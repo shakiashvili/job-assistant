@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Senior SDET / QA Automation Engineer at DataSphere - Lever Application</title>
+  <style>
+    body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; background: #fafafa; margin: 0; padding: 40px 20px; color: #333; }
+    .container { max-width: 720px; margin: 0 auto; background: #fff; padding: 48px; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    h1 { margin-top: 0; font-size: 28px; font-weight: 600; color: #111; }
+    .posting-headline { margin-bottom: 24px; color: #666; font-size: 15px; }
+    .section-page { border-bottom: 1px solid #eee; padding-bottom: 24px; margin-bottom: 30px; font-size: 14px; line-height: 1.6; }
+    .form-group { margin-bottom: 24px; }
+    label { display: block; font-weight: 500; font-size: 14px; margin-bottom: 8px; color: #222; }
+    .required:after { content: " ✱"; color: #ff4d4f; }
+    input[type="text"], input[type="email"], input[type="tel"], textarea, select {
+      width: 100%; box-sizing: border-box; padding: 12px; border: 1px solid #d9d9d9; border-radius: 4px; font-size: 14px;
+    }
+    input:focus, textarea:focus, select:focus { outline: none; border-color: #1890ff; box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2); }
+    .postings-btn { background: #1890ff; color: #fff; border: none; padding: 14px 28px; font-size: 15px; font-weight: 600; border-radius: 4px; cursor: pointer; }
+    .postings-btn:hover { background: #40a9ff; }
+    .badge { display: inline-block; background: #e6f7ff; color: #0050b3; padding: 4px 10px; border-radius: 4px; font-size: 12px; margin-bottom: 12px; font-weight: 600; }
+  </style>
+</head>
+<body data-board="lever">
+  <div class="container">
+    <div class="badge">Lever Job Board</div>
+    <h1 id="posting-title">Senior SDET / QA Automation Engineer</h1>
+    <div class="posting-headline">DataSphere Technologies • Remote (EU) • Full-time</div>
+
+    <div class="section-page" id="posting-description">
+      <h3>The Role</h3>
+      <p>DataSphere builds next-generation data analytics pipelines. We are seeking a <strong>Senior SDET / QA Automation Engineer</strong> to scale our browser automation and API test coverage.</p>
+      
+      <h4>Key Qualifications:</h4>
+      <ul>
+        <li>3-5+ years experience in Software Test Engineering with strong focus on automation.</li>
+        <li>Proficiency in <strong>Python</strong> or <strong>TypeScript</strong> for UI automation (<strong>Playwright</strong> or <strong>Cypress</strong>).</li>
+        <li>Experience testing high-throughput REST APIs and SQL databases.</li>
+        <li>Hands-on with CI/CD tools (GitHub Actions, Docker).</li>
+        <li>Fluent English. Based in EU or CET-adjacent timezones.</li>
+      </ul>
+    </div>
+
+    <!-- Lever standard form layout -->
+    <form class="application-form" id="application-form" action="/apply" method="post" enctype="multipart/form-data">
+      <div class="form-group">
+        <label for="full-name" class="required">Full name</label>
+        <input type="text" id="full-name" name="name" required />
+      </div>
+
+      <div class="form-group">
+        <label for="email" class="required">Email</label>
+        <input type="email" id="email" name="email" required />
+      </div>
+
+      <div class="form-group">
+        <label for="phone" class="required">Phone</label>
+        <input type="tel" id="phone" name="phone" required />
+      </div>
+
+      <div class="form-group">
+        <label for="org">Current company</label>
+        <input type="text" id="org" name="org" />
+      </div>
+
+      <div class="form-group">
+        <label for="resume-upload" class="required">Resume/CV (PDF, DOCX)</label>
+        <input type="file" id="resume-upload" name="resume" accept=".pdf,.doc,.docx" required />
+      </div>
+
+      <div class="form-group">
+        <label for="linkedin-url">LinkedIn URL</label>
+        <input type="text" id="linkedin-url" name="urls[LinkedIn]" />
+      </div>
+
+      <div class="form-group">
+        <label for="github-url">GitHub URL</label>
+        <input type="text" id="github-url" name="urls[GitHub]" />
+      </div>
+
+      <div class="form-group">
+        <label for="portfolio-url">Portfolio URL</label>
+        <input type="text" id="portfolio-url" name="urls[Portfolio]" />
+      </div>
+
+      <!-- Lever custom questions -->
+      <div class="custom-questions">
+        <div class="form-group">
+          <label for="custom-question-motivation" class="required">Why do you want to work at DataSphere?</label>
+          <textarea id="custom-question-motivation" name="cards[motivation]" rows="4" required></textarea>
+        </div>
+
+        <div class="form-group">
+          <label for="custom-question-automation">What is your favorite testing framework and why?</label>
+          <textarea id="custom-question-automation" name="cards[framework_experience]" rows="4"></textarea>
+        </div>
+
+        <div class="form-group">
+          <label for="custom-question-notice">What is your notice period?</label>
+          <input type="text" id="custom-question-notice" name="cards[notice_period]" placeholder="e.g. 1 month" />
+        </div>
+
+        <div class="form-group">
+          <label for="custom-question-salary">What are your salary expectations (annual gross EUR)?</label>
+          <input type="text" id="custom-question-salary" name="cards[salary_expectation]" placeholder="e.g. 85,000" />
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="additional-comments">Applicant Summary & Additional Information</label>
+        <textarea id="additional-comments" name="comments" rows="3" placeholder="Add any additional details or links..."></textarea>
+      </div>
+
+      <div class="form-group" style="background:#fafafa; border:1px solid #d9d9d9; padding:12px; border-radius:4px; display:flex; align-items:center; gap:10px;">
+        <input type="checkbox" id="captcha-checkbox" name="captcha" style="width:18px; height:18px;" />
+        <label for="captcha-checkbox" style="margin:0;">hCaptcha / Security Check: I am human</label>
+      </div>
+
+      <div style="margin-top: 32px;">
+        <button type="submit" class="postings-btn">Submit application</button>
+      </div>
+    </form>
+  </div>
+</body>
+</html>

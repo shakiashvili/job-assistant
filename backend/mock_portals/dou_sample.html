@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Senior QA Automation Engineer (Playwright/Python) at MacPaw — DOU.ua Jobs</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f2f4f7; margin: 0; padding: 32px 16px; color: #1f2937; }
+    .container { max-width: 780px; margin: 0 auto; background: #fff; padding: 36px; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,0.08); border-top: 5px solid #e11d48; }
+    .header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+    .badge { background: #ffe4e6; color: #be123c; padding: 4px 12px; border-radius: 99px; font-size: 12px; font-weight: 700; }
+    .reviews-pill { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; padding: 4px 12px; border-radius: 99px; font-size: 12px; font-weight: 600; }
+    h1 { margin: 0 0 8px 0; font-size: 24px; color: #111827; }
+    .company { color: #4b5563; font-size: 15px; margin-bottom: 20px; font-weight: 500; }
+    .job-desc { line-height: 1.6; margin-bottom: 28px; border-bottom: 1px solid #e5e7eb; padding-bottom: 20px; font-size: 14px; }
+    .field { margin-bottom: 18px; }
+    label { display: block; font-weight: 600; font-size: 13px; margin-bottom: 6px; color: #374151; }
+    .required:after { content: " *"; color: #e11d48; }
+    input[type="text"], input[type="email"], input[type="tel"], textarea, select {
+      width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;
+    }
+    .dou-highlight { background: #fff1f2; border: 1px solid #fecdd3; padding: 14px; border-radius: 8px; margin-bottom: 18px; }
+    .captcha-box { background: #f9fafb; border: 1px solid #d1d5db; padding: 14px 16px; border-radius: 6px; display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+    .submit-btn { background: #e11d48; color: #fff; border: none; padding: 12px 26px; font-size: 15px; font-weight: 600; border-radius: 6px; cursor: pointer; }
+  </style>
+</head>
+<body data-board="dou.ua">
+  <div class="container">
+    <div class="header-bar">
+      <span class="badge">DOU.ua Jobs • Remote / Abroad</span>
+      <span class="reviews-pill">★ 4.8 Rating • 142 Employee Reviews on DOU.ua</span>
+    </div>
+    <h1 id="app-title">Senior QA Automation Engineer (Playwright / Python)</h1>
+    <div class="company" id="company-name">MacPaw • Remote (EU / Ukraine / Georgia / Worldwide) • $4,200–$5,500</div>
+
+    <div class="job-desc" id="job-description">
+      <p>We are looking for a <strong>Senior QA Automation Engineer</strong> to scale automated testing across our web and cloud services on <strong>DOU.ua</strong>.</p>
+      <h4>Requirements:</h4>
+      <ul>
+        <li>4+ years of experience in QA Automation using <strong>Playwright</strong> or <strong>Cypress</strong>.</li>
+        <li>Strong hands-on coding in <strong>Python</strong> and <strong>TypeScript</strong>.</li>
+        <li>Experience testing <strong>REST API</strong> and <strong>GraphQL</strong> microservices with <strong>PyTest</strong>.</li>
+        <li>CI/CD pipeline orchestration with <strong>GitHub Actions</strong> and <strong>Docker</strong>.</li>
+        <li>Upper-Intermediate / Fluent <strong>English</strong>.</li>
+      </ul>
+      <p><em>Note: Applications on DOU.ua require an additional personalized Motivational Letter explaining why you want to join our team.</em></p>
+    </div>
+
+    <form id="dou-apply-form" action="#submitted" method="post" onsubmit="event.preventDefault(); document.getElementById('submit-banner').style.display='block';">
+      <div class="field">
+        <label for="full_name" class="required">Full Name</label>
+        <input type="text" id="full_name" name="name" required />
+      </div>
+
+      <div class="field">
+        <label for="email" class="required">Email Address</label>
+        <input type="email" id="email" name="email" required />
+      </div>
+
+      <div class="field">
+        <label for="phone" class="required">Phone / Telegram</label>
+        <input type="tel" id="phone" name="phone" required />
+      </div>
+
+      <div class="field">
+        <label for="linkedin">LinkedIn Profile URL</label>
+        <input type="text" id="linkedin" name="linkedin" />
+      </div>
+
+      <div class="field">
+        <label for="applicant_summary" class="required">Applicant Summary (Human Tone)</label>
+        <textarea id="applicant_summary" name="applicant_summary" rows="3" required></textarea>
+      </div>
+
+      <div class="dou-highlight">
+        <label for="dou_motivational_letter" class="required">DOU.ua Additional Motivational Letter (Required on DOU.ua)</label>
+        <textarea id="dou_motivational_letter" name="motivational_letter" rows="6" placeholder="Write your tailored motivational letter for the recruiter..." required></textarea>
+      </div>
+
+      <div class="field">
+        <label for="salary_expectation" class="required">Salary Expectations (USD / EUR)</label>
+        <input type="text" id="salary_expectation" name="salary" required />
+      </div>
+
+      <div class="field">
+        <label for="start_date" class="required">When can you start after receiving an offer?</label>
+        <input type="text" id="start_date" name="start_date" value="" placeholder="e.g. 1 week after offer" required />
+      </div>
+
+      <div class="field">
+        <label for="resume" class="required">Attach Tailored CV (PDF)</label>
+        <input type="file" id="resume" name="resume" accept=".pdf" required />
+      </div>
+
+      <div class="captcha-box">
+        <input type="checkbox" id="captcha-checkbox" name="captcha_verified" style="width:20px; height:20px;" required />
+        <label for="captcha-checkbox" style="margin:0; font-weight:500;">I am human (CAPTCHA Verification)</label>
+      </div>
+
+      <button type="submit" id="submit_app" class="submit-btn">Send Application on DOU.ua</button>
+      <div id="submit-banner" style="display:none; margin-top:16px; padding:12px; background:#dcfce7; color:#166534; border-radius:6px; font-weight:600;">
+        ✅ Application & Motivational Letter Ready / Submitted!
+      </div>
+    </form>
+  </div>
+</body>
+</html>

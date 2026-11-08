@@ -1,0 +1,23 @@
+{
+  "name": "ai-job-application-assistant-monorepo",
+  "version": "1.0.0",
+  "description": "Production-ready MVP for an AI-powered Job Application Assistant with a Human-in-the-Loop workflow",
+  "scripts": {
+    "dev:backend": "python backend/run.py",
+    "dev:frontend": "cd frontend && npm run dev",
+    "build:frontend": "cd frontend && npm run build",
+    "test:backend": "python -m pytest backend/tests -v",
+    "start": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\""
+  },
+  "keywords": [
+    "job-automation",
+    "playwright",
+    "gemini",
+    "fastapi",
+    "react",
+    "vite",
+    "chrome-extension"
+  ],
+  "author": "Antigravity Pair Programmer",
+  "license": "MIT"
+}

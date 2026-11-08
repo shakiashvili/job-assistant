@@ -1,0 +1,60 @@
+{
+  "manifest_version": 3,
+  "name": "AI Job Application Assistant",
+  "version": "2.0.0",
+  "description": "AI-powered Job Application Assistant with Per-Vacancy Human-Tone CV Generation, 3+ Reviews Gate & Multi-Portal Staging (DOU.ua, Djinni, Jobs.ge, HR.ge, HeadHunter.ge, JustJoin.it, Greenhouse, Lever).",
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "background": {
+    "service_worker": "background/service_worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.djinni.co/*",
+        "*://*.dou.ua/*",
+        "*://*.jobs.ge/*",
+        "*://*.hr.ge/*",
+        "*://*.headhunter.ge/*",
+        "*://*.hh.ge/*",
+        "*://*.justjoin.it/*",
+        "*://boards.greenhouse.io/*",
+        "*://jobs.lever.co/*",
+        "*://localhost/*",
+        "*://127.0.0.1/*",
+        "file://*/*sample*.html"
+      ],
+      "css": ["content/content.css"],
+      "js": ["content/content.js"],
+      "run_at": "document_end"
+    }
+  ],
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "*://*.djinni.co/*",
+    "*://*.dou.ua/*",
+    "*://*.jobs.ge/*",
+    "*://*.hr.ge/*",
+    "*://*.headhunter.ge/*",
+    "*://*.justjoin.it/*",
+    "*://boards.greenhouse.io/*",
+    "*://jobs.lever.co/*",
+    "http://localhost:8000/*",
+    "http://127.0.0.1:8000/*"
+  ]
+}

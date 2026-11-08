@@ -1,0 +1,44 @@
+%PDF-1.4
+1 0 obj <</Type /Catalog /Pages 2 0 R>> endobj
+2 0 obj <</Type /Pages /Kids [3 0 R] /Count 1>> endobj
+3 0 obj <</Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources <</Font <</F1 4 0 R /F2 5 0 R>>>> /Contents 6 0 R>> endobj
+4 0 obj <</Type /Font /Subtype /Type1 /BaseFont /Helvetica>> endobj
+5 0 obj <</Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold>> endobj
+6 0 obj <</Length 2427>> stream
+BT /F2 15 Tf 48 755 Td (Alex Mercer  -  Senior QA Automation Engineer \(Playwright / Python\)) Tj ET
+BT /F1 9 Tf 48 739 Td (alex.mercer.dev@gmail.com  |  +49 152 98765432
+-  |  Berlin, Germany) Tj ET
+BT /F1 8 Tf 48 727 Td (LinkedIn: https://linkedin.com/in/alex-mercer-qa  |  Availability: 1 week after offer) Tj ET
+0.75 0.78 0.82 RG 0.8 w 48 719 m 564 719 l S
+BT /F2 10 Tf 48 703 Td (SUMMARY \(TAILORED FOR MACPAW\)) Tj ET
+BT /F1 9 Tf 48 690 Td (Senior QA Automation Engineer with 5+ years of practical experience building fast, reliable) Tj ET
+BT /F1 9 Tf 48 678 Td (test suites using Playwright, Cypress, Selenium WebDriver, Appium, Python. I focus on keeping) Tj ET
+BT /F1 9 Tf 48 666 Td (CI/CD pipelines green, cutting regression time from hours to minutes, and working directly with) Tj ET
+BT /F1 9 Tf 48 654 Td (developers at MacPaw to ship clean releases. Available to start 1 week after offer.) Tj ET
+0.75 0.78 0.82 RG 0.8 w 48 642 m 564 642 l S
+BT /F2 10 Tf 48 626 Td (CORE SKILLS & COMPETENCIES) Tj ET
+BT /F1 9 Tf 48 613 Td (Playwright, Cypress, Selenium WebDriver, Appium, Python, TypeScript, JavaScript, SQL, Bash,) Tj ET
+BT /F1 9 Tf 48 601 Td (PyTest, Postman, REST API, GraphQL, Swagger, OpenAPI, GitHub Actions, GitLab CI, Docker) Tj ET
+0.75 0.78 0.82 RG 0.8 w 48 589 m 564 589 l S
+BT /F2 10 Tf 48 573 Td (PROFESSIONAL WORK EXPERIENCE) Tj ET
+BT /F2 9 Tf 48 559 Td (Senior QA Automation Engineer  |  TechNova Cloud Solutions \(Jan 2023 - Present - \)) Tj ET
+BT /F1 9 Tf 56 547 Td (* Built the Playwright + TypeScript end-to-end test suite from scratch, cutting regression) Tj ET
+BT /F1 9 Tf 56 536 Td (  time from 14 hours to 35 minutes.) Tj ET
+BT /F1 9 Tf 56 525 Td (* Integrated parallel CI test runs across GitHub Actions and Docker with 99.4% pipeline) Tj ET
+BT /F1 9 Tf 56 514 Td (  reliability.) Tj ET
+BT /F2 9 Tf 48 499 Td (QA Engineer / Automation Specialist  |  Apex Fintech Labs \(Mar 2021 - Dec 2022 - \)) Tj ET
+BT /F1 9 Tf 56 487 Td (* Automated critical payment and onboarding flows using Cypress and TypeScript for a high-) Tj ET
+BT /F1 9 Tf 56 476 Td (  volume banking platform.) Tj ET
+0.75 0.78 0.82 RG 0.8 w 48 465 m 564 465 l S
+BT /F2 10 Tf 48 449 Td (EDUCATION & LANGUAGES) Tj ET
+BT /F1 9 Tf 48 436 Td (B.Sc. in Computer Science - Technical University of Munich \(2019\)) Tj ET
+BT /F1 9 Tf 48 424 Td (Languages: English \(Fluent\), Georgian \(Native\)  |  Start Date: 1 week after offer) Tj ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+trailer <</Size 7 /Root 1 0 R>>
+startxref
+0
+%%EOF

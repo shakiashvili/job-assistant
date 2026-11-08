@@ -1,0 +1,170 @@
+/* Antigravity AI Job Assistant In-Page HUD */
+#ai-job-assistant-hud {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  width: 320px;
+  background: #0f172a;
+  color: #f8fafc;
+  border-radius: 12px;
+  border: 1px solid #334155;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4), 0 0 15px rgba(56, 189, 248, 0.2);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  z-index: 2147483647;
+  overflow: hidden;
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+#ai-job-assistant-hud.minimized {
+  width: auto;
+}
+
+#ai-job-assistant-hud .hud-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  background: #1e293b;
+  border-bottom: 1px solid #334155;
+  cursor: pointer;
+}
+
+#ai-job-assistant-hud .hud-title {
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #38bdf8;
+}
+
+#ai-job-assistant-hud .hud-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 6px #22c55e;
+}
+
+#ai-job-assistant-hud .hud-body {
+  padding: 14px;
+}
+
+#ai-job-assistant-hud.minimized .hud-body {
+  display: none;
+}
+
+#ai-job-assistant-hud .hud-row {
+  margin-bottom: 12px;
+}
+
+#ai-job-assistant-hud label {
+  display: block;
+  font-size: 11px;
+  text-transform: uppercase;
+  color: #94a3b8;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+#ai-job-assistant-hud select {
+  width: 100%;
+  padding: 7px 10px;
+  background: #1e293b;
+  border: 1px solid #475569;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 12px;
+}
+
+#ai-job-assistant-hud .hud-btn-primary {
+  width: 100%;
+  padding: 10px;
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-shadow: 0 4px 10px rgba(37, 99, 235, 0.3);
+  transition: background 0.2s;
+}
+
+#ai-job-assistant-hud .hud-btn-primary:hover {
+  background: linear-gradient(135deg, #1d4ed8, #1e40af);
+}
+
+#ai-job-assistant-hud .hud-btn-secondary {
+  width: 100%;
+  padding: 8px;
+  background: #334155;
+  color: #e2e8f0;
+  border: 1px solid #475569;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  margin-top: 6px;
+}
+
+#ai-job-assistant-hud .hud-btn-secondary:hover {
+  background: #475569;
+}
+
+#ai-job-assistant-hud .match-badge {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+#ai-job-assistant-hud .blocker-alert {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  margin-bottom: 10px;
+  line-height: 1.3;
+}
+
+/* Field highlight when autofilled */
+.ai-autofilled-field {
+  transition: all 0.4s ease !important;
+  box-shadow: 0 0 0 2px #38bdf8 !important;
+  border-color: #38bdf8 !important;
+}
+
+/* Toast banner */
+.ai-toast-banner {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  background: #10b981;
+  color: #fff;
+  padding: 12px 18px;
+  border-radius: 8px;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.25);
+  font-size: 13px;
+  font-weight: 600;
+  z-index: 2147483647;
+  font-family: sans-serif;
+  animation: slideInDown 0.3s ease-out;
+}
+
+@keyframes slideInDown {
+  from { transform: translateY(-30px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}

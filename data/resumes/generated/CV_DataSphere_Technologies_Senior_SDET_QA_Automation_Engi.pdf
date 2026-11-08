@@ -1,0 +1,57 @@
+%PDF-1.4
+1 0 obj <</Type /Catalog /Pages 2 0 R>> endobj
+2 0 obj <</Type /Pages /Kids [3 0 R] /Count 1>> endobj
+3 0 obj <</Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources <</Font <</F1 4 0 R /F2 5 0 R>>>> /Contents 6 0 R>> endobj
+4 0 obj <</Type /Font /Subtype /Type1 /BaseFont /Helvetica>> endobj
+5 0 obj <</Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold>> endobj
+6 0 obj <</Length 3788>> stream
+BT /F2 15 Tf 48 755 Td (Alex Mercer  -  Senior SDET / QA Automation Engineer) Tj ET
+BT /F1 9 Tf 48 739 Td (alex.mercer.dev@gmail.com  |  +49 152 98765432  |  Berlin, Germany \(Remote / Abroad Ready\)) Tj ET
+BT /F1 8 Tf 48 727 Td (LinkedIn: https://linkedin.com/in/alex-mercer-qa  |  GitHub: https://github.com/alex-mercer-automation  |  Start: 1 week after offer) Tj ET
+0.75 0.78 0.82 RG 0.8 w 48 719 m 564 719 l S
+BT /F2 10 Tf 48 703 Td (SUMMARY \(TAILORED FOR DATASPHERE TECHNOLOGIES\)) Tj ET
+BT /F1 9 Tf 48 690 Td (Senior QA Automation Engineer with 5+ years of practical experience building fast, reliable) Tj ET
+BT /F1 9 Tf 48 678 Td (test suites using Playwright, Cypress, Selenium WebDriver, Python, TypeScript. I focus on) Tj ET
+BT /F1 9 Tf 48 666 Td (keeping CI/CD pipelines green, cutting regression time from hours to minutes, and working) Tj ET
+BT /F1 9 Tf 48 654 Td (directly with developers at DataSphere Technologies to ship clean releases. Available to start) Tj ET
+BT /F1 9 Tf 48 642 Td (1 week after offer.) Tj ET
+0.75 0.78 0.82 RG 0.8 w 48 630 m 564 630 l S
+BT /F2 10 Tf 48 614 Td (CORE TECHNICAL SKILLS & TOOLS) Tj ET
+BT /F1 9 Tf 48 601 Td (Playwright \(TypeScript & Python\), Cypress, Selenium WebDriver, Python, TypeScript, JavaScript) Tj ET
+BT /F1 9 Tf 48 589 Td (\(ES6+\), PyTest, Appium, SQL, Bash, Postman, REST Assured, GraphQL, OpenAPI, Swagger, WireMock,) Tj ET
+BT /F1 9 Tf 48 577 Td (GitHub Actions, GitLab CI) Tj ET
+0.75 0.78 0.82 RG 0.8 w 48 565 m 564 565 l S
+BT /F2 10 Tf 48 549 Td (PROFESSIONAL WORK EXPERIENCE) Tj ET
+BT /F2 9 Tf 48 535 Td (Senior QA Automation Engineer  |  TechNova Cloud Solutions \(2023-01 - Present\)) Tj ET
+BT /F1 9 Tf 56 523 Td (* Architected end-to-end testing suite using Playwright and TypeScript, reducing release) Tj ET
+BT /F1 9 Tf 56 512 Td (  regression cycles from 14 hours to 35 minutes.) Tj ET
+BT /F1 9 Tf 56 501 Td (* Integrated parallel CI test runs across GitHub Actions and Docker, achieving 99.4%) Tj ET
+BT /F1 9 Tf 56 490 Td (  pipeline reliability and blocking 180+ critical bugs prior to production.) Tj ET
+BT /F1 9 Tf 56 479 Td (* Engineered API integration test suite using Python and PyTest covering 120+ REST) Tj ET
+BT /F1 9 Tf 56 468 Td (  endpoints with automated data seeding.) Tj ET
+BT /F2 9 Tf 48 453 Td (QA Engineer / Automation Specialist  |  Apex Fintech Labs \(2021-03 - 2022-12\)) Tj ET
+BT /F1 9 Tf 56 441 Td (* Implemented automated regression framework with Cypress and JavaScript for high-volume) Tj ET
+BT /F1 9 Tf 56 430 Td (  banking dashboard.) Tj ET
+BT /F1 9 Tf 56 419 Td (* Built performance benchmarks using k6, identifying bottlenecks under 5,000 concurrent) Tj ET
+BT /F1 9 Tf 56 408 Td (  virtual users.) Tj ET
+BT /F1 9 Tf 56 397 Td (* Mentored 4 manual QA testers transitioning into automation with structured TypeScript) Tj ET
+BT /F1 9 Tf 56 386 Td (  workshops.) Tj ET
+BT /F2 9 Tf 48 371 Td (Technical Support & QA Analyst  |  Global Logic Support \(2019-06 - 2021-02\)) Tj ET
+BT /F1 9 Tf 56 359 Td (* Diagnosed and resolved Tier-3 SaaS customer escalations involving REST APIs, webhook) Tj ET
+BT /F1 9 Tf 56 348 Td (  failures, and database mismatches.) Tj ET
+BT /F1 9 Tf 56 337 Td (* Executed manual test plans, exploratory testing, and authored reproducibility reports) Tj ET
+BT /F1 9 Tf 56 326 Td (  with SQL log analysis.) Tj ET
+BT /F1 9 Tf 56 315 Td (* Contributed to internal knowledge base and customer-facing troubleshooting playbooks.) Tj ET
+0.75 0.78 0.82 RG 0.8 w 48 304 m 564 304 l S
+BT /F2 10 Tf 48 288 Td (EDUCATION & LANGUAGES) Tj ET
+BT /F1 9 Tf 48 275 Td (B.Sc. in Computer Science - Technical University of Munich \(2019\)) Tj ET
+BT /F1 9 Tf 48 263 Td (Languages: English \(Full Professional / C2\), German \(Working / B2\)  |  Availability: 1 week after offer) Tj ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+trailer <</Size 7 /Root 1 0 R>>
+startxref
+0
+%%EOF

@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Senior QA Automation Engineer at CloudScale - Greenhouse Application</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f7fafc; margin: 0; padding: 40px 20px; color: #2d3748; }
+    .container { max-width: 760px; margin: 0 auto; background: #fff; padding: 40px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+    h1 { margin-top: 0; font-size: 26px; color: #1a202c; }
+    .company { color: #4a5568; font-size: 16px; margin-bottom: 24px; }
+    .job-desc { line-height: 1.6; margin-bottom: 32px; border-bottom: 1px solid #e2e8f0; padding-bottom: 24px; font-size: 14px; }
+    .field { margin-bottom: 20px; }
+    label { display: block; font-weight: 600; font-size: 13px; margin-bottom: 6px; color: #374151; }
+    .required:after { content: " *"; color: #e53e3e; }
+    input[type="text"], input[type="email"], input[type="tel"], textarea, select {
+      width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #cbd5e0; border-radius: 6px; font-size: 14px;
+    }
+    input:focus, textarea:focus, select:focus { outline: none; border-color: #3182ce; box-shadow: 0 0 0 3px rgba(66, 153, 225, 0.2); }
+    .name-row { display: flex; gap: 16px; }
+    .name-row .field { flex: 1; }
+    .file-drop { border: 2px dashed #cbd5e0; padding: 20px; text-align: center; border-radius: 6px; background: #f9fafb; cursor: pointer; }
+    .submit-btn { background: #2563eb; color: #fff; border: none; padding: 12px 24px; font-size: 16px; font-weight: 600; border-radius: 6px; cursor: pointer; }
+    .submit-btn:hover { background: #1d4ed8; }
+    .badge { display: inline-block; background: #e0f2fe; color: #0369a1; padding: 4px 10px; border-radius: 12px; font-size: 12px; margin-right: 6px; }
+  </style>
+</head>
+<body data-board="greenhouse" data-job-id="7123910">
+  <div class="container">
+    <div class="badge">Greenhouse Board</div>
+    <h1 id="app-title">Senior QA Automation Engineer</h1>
+    <div class="company">CloudScale Technologies • Berlin, Germany / Hybrid • Full-time</div>
+
+    <div class="job-desc" id="job-description">
+      <h3>About the Role</h3>
+      <p>CloudScale is looking for an experienced <strong>Senior QA Automation Engineer</strong> to lead our test automation efforts across modern microservices and web applications.</p>
+      
+      <h4>Requirements:</h4>
+      <ul>
+        <li>4+ years of professional test automation experience using <strong>Playwright</strong>, <strong>Cypress</strong>, or <strong>Selenium</strong>.</li>
+        <li>Strong programming skills in <strong>Python</strong> or <strong>TypeScript</strong>.</li>
+        <li>Deep understanding of REST API testing (using Postman, PyTest, or similar).</li>
+        <li>Experience setting up CI/CD test automation pipelines with <strong>GitHub Actions</strong> or GitLab CI and Docker.</li>
+        <li>Fluent English communication skills (written and spoken).</li>
+        <li>Must be legally authorized to work in the European Union (Germany). Visa sponsorship is not available for this role.</li>
+      </ul>
+
+      <h4>Nice to Have:</h4>
+      <ul>
+        <li>Experience with k6 or performance benchmarking.</li>
+        <li>Familiarity with AWS cloud environments.</li>
+      </ul>
+    </div>
+
+    <!-- Greenhouse standard form layout -->
+    <form id="application_form" action="/submit" method="post" enctype="multipart/form-data">
+      <div class="name-row">
+        <div class="field">
+          <label for="first_name" class="required">First Name</label>
+          <input type="text" id="first_name" name="job_application[first_name]" autocomplete="given-name" required />
+        </div>
+        <div class="field">
+          <label for="last_name" class="required">Last Name</label>
+          <input type="text" id="last_name" name="job_application[last_name]" autocomplete="family-name" required />
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="email" class="required">Email</label>
+        <input type="email" id="email" name="job_application[email]" autocomplete="email" required />
+      </div>
+
+      <div class="field">
+        <label for="phone" class="required">Phone</label>
+        <input type="tel" id="phone" name="job_application[phone]" autocomplete="tel" required />
+      </div>
+
+      <div class="field">
+        <label for="resume" class="required">Resume/CV (PDF, DOCX)</label>
+        <input type="file" id="resume" name="resume" accept=".pdf,.doc,.docx" required />
+      </div>
+
+      <div class="field">
+        <label for="job_application_answers_attributes_0_text_value">LinkedIn Profile</label>
+        <input type="text" id="job_application_answers_attributes_0_text_value" name="job_application[answers_attributes][0][text_value]" autocomplete="custom-question-linkedin-profile" />
+      </div>
+
+      <div class="field">
+        <label for="job_application_answers_attributes_1_text_value">Website / GitHub Portfolio</label>
+        <input type="text" id="job_application_answers_attributes_1_text_value" name="job_application[answers_attributes][1][text_value]" autocomplete="custom-question-website" />
+      </div>
+
+      <div class="field">
+        <label for="job_application_answers_attributes_2_text_value" class="required">Why are you interested in joining CloudScale?</label>
+        <textarea id="job_application_answers_attributes_2_text_value" name="job_application[answers_attributes][2][text_value]" rows="4" placeholder="Briefly describe your motivation..."></textarea>
+      </div>
+
+      <div class="field">
+        <label for="job_application_answers_attributes_3_text_value">Describe your experience with automated testing frameworks (Playwright, Cypress, etc.)</label>
+        <textarea id="job_application_answers_attributes_3_text_value" name="job_application[answers_attributes][3][text_value]" rows="4"></textarea>
+      </div>
+
+      <div class="field">
+        <label for="job_application_answers_attributes_4_boolean_value" class="required">Are you legally authorized to work in the EU without sponsorship?</label>
+        <select id="job_application_answers_attributes_4_boolean_value" name="job_application[answers_attributes][4][boolean_value]">
+          <option value="">-- Please select --</option>
+          <option value="yes">Yes</option>
+          <option value="no">No</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="job_application_answers_attributes_5_text_value">What is your desired gross annual salary in EUR?</label>
+        <input type="text" id="job_application_answers_attributes_5_text_value" name="job_application[answers_attributes][5][text_value]" placeholder="e.g. 85,000" />
+      </div>
+
+      <div class="field">
+        <label for="job_application_answers_attributes_6_text_value">Notice period / Earliest start date</label>
+        <input type="text" id="job_application_answers_attributes_6_text_value" name="job_application[answers_attributes][6][text_value]" placeholder="e.g. 1 week after offer" />
+      </div>
+
+      <div class="field">
+        <label for="applicant_summary">Applicant Summary (Human Tone)</label>
+        <textarea id="applicant_summary" name="applicant_summary" rows="3"></textarea>
+      </div>
+
+      <div class="field" style="background:#f8fafc; border:1px solid #cbd5e0; padding:12px; border-radius:6px; display:flex; align-items:center; gap:10px;">
+        <input type="checkbox" id="captcha-checkbox" name="captcha" style="width:18px; height:18px;" />
+        <label for="captcha-checkbox" style="margin:0;">Verify you are human (CAPTCHA Security Check)</label>
+      </div>
+
+      <div style="margin-top: 30px;">
+        <input type="submit" id="submit_app" class="submit-btn" value="Submit Application" />
+      </div>
+    </form>
+  </div>
+</body>
+</html>

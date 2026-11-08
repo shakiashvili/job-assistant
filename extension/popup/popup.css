@@ -1,0 +1,287 @@
+body {
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: #0b0f19;
+  color: #f1f5f9;
+  width: 360px;
+  box-sizing: border-box;
+}
+
+.popup-container {
+  padding: 16px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #1e293b;
+  margin-bottom: 12px;
+}
+
+.logo-area {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.logo-icon {
+  font-size: 22px;
+}
+
+.logo-area h1 {
+  font-size: 14px;
+  margin: 0;
+  font-weight: 700;
+  color: #38bdf8;
+  letter-spacing: -0.3px;
+}
+
+.subtext {
+  font-size: 10px;
+  color: #94a3b8;
+  display: block;
+}
+
+.connection-badge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  background: #1e293b;
+  color: #94a3b8;
+}
+
+.connection-badge.online {
+  color: #4ade80;
+  background: rgba(34, 197, 94, 0.15);
+}
+
+.connection-badge .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ef4444;
+}
+
+.connection-badge.online .dot {
+  background: #22c55e;
+  box-shadow: 0 0 6px #22c55e;
+}
+
+/* Candidate Card */
+.candidate-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #131d31;
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.candidate-avatar {
+  width: 36px;
+  height: 36px;
+  background: linear-gradient(135deg, #2563eb, #38bdf8);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 12px;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.candidate-info .name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #f8fafc;
+}
+
+.candidate-info .title {
+  font-size: 11px;
+  color: #38bdf8;
+}
+
+.candidate-info .meta {
+  font-size: 10px;
+  color: #94a3b8;
+  margin-top: 2px;
+}
+
+/* Section Box */
+.section-box {
+  background: #111827;
+  border: 1px solid #1f2937;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+
+.box-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  color: #9ca3af;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  display: block;
+}
+
+.tab-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.portal-pill {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: #1e3a8a;
+  color: #60a5fa;
+  flex-shrink: 0;
+}
+
+.tab-title-text {
+  font-size: 12px;
+  color: #e5e7eb;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Match Box */
+.box-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.score-percent {
+  font-size: 15px;
+  font-weight: 700;
+  color: #38bdf8;
+}
+
+.progress-bar-bg {
+  width: 100%;
+  height: 6px;
+  background: #1f2937;
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3b82f6, #10b981);
+  transition: width 0.4s ease;
+}
+
+.breakdown-pills {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.breakdown-pills .pill {
+  font-size: 10px;
+  background: #1f2937;
+  color: #9ca3af;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.blockers-list {
+  margin-top: 8px;
+}
+
+.blocker-item {
+  font-size: 10px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  margin-bottom: 4px;
+}
+
+.variant-select {
+  width: 100%;
+  margin-top: 6px;
+  background: #1e293b;
+  border: 1px solid #334155;
+  color: #fff;
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 11px;
+}
+
+/* Actions */
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.btn {
+  padding: 9px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all 0.2s;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.3);
+}
+
+.btn-primary:hover {
+  background: #1d4ed8;
+}
+
+.btn-secondary {
+  background: #1e293b;
+  color: #e2e8f0;
+  border: 1px solid #334155;
+}
+
+.btn-secondary:hover {
+  background: #334155;
+}
+
+.btn-accent {
+  background: #0f766e;
+  color: #ccfbf1;
+}
+
+.btn-accent:hover {
+  background: #115e59;
+}
+
+.footer {
+  text-align: center;
+  font-size: 9px;
+  color: #64748b;
+  margin-top: 14px;
+}
