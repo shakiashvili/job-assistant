@@ -1,13 +1,46 @@
 import io
+from pathlib import Path
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 from app.main import app
-from app.database import engine
-from app.models.db_models import CandidateProfile, JobPosting, ApplicationRecord
+from app.db.database import engine
+from app.db.models import CandidateProfile, JobPosting, ApplicationRecord
 from app.services.salary_service import salary_service
-from app.services.scrapers.base_scraper import evaluate_remote_and_language_gate
+from app.services.company_validator import company_validator
+from app.services.portal_detector import detect_portal_from_url
+from app.services.scrapers.base_scraper import (
+    evaluate_remote_and_language_gate,
+    parse_contact_method_and_email,
+)
 
 client = TestClient(app)
+
+
+def test_bug1_company_validator_no_synthetic_md5():
+    """Verify unknown companies return neutral UNVERIFIED status without MD5 fabrication."""
+    unknown = company_validator.validate_company("CompletelyUnknownCompanyXYZ_2026")
+    assert unknown.reputation == "UNVERIFIED"
+    assert unknown.rating is None
+    assert unknown.reviews_count == 0
+    assert unknown.review_count == 0
+    assert unknown.is_blacklisted is False
+    assert unknown.passed_gate is True
+
+    # Known verified company still returns verified stats
+    verified = company_validator.validate_company("TBC Bank")
+    assert verified.reputation == "VERIFIED"
+    assert verified.rating is not None and verified.rating >= 4.0
+    assert verified.reviews_count >= 3
+
+
+def test_bug2_canonical_hostname_portal_detection():
+    """Verify portal_detector uses urllib.parse.urlparse hostname matching instead of mock file paths."""
+    assert detect_portal_from_url("https://jobs.dou.ua/companies/macpaw/vacancies/123/") == "dou.ua"
+    assert detect_portal_from_url("https://djinni.co/jobs/650112-senior-qa/") == "djinni.co"
+    assert detect_portal_from_url("https://jobs.ge/en/?view=jobs&id=541209") == "jobs.ge"
+    assert detect_portal_from_url("https://www.hr.ge/announcement/391044/qa-lead") == "hr.ge"
+    assert detect_portal_from_url("https://boards.greenhouse.io/datadog/jobs/1") == "greenhouse"
+    assert detect_portal_from_url("https://jobs.lever.co/spotify/1") == "lever"
 
 
 def test_upload_skills_endpoint_and_candidate_profile_db():
@@ -49,8 +82,8 @@ Senior QA Automation Engineer with 6+ years of experience building scalable test
         assert "Playwright" in prof.parsed_skills["qa_automation"]
 
 
-def test_strict_remote_and_language_gate():
-    # 1. Ukrainian language requirement -> FILTERED_OUT ("Requires local language")
+def test_strict_remote_and_language_gate_and_contact_extraction():
+    # 1. Ukrainian language requirement -> FILTERED_OUT
     is_rem, status, reason, langs = evaluate_remote_and_language_gate(
         title="Senior QA Engineer",
         description="Requirements: Playwright, Python. Обов'язково вільна українська мова, fluent Ukrainian.",
@@ -58,10 +91,10 @@ def test_strict_remote_and_language_gate():
         portal="dou.ua",
     )
     assert status == "FILTERED_OUT"
-    assert reason == "Requires local language"
+    assert "Requires local language" in reason
     assert "Ukrainian" in langs
 
-    # 2. Russian language requirement -> FILTERED_OUT ("Requires local language")
+    # 2. Russian language requirement -> FILTERED_OUT
     is_rem2, status2, reason2, langs2 = evaluate_remote_and_language_gate(
         title="QA Automation Engineer",
         description="Stack: Selenium, Java. Требования: русский на разговорном уровне.",
@@ -69,7 +102,7 @@ def test_strict_remote_and_language_gate():
         portal="djinni.co",
     )
     assert status2 == "FILTERED_OUT"
-    assert reason2 == "Requires local language"
+    assert "Requires local language" in reason2
     assert "Russian" in langs2
 
     # 3. English-only remote position -> DISCOVERED
@@ -82,6 +115,14 @@ def test_strict_remote_and_language_gate():
     assert is_rem3 is True
     assert status3 == "DISCOVERED"
     assert "English" in langs3
+
+    # 4. Georgian portal email contact vs web form extraction
+    ch, email, subj = parse_contact_method_and_email(
+        "Please send your CV to: talent@tbcbank.com.ge and indicate subject: 'Senior QA Automation Engineer'."
+    )
+    assert ch == "EMAIL"
+    assert email == "talent@tbcbank.com.ge"
+    assert "Senior QA Automation Engineer" in subj
 
 
 def test_automated_ai_salary_estimator():
@@ -136,6 +177,11 @@ def test_multi_portal_scrapers_and_suitability_promotion():
     filtered_jobs = [j for j in jobs if j["status"] == "FILTERED_OUT"]
     assert len(filtered_jobs) >= 2
     assert any("Requires local language" in j["match_rationale"] for j in filtered_jobs)
+
+    # Verify Georgian EMAIL channel extraction is persisted
+    email_jobs = [j for j in jobs if j.get("channel") == "EMAIL"]
+    assert len(email_jobs) >= 1
+    assert email_jobs[0]["target_email"] is not None
 
     # Verify jobs with suitability_score >= 75% were auto-promoted to STAGED and linked to ApplicationRecord
     staged_jobs = [j for j in jobs if j["status"] == "STAGED"]

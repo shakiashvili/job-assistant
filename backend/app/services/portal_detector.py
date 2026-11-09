@@ -1,94 +1,114 @@
 import re
 from typing import Tuple, Optional
+from urllib.parse import urlparse
 from bs4 import BeautifulSoup
+
+HOSTNAME_PORTAL_MAP = {
+    "jobs.dou.ua": "dou.ua",
+    "dou.ua": "dou.ua",
+    "djinni.co": "djinni.co",
+    "jobs.ge": "jobs.ge",
+    "www.jobs.ge": "jobs.ge",
+    "hr.ge": "hr.ge",
+    "www.hr.ge": "hr.ge",
+    "headhunter.ge": "headhunter.ge",
+    "hh.ge": "headhunter.ge",
+    "justjoin.it": "justjoin.it",
+    "boards.greenhouse.io": "greenhouse",
+    "job-boards.greenhouse.io": "greenhouse",
+    "greenhouse.io": "greenhouse",
+    "jobs.lever.co": "lever",
+    "lever.co": "lever",
+    "linkedin.com": "linkedin",
+    "www.linkedin.com": "linkedin",
+}
 
 
 def detect_portal_from_url(url: str) -> str:
-    """Detects portal type based on URL pattern across global, Ukrainian, Georgian, Polish, and US/EU boards."""
-    url_lower = (url or "").lower()
-    if "dou.ua" in url_lower or "dou_sample" in url_lower:
-        return "dou.ua"
-    if "djinni.co" in url_lower or "djinni_sample" in url_lower:
-        return "djinni.co"
-    if "jobs.ge" in url_lower or "jobs_ge_sample" in url_lower:
-        return "jobs.ge"
-    if "hr.ge" in url_lower or "hr_ge_sample" in url_lower:
-        return "hr.ge"
-    if "headhunter.ge" in url_lower or "hh.ge" in url_lower or "hh_sample" in url_lower:
-        return "headhunter.ge"
-    if "justjoin.it" in url_lower or "justjoin_sample" in url_lower:
-        return "justjoin.it"
-    if "greenhouse.io" in url_lower or "boards.greenhouse" in url_lower or "greenhouse_sample" in url_lower:
-        return "greenhouse"
-    if "lever.co" in url_lower or "jobs.lever" in url_lower or "lever_sample" in url_lower:
-        return "lever"
-    if "linkedin.com" in url_lower:
-        return "linkedin"
-    if "remoteok" in url_lower or "weworkremotely" in url_lower:
-        return "remote_abroad"
-    return "generic"
+    """
+    Detects portal strictly using canonical URL hostname parsing (urllib.parse.urlparse).
+    """
+    if not url:
+        return "custom"
+
+    parsed = urlparse(url if "://" in url else f"https://{url}")
+    hostname = (parsed.hostname or "").lower().strip()
+
+    if hostname in HOSTNAME_PORTAL_MAP:
+        return HOSTNAME_PORTAL_MAP[hostname]
+
+    for domain, portal in HOSTNAME_PORTAL_MAP.items():
+        if hostname.endswith(f".{domain}") or hostname == domain:
+            return portal
+
+    return "custom"
 
 
 def detect_portal_from_html(html: str, url: Optional[str] = None) -> Tuple[str, dict]:
     """
-    Analyzes HTML structure to detect portal type and extracted metadata
-    (job title, company, description element, form element).
+    Extracts job metadata from HTML using semantic DOM selectors and canonical URL hostname parsing.
     """
-    portal_type = "generic"
-    if url:
-        detected = detect_portal_from_url(url)
-        if detected != "generic":
-            portal_type = detected
+    portal_type = detect_portal_from_url(url or "")
+    soup = BeautifulSoup(html or "", "html.parser")
 
-    soup = BeautifulSoup(html, "html.parser")
+    if portal_type == "custom":
+        doc_title = (soup.title.string if soup.title and soup.title.string else "").lower()
+        canonical_link = soup.find("link", rel="canonical")
+        if canonical_link and canonical_link.get("href"):
+            portal_type = detect_portal_from_url(str(canonical_link["href"]))
 
-    board_attr = soup.find(attrs={"data-board": True})
-    if board_attr:
-        portal_type = board_attr.get("data-board")
+        if portal_type == "custom":
+            if (
+                "greenhouse" in doc_title
+                or soup.find("meta", attrs={"property": "og:site_name", "content": re.compile(r"Greenhouse", re.I)})
+                or soup.find("input", attrs={"name": re.compile(r"job_application\[", re.I)})
+                or soup.find(id="first_name")
+            ):
+                portal_type = "greenhouse"
+            elif (
+                "lever" in doc_title
+                or soup.find("form", class_=re.compile(r"application-form", re.I))
+                or soup.find("input", attrs={"name": "urls[LinkedIn]"})
+            ):
+                portal_type = "lever"
+            elif "dou.ua" in doc_title or soup.find("a", href=re.compile(r"dou\.ua", re.I)):
+                portal_type = "dou.ua"
+            elif "djinni" in doc_title or soup.find("a", href=re.compile(r"djinni\.co", re.I)):
+                portal_type = "djinni.co"
+            elif "jobs.ge" in doc_title or soup.find("a", href=re.compile(r"jobs\.ge", re.I)):
+                portal_type = "jobs.ge"
+            elif "hr.ge" in doc_title or soup.find("a", href=re.compile(r"hr\.ge", re.I)):
+                portal_type = "hr.ge"
 
-    if portal_type == "generic":
-        if soup.find(id="application_form") or soup.find("input", attrs={"name": re.compile(r"job_application\[", re.I)}):
-            portal_type = "greenhouse"
-        elif soup.find("form", class_=re.compile(r"application-form", re.I)) or soup.find("input", attrs={"name": "urls[LinkedIn]"}):
-            portal_type = "lever"
-        elif "dou.ua" in html.lower() or soup.find(id="dou-apply-form"):
-            portal_type = "dou.ua"
-        elif "djinni.co" in html.lower() or soup.find(id="djinni-apply-form"):
-            portal_type = "djinni.co"
-        elif "justjoin.it" in html.lower() or soup.find(id="justjoin-apply-form"):
-            portal_type = "justjoin.it"
-        elif "jobs.ge" in html.lower() or "hr.ge" in html.lower() or "headhunter.ge" in html.lower():
-            portal_type = "jobs.ge"
-
-    # Extract Title
+    # Extract Title via semantic headings / OpenGraph metadata
     title = ""
-    title_el = (
-        soup.find(id="app-title")
-        or soup.find(id="posting-title")
-        or soup.find("h1", class_=re.compile(r"title|headline|job-title|g-h2", re.I))
-        or soup.find("h1")
-    )
-    if title_el:
-        title = title_el.get_text(strip=True)
+    og_title = soup.find("meta", attrs={"property": "og:title"})
+    h1_el = soup.find("h1")
+    if h1_el and h1_el.get_text(strip=True):
+        title = h1_el.get_text(strip=True)
+    elif og_title and og_title.get("content"):
+        title = str(og_title["content"]).strip()
 
-    # Extract Company
+    # Extract Company via semantic selectors
     company = ""
     company_el = (
-        soup.find(id="company-name")
-        or soup.find("div", class_=re.compile(r"company|posting-headline|b-compinfo", re.I))
+        soup.find(attrs={"itemprop": "hiringOrganization"})
         or soup.find("a", class_=re.compile(r"company", re.I))
+        or soup.find("div", class_=re.compile(r"company|employer|posting-headline", re.I))
         or soup.find("span", class_=re.compile(r"company", re.I))
     )
     if company_el:
         company = company_el.get_text(strip=True).split("•")[0].strip()
 
-    # Extract Description
-    desc_el = (
-        soup.find(id="job-description")
-        or soup.find(id="posting-description")
-        or soup.find("div", class_=re.compile(r"section-page|job-desc|description|b-typo|vacancy-section", re.I))
+    # Extract substantive description text
+    main_el = (
+        soup.find("main")
+        or soup.find("article")
+        or soup.find("div", class_=re.compile(r"description|vacancy|job-details|posting|b-typo|content", re.I))
+        or soup.body
+        or soup
     )
-    desc_text = desc_el.get_text(separator="\n", strip=True) if desc_el else soup.get_text(separator="\n", strip=True)
+    desc_text = main_el.get_text(separator="\n", strip=True) if main_el else ""
 
     return portal_type, {
         "title": title or "Senior QA Automation Engineer",

@@ -22,3 +22,8 @@ extension/node_modules/
 Thumbs.db
 .vscode/
 .idea/
+
+# SQLite WAL runtime files & HITL temporary screenshots
+*.db-shm
+*.db-wal
+data/resumes/generated/hitl_captcha_pause.png

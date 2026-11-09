@@ -1,35 +1,64 @@
-import re
-import textwrap
 import logging
-import concurrent.futures
+import re
 from pathlib import Path
 from typing import Dict, Any, List, Optional
+from xml.sax.saxutils import escape
+
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
+
 from ..config import GENERATED_RESUMES_DIR
 from ..storage.ground_truth_store import ground_truth_store
 from ..services.gemini_service import GEORGIAN_SKILL_TRANSLATIONS
 
 logger = logging.getLogger(__name__)
 
-_pdf_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+RESUME_STRATEGIST_SYSTEM_PROMPT = """You are an expert technical resume strategist for QA and SDET professionals.
+Generate a tailored resume strictly grounded in the candidate's verified profile and target vacancy.
+
+MANDATORY RULES:
+1. NO FABRICATION: Never invent jobs, dates, tools, degrees, or metrics not present in the candidate profile.
+2. Natural Professional Voice: Write in a confident, humanized active voice (e.g., "Architected end-to-end regression suite..."). Avoid robotic buzzwords and empty adjectives ("visionary", "rockstar").
+3. ATS Alignment: Align genuine matching skills to the exact terminology used in the job description.
+4. Metric-Driven Bullets: Structure bullet points around scope, action, and measurable results (test pass rates, defect reduction, CI/CD pipeline acceleration).
+5. Clean Single-Column Layout: Header -> Summary -> Technical Skills Matrix -> Work Experience -> Education & Certifications."""
 
 
-def _sanitize_pdf_text(text: str) -> str:
-    """Fallback ASCII sanitizer for Type1 Helvetica when Chromium PDF is skipped."""
-    replacements = {
-        "—": "-", "–": "-", "•": "*", "“": '"', "”": '"', "’": "'", "‘": "'", "€": "EUR ",
-    }
-    for k, v in replacements.items():
-        text = text.replace(k, v)
-    text = text.encode("latin-1", "replace").decode("latin-1")
-    return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+def _register_unicode_font() -> str:
+    """Registers a Unicode TrueType font (Sylfaen / Segoe UI / Arial) in ReportLab for English & Georgian rendering."""
+    font_candidates = [
+        ("Sylfaen", "C:/Windows/Fonts/sylfaen.ttf"),
+        ("SegoeUI", "C:/Windows/Fonts/segoeui.ttf"),
+        ("ArialUnicode", "C:/Windows/Fonts/arial.ttf"),
+    ]
+    for font_name, font_path in font_candidates:
+        if Path(font_path).exists():
+            try:
+                if font_name not in pdfmetrics.getRegisteredFontNames():
+                    pdfmetrics.registerFont(TTFont(font_name, font_path))
+                return font_name
+            except Exception as e:
+                logger.debug(f"Could not register TTF {font_path}: {e}")
+    return "Helvetica"
+
+
+UNICODE_FONT_NAME = _register_unicode_font()
 
 
 class CVGeneratorService:
     """
-    Generates a tailored, human-tone PDF CV for each specific job vacancy
-    in either English ('en') or Georgian ('ka' - ქართული ენა)
-    based on the user's attached candidate_skills.md + ground_truth.json.
+    Grounded, Non-Exaggerated Single-Column ATS CV Generator using ReportLab.
+    Produces clean, ATS-compliant single-column PDF resumes (and printable HTML previews)
+    following the structure:
+      Header -> Summary -> Technical Skills Matrix -> Work Experience -> Education & Certifications.
     """
+
+    SYSTEM_PROMPT = RESUME_STRATEGIST_SYSTEM_PROMPT
 
     def generate_vacancy_cv(
         self,
@@ -61,12 +90,13 @@ class CVGeneratorService:
         md_skills = parsed_md.get("skills") or []
         core_skills = md_skills or gt.get("skills", {}).get("core", [])
         work_history = parsed_md.get("work_history") or gt.get("work_history", [])
+        education = gt.get("education", [])
 
-        # Order skills so matched ATS keywords appear first
+        # Order genuine skills so matched ATS keywords appear first (NO FABRICATION)
         matched_lower = {s.lower() for s in matched_skills}
         prioritized_skills = sorted(
             core_skills,
-            key=lambda s: (0 if any(m in s.lower() or s.lower() in m for m in matched_lower) else 1)
+            key=lambda s: (0 if any(m in s.lower() or s.lower() in m for m in matched_lower) else 1),
         )
 
         if cv_language == "ka":
@@ -88,7 +118,7 @@ class CVGeneratorService:
             for h in job.get("highlights", [])[:2]:
                 tailored_highlights.append(f"{job.get('role')} @ {job.get('company')}: {h}")
 
-        # 1. Build rich HTML CV (supports full Georgian Unicode & English)
+        # 1. Build Single-Column ATS HTML Preview
         html_content = self._build_cv_html(
             candidate=candidate,
             target_role=job_title,
@@ -96,32 +126,23 @@ class CVGeneratorService:
             human_summary=human_summary,
             display_skills=display_skills,
             work_history=work_history,
-            education=gt.get("education", []),
+            education=education,
             cv_language=cv_language,
         )
         html_path.write_text(html_content, encoding="utf-8")
 
-        # 2. Render PDF (Uses Chromium HTML-to-PDF for Georgian 'ka' or rich layout, with instant fallback)
-        rendered_via_chromium = False
-        if cv_language == "ka":
-            try:
-                future = _pdf_executor.submit(self._render_html_to_pdf_sync, html_content, pdf_path)
-                future.result(timeout=8)
-                rendered_via_chromium = pdf_path.exists() and pdf_path.stat().st_size > 500
-            except Exception as e:
-                logger.warning(f"Chromium PDF render fallback: {e}")
-
-        if not rendered_via_chromium:
-            self._write_formatted_pdf(
-                filepath=pdf_path,
-                candidate=candidate,
-                target_role=job_title,
-                target_company=company,
-                human_summary=human_summary,
-                prioritized_skills=display_skills,
-                work_history=work_history,
-                education=gt.get("education", []),
-            )
+        # 2. Build Clean Single-Column ATS PDF via ReportLab
+        self._build_reportlab_single_column_pdf(
+            filepath=pdf_path,
+            candidate=candidate,
+            target_role=job_title,
+            target_company=company,
+            human_summary=human_summary,
+            display_skills=display_skills,
+            work_history=work_history,
+            education=education,
+            cv_language=cv_language,
+        )
 
         start_date_str = "1 კვირა შეთავაზებიდან (1 week after offer)" if cv_language == "ka" else "1 week after offer"
 
@@ -140,22 +161,165 @@ class CVGeneratorService:
             "tailored_highlights": tailored_highlights,
             "ats_keywords_covered": matched_skills or display_skills[:8],
             "start_date_default": start_date_str,
-            "expected_salary": f"EUR {candidate.get('compensation', {}).get('expected_salary_eur', 85000):,} / year (or local market rate)"
+            "expected_salary": f"EUR {candidate.get('compensation', {}).get('expected_salary_eur', 85000):,} / year (or local market rate)",
         }
 
-    def _render_html_to_pdf_sync(self, html_content: str, pdf_path: Path) -> None:
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
-            page.set_content(html_content, wait_until="domcontentloaded")
-            page.pdf(
-                path=str(pdf_path),
-                format="A4",
-                print_background=True,
-                margin={"top": "14mm", "bottom": "14mm", "left": "15mm", "right": "15mm"}
+    def _build_reportlab_single_column_pdf(
+        self,
+        filepath: Path,
+        candidate: Dict[str, Any],
+        target_role: str,
+        target_company: str,
+        human_summary: str,
+        display_skills: List[str],
+        work_history: List[Dict[str, Any]],
+        education: List[Dict[str, Any]],
+        cv_language: str = "en",
+    ) -> None:
+        """
+        Generates a clean, ATS-compliant single-column PDF resume using ReportLab:
+        Header -> Summary -> Technical Skills Matrix -> Work Experience -> Education & Certifications.
+        """
+        is_ka = cv_language == "ka"
+        font_name = UNICODE_FONT_NAME
+
+        doc = SimpleDocTemplate(
+            str(filepath),
+            pagesize=A4,
+            leftMargin=16 * mm,
+            rightMargin=16 * mm,
+            topMargin=14 * mm,
+            bottomMargin=14 * mm,
+            title=f"{candidate.get('full_name', 'Candidate')} - {target_role}",
+        )
+
+        styles = getSampleStyleSheet()
+        header_style = ParagraphStyle(
+            "CVHeaderName",
+            parent=styles["Normal"],
+            fontName=font_name,
+            fontSize=18,
+            leading=22,
+            textColor=colors.HexColor("#0f172a"),
+            spaceAfter=2,
+        )
+        role_style = ParagraphStyle(
+            "CVTargetRole",
+            parent=styles["Normal"],
+            fontName=font_name,
+            fontSize=11.5,
+            leading=15,
+            textColor=colors.HexColor("#0284c7"),
+            spaceAfter=4,
+        )
+        contact_style = ParagraphStyle(
+            "CVContact",
+            parent=styles["Normal"],
+            fontName=font_name,
+            fontSize=9,
+            leading=13,
+            textColor=colors.HexColor("#475569"),
+            spaceAfter=6,
+        )
+        sec_title_style = ParagraphStyle(
+            "CVSectionTitle",
+            parent=styles["Normal"],
+            fontName=font_name,
+            fontSize=10.5,
+            leading=14,
+            textColor=colors.HexColor("#0369a1"),
+            spaceBefore=8,
+            spaceAfter=4,
+        )
+        body_style = ParagraphStyle(
+            "CVBody",
+            parent=styles["Normal"],
+            fontName=font_name,
+            fontSize=9.5,
+            leading=13.5,
+            textColor=colors.HexColor("#1e293b"),
+            spaceAfter=4,
+        )
+        bullet_style = ParagraphStyle(
+            "CVBullet",
+            parent=body_style,
+            leftIndent=12,
+            spaceAfter=2.5,
+        )
+
+        full_name = escape(str(candidate.get("full_name", "Alex Mercer")))
+        email = escape(str(candidate.get("email", "alex.mercer.dev@gmail.com")))
+        phone = escape(str(candidate.get("phone", "+49 152 98765432")))
+        loc_dict = candidate.get("location", {})
+        loc = escape(
+            f"{loc_dict.get('city', 'Tbilisi')}, {loc_dict.get('country', 'Georgia')}"
+            if isinstance(loc_dict, dict)
+            else str(loc_dict)
+        )
+        linkedin = escape(str(candidate.get("links", {}).get("linkedin", "linkedin.com/in/alex-mercer-qa")))
+
+        lbl_summary = (
+            f"პროფესიული მიმოხილვა ({escape(target_company)})"
+            if is_ka
+            else f"PROFESSIONAL SUMMARY — TAILORED FOR {escape(target_company.upper())}"
+        )
+        lbl_skills = "ძირითადი უნარები და ტექნიკური მატრიცა" if is_ka else "TECHNICAL SKILLS MATRIX"
+        lbl_exp = "სამუშაო გამოცდილება" if is_ka else "WORK EXPERIENCE"
+        lbl_edu = "განათლება და სერტიფიკატები" if is_ka else "EDUCATION & CERTIFICATIONS"
+        lbl_start = "მზადყოფნა: შეთავაზებიდან 1 კვირაში" if is_ka else "Availability: 1 week after offer"
+
+        story = []
+
+        # 1. Header
+        story.append(Paragraph(f"<b>{full_name}</b>", header_style))
+        story.append(Paragraph(escape(target_role), role_style))
+        story.append(
+            Paragraph(
+                f"{email} | {phone} | {loc} | {linkedin} | {lbl_start}",
+                contact_style,
             )
-            browser.close()
+        )
+        story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#0284c7"), spaceAfter=6))
+
+        # 2. Summary
+        story.append(Paragraph(f"<b>{lbl_summary}</b>", sec_title_style))
+        story.append(Paragraph(escape(human_summary), body_style))
+
+        # 3. Technical Skills Matrix
+        story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#cbd5e1"), spaceBefore=4, spaceAfter=4))
+        story.append(Paragraph(f"<b>{lbl_skills}</b>", sec_title_style))
+        skills_text = " • ".join(escape(s) for s in display_skills[:20])
+        story.append(Paragraph(skills_text, body_style))
+
+        # 4. Work Experience
+        story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#cbd5e1"), spaceBefore=4, spaceAfter=4))
+        story.append(Paragraph(f"<b>{lbl_exp}</b>", sec_title_style))
+        for job in work_history[:4]:
+            r_title = escape(str(job.get("role", "")))
+            r_comp = escape(str(job.get("company", "")))
+            r_dates = escape(f"{job.get('start_date', '')} - {job.get('end_date', '')}".strip(" -"))
+            story.append(Paragraph(f"<b>{r_title}</b> | {r_comp} ({r_dates})", body_style))
+            for b in job.get("highlights", [])[:4]:
+                story.append(Paragraph(f"• {escape(str(b))}", bullet_style))
+            story.append(Spacer(1, 3))
+
+        # 5. Education & Certifications
+        story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#cbd5e1"), spaceBefore=4, spaceAfter=4))
+        story.append(Paragraph(f"<b>{lbl_edu}</b>", sec_title_style))
+        for edu in education:
+            deg = escape(str(edu.get("degree", "")))
+            inst = escape(str(edu.get("institution", "")))
+            yr = escape(str(edu.get("graduation_year", "")))
+            story.append(Paragraph(f"<b>{deg}</b> — {inst} ({yr})", body_style))
+
+        lang_line = (
+            "ენები: ქართული (მშობლიური), ინგლისური (თავისუფლად C1/C2) | მუშაობის დაწყება: 1 კვირა შეთავაზებიდან"
+            if is_ka
+            else "Languages: English (Fluent C1/C2), Georgian (Native) | Notice Period: 1 week after offer"
+        )
+        story.append(Paragraph(lang_line, body_style))
+
+        doc.build(story)
 
     def _build_cv_html(
         self,
@@ -172,13 +336,18 @@ class CVGeneratorService:
         full_name = candidate.get("full_name", "Alex Mercer")
         email = candidate.get("email", "alex.mercer.dev@gmail.com")
         phone = candidate.get("phone", "+995 599 12 34 56")
-        loc = candidate.get("location", {}).get("city", "Tbilisi") + ", " + candidate.get("location", {}).get("country", "Georgia")
+        loc_dict = candidate.get("location", {})
+        loc = (
+            f"{loc_dict.get('city', 'Tbilisi')}, {loc_dict.get('country', 'Georgia')}"
+            if isinstance(loc_dict, dict)
+            else str(loc_dict)
+        )
         linkedin = candidate.get("links", {}).get("linkedin", "linkedin.com/in/candidate")
 
         lbl_summary = f"პროფესიული მიმოხილვა ({target_company})" if is_ka else f"PROFESSIONAL SUMMARY (TAILORED FOR {target_company.upper()})"
-        lbl_skills = "ძირითადი უნარები და კომპეტენციები" if is_ka else "CORE SKILLS & COMPETENCIES"
-        lbl_exp = "სამუშაო გამოცდილება" if is_ka else "PROFESSIONAL WORK EXPERIENCE"
-        lbl_edu = "განათლება და ენები" if is_ka else "EDUCATION & AVAILABILITY"
+        lbl_skills = "ძირითადი უნარები და კომპეტენციები" if is_ka else "TECHNICAL SKILLS MATRIX"
+        lbl_exp = "სამუშაო გამოცდილება" if is_ka else "WORK EXPERIENCE"
+        lbl_edu = "განათლება და სერტიფიკატები" if is_ka else "EDUCATION & CERTIFICATIONS"
         lbl_start = "მუშაობის დაწყება: შეთავაზებიდან 1 კვირაში" if is_ka else "Availability: 1 week after offer"
 
         skills_badges = "".join(
@@ -265,103 +434,6 @@ class CVGeneratorService:
   </div>
 </body>
 </html>"""
-
-    def _write_formatted_pdf(
-        self,
-        filepath: Path,
-        candidate: Dict[str, Any],
-        target_role: str,
-        target_company: str,
-        human_summary: str,
-        prioritized_skills: List[str],
-        work_history: List[Dict[str, Any]],
-        education: List[Dict[str, Any]],
-    ) -> None:
-        """Fast pure-Python PDF writer."""
-        commands = []
-        y = 755
-
-        def add_line(text: str, font: str = "F1", size: int = 10, indent: int = 48, spacing: int = 14):
-            nonlocal y
-            if y < 45:
-                return
-            safe = _sanitize_pdf_text(text)
-            commands.append(f"BT /{font} {size} Tf {indent} {y} Td ({safe}) Tj ET")
-            y -= spacing
-
-        def add_wrapped(text: str, font: str = "F1", size: int = 9, width: int = 92, indent: int = 48, spacing: int = 12):
-            for line in textwrap.wrap(text, width=width):
-                add_line(line, font=font, size=size, indent=indent, spacing=spacing)
-
-        def add_divider():
-            nonlocal y
-            y -= 2
-            commands.append(f"0.75 0.78 0.82 RG 0.8 w 48 {y + 6} m 564 {y + 6} l S")
-            y -= 10
-
-        full_name = candidate.get("full_name", "Alex Mercer")
-        email = candidate.get("email", "alex.mercer.dev@gmail.com")
-        phone = candidate.get("phone", "+49 152 98765432")
-        loc = candidate.get("location", {}).get("city", "Tbilisi") + ", " + candidate.get("location", {}).get("country", "Georgia")
-        linkedin = candidate.get("links", {}).get("linkedin", "linkedin.com/in/candidate")
-
-        add_line(f"{full_name}  -  {target_role}", font="F2", size=15, spacing=16)
-        add_line(f"{email}  |  {phone}  |  {loc}", font="F1", size=9, spacing=12)
-        add_line(f"LinkedIn: {linkedin}  |  Availability: 1 week after offer", font="F1", size=8, spacing=12)
-        add_divider()
-
-        add_line(f"SUMMARY (TAILORED FOR {target_company.upper()})", font="F2", size=10, spacing=13)
-        add_wrapped(human_summary, font="F1", size=9, width=95, spacing=12)
-        y -= 4
-        add_divider()
-
-        add_line("CORE SKILLS & COMPETENCIES", font="F2", size=10, spacing=13)
-        skills_str = ", ".join(prioritized_skills[:18])
-        add_wrapped(skills_str, font="F1", size=9, width=95, spacing=12)
-        y -= 4
-        add_divider()
-
-        add_line("PROFESSIONAL WORK EXPERIENCE", font="F2", size=10, spacing=14)
-        for job in work_history[:3]:
-            role_line = f"{job.get('role', '')}  |  {job.get('company', '')} ({job.get('start_date', '')} - {job.get('end_date', '')})"
-            add_line(role_line, font="F2", size=9, spacing=12)
-            for bullet in job.get("highlights", [])[:3]:
-                for idx, wrapped_line in enumerate(textwrap.wrap(bullet, width=88)):
-                    prefix = "* " if idx == 0 else "  "
-                    add_line(prefix + wrapped_line, font="F1", size=9, indent=56, spacing=11)
-            y -= 4
-
-        add_divider()
-        add_line("EDUCATION & LANGUAGES", font="F2", size=10, spacing=13)
-        for edu in education:
-            add_line(f"{edu.get('degree', 'Degree')} - {edu.get('institution', '')} ({edu.get('graduation_year', '')})", font="F1", size=9, spacing=12)
-        add_line("Languages: English (Fluent), Georgian (Native)  |  Start Date: 1 week after offer", font="F1", size=9, spacing=12)
-
-        content_stream = "\n".join(commands)
-        stream_bytes = content_stream.encode("latin-1", "replace")
-        stream_len = len(stream_bytes)
-
-        pdf_header = (
-            "%PDF-1.4\n"
-            "1 0 obj <</Type /Catalog /Pages 2 0 R>> endobj\n"
-            "2 0 obj <</Type /Pages /Kids [3 0 R] /Count 1>> endobj\n"
-            "3 0 obj <</Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
-            "/Resources <</Font <</F1 4 0 R /F2 5 0 R>>>> /Contents 6 0 R>> endobj\n"
-            "4 0 obj <</Type /Font /Subtype /Type1 /BaseFont /Helvetica>> endobj\n"
-            "5 0 obj <</Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold>> endobj\n"
-            f"6 0 obj <</Length {stream_len}>> stream\n"
-        ).encode("latin-1")
-
-        pdf_footer = (
-            "\nendstream\nendobj\n"
-            "xref\n0 7\n"
-            "0000000000 65535 f \n"
-            "trailer <</Size 7 /Root 1 0 R>>\n"
-            "startxref\n0\n%%EOF"
-        ).encode("latin-1")
-
-        with open(filepath, "wb") as f:
-            f.write(pdf_header + stream_bytes + pdf_footer)
 
 
 cv_generator_service = CVGeneratorService()

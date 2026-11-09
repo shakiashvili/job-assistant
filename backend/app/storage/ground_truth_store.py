@@ -350,59 +350,26 @@ class GroundTruthStore:
 
     def ingest_skills_markdown(self, md_content: str) -> CandidateProfile:
         """
-        Ingests a skills.md file into the CandidateProfile relational table,
-        computing structured QA/SDET + multi-industry taxonomy via MatcherService/Gemini.
+        Ingests a skills.md file into the CandidateProfile relational table via ProfileService,
+        extracting personal info, QA/SDET taxonomy, and work history.
         """
-        try:
-            self.skills_md_path.write_text(md_content, encoding="utf-8")
-        except Exception:
-            pass
-
+        from ..services.profile_service import profile_service
+        profile = profile_service.upsert_candidate_profile(md_content)
         parsed = self.parse_profile_from_md(md_content)
-        taxonomy = matcher_service.parse_skills_markdown(md_content)
-
-        gt = self.get_data()
-        gt.pop("skills_md_raw", None)
-        gt.pop("parsed_skills_taxonomy", None)
-
-        cand = gt.setdefault("candidate", {})
-        if parsed.get("full_name"):
-            cand["full_name"] = parsed["full_name"]
-            name_parts = parsed["full_name"].split()
-            cand["first_name"] = name_parts[0]
-            cand["last_name"] = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
-        if parsed.get("headline"):
-            cand["headline"] = parsed["headline"]
-        if parsed.get("email"):
-            cand["email"] = parsed["email"]
-        if parsed.get("phone"):
-            cand["phone"] = parsed["phone"]
-        if parsed.get("skills"):
-            gt.setdefault("skills", {})["core"] = parsed["skills"]
         if parsed.get("work_history"):
-            gt["work_history"] = parsed["work_history"]
-        cand.setdefault("compensation", {})["notice_period"] = "1 week after offer"
-
-        taxonomy["ground_truth_vault"] = gt
-
-        with Session(engine) as session:
-            profile = session.exec(
-                select(CandidateProfile).order_by(CandidateProfile.updated_at.desc())
-            ).first()
-            if profile:
-                profile.raw_markdown = md_content
-                profile.parsed_skills = taxonomy
-                profile.updated_at = utc_now()
-            else:
-                profile = CandidateProfile(
-                    raw_markdown=md_content,
-                    parsed_skills=taxonomy,
-                    updated_at=utc_now(),
-                )
-            session.add(profile)
-            session.commit()
-            session.refresh(profile)
-            return profile
+            with Session(engine, expire_on_commit=False) as session:
+                db_prof = session.get(CandidateProfile, profile.id)
+                if db_prof:
+                    skills_copy = dict(db_prof.parsed_skills)
+                    vault = dict(skills_copy.get("ground_truth_vault") or {})
+                    vault["work_history"] = parsed["work_history"]
+                    skills_copy["ground_truth_vault"] = vault
+                    db_prof.parsed_skills = skills_copy
+                    session.add(db_prof)
+                    session.commit()
+                    session.refresh(db_prof)
+                    return db_prof
+        return profile
 
     def save_skills_md(self, md_content: str) -> Dict[str, Any]:
         """Saves skills.md into CandidateProfile and returns the updated ground truth dictionary."""

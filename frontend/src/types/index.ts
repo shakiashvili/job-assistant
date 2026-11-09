@@ -156,8 +156,11 @@ export interface GapItem {
 
 export interface CompanyValidation {
   company_name: string;
+  reputation?: 'VERIFIED' | 'UNVERIFIED' | 'BLACKLISTED' | string;
   review_count: number;
-  rating: number;
+  reviews_count?: number;
+  rating: number | null;
+  is_blacklisted?: boolean;
   passed_gate: boolean;
   portals_checked: string[];
   verdict: string;

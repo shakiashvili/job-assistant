@@ -1,36 +1,51 @@
 /**
- * AI Job Application Assistant - Content Script
- * Detects DOU.ua, Djinni, Jobs.ge, HR.ge, HeadHunter.ge, JustJoin.it, Greenhouse, and Lever fields.
+ * AI Job Application Assistant - Semantic Content Script (Manifest V3)
+ * Uses configurable api_base_url via chrome.storage.sync and semantic label/aria/placeholder DOM matching.
+ * Never clicks CAPTCHAs automatically (flags HITL review instead).
  */
 
-const BACKEND_URL = "http://localhost:8000";
+const DEFAULT_API_BASE_URL = "http://localhost:8000";
+
+async function getApiBaseUrl() {
+  return new Promise((resolve) => {
+    if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.sync) {
+      chrome.storage.sync.get({ api_base_url: DEFAULT_API_BASE_URL }, (items) => {
+        resolve((items.api_base_url || DEFAULT_API_BASE_URL).replace(/\/+$/, ""));
+      });
+    } else {
+      resolve(DEFAULT_API_BASE_URL);
+    }
+  });
+}
 
 class JobPortalAssistant {
   constructor() {
     this.portalType = this.detectPortal();
     this.groundTruth = null;
     this.auditResult = null;
+    this.apiBaseUrl = DEFAULT_API_BASE_URL;
     this.init();
   }
 
   detectPortal() {
-    const url = window.location.href.toLowerCase();
+    const hostname = (window.location.hostname || "").toLowerCase();
     const boardAttr = document.body?.getAttribute("data-board");
     if (boardAttr) return boardAttr;
-    if (url.includes("dou.ua") || url.includes("dou_sample")) return "dou.ua";
-    if (url.includes("djinni.co") || url.includes("djinni_sample")) return "djinni.co";
-    if (url.includes("jobs.ge") || url.includes("jobs_ge_sample")) return "jobs.ge";
-    if (url.includes("hr.ge")) return "hr.ge";
-    if (url.includes("headhunter.ge") || url.includes("hh.ge")) return "headhunter.ge";
-    if (url.includes("justjoin.it") || url.includes("justjoin_sample")) return "justjoin.it";
-    if (url.includes("greenhouse.io") || url.includes("greenhouse_sample")) return "greenhouse";
-    if (url.includes("lever.co") || url.includes("lever_sample")) return "lever";
+    if (hostname.includes("dou.ua")) return "dou.ua";
+    if (hostname.includes("djinni.co")) return "djinni.co";
+    if (hostname.includes("jobs.ge")) return "jobs.ge";
+    if (hostname.includes("hr.ge")) return "hr.ge";
+    if (hostname.includes("headhunter.ge") || hostname.includes("hh.ge")) return "headhunter.ge";
+    if (hostname.includes("justjoin.it")) return "justjoin.it";
+    if (hostname.includes("greenhouse.io")) return "greenhouse";
+    if (hostname.includes("lever.co")) return "lever";
     if (document.querySelector("form")) return "generic";
     return "unknown";
   }
 
   async init() {
-    if (window.location.port === "5173") return; // Do not inject HUD onto the React dashboard itself
+    if (window.location.port === "5173") return;
+    this.apiBaseUrl = await getApiBaseUrl();
     await this.fetchGroundTruth();
     this.injectHUD();
     this.setupMessageListeners();
@@ -38,12 +53,13 @@ class JobPortalAssistant {
 
   async fetchGroundTruth() {
     try {
-      const res = await fetch(`${BACKEND_URL}/api/ground-truth`);
+      this.apiBaseUrl = await getApiBaseUrl();
+      const res = await fetch(`${this.apiBaseUrl}/api/ground-truth`);
       if (res.ok) {
         this.groundTruth = await res.json();
       }
     } catch (err) {
-      console.warn("[AI Job Assistant] Local backend not reachable yet:", err);
+      console.warn("[AI Job Assistant] Backend not reachable yet:", err);
     }
   }
 
@@ -79,7 +95,7 @@ class JobPortalAssistant {
         </div>
 
         <button class="hud-btn-primary" id="btn-autofill">
-          ⚡ Autofill All, CAPTCHA & Stage
+          ⚡ Semantic Autofill & HITL Stage
         </button>
       </div>
     `;
@@ -103,10 +119,11 @@ class JobPortalAssistant {
     btn.disabled = true;
 
     try {
+      this.apiBaseUrl = await getApiBaseUrl();
       const pageText = document.body.innerText.slice(0, 10000);
       const variant = document.getElementById("hud-variant-select").value;
 
-      const res = await fetch(`${BACKEND_URL}/api/audit-job`, {
+      const res = await fetch(`${this.apiBaseUrl}/api/audit-job`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -122,7 +139,7 @@ class JobPortalAssistant {
       this.renderAuditResult(data);
     } catch (e) {
       console.error(e);
-      alert("Could not audit job. Ensure local backend is running at http://localhost:8000");
+      alert(`Could not audit job. Ensure backend is running at ${this.apiBaseUrl}`);
     } finally {
       btn.textContent = "🔍 Audit Vacancy & Generate PDF CV";
       btn.disabled = false;
@@ -146,11 +163,44 @@ class JobPortalAssistant {
         ${compVal.verdict || 'Company validated'}
       </div>
       ${cv.pdf_url ? `
-        <a href="${BACKEND_URL}${cv.pdf_url}" target="_blank" style="display:block; text-align:center; font-size:11px; background:#0284c7; color:#fff; padding:6px; border-radius:6px; text-decoration:none; margin-bottom:8px; font-weight:600;">
-          📄 Download Tailored Human-Tone CV (${cv.pdf_filename})
+        <a href="${this.apiBaseUrl}${cv.pdf_url}" target="_blank" style="display:block; text-align:center; font-size:11px; background:#0284c7; color:#fff; padding:6px; border-radius:6px; text-decoration:none; margin-bottom:8px; font-weight:600;">
+          📄 Download Single-Column ATS CV (${cv.pdf_filename})
         </a>
       ` : ''}
     `;
+  }
+
+  /**
+   * Semantic DOM Locator:
+   * 1. Associated <label> text or aria-label
+   * 2. placeholder text
+   * 3. Fallback semantic name/type attributes
+   */
+  findSemanticField(labelPatterns, fallbackSelector) {
+    const inputs = Array.from(document.querySelectorAll("input:not([type='hidden']), textarea, select"));
+    for (const pattern of labelPatterns) {
+      const regex = new RegExp(pattern, "i");
+      for (const el of inputs) {
+        // Check explicit <label for="id"> or wrapping <label>
+        let labelText = "";
+        if (el.id) {
+          const explicitLabel = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+          if (explicitLabel) labelText += " " + explicitLabel.innerText;
+        }
+        const parentLabel = el.closest("label");
+        if (parentLabel) labelText += " " + parentLabel.innerText;
+        const ariaLabel = el.getAttribute("aria-label") || "";
+        const placeholder = el.getAttribute("placeholder") || "";
+
+        if (regex.test(labelText) || regex.test(ariaLabel) || regex.test(placeholder)) {
+          return el;
+        }
+      }
+    }
+    if (fallbackSelector) {
+      return document.querySelector(fallbackSelector);
+    }
+    return null;
   }
 
   async autofill() {
@@ -158,7 +208,7 @@ class JobPortalAssistant {
       await this.fetchGroundTruth();
     }
     if (!this.groundTruth) {
-      alert("Unable to connect to local backend at http://localhost:8000. Start the backend first.");
+      alert(`Unable to connect to backend at ${this.apiBaseUrl}. Start the backend first.`);
       return;
     }
 
@@ -189,40 +239,38 @@ class JobPortalAssistant {
       return true;
     };
 
-    // 1. Names, Email, Phone
-    setVal(document.querySelector("#first_name, input[name*='first_name']"), candidate.first_name);
-    setVal(document.querySelector("#last_name, input[name*='last_name']"), candidate.last_name);
-    setVal(document.querySelector("#full_name, #full-name, input[name='name']"), candidate.full_name);
-    setVal(document.querySelector("#email, input[name='email'], input[type='email']"), candidate.email);
-    setVal(document.querySelector("#phone, input[name='phone'], input[type='tel']"), candidate.phone);
-    setVal(document.querySelector("#org, input[name='org']"), this.groundTruth.work_history?.[0]?.company);
+    // 1. Semantic Name, Email, Phone, Organization
+    setVal(this.findSemanticField(["first name", "given name"], "input[name*='first_name']"), candidate.first_name);
+    setVal(this.findSemanticField(["last name", "surname", "family name"], "input[name*='last_name']"), candidate.last_name);
+    setVal(this.findSemanticField(["^full name", "^your name", "candidate name"], "input[name='name']"), candidate.full_name);
+    setVal(this.findSemanticField(["email", "e-mail"], "input[type='email'], input[name*='email']"), candidate.email);
+    setVal(this.findSemanticField(["phone", "mobile", "telephone"], "input[type='tel'], input[name*='phone']"), candidate.phone);
+    setVal(this.findSemanticField(["current company", "organization", "employer"], "input[name='org']"), this.groundTruth.work_history?.[0]?.company);
 
-    // 2. Social Links
-    setVal(document.querySelector("#linkedin, #linkedin-url, input[name='urls[LinkedIn]'], input[autocomplete='custom-question-linkedin-profile']"), links.linkedin);
-    setVal(document.querySelector("#github-url, input[name='urls[GitHub]']"), links.github);
-    setVal(document.querySelector("#portfolio-url, input[name='urls[Portfolio]'], input[autocomplete='custom-question-website']"), links.portfolio || links.github);
+    // 2. Semantic Social Links
+    setVal(this.findSemanticField(["linkedin"], "input[name*='linkedin' i]"), links.linkedin);
+    setVal(this.findSemanticField(["github"], "input[name*='github' i]"), links.github);
+    setVal(this.findSemanticField(["portfolio", "website", "personal site"], "input[name*='portfolio' i]"), links.portfolio || links.github);
 
-    // 3. Human-Tone Applicant Summary, DOU.ua Motivational Letter, Salary, and Start Date (1 week after offer)
+    // 3. Semantic Summary, Motivational Letter, AI Salary, and Start Date
     const summaryText = cv.applicant_summary || "Senior QA Automation Engineer with 5+ years building reliable Playwright, Cypress, and Python test suites. Available 1 week after offer.";
     const douLetter = cv.dou_motivational_letter || cv.motivation_statement || "Hi team! I would love to bring my 5+ years of Playwright & Python automation experience to your engineering team. Available to start 1 week after offer.";
     const salaryText = cv.expected_salary || `€${comp.expected_salary_eur || 85000} / yr ($4,500/mo remote)`;
 
-    setVal(document.querySelector("#applicant_summary, textarea[name*='summary'], #additional-comments"), summaryText);
-    setVal(document.querySelector("#dou_motivational_letter, textarea[name*='motivational_letter']"), douLetter);
-    setVal(document.querySelector("#motivation, #custom-question-motivation, textarea[name*='motivation'], textarea[name='message']"), douLetter);
-    setVal(document.querySelector("#salary, #salary_expectation, #custom-question-salary, input[name*='salary']"), salaryText);
-    setVal(document.querySelector("#start_date, #custom-question-notice, input[name*='start_date'], input[name*='notice']"), "1 week after offer");
+    setVal(this.findSemanticField(["applicant summary", "introduce yourself", "additional information", "summary"], "textarea[name*='summary'], textarea[name*='comments']"), summaryText);
+    setVal(this.findSemanticField(["motivational letter", "cover letter", "why are you interested", "motivation", "message to recruiter"], "textarea[name*='motivation'], textarea[name='message']"), douLetter);
+    setVal(this.findSemanticField(["salary", "compensation", "remuneration"], "input[name*='salary']"), salaryText);
+    setVal(this.findSemanticField(["start date", "notice period", "when can you start"], "input[name*='start_date'], input[name*='notice']"), "1 week after offer");
 
-    // 4. Check CAPTCHA checkbox if present
-    const captchaBox = document.querySelector("#captcha-checkbox, input[name*='captcha'], input[type='checkbox'][id*='captcha']");
-    if (captchaBox && !captchaBox.checked) {
-      captchaBox.click();
-      captchaBox.checked = true;
-      captchaBox.dispatchEvent(new Event("change", { bubbles: true }));
-      filledCount++;
+    // 4. Non-Clicking HITL Anti-Bot / CAPTCHA Detection (Never auto-click CAPTCHAs)
+    const captchaChallenge = document.querySelector(
+      "iframe[src*='recaptcha'], iframe[src*='turnstile'], iframe[src*='hcaptcha'], .g-recaptcha, .cf-turnstile, .h-captcha, #captcha-checkbox, input[name*='captcha']"
+    );
+    if (captchaChallenge) {
+      this.showToast(`⚠️ ${filledCount} fields staged! CAPTCHA detected — paused for Human-in-the-Loop (HITL) manual verification.`);
+    } else {
+      this.showToast(`✅ ${filledCount} fields semantically staged! Ready for Human-in-the-Loop review.`);
     }
-
-    this.showToast(`✅ ${filledCount} fields + CAPTCHA staged! Start date set to '1 week after offer'.`);
   }
 
   showToast(msg) {
@@ -230,7 +278,7 @@ class JobPortalAssistant {
     toast.className = "ai-toast-banner";
     toast.textContent = msg;
     document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 4500);
+    setTimeout(() => toast.remove(), 5000);
   }
 
   setupMessageListeners() {

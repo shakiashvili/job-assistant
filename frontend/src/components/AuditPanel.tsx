@@ -868,7 +868,7 @@ export const AuditPanel: React.FC = () => {
                     Company Review Validation (3+ Reviews Gate)
                   </span>
                   <span>
-                    {auditResult.company_validation.review_count} Reviews • {auditResult.company_validation.rating}★
+                    {auditResult.company_validation.review_count} Reviews • {auditResult.company_validation.rating !== null ? `${auditResult.company_validation.rating}★` : (auditResult.company_validation.reputation || 'UNVERIFIED')}
                   </span>
                 </div>
                 <p className="text-[11px] text-slate-300">{auditResult.company_validation.verdict}</p>

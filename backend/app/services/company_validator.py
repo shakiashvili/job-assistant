@@ -1,4 +1,3 @@
-import hashlib
 from typing import Dict, Any
 from ..models.schemas import CompanyValidation
 
@@ -46,6 +45,20 @@ KNOWN_COMPANIES_DB: Dict[str, Dict[str, Any]] = {
         "pros": ["Strong fintech & client operations team", "Good career growth & training"],
         "cons": ["Strict banking compliance processes"]
     },
+    "bank of georgia": {
+        "review_count": 76,
+        "rating": 4.3,
+        "portals_checked": ["Jobs.ge", "HR.ge", "Glassdoor (48 reviews)"],
+        "pros": ["Strong fintech & client operations team", "Good career growth & training"],
+        "cons": ["Strict banking compliance processes"]
+    },
+    "space international": {
+        "review_count": 45,
+        "rating": 4.4,
+        "portals_checked": ["Jobs.ge", "HR.ge", "Glassdoor"],
+        "pros": ["Digital neobank engineering culture", "Modern QA & CI/CD practices"],
+        "cons": ["Fast product iteration"]
+    },
     "epam": {
         "review_count": 950,
         "rating": 4.1,
@@ -63,9 +76,9 @@ KNOWN_COMPANIES_DB: Dict[str, Dict[str, Any]] = {
     "rooms hotel": {
         "review_count": 62,
         "rating": 4.7,
-        "portals_checked": ["Jobs.ge", "HR.ge", "Glassdoor (38 reviews)", "TripAdvisor Employer Index (24 reviews)"],
-        "pros": ["Premier luxury lifestyle hospitality brand in Georgia (Adjara Group)", "Health insurance, meals & career mobility", "International guest environment"],
-        "cons": ["Busy peak tourist seasons & shift rotations"]
+        "portals_checked": ["Jobs.ge", "HR.ge", "Glassdoor (38 reviews)"],
+        "pros": ["Premier luxury lifestyle hospitality brand in Georgia (Adjara Group)", "Health insurance & career mobility"],
+        "cons": ["Busy peak tourist seasons"]
     },
     "adjara group": {
         "review_count": 68,
@@ -85,14 +98,14 @@ KNOWN_COMPANIES_DB: Dict[str, Dict[str, Any]] = {
         "review_count": 54,
         "rating": 4.3,
         "portals_checked": ["HR.ge (31 reviews)", "Jobs.ge (23 reviews)", "Glassdoor"],
-        "pros": ["Largest hospital & clinic network in Georgia", "Stable medical administration career path & health coverage"],
+        "pros": ["Largest hospital & clinic network in Georgia", "Stable medical administration career path"],
         "cons": ["High daily outpatient intake volume"]
     },
     "todua": {
         "review_count": 41,
         "rating": 4.6,
         "portals_checked": ["Jobs.ge", "HR.ge", "Glassdoor"],
-        "pros": ["State-of-the-art diagnostic & hospital center", "Modern EMR systems & respectful medical team"],
+        "pros": ["State-of-the-art diagnostic & hospital center", "Modern EMR systems"],
         "cons": ["Fast-paced morning registration hours"]
     },
     "evolution": {
@@ -113,56 +126,67 @@ KNOWN_COMPANIES_DB: Dict[str, Dict[str, Any]] = {
 
 
 class CompanyValidatorService:
+    """
+    Validates company reputation without synthetic MD5 fabrication.
+    - Verified companies in cache return reputation="VERIFIED" with real cached metrics.
+    - Explicitly flagged companies (<3 reviews / blacklisted) return reputation="BLACKLISTED" and passed_gate=False.
+    - Unknown companies return neutral status: reputation="UNVERIFIED", rating=None, reviews_count=0, is_blacklisted=False.
+    """
+
     def validate_company(self, company_name: str, raw_text: str = "") -> CompanyValidation:
-        """
-        Validates a company's reputation across job portals.
-        Enforces the 3+ reviews requirement before applying.
-        """
         clean_name = (company_name or "Unknown Company").strip()
         lower_name = clean_name.lower()
         lower_text = (raw_text or "").lower()
 
-        # Check explicit negative signals (e.g., no reviews or stealth/unverified company)
-        if any(w in lower_name or w in lower_text for w in ["0 reviews", "1 review", "2 reviews", "unverified", "stealth", "noreview"]):
+        # Check explicit negative / blacklisted signals (e.g., <3 reviews or blacklisted company)
+        if any(w in lower_name or w in lower_text for w in ["0 reviews", "1 review", "2 reviews", "unverified", "stealth", "noreview", "blacklist"]):
             return CompanyValidation(
                 company_name=clean_name,
+                reputation="BLACKLISTED",
                 review_count=1,
+                reviews_count=1,
                 rating=2.5,
+                is_blacklisted=True,
                 passed_gate=False,
-                portals_checked=["Glassdoor", "Jobs.ge / HR.ge", "DOU.ua", "Indeed"],
-                verdict=f"⚠️ Blocked: {clean_name} has fewer than 3 verified reviews on job portals (found only 1 review).",
-                pros=["Early stage"],
+                portals_checked=["Glassdoor", "Jobs.ge / HR.ge", "DOU.ua"],
+                verdict=f"⚠️ Blocked: {clean_name} has fewer than 3 verified reviews on job portals.",
+                pros=[],
                 cons=["Fewer than 3 public employee reviews", "Unverified work culture"]
             )
 
-        # Match known companies DB
+        # Match verified known companies cache
         for key, info in KNOWN_COMPANIES_DB.items():
             if key in lower_name:
+                cnt = int(info["review_count"])
+                rt = float(info["rating"])
+                passed = cnt >= 3 and rt >= 3.0
                 return CompanyValidation(
                     company_name=clean_name,
-                    review_count=info["review_count"],
-                    rating=info["rating"],
-                    passed_gate=info["review_count"] >= 3 and info["rating"] >= 3.0,
+                    reputation="VERIFIED" if passed else "BLACKLISTED",
+                    review_count=cnt,
+                    reviews_count=cnt,
+                    rating=rt,
+                    is_blacklisted=not passed,
+                    passed_gate=passed,
                     portals_checked=info["portals_checked"],
-                    verdict=f"✅ Verified ({info['review_count']} reviews, {info['rating']}★) — Passes 3+ Reviews Gate",
+                    verdict=f"✅ Verified ({cnt} reviews, {rt}★) — Passes 3+ Reviews Gate",
                     pros=info["pros"],
                     cons=info["cons"]
                 )
 
-        # Deterministic realistic portal check for any other valid company name
-        h = int(hashlib.md5(lower_name.encode("utf-8")).hexdigest()[:4], 16)
-        review_count = 12 + (h % 65)  # 12 to 76 reviews
-        rating = round(3.8 + ((h % 10) * 0.1), 1)
-
+        # Unknown company -> Return neutral UNVERIFIED status (NO fake MD5 fabrication!)
         return CompanyValidation(
             company_name=clean_name,
-            review_count=review_count,
-            rating=rating,
+            reputation="UNVERIFIED",
+            review_count=0,
+            reviews_count=0,
+            rating=None,
+            is_blacklisted=False,
             passed_gate=True,
-            portals_checked=["Glassdoor", "Jobs.ge / HR.ge", "DOU.ua / Djinni", "LinkedIn"],
-            verdict=f"✅ Verified ({review_count} employee reviews, {rating}★ avg) — Passes 3+ Reviews Gate",
-            pros=["Verified employer on local & international job portals", "Positive employee satisfaction feedback"],
-            cons=["Standard structured interview loop"]
+            portals_checked=["Local Verified Cache"],
+            verdict=f"ℹ️ Neutral (UNVERIFIED): {clean_name} is not in the local verified cache (0 cached reviews, not blacklisted).",
+            pros=["Not blacklisted"],
+            cons=["No cached third-party review metrics"]
         )
 
 

@@ -35,9 +35,12 @@ class GapItem(BaseModel):
 
 class CompanyValidation(BaseModel):
     company_name: str
-    review_count: int = Field(..., description="Total reviews found across job portals")
-    rating: float = Field(..., description="Average star rating out of 5.0")
-    passed_gate: bool = Field(..., description="True if company has 3+ reviews and acceptable reputation")
+    reputation: str = Field("UNVERIFIED", description="VERIFIED, UNVERIFIED, or BLACKLISTED")
+    review_count: int = Field(0, description="Total reviews found across job portals")
+    reviews_count: int = Field(0, description="Total reviews count (canonical field)")
+    rating: Optional[float] = Field(None, description="Average star rating out of 5.0, or None if UNVERIFIED")
+    is_blacklisted: bool = Field(False, description="True if blacklisted or <3 reviews")
+    passed_gate: bool = Field(True, description="True if not blacklisted")
     portals_checked: List[str] = Field(default_factory=list)
     verdict: str
     pros: List[str] = Field(default_factory=list)

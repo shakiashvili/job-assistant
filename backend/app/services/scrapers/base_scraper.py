@@ -9,26 +9,50 @@ logger = logging.getLogger(__name__)
 
 # Mandatory Strict Language Gate Keywords (Ukrainian / Russian requirement indicators)
 SLAVIC_LANGUAGE_REQUIREMENT_PATTERNS = [
-    "українська",
-    "українською",
-    "вільна українська",
-    "знання української",
-    "рівень української",
-    "русский",
-    "русском",
-    "знание русского",
-    "свободный русский",
-    "на разговорном уровне",
-    "fluent ukrainian",
-    "native ukrainian",
-    "ukrainian required",
-    "ukrainian is a must",
-    "fluent russian",
-    "native russian",
-    "russian required",
-    "ukrainian/russian",
-    "співбесіда українською",
+    r"вільно",
+    r"українськ",
+    r"русский",
+    r"русском",
+    r"разговорн",
+    r"на разговорном уровне",
+    r"fluent ukrainian",
+    r"native ukrainian",
+    r"ukrainian required",
+    r"ukrainian is a must",
+    r"fluent russian",
+    r"native russian",
+    r"russian required",
+    r"знання української",
+    r"рівень української",
+    r"співбесіда українською",
 ]
+
+
+def parse_contact_method_and_email(text: str, html: str = "") -> Tuple[str, Optional[str], Optional[str]]:
+    """
+    Parses the application submission channel ("WEB_FORM", "EMAIL", "EXTERNAL_LINK"),
+    target email address (e.g. hr@bank.ge), and required email subject line format from job text/HTML.
+    """
+    combined = f"{text}\n{html}"
+    email_match = re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", combined)
+    target_email = email_match.group(0) if email_match else None
+
+    subject_line = None
+    subj_match = re.search(
+        r"(?:subject(?:\s+line)?|სათაურის\s+ველში|თემა)\s*[:\-–]?\s*[\"“']([^\"”'\n]{3,80})[\"”']",
+        combined,
+        re.IGNORECASE,
+    )
+    if subj_match:
+        subject_line = subj_match.group(1).strip()
+
+    if target_email:
+        return ("EMAIL", target_email, subject_line or "QA Automation Engineer - [Name]")
+
+    if "apply" in combined.lower() or "<form" in html.lower():
+        return ("WEB_FORM", None, None)
+
+    return ("EXTERNAL_LINK", None, None)
 
 
 def evaluate_remote_and_language_gate(
@@ -38,15 +62,16 @@ def evaluate_remote_and_language_gate(
     portal: str = "dou.ua",
 ) -> Tuple[bool, str, str, List[str]]:
     """
-    Evaluates a scraped vacancy against the Mandatory Remote & Language Gate:
+    Evaluates a scraped vacancy against the Mandatory Remote & Slavic Language Gate:
     Returns:
-      (is_remote, status, filter_reason, language_requirements)
+      (is_remote, status, filter_out_reason, detected_languages)
     - For Ukrainian / Regional portals (dou.ua, djinni.co):
-      1. Must be Remote or Relocation.
-      2. If the vacancy requires Ukrainian or Russian proficiency, marks status = "FILTERED_OUT"
-         with filter_reason = "Requires local language".
-      3. Only retains vacancies where the working language is English and no local Slavic language
-         fluency is required.
+      1. Vacancies must explicitly allow remote work (or relocation).
+      2. Checks description text using regex & semantic parsing for required Slavic fluency
+         (вільно, українськ, русский, разговорный, fluent Ukrainian, etc.).
+         If present, sets status = "FILTERED_OUT" and
+         filter_out_reason = "Mandatory local Slavic language requirement (Requires local language)".
+      3. Only accepts positions where English is the required business language.
     """
     combined = f"{title}\n{description}\n{location_text}".lower()
     langs_detected: List[str] = []
@@ -54,14 +79,13 @@ def evaluate_remote_and_language_gate(
     if any(w in combined for w in ["english", "upper-intermediate", "b2", "c1", "fluent english", "spoken english"]):
         langs_detected.append("English")
 
-    has_slavic_keyword = any(pat in combined for pat in SLAVIC_LANGUAGE_REQUIREMENT_PATTERNS)
+    has_slavic_keyword = any(re.search(pat, combined, re.IGNORECASE) for pat in SLAVIC_LANGUAGE_REQUIREMENT_PATTERNS)
 
-    # Also detect heavy Cyrillic requirement blocks in description (unless explicitly marked English-only)
     cyrillic_chars = len(re.findall(r"[а-яА-ЯіїєґІЇЄҐ]", f"{title}\n{description}"))
     if cyrillic_chars > 35 or has_slavic_keyword:
-        if any(w in combined for w in ["україн", "ukrainian", "іїєґ"]) or re.search(r"[іїєґІЇЄҐ]", description):
+        if any(w in combined for w in ["україн", "ukrainian", "вільно"]) or re.search(r"[іїєґІЇЄҐ]", description):
             langs_detected.append("Ukrainian")
-        if any(w in combined for w in ["русск", "russian", "на разговорном"]):
+        if any(w in combined for w in ["русск", "russian", "разговорн"]):
             langs_detected.append("Russian")
         if "Ukrainian" not in langs_detected and "Russian" not in langs_detected:
             langs_detected.append("Ukrainian")
@@ -69,7 +93,6 @@ def evaluate_remote_and_language_gate(
     if not langs_detected:
         langs_detected.append("English")
 
-    # Determine remote / relocation eligibility
     is_office_only = any(
         w in combined for w in ["office only", "on-site only", "onsite only", "тільки офіс", "only office"]
     )
@@ -82,7 +105,7 @@ def evaluate_remote_and_language_gate(
             return (
                 is_remote,
                 "FILTERED_OUT",
-                "Requires local language",
+                "Mandatory local Slavic language requirement (Requires local language)",
                 langs_detected,
             )
         if not is_remote:
@@ -97,8 +120,8 @@ def evaluate_remote_and_language_gate(
 
 
 class BasePortalScraper:
-    portal_name: str = "generic"
-    market: str = "INT_REMOTE"
+    portal_name: str = "custom"
+    market: str = "GLOBAL_REMOTE"
     rate_limit_delay_sec: float = 0.25
     max_retries: int = 2
 
@@ -112,7 +135,7 @@ class BasePortalScraper:
     }
 
     async def fetch_html(self, url: str, timeout: float = 6.0) -> Optional[str]:
-        """Fetches HTML from a URL with polite rate limiting and retry logic."""
+        """Fetches HTML from a URL with polite concurrency rate limiting and retry logic."""
         for attempt in range(1, self.max_retries + 1):
             try:
                 await asyncio.sleep(self.rate_limit_delay_sec)

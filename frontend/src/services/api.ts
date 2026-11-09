@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 import {
   GroundTruth,
   JobAuditResponse,
@@ -11,7 +12,7 @@ import {
   ParsedSkillsTaxonomy
 } from '../types';
 
-export const BACKEND_ORIGIN = 'http://localhost:8000';
+export const BACKEND_ORIGIN = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 const API_BASE = `${BACKEND_ORIGIN}/api`;
 
 export async function fetchHealth(): Promise<{ status: string; gemini: { connected: boolean; model: string; mode: string } }> {

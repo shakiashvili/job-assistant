@@ -1,19 +1,33 @@
 import asyncio
 import logging
+import re
 from pathlib import Path
-from typing import Dict, Optional
-from ..config import RESUMES_DIR, GENERATED_RESUMES_DIR, MOCK_PORTALS_DIR
+from typing import Dict, List, Optional, Pattern
+from ..config import RESUMES_DIR, GENERATED_RESUMES_DIR
 from ..storage.ground_truth_store import ground_truth_store
-from ..services.portal_detector import detect_portal_from_url
+from ..services.portal_detector import detect_portal_from_url, detect_portal_from_html
 from ..services.company_validator import company_validator
 from ..services.cv_generator_service import cv_generator_service
 from ..services.gemini_service import gemini_service
+from ..services.salary_service import salary_service
 from ..models.schemas import StageApplicationResponse
 
 logger = logging.getLogger(__name__)
 
 
 class PlaywrightStagerService:
+    """
+    Production Playwright Stager using prioritized semantic accessibility locator cascades:
+      1. page.get_by_label(...)
+      2. page.get_by_placeholder(...)
+      3. page.get_by_role("textbox" / "combobox", name=...)
+      4. Semantic input[type=...] / [name*=...] fallback.
+
+    For CAPTCHAs (reCAPTCHA, hCaptcha, Cloudflare Turnstile, or checkbox challenges):
+    - Never attempts automated clicking.
+    - Detects the challenge, takes a screenshot, pauses automation, and signals the user via HITL modal.
+    """
+
     def get_resume_path(self, variant: str, custom_pdf_filename: Optional[str] = None) -> Optional[Path]:
         if custom_pdf_filename:
             gen_path = GENERATED_RESUMES_DIR / custom_pdf_filename
@@ -32,13 +46,6 @@ class PlaywrightStagerService:
         resumes = list(GENERATED_RESUMES_DIR.glob("*.pdf")) + list(RESUMES_DIR.glob("*.pdf"))
         return resumes[0] if resumes else None
 
-    def resolve_target_url(self, job_url: str) -> str:
-        """Resolves mock portal shortcuts or localhost URLs to local file URIs if needed."""
-        for mock_file in MOCK_PORTALS_DIR.glob("*.html"):
-            if mock_file.stem in job_url or mock_file.name in job_url:
-                return mock_file.as_uri()
-        return job_url
-
     async def stage_application(
         self,
         job_url: str,
@@ -54,10 +61,6 @@ class PlaywrightStagerService:
         headless: bool = False,
         timeout_seconds: int = 12,
     ) -> StageApplicationResponse:
-        """
-        Runs Playwright inside a dedicated worker thread using sync_playwright
-        so it works 100% reliably on Windows with FastAPI/Uvicorn!
-        """
         return await asyncio.to_thread(
             self._stage_sync,
             job_url=job_url,
@@ -94,60 +97,39 @@ class PlaywrightStagerService:
         ground_truth = ground_truth_store.get_data()
         candidate = ground_truth.get("candidate", {})
         links = candidate.get("links", {})
-        comp = candidate.get("compensation", {})
         skills_md = ground_truth.get("skills_md_raw") or ground_truth_store.get_skills_md()
 
         portal_type = detect_portal_from_url(job_url)
-        resolved_url = self.resolve_target_url(job_url)
-
-        fields_filled = []
+        fields_filled: List[str] = []
         file_uploaded = False
         captcha_status = "none_detected"
 
         with sync_playwright() as p:
             browser = p.chromium.launch(
                 headless=headless,
-                args=["--start-maximized"]
+                args=["--start-maximized"],
             )
             context = browser.new_context(no_viewport=True)
             page = context.new_page()
 
             try:
-                logger.info(f"Navigating to {resolved_url} (Portal: {portal_type})...")
-                page.goto(resolved_url, wait_until="domcontentloaded", timeout=30000)
-                page.wait_for_timeout(500)
+                logger.info(f"Navigating to {job_url} (Portal: {portal_type})...")
+                page.goto(job_url, wait_until="domcontentloaded", timeout=30000)
+                page.wait_for_timeout(400)
 
                 page_title = page.title()
                 html_body = page.content()
 
-                # Detect portal from page if generic
-                board_el = page.locator("[data-board]")
-                if board_el.count() > 0:
-                    portal_type = board_el.first.get_attribute("data-board") or portal_type
-                elif portal_type == "generic":
-                    if "application_form" in html_body:
-                        portal_type = "greenhouse"
-                    elif "application-form" in html_body:
-                        portal_type = "lever"
-                    elif "dou.ua" in html_body.lower():
-                        portal_type = "dou.ua"
-                    elif "djinni" in html_body.lower():
-                        portal_type = "djinni.co"
+                detected_portal, html_meta = detect_portal_from_html(html_body, job_url)
+                if portal_type == "custom" and detected_portal != "custom":
+                    portal_type = detected_portal
 
-                # Extract company name from page for 3+ reviews validation
-                comp_el = page.locator("#company-name, .company, .posting-headline")
-                detected_company = "CloudScale Technologies"
-                if comp_el.count() > 0:
-                    detected_company = (comp_el.first.text_content() or "").split("•")[0].strip()
+                detected_company = html_meta.get("company") or "Hiring Company"
+                detected_role = html_meta.get("title") or page_title or "Senior QA Automation Engineer"
 
-                role_el = page.locator("#app-title, #posting-title, h1")
-                detected_role = page_title
-                if role_el.count() > 0:
-                    detected_role = (role_el.first.text_content() or page_title).strip()
-
-                # 1. Validate Company Reviews (3+ Reviews Gate)
+                # 1. Validate Company Reputation
                 comp_val = company_validator.validate_company(detected_company, html_body)
-                if not comp_val.passed_gate and not bypass_company_gate:
+                if comp_val.is_blacklisted and not bypass_company_gate:
                     return StageApplicationResponse(
                         status="blocked_by_reviews",
                         portal_detected=portal_type,
@@ -157,22 +139,30 @@ class PlaywrightStagerService:
                         company_validation=comp_val,
                         message=comp_val.verdict,
                         manual_review_needed=True,
-                        page_title=page_title
+                        page_title=page_title,
                     )
 
-                # 2. Generate Per-Vacancy Human-Tone PDF CV if not already provided
+                # 2. Dynamic AI Salary Estimation (no manual user salary input required)
+                sal_est = salary_service.estimate_salary(
+                    title=detected_role,
+                    description=html_meta.get("description_text", ""),
+                    market="GE_DOMESTIC" if portal_type in ("jobs.ge", "hr.ge") else "GLOBAL_REMOTE",
+                    portal=portal_type,
+                )
+                salary_text = expected_salary or f"{sal_est['min_salary']:g} - {sal_est['max_salary']:g} {sal_est['currency']}/mo"
+
+                # 3. Generate Per-Vacancy Grounded PDF CV
                 narratives = gemini_service.craft_human_tone_narratives(
                     job_details={"title": detected_role, "company": detected_company},
                     skills_md=skills_md,
                     matched_skills=ground_truth.get("skills", {}).get("core", [])[:6],
-                    missing_skills=[]
+                    missing_skills=[],
                 )
                 summary_text = applicant_summary or narratives["human_tone_summary"]
                 motivation_text = motivation_letter or (
                     narratives["dou_motivational_letter"] if portal_type == "dou.ua" else narratives["motivation_statement"]
                 )
                 dou_letter_text = narratives["dou_motivational_letter"]
-                salary_text = expected_salary or f"€{comp.get('expected_salary_eur', 85000):,} / year (or $4,500/mo B2B remote)"
                 start_text = start_date or "1 week after offer"
 
                 if not custom_pdf_filename:
@@ -185,105 +175,194 @@ class PlaywrightStagerService:
                         human_summary=summary_text,
                         motivation_statement=motivation_text,
                         dou_motivational_letter=dou_letter_text,
-                        skills_md_override=skills_md
+                        skills_md_override=skills_md,
                     )
                     resume_path = Path(cv_gen["pdf_path"])
                 else:
                     resume_path = self.get_resume_path(variant, custom_pdf_filename)
 
-                # Helper to safely fill first matching visible locator
-                def fill_if_present(selector: str, value: str, field_label: str) -> bool:
-                    loc = page.locator(selector)
-                    if loc.count() > 0 and value:
+                # Semantic Accessibility Locator Cascade Helper
+                def fill_semantic_cascade(
+                    label_regex: Pattern[str],
+                    placeholder_regex: Pattern[str],
+                    fallback_selector: str,
+                    value: str,
+                    field_key: str,
+                ) -> bool:
+                    if not value:
+                        return False
+                    locators_to_try = [
+                        page.get_by_label(label_regex),
+                        page.get_by_placeholder(placeholder_regex),
+                        page.get_by_role("textbox", name=label_regex),
+                        page.locator(fallback_selector),
+                    ]
+                    for loc in locators_to_try:
                         try:
-                            loc.first.fill(value)
-                            fields_filled.append(field_label)
-                            return True
+                            if loc.count() > 0:
+                                target = loc.first
+                                tag = target.evaluate("el => el.tagName.toLowerCase()")
+                                if tag in ("input", "textarea"):
+                                    inp_type = (target.get_attribute("type") or "text").lower()
+                                    if inp_type not in ("file", "checkbox", "radio", "submit", "button"):
+                                        target.fill(value)
+                                        if field_key not in fields_filled:
+                                            fields_filled.append(field_key)
+                                        return True
                         except Exception:
-                            pass
+                            continue
                     return False
 
-                # 3. Fill Universal & Portal-Specific Fields
-                fill_if_present("#first_name, input[name*='first_name']", candidate.get("first_name", "Alex"), "first_name")
-                fill_if_present("#last_name, input[name*='last_name']", candidate.get("last_name", "Mercer"), "last_name")
-                fill_if_present("#full_name, #full-name, input[name='name']", candidate.get("full_name", "Alex Mercer"), "full_name")
-                fill_if_present("#email, input[name*='email'], input[type='email']", candidate.get("email", "alex.mercer.dev@gmail.com"), "email")
-                fill_if_present("#phone, input[name*='phone'], input[type='tel']", candidate.get("phone", "+49 152 98765432"), "phone")
-                fill_if_present("#org, input[name='org']", ground_truth.get("work_history", [{}])[0].get("company", "TechNova Cloud Solutions"), "current_company")
-                fill_if_present("#linkedin, #linkedin-url, input[name='urls[LinkedIn]'], input[autocomplete='custom-question-linkedin-profile']", links.get("linkedin", ""), "linkedin")
-                fill_if_present("#github-url, input[name='urls[GitHub]']", links.get("github", ""), "github_url")
-                fill_if_present("#portfolio-url, input[name='urls[Portfolio]'], input[autocomplete='custom-question-website']", links.get("portfolio", ""), "portfolio_url")
+                # 4. Fill Form Fields via Prioritized Semantic Locators
+                fill_semantic_cascade(
+                    re.compile(r"first\s*name|სახელი", re.I),
+                    re.compile(r"first\s*name", re.I),
+                    "input[name*='first_name'], input[autocomplete='given-name']",
+                    candidate.get("first_name", "Alex"),
+                    "first_name",
+                )
+                fill_semantic_cascade(
+                    re.compile(r"last\s*name|გვარი", re.I),
+                    re.compile(r"last\s*name", re.I),
+                    "input[name*='last_name'], input[autocomplete='family-name']",
+                    candidate.get("last_name", "Mercer"),
+                    "last_name",
+                )
+                fill_semantic_cascade(
+                    re.compile(r"full\s*name|your\s*name|სახელი\s*და\s*გვარი", re.I),
+                    re.compile(r"full\s*name|your\s*name", re.I),
+                    "input[name='name'], input[name*='full_name'], input[autocomplete='name']",
+                    candidate.get("full_name", "Alex Mercer"),
+                    "full_name",
+                )
+                fill_semantic_cascade(
+                    re.compile(r"e-?mail|ელ\.?\s*ფოსტა", re.I),
+                    re.compile(r"email|@", re.I),
+                    "input[type='email'], input[name*='email']",
+                    candidate.get("email", "alex.mercer.dev@gmail.com"),
+                    "email",
+                )
+                fill_semantic_cascade(
+                    re.compile(r"phone|mobile|tel|ტელეფონი", re.I),
+                    re.compile(r"phone|\+", re.I),
+                    "input[type='tel'], input[name*='phone']",
+                    candidate.get("phone", "+49 152 98765432"),
+                    "phone",
+                )
+                fill_semantic_cascade(
+                    re.compile(r"current\s*company|organization|employer", re.I),
+                    re.compile(r"company|organization", re.I),
+                    "input[name='org'], input[name*='company']",
+                    ground_truth.get("work_history", [{}])[0].get("company", "TechNova Cloud Solutions"),
+                    "current_company",
+                )
+                fill_semantic_cascade(
+                    re.compile(r"linkedin", re.I),
+                    re.compile(r"linkedin\.com", re.I),
+                    "input[name*='linkedin' i], input[autocomplete*='linkedin' i]",
+                    links.get("linkedin", ""),
+                    "linkedin",
+                )
+                fill_semantic_cascade(
+                    re.compile(r"github", re.I),
+                    re.compile(r"github\.com", re.I),
+                    "input[name*='github' i]",
+                    links.get("github", ""),
+                    "github_url",
+                )
+                fill_semantic_cascade(
+                    re.compile(r"portfolio|website", re.I),
+                    re.compile(r"https://", re.I),
+                    "input[name*='portfolio' i], input[autocomplete*='website' i]",
+                    links.get("portfolio", ""),
+                    "portfolio_url",
+                )
+                fill_semantic_cascade(
+                    re.compile(r"applicant\s*summary|introduce\s*yourself|professional\s*summary|additional\s*info", re.I),
+                    re.compile(r"summary|introduce", re.I),
+                    "textarea[name*='summary' i], textarea[name*='comments' i]",
+                    summary_text,
+                    "applicant_summary",
+                )
+                fill_semantic_cascade(
+                    re.compile(r"dou.*motivational|motivational\s*letter\s*\(required", re.I),
+                    re.compile(r"motivational\s*letter", re.I),
+                    "textarea[name*='motivational_letter' i]",
+                    dou_letter_text,
+                    "dou_motivational_letter",
+                )
+                fill_semantic_cascade(
+                    re.compile(r"why\s*are\s*you\s*interested|cover\s*letter|motivation|message\s*to\s*recruiter", re.I),
+                    re.compile(r"motivation|why\s*you", re.I),
+                    "textarea[name*='motivation' i], textarea[name='message']",
+                    motivation_text,
+                    "motivation_letter",
+                )
+                fill_semantic_cascade(
+                    re.compile(r"salary|compensation|financial\s*expectation", re.I),
+                    re.compile(r"salary|eur|usd|gel", re.I),
+                    "input[name*='salary' i]",
+                    salary_text,
+                    "salary_expectation",
+                )
+                fill_semantic_cascade(
+                    re.compile(r"start\s*date|notice\s*period|when\s*can\s*you\s*start|availability", re.I),
+                    re.compile(r"1\s*week|start\s*date|notice", re.I),
+                    "input[name*='start_date' i], input[name*='notice' i]",
+                    start_text,
+                    "start_date_1_week",
+                )
+                fill_semantic_cascade(
+                    re.compile(r"playwright|cypress|automation\s*framework|experience", re.I),
+                    re.compile(r"experience|framework", re.I),
+                    "textarea[name*='experience' i]",
+                    "5+ years building modular Playwright (TS/Python) and Cypress test suites, cutting CI regression from 14h to 35m.",
+                    "framework_experience",
+                )
 
-                # Fill Applicant Summary
-                fill_if_present("#applicant_summary, textarea[name*='summary'], #additional-comments", summary_text, "applicant_summary")
-
-                # Fill DOU.ua Motivational Letter & General Motivation
-                fill_if_present("#dou_motivational_letter, textarea[name*='motivational_letter']", dou_letter_text, "dou_motivational_letter")
-                fill_if_present("#motivation, #custom-question-motivation, textarea[name*='motivation'], textarea[name='message']", motivation_text, "motivation_letter")
-
-                # Fill Salary & Start Date (1 week after offer)
-                fill_if_present("#salary, #salary_expectation, #custom-question-salary, input[name*='salary']", salary_text, "salary_expectation")
-                fill_if_present("#start_date, #custom-question-notice, input[name*='start_date'], input[name*='notice']", start_text, "start_date_1_week")
-
-                # Label-based smart scan for Greenhouse / Lever custom fields
-                labels = page.locator("label").all()
-                for label in labels:
-                    txt = (label.text_content() or "").lower()
-                    for_attr = label.get_attribute("for")
-                    if not for_attr or for_attr == "captcha-checkbox":
-                        continue
-                    target = page.locator(f"#{for_attr}")
-                    if target.count() == 0:
-                        continue
-                    tag_name = target.first.evaluate("el => el.tagName.toLowerCase()")
-
-                    if tag_name == "select" and ("authorized" in txt or "sponsorship" in txt):
-                        target.first.select_option(value="yes")
-                        if "work_auth_select" not in fields_filled:
-                            fields_filled.append("work_auth_select")
-                    elif tag_name in ["input", "textarea"]:
-                        current_val = target.first.input_value() if tag_name == "input" and target.first.get_attribute("type") != "file" else ""
-                        if current_val:
-                            continue
-                        if "why" in txt or "interest" in txt or "motivational" in txt:
-                            target.first.fill(dou_letter_text if "dou" in txt else motivation_text)
-                            fields_filled.append("motivation_textarea")
-                        elif "summary" in txt or "introduce" in txt:
-                            target.first.fill(summary_text)
-                            fields_filled.append("applicant_summary")
-                        elif "experience" in txt or "framework" in txt:
-                            target.first.fill("5+ years building modular Playwright (TS/Python) and Cypress test suites, cutting CI regression from 14h to 35m.")
-                            fields_filled.append("framework_experience")
-                        elif "salary" in txt or "financial" in txt or "compensation" in txt:
-                            target.first.fill(salary_text)
-                            fields_filled.append("salary")
-                        elif "notice" in txt or "start date" in txt or "availability" in txt or "when can you start" in txt:
-                            target.first.fill(start_text)
-                            fields_filled.append("start_date_1_week")
-
-                # 4. Upload Per-Vacancy Tailored CV PDF
-                file_input = page.locator("#resume, #resume-upload, input[type='file']")
-                if file_input.count() > 0 and resume_path and resume_path.exists():
-                    file_input.first.set_input_files(str(resume_path))
-                    file_uploaded = True
-                    fields_filled.append("resume_pdf")
-
-                # 5. Detect & Solve / Check CAPTCHA
-                captcha_box = page.locator("#captcha-checkbox, input[name*='captcha'], input[type='checkbox'][id*='captcha']")
-                if captcha_box.count() > 0:
-                    captcha_box.first.check()
-                    captcha_status = "solved"
-                    fields_filled.append("captcha_verified")
-                elif page.locator("iframe[src*='recaptcha'], iframe[src*='hcaptcha'], .cf-turnstile").count() > 0:
+                # Semantic combobox / select handling for work authorization
+                auth_select = page.get_by_label(re.compile(r"authorized\s*to\s*work|sponsorship", re.I))
+                if auth_select.count() > 0:
                     try:
-                        page.locator("iframe[src*='recaptcha'], .cf-turnstile").first.click(timeout=2000)
-                        captcha_status = "solved"
+                        auth_select.first.select_option(value="yes")
+                        fields_filled.append("work_auth_select")
                     except Exception:
-                        captcha_status = "highlighted_for_human"
+                        pass
 
-                # 6. Auto-submit if requested, or show HITL banner
-                if auto_submit:
-                    submit_btn = page.locator("#submit_app, button[type='submit'], input[type='submit']")
+                # 5. Upload Per-Vacancy Tailored CV PDF via semantic label or file input
+                file_locator = page.get_by_label(re.compile(r"resume|cv|attach|upload", re.I))
+                if file_locator.count() == 0:
+                    file_locator = page.locator("input[type='file']")
+                if file_locator.count() > 0 and resume_path and resume_path.exists():
+                    try:
+                        file_locator.first.set_input_files(str(resume_path))
+                        file_uploaded = True
+                        fields_filled.append("resume_pdf")
+                    except Exception:
+                        raw_file_inp = page.locator("input[type='file']")
+                        if raw_file_inp.count() > 0:
+                            raw_file_inp.first.set_input_files(str(resume_path))
+                            file_uploaded = True
+                            fields_filled.append("resume_pdf")
+
+                # 6. Anti-Bot / CAPTCHA Detection (DO NOT CLICK! Pause & take screenshot for HITL)
+                captcha_loc = page.locator(
+                    "iframe[src*='recaptcha'], iframe[src*='hcaptcha'], .cf-turnstile, "
+                    "input[name*='captcha' i], [id*='captcha' i]"
+                )
+                if captcha_loc.count() > 0:
+                    captcha_status = "paused_for_human_hitl"
+                    fields_filled.append("captcha_paused_hitl")
+                    screenshot_path = GENERATED_RESUMES_DIR / "hitl_captcha_pause.png"
+                    try:
+                        page.screenshot(path=str(screenshot_path), full_page=False)
+                        logger.info(f"CAPTCHA challenge detected; saved HITL screenshot to {screenshot_path}")
+                    except Exception as sc_err:
+                        logger.debug(f"CAPTCHA screenshot note: {sc_err}")
+
+                # 7. Only auto-submit if explicitly requested AND no CAPTCHA challenge is blocking
+                if auto_submit and captcha_status == "none_detected":
+                    submit_btn = page.get_by_role("button", name=re.compile(r"submit|apply|send", re.I))
                     if submit_btn.count() > 0:
                         submit_btn.first.click()
                         fields_filled.append("form_submitted")
@@ -298,32 +377,35 @@ class PlaywrightStagerService:
                         <div style="position:fixed; top:12px; right:12px; z-index:999999; background:#0f172a; color:#fff; padding:16px 20px; border-radius:12px; box-shadow:0 12px 30px rgba(0,0,0,0.45); border:2px solid #10b981; font-family:sans-serif; max-width:400px;">
                             <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
                                 <span style="background:#10b981; width:10px; height:10px; border-radius:50%; display:inline-block;"></span>
-                                <strong style="font-size:14px; color:#34d399;">Staged on ${info.portal} (${info.reviews}★ Verified)</strong>
+                                <strong style="font-size:14px; color:#34d399;">HITL Staged on ${info.portal}</strong>
                             </div>
                             <p style="font-size:12px; margin:0 0 8px 0; color:#e2e8f0; line-height:1.45;">
-                                ✅ Custom Human-Tone CV attached: <strong>${info.cvFile}</strong><br/>
-                                ✅ Start Date: <strong>1 week after offer</strong><br/>
-                                ✅ CAPTCHA: <strong>${info.captcha}</strong>
+                                ✅ Custom Single-Column CV: <strong>${info.cvFile}</strong><br/>
+                                ✅ AI Market Salary: <strong>${info.salary}</strong><br/>
+                                ⚠️ CAPTCHA Status: <strong>${info.captcha}</strong>
                             </p>
                             <div style="font-size:11px; color:#94a3b8; border-top:1px solid #334155; padding-top:6px;">
-                                Review filled fields & click Submit!
+                                Complete any CAPTCHA challenge manually & click Submit!
                             </div>
                         </div>
                     `;
                     document.body.appendChild(banner);
                 }"""
-                page.evaluate(banner_js, {
-                    "cvFile": resume_path.name if resume_path else "CV.pdf",
-                    "portal": portal_type.upper(),
-                    "reviews": f"{comp_val.rating} / {comp_val.review_count} reviews",
-                    "captcha": captcha_status.upper()
-                })
+                page.evaluate(
+                    banner_js,
+                    {
+                        "cvFile": resume_path.name if resume_path else "CV.pdf",
+                        "portal": portal_type.upper(),
+                        "salary": salary_text,
+                        "captcha": captcha_status.upper(),
+                    },
+                )
 
                 if not headless:
                     page.wait_for_timeout(min(timeout_seconds * 1000, 12000))
 
                 return StageApplicationResponse(
-                    status="submitted" if auto_submit else "staged",
+                    status="submitted" if (auto_submit and captcha_status == "none_detected") else "staged",
                     portal_detected=portal_type,
                     fields_filled=list(dict.fromkeys(fields_filled)),
                     captcha_status=captcha_status,
@@ -331,12 +413,12 @@ class PlaywrightStagerService:
                     resume_file_path=str(resume_path) if resume_path else None,
                     company_validation=comp_val,
                     message=(
-                        f"Application staged on {portal_type}! Company verified ({comp_val.review_count} reviews, {comp_val.rating}★). "
-                        f"Attached custom human-tone CV ({resume_path.name if resume_path else 'CV.pdf'}), filled summary, motivation, salary, "
-                        f"start date ('1 week after offer'), and verified CAPTCHA."
+                        f"Application staged on {portal_type} via semantic locators. "
+                        f"Attached single-column ATS PDF ({resume_path.name if resume_path else 'CV.pdf'}), "
+                        f"AI salary ({salary_text}), and paused for human CAPTCHA/review ({captcha_status})."
                     ),
-                    manual_review_needed=not auto_submit,
-                    page_title=page_title
+                    manual_review_needed=True,
+                    page_title=page_title,
                 )
 
             except Exception as e:
@@ -350,7 +432,7 @@ class PlaywrightStagerService:
                     resume_file_path=None,
                     message=f"Staging encountered an issue: {str(e)}",
                     manual_review_needed=True,
-                    page_title=None
+                    page_title=None,
                 )
             finally:
                 browser.close()

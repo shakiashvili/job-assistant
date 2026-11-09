@@ -65,6 +65,15 @@
       </select>
     </div>
 
+    <!-- Configurable Backend API Base URL (chrome.storage.sync) -->
+    <div class="section-box">
+      <label class="box-label" for="api-base-url-input">Backend API URL</label>
+      <div style="display:flex; gap:6px; margin-top:4px;">
+        <input id="api-base-url-input" type="text" value="http://localhost:8000" style="flex:1; background:#0f172a; border:1px solid #334155; color:#e2e8f0; border-radius:6px; padding:5px 8px; font-size:11px;" />
+        <button id="btn-save-api-url" class="btn btn-secondary" style="padding:5px 10px; font-size:11px;">Save</button>
+      </div>
+    </div>
+
     <!-- Action Buttons -->
     <div class="actions">
       <button class="btn btn-primary" id="btn-popup-autofill">

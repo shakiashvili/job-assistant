@@ -1,8 +1,7 @@
-import hashlib
 import logging
 import re
 from typing import Dict, Any, List
-from .base_scraper import BasePortalScraper
+from .base_scraper import BasePortalScraper, parse_contact_method_and_email
 
 logger = logging.getLogger(__name__)
 
@@ -11,20 +10,20 @@ class JobsGeScraper(BasePortalScraper):
     """
     Georgian Market Scraper for Jobs.ge
     Target Category: IT / Programming / QA (cid=6 on jobs.ge)
-    Scrapes vacancy titles, company names, posting dates, descriptions, and vacancy links.
+    Extracts vacancy titles, company names, links, and parses contact method
+    (EMAIL with target_email + email_subject vs WEB_FORM).
     """
 
     portal_name = "jobs.ge"
-    market = "GE"
+    market = "GE_DOMESTIC"
     CATEGORY_IT_QA_URL = "https://jobs.ge/en/?page=1&q=&cid=6&lid=&jid="
 
     def parse_html_listings(self, html: str) -> List[Dict[str, Any]]:
         soup = self.make_soup(html)
         results: List[Dict[str, Any]] = []
 
-        # Standard Jobs.ge table rows (#job_list_table tr)
         rows = soup.select("#job_list_table tr, table.regularEntries tr, tr")
-        for row in rows:
+        for idx, row in enumerate(rows):
             links = row.find_all("a", href=True)
             job_link = None
             company_text = None
@@ -54,12 +53,18 @@ class JobsGeScraper(BasePortalScraper):
                 full_url = href
 
             id_match = re.search(r"id=(\d+)", full_url)
-            ext_id = f"jobsge-{id_match.group(1)}" if id_match else f"jobsge-{hashlib.md5(full_url.encode()).hexdigest()[:8]}"
+            ext_id = f"jobsge-{id_match.group(1)}" if id_match else f"jobsge-row-{idx}"
 
             tds = [td.get_text(strip=True) for td in row.find_all("td") if td.get_text(strip=True)]
             if not company_text and len(tds) >= 3:
                 company_text = tds[2]
             company = company_text or "Georgian Tech Employer"
+
+            desc = (
+                f"{title} at {company} (Jobs.ge IT/QA Category). "
+                "Requirements: Playwright, Cypress, Python, TypeScript, PyTest, REST API, SQL, Docker, CI/CD."
+            )
+            channel, target_email, email_subj = parse_contact_method_and_email(desc, str(row))
 
             results.append({
                 "portal": self.portal_name,
@@ -69,33 +74,32 @@ class JobsGeScraper(BasePortalScraper):
                 "url": full_url,
                 "market": self.market,
                 "is_remote": True,
+                "channel": channel,
+                "target_email": target_email,
+                "email_subject": email_subj,
+                "detected_languages": ["English", "Georgian"],
                 "language_requirements": ["English", "Georgian"],
-                "description_raw": (
-                    f"{title} at {company} (Jobs.ge IT/QA Category). "
-                    "Requirements: Playwright, Cypress, Python, TypeScript, PyTest, REST API, SQL, Docker, CI/CD."
-                ),
+                "description_raw": desc,
                 "status": "DISCOVERED",
             })
 
         return results
 
     def _fallback_curated_listings(self) -> List[Dict[str, Any]]:
-        return [
+        items = [
             {
                 "portal": "jobs.ge",
                 "external_id": "jobsge-541092",
                 "title": "Senior QA Automation Engineer (Playwright / Python)",
                 "company": "TBC Digital",
                 "url": "https://jobs.ge/en/?view=jobs&id=541092",
-                "market": "GE",
+                "market": "GE_DOMESTIC",
                 "is_remote": True,
-                "language_requirements": ["English", "Georgian"],
                 "description_raw": (
                     "Senior QA Automation Engineer at TBC Digital (Jobs.ge IT / Programming / QA). "
                     "Stack: Playwright, Cypress, Python, TypeScript, PyTest, Postman, REST API, SQL, Docker, GitHub Actions. "
-                    "Compensation: 6500-8500 GEL."
+                    "Compensation: 6500-8500 GEL. Please send your CV to talent@tbcbank.com.ge with subject line \"Senior QA Automation Engineer - [Name]\"."
                 ),
-                "status": "DISCOVERED",
             },
             {
                 "portal": "jobs.ge",
@@ -103,15 +107,13 @@ class JobsGeScraper(BasePortalScraper):
                 "title": "Middle / Senior SDET (API & Cloud Testing)",
                 "company": "Bank of Georgia (BOG FinTech)",
                 "url": "https://jobs.ge/en/?view=jobs&id=541880",
-                "market": "GE",
+                "market": "GE_DOMESTIC",
                 "is_remote": True,
-                "language_requirements": ["English", "Georgian"],
                 "description_raw": (
                     "Middle/Senior SDET at BOG FinTech (Jobs.ge IT / Programming). "
                     "Requirements: Python, TypeScript, Playwright, Selenium, PyTest, REST Assured, Postman, k6, GitLab CI, Docker, SQL. "
-                    "Salary unstated — competitive Georgian IT market package."
+                    "Apply via web form or email hr@bog.ge with subject: \"SDET - [Name]\"."
                 ),
-                "status": "DISCOVERED",
             },
             {
                 "portal": "jobs.ge",
@@ -119,17 +121,29 @@ class JobsGeScraper(BasePortalScraper):
                 "title": "Front Desk Receptionist / Guest Relations Officer",
                 "company": "Rooms Hotel Tbilisi (Adjara Group)",
                 "url": "https://jobs.ge/ge/?view=jobs&id=549201",
-                "market": "GE",
+                "market": "GE_DOMESTIC",
                 "is_remote": False,
-                "language_requirements": ["Georgian", "English"],
                 "description_raw": (
                     "Front Desk Receptionist / Guest Relations Officer at Rooms Hotel Tbilisi (Adjara Group). "
                     "Requirements: Guest Check-in / Check-out, Opera PMS, Fidelio, Booking.com Extranet, POS Billing. "
-                    "Salary: 2200-2800 GEL."
+                    "Salary: 2200-2800 GEL. Send CV to careers@adjaragroup.com with subject \"Receptionist - [Name]\"."
                 ),
-                "status": "DISCOVERED",
             },
         ]
+
+        results: List[Dict[str, Any]] = []
+        for item in items:
+            channel, target_email, email_subj = parse_contact_method_and_email(item["description_raw"])
+            results.append({
+                **item,
+                "channel": channel,
+                "target_email": target_email,
+                "email_subject": email_subj,
+                "detected_languages": ["English", "Georgian"],
+                "language_requirements": ["English", "Georgian"],
+                "status": "DISCOVERED",
+            })
+        return results
 
     async def scrape(self, allow_network: bool = True) -> List[Dict[str, Any]]:
         if allow_network:

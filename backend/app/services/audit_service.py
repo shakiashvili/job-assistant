@@ -1,5 +1,7 @@
+import asyncio
 import logging
 import httpx
+from bs4 import BeautifulSoup
 from typing import List, Optional
 from ..storage.ground_truth_store import ground_truth_store
 from ..services.gemini_service import gemini_service
@@ -11,22 +13,60 @@ from ..services.scrapers.base_scraper import evaluate_remote_and_language_gate
 from ..models.schemas import (
     JobAuditResponse, JobDetails, ScoreBreakdown, Blocker, GapItem, TailoredCVResult
 )
-from ..config import MOCK_PORTALS_DIR
 
 logger = logging.getLogger(__name__)
 
 
+def _fetch_spa_html_with_playwright(url: str) -> str:
+    """Isolated headless Playwright fallback for client-side hydrated SPA job boards."""
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            page.goto(url, wait_until="domcontentloaded", timeout=12000)
+            page.wait_for_timeout(500)
+            return page.content()
+        finally:
+            browser.close()
+
+
 class AuditService:
     async def fetch_url_content(self, url: str) -> str:
-        """Fetches raw HTML or text from a URL or local mock path."""
-        for mock_file in MOCK_PORTALS_DIR.glob("*.html"):
-            if mock_file.stem in url or mock_file.name in url:
-                return mock_file.read_text(encoding="utf-8")
+        """
+        Hybrid fetching strategy for job pages:
+        1. Fast HTTP fetch via httpx with realistic browser headers (User-Agent, Accept-Language).
+        2. If the parsed page body has fewer than 150 characters of substantive text,
+           falls back to an isolated headless Playwright browser instance (page.content())
+           to allow client-side SPA hydration.
+        """
+        html_text = ""
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.9,ka;q=0.8",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True, headers=headers) as client:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    html_text = resp.text
+        except Exception as e:
+            logger.debug(f"Fast httpx fetch note for {url}: {e}")
 
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-            resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
-            resp.raise_for_status()
-            return resp.text
+        soup = BeautifulSoup(html_text or "", "html.parser")
+        body_text = (soup.body.get_text(" ", strip=True) if soup.body else soup.get_text(" ", strip=True)).strip()
+
+        if len(body_text) < 150 and url.startswith(("http://", "https://", "file://")):
+            logger.info(f"Body text length ({len(body_text)} < 150 chars) on {url}; falling back to headless Playwright SPA hydration.")
+            try:
+                html_text = await asyncio.to_thread(_fetch_spa_html_with_playwright, url)
+            except Exception as pw_err:
+                logger.warning(f"Headless Playwright SPA hydration fallback failed for {url}: {pw_err}")
+
+        return html_text
 
     async def audit_job(
         self,

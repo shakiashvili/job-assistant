@@ -1,4 +1,3 @@
-import hashlib
 import logging
 import re
 from typing import Dict, Any, List
@@ -9,17 +8,15 @@ logger = logging.getLogger(__name__)
 
 class DjinniScraper(BasePortalScraper):
     """
-    Ukrainian & International Remote Scraper for Djinni.co
-    Query Filters: QA, QA Automation, SDET positions (Strictly Remote / Relocation).
-    Enforces the Mandatory Critical Filter:
-    - Must be Remote / Relocation.
-    - Strict Language Gate: If the vacancy requires Ukrainian or Russian proficiency
-      ("українська", "русский", "fluent Ukrainian", "на разговорном уровне"), automatically
-      marks status = "FILTERED_OUT" with match_rationale = "Requires local language".
+    Ukrainian & Regional Remote Scraper for Djinni.co
+    Query Filters: QA, QA Automation, SDET positions (Strictly Remote).
+    Enforces Strict Remote Gate & Strict Slavic Language Filter:
+    - Any vacancy requiring Ukrainian or Russian fluency (вільно, українськ, русский, разговорный)
+      is marked status = "FILTERED_OUT" with filter_out_reason = "Mandatory local Slavic language requirement".
     """
 
     portal_name = "djinni.co"
-    market = "INT_REMOTE"
+    market = "GLOBAL_REMOTE"
     SEARCH_URL = "https://djinni.co/jobs/?primary_keyword=QA+Automation&employment=remote"
 
     def parse_html_listings(self, html: str) -> List[Dict[str, Any]]:
@@ -27,7 +24,7 @@ class DjinniScraper(BasePortalScraper):
         results: List[Dict[str, Any]] = []
 
         items = soup.select("li.list-jobs__item, div.job-list-item")
-        for item in items:
+        for idx, item in enumerate(items):
             title_link = item.select_one("a.job-list-item__link, a.h3, a[href*='/jobs/']")
             if not title_link or not title_link.get("href"):
                 continue
@@ -43,7 +40,7 @@ class DjinniScraper(BasePortalScraper):
             description = desc_el.get_text(" ", strip=True) if desc_el else title
 
             id_match = re.search(r"/jobs/(\d+)", url)
-            ext_id = f"djinni-{id_match.group(1)}" if id_match else f"djinni-{hashlib.md5(url.encode()).hexdigest()[:8]}"
+            ext_id = f"djinni-{id_match.group(1)}" if id_match else f"djinni-row-{idx}"
 
             is_remote, status, filter_reason, langs = evaluate_remote_and_language_gate(
                 title=title,
@@ -60,9 +57,12 @@ class DjinniScraper(BasePortalScraper):
                 "url": url,
                 "market": self.market,
                 "is_remote": is_remote,
+                "channel": "WEB_FORM",
+                "detected_languages": langs,
                 "language_requirements": langs,
                 "description_raw": description,
                 "status": status,
+                "filter_out_reason": filter_reason or None,
                 "match_rationale": filter_reason,
             })
 
@@ -124,9 +124,12 @@ class DjinniScraper(BasePortalScraper):
                 "url": item["url"],
                 "market": self.market,
                 "is_remote": is_remote,
+                "channel": "WEB_FORM",
+                "detected_languages": langs,
                 "language_requirements": langs,
                 "description_raw": item["description"],
                 "status": status,
+                "filter_out_reason": filter_reason or None,
                 "match_rationale": filter_reason,
             })
         return processed

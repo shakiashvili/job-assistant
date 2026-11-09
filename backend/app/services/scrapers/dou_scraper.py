@@ -1,4 +1,3 @@
-import hashlib
 import logging
 import re
 from typing import Dict, Any, List
@@ -11,11 +10,9 @@ class DouScraper(BasePortalScraper):
     """
     Ukrainian & Regional Portal Scraper for DOU.ua (jobs.dou.ua)
     Query Filters: QA, QA Automation, SDET positions (Remote / Relocation).
-    Enforces the Mandatory Critical Filter:
-    - Must be Remote / Relocation.
-    - Strict Language Gate: Any vacancy requiring Ukrainian or Russian proficiency
-      ("українська", "русский", "fluent Ukrainian", "на разговорном уровне") is automatically
-      marked status = "FILTERED_OUT" with match_rationale = "Requires local language".
+    Enforces Strict Remote Gate & Strict Slavic Language Filter:
+    - Any vacancy requiring Ukrainian or Russian fluency (вільно, українськ, русский, разговорный)
+      is marked status = "FILTERED_OUT" with filter_out_reason = "Mandatory local Slavic language requirement".
     """
 
     portal_name = "dou.ua"
@@ -27,7 +24,7 @@ class DouScraper(BasePortalScraper):
         results: List[Dict[str, Any]] = []
 
         items = soup.select("li.l-vacancy, div.vacancy")
-        for item in items:
+        for idx, item in enumerate(items):
             title_link = item.select_one("a.vt, div.title a")
             if not title_link or not title_link.get("href"):
                 continue
@@ -42,7 +39,7 @@ class DouScraper(BasePortalScraper):
             description = desc_el.get_text(" ", strip=True) if desc_el else title
 
             id_match = re.search(r"vacancies/(\d+)", url)
-            ext_id = f"dou-{id_match.group(1)}" if id_match else f"dou-{hashlib.md5(url.encode()).hexdigest()[:8]}"
+            ext_id = f"dou-{id_match.group(1)}" if id_match else f"dou-row-{idx}"
 
             is_remote, status, filter_reason, langs = evaluate_remote_and_language_gate(
                 title=title,
@@ -59,9 +56,12 @@ class DouScraper(BasePortalScraper):
                 "url": url,
                 "market": self.market,
                 "is_remote": is_remote,
+                "channel": "WEB_FORM",
+                "detected_languages": langs,
                 "language_requirements": langs,
                 "description_raw": description,
                 "status": status,
+                "filter_out_reason": filter_reason or None,
                 "match_rationale": filter_reason,
             })
 
@@ -90,7 +90,7 @@ class DouScraper(BasePortalScraper):
                 "location": "Remote (Ukraine)",
                 "description": (
                     "Middle/Senior QA Automation Engineer. Requirements: Python, PyTest, Playwright. "
-                    "Обов'язково: вільна українська мова для спілкування з командою, fluent Ukrainian required."
+                    "Обов'язково: вільно українська мова для спілкування з командою, fluent Ukrainian required."
                 ),
             },
         ]
@@ -111,9 +111,12 @@ class DouScraper(BasePortalScraper):
                 "url": item["url"],
                 "market": self.market,
                 "is_remote": is_remote,
+                "channel": "WEB_FORM",
+                "detected_languages": langs,
                 "language_requirements": langs,
                 "description_raw": item["description"],
                 "status": status,
+                "filter_out_reason": filter_reason or None,
                 "match_rationale": filter_reason,
             })
         return processed

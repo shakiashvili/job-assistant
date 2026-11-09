@@ -1,17 +1,34 @@
-const BACKEND_URL = "http://localhost:8000";
-const FRONTEND_URL = "http://localhost:5173";
+const DEFAULT_API_BASE_URL = "http://localhost:8000";
+const DEFAULT_FRONTEND_URL = "http://localhost:5173";
+
+async function getApiBaseUrl() {
+  return new Promise((resolve) => {
+    if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.sync) {
+      chrome.storage.sync.get({ api_base_url: DEFAULT_API_BASE_URL }, (items) => {
+        resolve((items.api_base_url || DEFAULT_API_BASE_URL).replace(/\/+$/, ""));
+      });
+    } else {
+      resolve(DEFAULT_API_BASE_URL);
+    }
+  });
+}
 
 document.addEventListener("DOMContentLoaded", async () => {
-  await checkBackendStatus();
+  const apiUrl = await getApiBaseUrl();
+  const inputEl = document.getElementById("api-base-url-input");
+  if (inputEl) inputEl.value = apiUrl;
+
+  await checkBackendStatus(apiUrl);
   await inspectCurrentTab();
   setupEventListeners();
 });
 
-async function checkBackendStatus() {
+async function checkBackendStatus(apiBaseUrl) {
   const badge = document.getElementById("backend-status");
   const text = document.getElementById("backend-text");
+  const baseUrl = apiBaseUrl || (await getApiBaseUrl());
   try {
-    const res = await fetch(`${BACKEND_URL}/api/health`);
+    const res = await fetch(`${baseUrl}/api/health`);
     if (res.ok) {
       const data = await res.json();
       badge.classList.add("online");
@@ -38,19 +55,26 @@ async function inspectCurrentTab() {
   const url = (tab.url || "").toLowerCase();
   let portalName = "Generic Web";
 
-  if (url.includes("greenhouse.io") || url.includes("greenhouse_sample")) {
+  if (url.includes("greenhouse.io")) {
     portalName = "Greenhouse";
     portalPill.style.background = "#065f46";
     portalPill.style.color = "#34d399";
-  } else if (url.includes("lever.co") || url.includes("lever_sample")) {
+  } else if (url.includes("lever.co")) {
     portalName = "Lever";
     portalPill.style.background = "#1e3a8a";
     portalPill.style.color = "#60a5fa";
+  } else if (url.includes("dou.ua")) {
+    portalName = "DOU.ua";
+  } else if (url.includes("djinni.co")) {
+    portalName = "Djinni.co";
+  } else if (url.includes("jobs.ge")) {
+    portalName = "Jobs.ge";
+  } else if (url.includes("hr.ge")) {
+    portalName = "HR.ge";
   }
 
   portalPill.textContent = portalName;
 
-  // Attempt to communicate with content script
   try {
     chrome.tabs.sendMessage(tab.id, { action: "GET_PAGE_STATUS" }, (response) => {
       if (chrome.runtime.lastError || !response) return;
@@ -93,16 +117,31 @@ function renderAudit(audit) {
 }
 
 function setupEventListeners() {
-  // Autofill button
+  const saveApiBtn = document.getElementById("btn-save-api-url");
+  if (saveApiBtn) {
+    saveApiBtn.addEventListener("click", async () => {
+      const inputEl = document.getElementById("api-base-url-input");
+      const newUrl = (inputEl?.value || DEFAULT_API_BASE_URL).trim().replace(/\/+$/, "");
+      if (chrome.storage && chrome.storage.sync) {
+        chrome.storage.sync.set({ api_base_url: newUrl }, async () => {
+          saveApiBtn.textContent = "Saved!";
+          await checkBackendStatus(newUrl);
+          setTimeout(() => {
+            saveApiBtn.textContent = "Save";
+          }, 1500);
+        });
+      }
+    });
+  }
+
   document.getElementById("btn-popup-autofill").addEventListener("click", async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab) return;
-    chrome.tabs.sendMessage(tab.id, { action: "TRIGGER_AUTOFILL" }, (res) => {
+    chrome.tabs.sendMessage(tab.id, { action: "TRIGGER_AUTOFILL" }, () => {
       window.close();
     });
   });
 
-  // Audit button
   document.getElementById("btn-popup-audit").addEventListener("click", async () => {
     const btn = document.getElementById("btn-popup-audit");
     btn.innerHTML = `<span>⏳</span> Auditing...`;
@@ -120,8 +159,7 @@ function setupEventListeners() {
     });
   });
 
-  // Dashboard link
   document.getElementById("btn-open-dashboard").addEventListener("click", () => {
-    chrome.tabs.create({ url: FRONTEND_URL });
+    chrome.tabs.create({ url: DEFAULT_FRONTEND_URL });
   });
 }
