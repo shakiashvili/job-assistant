@@ -1,5 +1,6 @@
 from typing import List, Dict, Optional, Any
 from pydantic import BaseModel, Field
+from .db_models import CandidateProfile, JobPosting, ApplicationRecord  # noqa: F401
 
 
 # --- Audit & Validation Schemas ---
@@ -9,6 +10,7 @@ class JobDetails(BaseModel):
     company: str = Field("Unknown Company", description="Company offering the position")
     portal: str = Field("generic", description="Detected job portal (djinni, dou.ua, jobs.ge, hr.ge, headhunter.ge, justjoin.it, greenhouse, lever)")
     industry: str = Field("general", description="Detected industry: qa_tech, hospitality_reception, customer_service, healthcare_hospital, general")
+    market: str = Field("INT_REMOTE", description="GE, UA_REMOTE, or INT_REMOTE")
     experience_years_required: Optional[int] = Field(None, description="Minimum years of experience required")
     required_skills: List[str] = Field(default_factory=list, description="Must-have skills / qualifications")
     nice_to_have_skills: List[str] = Field(default_factory=list, description="Nice-to-have or preferred skills")
@@ -16,7 +18,11 @@ class JobDetails(BaseModel):
     language_requirements: List[str] = Field(default_factory=list, description="Languages required")
     location: str = Field("Tbilisi / Remote", description="Location or remote / abroad market policy")
     remote_policy: str = Field("Flexible / On-site / Remote", description="Remote, Hybrid, Abroad, or On-site")
-    salary_range: Optional[str] = Field(None, description="Detected salary range if any")
+    salary_range: Optional[str] = Field(None, description="Detected or AI-estimated salary range")
+    salary_min: Optional[float] = Field(None, description="Extracted or AI-estimated min salary")
+    salary_max: Optional[float] = Field(None, description="Extracted or AI-estimated max salary")
+    salary_currency: Optional[str] = Field(None, description="Salary currency: USD, EUR, GEL, GBP")
+    salary_estimated_by_ai: bool = Field(False, description="True if predicted by AI, False if extracted from posting")
     summary: str = Field("", description="Executive summary of the job description")
 
 

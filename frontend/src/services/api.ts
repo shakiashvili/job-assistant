@@ -6,7 +6,9 @@ import {
   StageApplicationResponse,
   ApplicationItem,
   PortalVacancyItem,
-  SkillsPresetItem
+  SkillsPresetItem,
+  DbJobPosting,
+  ParsedSkillsTaxonomy
 } from '../types';
 
 export const BACKEND_ORIGIN = 'http://localhost:8000';
@@ -78,14 +80,63 @@ export async function saveSkillsMdText(content: string): Promise<{ status: strin
   return res.json();
 }
 
-export async function uploadSkillsMdFile(file: File): Promise<{ status: string; filename: string; content: string; extracted_skills: string[]; message: string }> {
+export async function uploadSkillsMdFile(file: File): Promise<{
+  status: string;
+  filename: string;
+  content: string;
+  extracted_skills: string[];
+  parsed_skills?: ParsedSkillsTaxonomy;
+  message: string;
+}> {
   const formData = new FormData();
   formData.append('file', file);
-  const res = await fetch(`${API_BASE}/skills-md/upload`, {
+  const res = await fetch(`${API_BASE}/profile/upload-skills`, {
     method: 'POST',
     body: formData,
   });
   if (!res.ok) throw new Error('Failed to upload .md file');
+  const data = await res.json();
+  const allSkills: string[] = data.parsed_skills?.all_skills || [];
+  return {
+    status: data.status,
+    filename: data.filename || file.name,
+    content: data.raw_markdown || '',
+    extracted_skills: allSkills,
+    parsed_skills: data.parsed_skills,
+    message: `Uploaded ${file.name} into SQLite CandidateProfile (${allSkills.length} skills indexed)!`,
+  };
+}
+
+export async function fetchDbProfile(): Promise<{
+  id: number;
+  raw_markdown: string;
+  parsed_skills: ParsedSkillsTaxonomy;
+  updated_at: string;
+}> {
+  const res = await fetch(`${API_BASE}/profile`);
+  if (!res.ok) throw new Error('Failed to load CandidateProfile from DB');
+  return res.json();
+}
+
+export async function fetchScrapedJobs(statusFilter?: string): Promise<DbJobPosting[]> {
+  const qs = statusFilter && statusFilter !== 'ALL' ? `?status=${encodeURIComponent(statusFilter)}` : '';
+  const res = await fetch(`${API_BASE}/jobs${qs}`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function triggerMultiPortalScrape(allowNetwork = false): Promise<{
+  total_processed: number;
+  staged_ready_count: number;
+  filtered_out_count: number;
+  jobs: DbJobPosting[];
+}> {
+  const res = await fetch(`${API_BASE}/jobs/scrape`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ allow_network: allowNetwork }),
+  });
+  if (!res.ok) throw new Error('Scraper run failed');
   return res.json();
 }
 

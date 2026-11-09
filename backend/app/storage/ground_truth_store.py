@@ -1,8 +1,12 @@
 import json
 import logging
 import re
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
+from sqlmodel import Session, select
 from ..config import GROUND_TRUTH_FILE, SKILLS_MD_FILE
+from ..database import engine, init_db
+from ..models.db_models import CandidateProfile, utc_now
+from ..services.matcher_service import matcher_service
 
 logger = logging.getLogger(__name__)
 
@@ -29,9 +33,9 @@ I build reliable test automation that helps engineering teams ship faster withou
 
 ## Core Skills
 - **UI & End-to-End Automation:** Playwright, Cypress, Selenium WebDriver, Appium
-- **Programming & Scripting:** Python, TypeScript, JavaScript, SQL, Bash
-- **API & Integration Testing:** PyTest, Postman, REST API, GraphQL, Swagger/OpenAPI
-- **CI/CD & DevOps:** GitHub Actions, GitLab CI, Docker, AWS, k6, Jira, Xray
+- **Programming & Scripting:** Python, TypeScript, JavaScript, Java, SQL, Bash
+- **API & Integration Testing:** PyTest, JUnit, Postman, REST Assured, REST API, GraphQL, k6, JMeter
+- **CI/CD & DevOps:** GitHub Actions, GitLab CI, Docker, Kubernetes, AWS, Jira, Xray
 
 ## Work Experience
 ### Senior QA Automation Engineer | TechNova Cloud Solutions
@@ -152,9 +156,57 @@ Compassionate, composed, and highly organized Hospital Patient Coordinator & Med
 
 
 class GroundTruthStore:
+    """
+    Relational Database-backed CandidateProfile store (SQLModel / SQLAlchemy).
+    Replaces raw JSON persistence with the `candidate_profiles` SQL table while preserving
+    full backward compatibility for existing endpoints.
+    """
+
     def __init__(self, filepath=GROUND_TRUTH_FILE, skills_md_path=SKILLS_MD_FILE):
         self.filepath = filepath
         self.skills_md_path = skills_md_path
+        init_db()
+        self._ensure_seeded()
+
+    def _load_seed_json(self) -> Dict[str, Any]:
+        if self.filepath.exists():
+            try:
+                with open(self.filepath, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.warning(f"Failed reading seed JSON: {e}")
+        return {}
+
+    def _ensure_seeded(self) -> CandidateProfile:
+        with Session(engine) as session:
+            profile = session.exec(
+                select(CandidateProfile).order_by(CandidateProfile.updated_at.desc())
+            ).first()
+            if profile:
+                return profile
+
+            raw_md = ""
+            if self.skills_md_path.exists():
+                raw_md = self.skills_md_path.read_text(encoding="utf-8")
+            if not raw_md:
+                raw_md = PROFESSION_MD_PRESETS["qa_tech"]["content"]
+
+            seed_gt = self._load_seed_json()
+            taxonomy = matcher_service.parse_skills_markdown(raw_md)
+            taxonomy["ground_truth_vault"] = seed_gt
+
+            profile = CandidateProfile(
+                raw_markdown=raw_md,
+                parsed_skills=taxonomy,
+                updated_at=utc_now(),
+            )
+            session.add(profile)
+            session.commit()
+            session.refresh(profile)
+            return profile
+
+    def get_profile_record(self) -> CandidateProfile:
+        return self._ensure_seeded()
 
     def get_profession_presets(self) -> Dict[str, Dict[str, str]]:
         return PROFESSION_MD_PRESETS
@@ -166,47 +218,58 @@ class GroundTruthStore:
         return preset["content"]
 
     def get_data(self) -> Dict[str, Any]:
-        """Loads and returns candidate ground truth."""
-        try:
-            with open(self.filepath, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            data["skills_md_raw"] = self.get_skills_md()
-            return data
-        except Exception as e:
-            logger.error(f"Error loading ground_truth from {self.filepath}: {e}")
-            return {}
+        """Returns the full candidate vault backed by CandidateProfile in SQLite/PostgreSQL."""
+        profile = self.get_profile_record()
+        vault = dict(profile.parsed_skills.get("ground_truth_vault") or self._load_seed_json())
+        vault["skills_md_raw"] = profile.raw_markdown
+        vault["parsed_skills_taxonomy"] = {
+            k: v for k, v in profile.parsed_skills.items() if k != "ground_truth_vault"
+        }
+        return vault
 
     def update_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Updates and persists ground truth to disk."""
-        try:
-            save_copy = dict(data)
-            if "skills_md_raw" in save_copy:
-                self.save_skills_md(save_copy.pop("skills_md_raw"))
-            with open(self.filepath, "w", encoding="utf-8") as f:
-                json.dump(save_copy, f, indent=2, ensure_ascii=False)
-            return self.get_data()
-        except Exception as e:
-            logger.error(f"Error saving ground_truth to {self.filepath}: {e}")
-            raise
+        """Persists updated candidate vault into CandidateProfile in the relational DB."""
+        save_copy = dict(data)
+        raw_md = save_copy.pop("skills_md_raw", None)
+        save_copy.pop("parsed_skills_taxonomy", None)
+
+        with Session(engine) as session:
+            profile = session.exec(
+                select(CandidateProfile).order_by(CandidateProfile.updated_at.desc())
+            ).first()
+            if not profile:
+                profile = self._ensure_seeded()
+                profile = session.get(CandidateProfile, profile.id)
+
+            if raw_md is not None:
+                profile.raw_markdown = raw_md
+                try:
+                    self.skills_md_path.write_text(raw_md, encoding="utf-8")
+                except Exception:
+                    pass
+
+            taxonomy = matcher_service.parse_skills_markdown(profile.raw_markdown)
+            taxonomy["ground_truth_vault"] = save_copy
+            profile.parsed_skills = taxonomy
+            profile.updated_at = utc_now()
+            session.add(profile)
+            session.commit()
+
+        return self.get_data()
 
     def get_skills_md(self) -> str:
-        """Reads the candidate's attached Markdown (.md) skills file."""
-        try:
-            if self.skills_md_path.exists():
-                return self.skills_md_path.read_text(encoding="utf-8")
-        except Exception as e:
-            logger.error(f"Error reading {self.skills_md_path}: {e}")
-        return ""
+        """Reads the candidate's raw_markdown directly from CandidateProfile in the relational database."""
+        profile = self.get_profile_record()
+        return profile.raw_markdown or ""
 
     def parse_profile_from_md(self, md_content: str) -> Dict[str, Any]:
         """
         Extracts name, headline, email, phone, location, summary, skills,
-        and work history from any English or Georgian .md skills file!
+        and work history from any English or Georgian .md skills file.
         """
         result: Dict[str, Any] = {}
         lines = md_content.splitlines()
 
-        # 1. Extract Name & Headline from H1 (# Name — Headline)
         for line in lines:
             s = line.strip()
             if s.startswith("# "):
@@ -217,7 +280,6 @@ class GroundTruthStore:
                     result["headline"] = parts[1].strip()
                 break
 
-        # 2. Extract Full Name / Email / Phone / Location from bullet points
         email_m = re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", md_content)
         if email_m:
             result["email"] = email_m.group(0)
@@ -230,7 +292,6 @@ class GroundTruthStore:
         if name_m:
             result["full_name"] = name_m.group(1).strip()
 
-        # 3. Extract Summary
         summary_lines = []
         in_summary = False
         for line in lines:
@@ -243,10 +304,8 @@ class GroundTruthStore:
         if summary_lines:
             result["summary"] = " ".join(summary_lines)
 
-        # 4. Extract Skills
         result["skills"] = self.extract_skills_from_md(md_content)
 
-        # 5. Extract Work History sections (### Role | Company)
         work_history = []
         in_exp = False
         current_job = None
@@ -275,7 +334,6 @@ class GroundTruthStore:
                         "highlights": []
                     }
                 elif current_job and s.startswith(("*", "-")) and not s.startswith("* ") and s.endswith("*"):
-                    # Date/location italic line e.g. *Tbilisi • 2022 – Present*
                     meta = s.strip("* ")
                     current_job["start_date"] = meta
                     current_job["end_date"] = ""
@@ -290,42 +348,66 @@ class GroundTruthStore:
 
         return result
 
-    def save_skills_md(self, md_content: str) -> Dict[str, Any]:
+    def ingest_skills_markdown(self, md_content: str) -> CandidateProfile:
         """
-        Saves the new Markdown (.md) skills file and extracts candidate info,
-        skills, and work history to synchronize with ground_truth.json!
+        Ingests a skills.md file into the CandidateProfile relational table,
+        computing structured QA/SDET + multi-industry taxonomy via MatcherService/Gemini.
         """
         try:
             self.skills_md_path.write_text(md_content, encoding="utf-8")
-            parsed = self.parse_profile_from_md(md_content)
-            gt = self.get_data()
-            gt.pop("skills_md_raw", None)
+        except Exception:
+            pass
 
-            cand = gt.setdefault("candidate", {})
-            if parsed.get("full_name"):
-                cand["full_name"] = parsed["full_name"]
-                name_parts = parsed["full_name"].split()
-                cand["first_name"] = name_parts[0]
-                cand["last_name"] = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
-            if parsed.get("headline"):
-                cand["headline"] = parsed["headline"]
-            if parsed.get("email"):
-                cand["email"] = parsed["email"]
-            if parsed.get("phone"):
-                cand["phone"] = parsed["phone"]
+        parsed = self.parse_profile_from_md(md_content)
+        taxonomy = matcher_service.parse_skills_markdown(md_content)
 
-            if parsed.get("skills"):
-                gt.setdefault("skills", {})["core"] = parsed["skills"]
-            if parsed.get("work_history"):
-                gt["work_history"] = parsed["work_history"]
+        gt = self.get_data()
+        gt.pop("skills_md_raw", None)
+        gt.pop("parsed_skills_taxonomy", None)
 
-            cand.setdefault("compensation", {})["notice_period"] = "1 week after offer"
-            with open(self.filepath, "w", encoding="utf-8") as f:
-                json.dump(gt, f, indent=2, ensure_ascii=False)
-            return self.get_data()
-        except Exception as e:
-            logger.error(f"Error saving skills.md: {e}")
-            raise
+        cand = gt.setdefault("candidate", {})
+        if parsed.get("full_name"):
+            cand["full_name"] = parsed["full_name"]
+            name_parts = parsed["full_name"].split()
+            cand["first_name"] = name_parts[0]
+            cand["last_name"] = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
+        if parsed.get("headline"):
+            cand["headline"] = parsed["headline"]
+        if parsed.get("email"):
+            cand["email"] = parsed["email"]
+        if parsed.get("phone"):
+            cand["phone"] = parsed["phone"]
+        if parsed.get("skills"):
+            gt.setdefault("skills", {})["core"] = parsed["skills"]
+        if parsed.get("work_history"):
+            gt["work_history"] = parsed["work_history"]
+        cand.setdefault("compensation", {})["notice_period"] = "1 week after offer"
+
+        taxonomy["ground_truth_vault"] = gt
+
+        with Session(engine) as session:
+            profile = session.exec(
+                select(CandidateProfile).order_by(CandidateProfile.updated_at.desc())
+            ).first()
+            if profile:
+                profile.raw_markdown = md_content
+                profile.parsed_skills = taxonomy
+                profile.updated_at = utc_now()
+            else:
+                profile = CandidateProfile(
+                    raw_markdown=md_content,
+                    parsed_skills=taxonomy,
+                    updated_at=utc_now(),
+                )
+            session.add(profile)
+            session.commit()
+            session.refresh(profile)
+            return profile
+
+    def save_skills_md(self, md_content: str) -> Dict[str, Any]:
+        """Saves skills.md into CandidateProfile and returns the updated ground truth dictionary."""
+        self.ingest_skills_markdown(md_content)
+        return self.get_data()
 
     def extract_skills_from_md(self, md_content: str) -> List[str]:
         """Extracts individual skills from English or Georgian markdown bullet lists."""

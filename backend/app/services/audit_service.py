@@ -6,6 +6,8 @@ from ..services.gemini_service import gemini_service
 from ..services.portal_detector import detect_portal_from_html, detect_portal_from_url
 from ..services.company_validator import company_validator
 from ..services.cv_generator_service import cv_generator_service
+from ..services.salary_service import salary_service
+from ..services.scrapers.base_scraper import evaluate_remote_and_language_gate
 from ..models.schemas import (
     JobAuditResponse, JobDetails, ScoreBreakdown, Blocker, GapItem, TailoredCVResult
 )
@@ -70,6 +72,24 @@ class AuditService:
 
         raw_details = gemini_service.extract_job_details(extracted_text, portal=inferred_portal)
         details = JobDetails(**raw_details)
+
+        # Market & Dynamic AI Salary Estimation (never asks the user for salary)
+        market = "GE" if details.portal in ("jobs.ge", "hr.ge", "headhunter.ge") else (
+            "UA_REMOTE" if details.portal == "dou.ua" else "INT_REMOTE"
+        )
+        details.market = market
+        sal_est = salary_service.estimate_salary(
+            title=details.title,
+            description=extracted_text,
+            market=market,
+            portal=details.portal,
+        )
+        details.salary_min = sal_est["min_salary"]
+        details.salary_max = sal_est["max_salary"]
+        details.salary_currency = sal_est["currency"]
+        details.salary_estimated_by_ai = sal_est["salary_estimated_by_ai"]
+        est_badge = "AI Estimated" if sal_est["salary_estimated_by_ai"] else "Extracted from Job"
+        details.salary_range = f"{sal_est['min_salary']:g} – {sal_est['max_salary']:g} {sal_est['currency']}/mo ({est_badge})"
 
         # 1. Skills Match & Gaps Analysis
         req_skills = details.required_skills or []
@@ -164,6 +184,21 @@ class AuditService:
             ))
 
         lang_score = 100
+        _, gate_status, gate_reason, detected_langs = evaluate_remote_and_language_gate(
+            title=details.title,
+            description=extracted_text,
+            location_text=details.location or "Remote",
+            portal=details.portal,
+        )
+        if gate_status == "FILTERED_OUT":
+            lang_score = 0
+            blockers.append(Blocker(
+                category="language",
+                severity="critical",
+                description=f"Filtered Out ({gate_reason}): Vacancy requires Ukrainian/Russian or non-remote attendance.",
+                candidate_status="Strict English-only Remote filter active for Ukrainian/Regional platforms."
+            ))
+
         overall_score = int(
             (skills_score * 0.35) +
             (ats_score * 0.25) +
@@ -196,6 +231,8 @@ class AuditService:
             cv_language=cv_language
         )
         tailored_cv = TailoredCVResult(**cv_result_dict)
+        if details.salary_range:
+            tailored_cv.expected_salary = details.salary_range
 
         recommended_variant = variant
         lang_label = "Georgian (ქართული)" if cv_language == "ka" else "English"

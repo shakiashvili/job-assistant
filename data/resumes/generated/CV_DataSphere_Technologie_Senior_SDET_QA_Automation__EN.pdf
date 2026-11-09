@@ -4,7 +4,7 @@
 3 0 obj <</Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources <</Font <</F1 4 0 R /F2 5 0 R>>>> /Contents 6 0 R>> endobj
 4 0 obj <</Type /Font /Subtype /Type1 /BaseFont /Helvetica>> endobj
 5 0 obj <</Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold>> endobj
-6 0 obj <</Length 2474>> stream
+6 0 obj <</Length 2446>> stream
 BT /F2 15 Tf 48 755 Td (Alex Mercer  -  Senior SDET / QA Automation Engineer) Tj ET
 BT /F1 9 Tf 48 739 Td (alex.mercer.dev@gmail.com  |  +49 152 98765432
 -  |  Berlin, Germany) Tj ET
@@ -12,14 +12,14 @@ BT /F1 8 Tf 48 727 Td (LinkedIn: https://linkedin.com/in/alex-mercer-qa  |  Avai
 0.75 0.78 0.82 RG 0.8 w 48 719 m 564 719 l S
 BT /F2 10 Tf 48 703 Td (SUMMARY \(TAILORED FOR DATASPHERE TECHNOLOGIES\)) Tj ET
 BT /F1 9 Tf 48 690 Td (Senior QA Automation Engineer with 5+ years of practical experience building fast, reliable) Tj ET
-BT /F1 9 Tf 48 678 Td (test suites using Playwright, Cypress, Selenium WebDriver, Appium, Python. I focus on keeping) Tj ET
-BT /F1 9 Tf 48 666 Td (CI/CD pipelines green, cutting regression time from hours to minutes, and working directly with) Tj ET
+BT /F1 9 Tf 48 678 Td (test suites using Playwright, Selenium, Cypress, Appium, PyTest. I focus on keeping CI/CD) Tj ET
+BT /F1 9 Tf 48 666 Td (pipelines green, cutting regression time from hours to minutes, and working directly with) Tj ET
 BT /F1 9 Tf 48 654 Td (developers at DataSphere Technologies to ship clean releases. Available to start 1 week after) Tj ET
 BT /F1 9 Tf 48 642 Td (offer.) Tj ET
 0.75 0.78 0.82 RG 0.8 w 48 630 m 564 630 l S
 BT /F2 10 Tf 48 614 Td (CORE SKILLS & COMPETENCIES) Tj ET
-BT /F1 9 Tf 48 601 Td (Playwright, Cypress, Selenium WebDriver, Appium, Python, TypeScript, JavaScript, SQL, Bash,) Tj ET
-BT /F1 9 Tf 48 589 Td (PyTest, Postman, REST API, GraphQL, Swagger, OpenAPI, GitHub Actions, GitLab CI, Docker) Tj ET
+BT /F1 9 Tf 48 601 Td (Playwright, Selenium, Cypress, Appium, PyTest, JUnit, Python, TypeScript, Java, SQL, Bash,) Tj ET
+BT /F1 9 Tf 48 589 Td (Postman, REST Assured, REST API, k6, JMeter, GitHub Actions, GitLab CI) Tj ET
 0.75 0.78 0.82 RG 0.8 w 48 577 m 564 577 l S
 BT /F2 10 Tf 48 561 Td (PROFESSIONAL WORK EXPERIENCE) Tj ET
 BT /F2 9 Tf 48 547 Td (Senior QA Automation Engineer  |  TechNova Cloud Solutions \(Jan 2023 - Present - \)) Tj ET

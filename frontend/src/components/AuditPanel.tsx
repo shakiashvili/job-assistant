@@ -17,7 +17,10 @@ import {
   Briefcase,
   Building2,
   CheckCircle2,
-  Eye
+  Eye,
+  Database,
+  ShieldAlert,
+  DollarSign
 } from 'lucide-react';
 import {
   auditJob,
@@ -28,9 +31,11 @@ import {
   uploadSkillsMdFile,
   saveSkillsMdText,
   applySkillsPreset,
+  fetchScrapedJobs,
+  triggerMultiPortalScrape,
   BACKEND_ORIGIN
 } from '../services/api';
-import { JobAuditResponse, ScreeningAnswer, PortalVacancyItem } from '../types';
+import { JobAuditResponse, ScreeningAnswer, PortalVacancyItem, DbJobPosting } from '../types';
 import { StageModal } from './StageModal';
 
 const INDUSTRY_PRESETS = [
@@ -44,6 +49,16 @@ export const AuditPanel: React.FC = () => {
   const [vacancies, setVacancies] = useState<PortalVacancyItem[]>([]);
   const [selectedPortalFilter, setSelectedPortalFilter] = useState<string>('ALL');
   const [selectedIndustryFilter, setSelectedIndustryFilter] = useState<string>('ALL');
+
+  // Relational DB Scraped JobPostings State
+  const [scrapedJobs, setScrapedJobs] = useState<DbJobPosting[]>([]);
+  const [dbStatusFilter, setDbStatusFilter] = useState<string>('ALL');
+  const [isScraping, setIsScraping] = useState(false);
+  const [scrapeStats, setScrapeStats] = useState<{
+    total: number;
+    staged: number;
+    filteredOut: number;
+  } | null>(null);
 
   const [jobUrl, setJobUrl] = useState(`${BACKEND_ORIGIN}/mock-portals/jobs_ge_sample.html`);
   const [jobText, setJobText] = useState('');
@@ -77,8 +92,13 @@ export const AuditPanel: React.FC = () => {
 
   const loadInitialData = async () => {
     try {
-      const [vacs, mdData] = await Promise.all([fetchVacancies(), fetchSkillsMd()]);
+      const [vacs, mdData, dbJobs] = await Promise.all([
+        fetchVacancies(),
+        fetchSkillsMd(),
+        fetchScrapedJobs(),
+      ]);
       setVacancies(vacs);
+      setScrapedJobs(dbJobs);
       if (vacs.length > 0) {
         setJobUrl(vacs[0].mock_url);
         setJobText(vacs[0].description);
@@ -91,6 +111,36 @@ export const AuditPanel: React.FC = () => {
     }
   };
 
+  const handleRunMultiPortalScrapers = async () => {
+    setIsScraping(true);
+    setError(null);
+    try {
+      const res = await triggerMultiPortalScrape(false);
+      setScrapedJobs(res.jobs);
+      setScrapeStats({
+        total: res.total_processed,
+        staged: res.staged_ready_count,
+        filteredOut: res.filtered_out_count,
+      });
+    } catch (err: any) {
+      setError(err.message || 'Multi-portal scrape failed');
+    } finally {
+      setIsScraping(false);
+    }
+  };
+
+  const handleSelectScrapedDbJob = (job: DbJobPosting) => {
+    const mockMap: Record<string, string> = {
+      'dou.ua': `${BACKEND_ORIGIN}/mock-portals/dou_sample.html`,
+      'djinni.co': `${BACKEND_ORIGIN}/mock-portals/djinni_sample.html`,
+      'jobs.ge': `${BACKEND_ORIGIN}/mock-portals/jobs_ge_sample.html`,
+      'hr.ge': `${BACKEND_ORIGIN}/mock-portals/jobs_ge_sample.html`,
+    };
+    setJobUrl(mockMap[job.portal] || job.url);
+    setJobText(job.description_raw);
+    setError(null);
+  };
+
   const handleApplyPreset = async (presetId: string) => {
     try {
       setError(null);
@@ -100,14 +150,16 @@ export const AuditPanel: React.FC = () => {
       setExtractedSkillsCount(res.extracted_skills.length);
       setSelectedVariant(presetId === 'qa_tech' ? 'qa_automation' : presetId);
 
-      // Also auto-select a matching vacancy for convenience
       const matchingVac = vacancies.find((v) => v.industry === presetId);
       if (matchingVac) {
         setJobUrl(matchingVac.mock_url);
         setJobText(matchingVac.description);
       }
 
-      setSkillsStatusMsg(`✅ Switched profile to "${presetId}" (${res.extracted_skills.length} skills synced into candidate_skills.md)!`);
+      const refreshedJobs = await fetchScrapedJobs();
+      setScrapedJobs(refreshedJobs);
+
+      setSkillsStatusMsg(`✅ Switched SQL CandidateProfile to "${presetId}" (${res.extracted_skills.length} skills indexed)!`);
       setTimeout(() => setSkillsStatusMsg(null), 4500);
     } catch (err: any) {
       setError(err.message || 'Failed to load profession template');
@@ -122,7 +174,9 @@ export const AuditPanel: React.FC = () => {
       setSkillsMdContent(res.content);
       setSkillsFilename(res.filename);
       setExtractedSkillsCount(res.extracted_skills.length);
-      setSkillsStatusMsg(`✅ Attached ${res.filename} (${res.extracted_skills.length} skills extracted)!`);
+      const refreshedJobs = await fetchScrapedJobs();
+      setScrapedJobs(refreshedJobs);
+      setSkillsStatusMsg(res.message);
       setTimeout(() => setSkillsStatusMsg(null), 4500);
     } catch (err: any) {
       setError(err.message || 'Failed to upload .md file');
@@ -133,7 +187,9 @@ export const AuditPanel: React.FC = () => {
     try {
       const res = await saveSkillsMdText(skillsMdContent);
       setExtractedSkillsCount(res.extracted_skills.length);
-      setSkillsStatusMsg(`✅ Updated candidate_skills.md (${res.extracted_skills.length} skills synced)!`);
+      const refreshedJobs = await fetchScrapedJobs();
+      setScrapedJobs(refreshedJobs);
+      setSkillsStatusMsg(`✅ Updated CandidateProfile in SQL DB (${res.extracted_skills.length} skills synced)!`);
       setShowSkillsEditor(false);
       setTimeout(() => setSkillsStatusMsg(null), 4000);
     } catch (err: any) {
@@ -233,9 +289,9 @@ export const AuditPanel: React.FC = () => {
         company_reviews: auditResult.company_validation.review_count,
         cv_pdf_url: auditResult.tailored_cv.pdf_url,
         variant_used: selectedVariant,
-        notes: `Tailored CV (${cvLanguage.toUpperCase()}): ${auditResult.tailored_cv.pdf_filename} | Reviews: ${auditResult.company_validation.review_count} (${auditResult.company_validation.rating}★) | Start: ${auditResult.tailored_cv.start_date_default}`,
+        notes: `Tailored CV (${cvLanguage.toUpperCase()}): ${auditResult.tailored_cv.pdf_filename} | Salary: ${auditResult.job_details.salary_range || auditResult.tailored_cv.expected_salary} | Start: ${auditResult.tailored_cv.start_date_default}`,
       });
-      setSaveSuccessMsg('Saved vacancy + tailored PDF CV to Tracker Board!');
+      setSaveSuccessMsg('Saved ApplicationRecord + JobPosting to Relational SQL Database!');
       setTimeout(() => setSaveSuccessMsg(null), 4000);
     } catch (err: any) {
       setError(err.message || 'Could not save application');
@@ -257,6 +313,11 @@ export const AuditPanel: React.FC = () => {
     return matchesPortal && matchesInd;
   });
 
+  const filteredDbJobs = scrapedJobs.filter((j) => {
+    if (dbStatusFilter === 'ALL') return true;
+    return j.status === dbStatusFilter;
+  });
+
   return (
     <div className="space-y-6">
       {/* Top 1% B2B SaaS Hero Banner */}
@@ -265,15 +326,13 @@ export const AuditPanel: React.FC = () => {
           <div className="space-y-2 max-w-3xl">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-sky-500/10 border border-sky-500/30 text-sky-300 text-xs font-semibold">
               <Building2 className="w-3.5 h-3.5" />
-              <span>B2B & Candidate AI Automation Suite • Multi-Industry & Bilingual (EN / KA ქართული)</span>
+              <span>SQLModel Relational DB • Automated Portal Scrapers • AI Salary Estimator • EN / KA ქართული</span>
             </div>
             <h1 className="text-xl sm:text-2xl font-extrabold text-white tracking-tight">
-              One-Click Tailored CVs & Automated Portal Staging for Every Profession
+              Automated Job Discovery, Strict Language Filtering & Bilingual CV Generation
             </h1>
             <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
-              Built for <strong>QA & Software Engineers</strong>, <strong>Hotel Receptionists & Hospitality</strong>,{' '}
-              <strong>Customer Service Teams</strong>, and <strong>Hospital / Medical Coordinators</strong>. Upload skills in{' '}
-              <strong>English or Georgian</strong> and generate human-tone PDFs in either language with verified 3+ review company gating.
+              Scrapes <strong>Jobs.ge, HR.ge, DOU.ua, and Djinni.co</strong> into a relational SQL database, automatically filters out Ukrainian/Russian-required postings (`FILTERED_OUT`), estimates unstated salaries via AI, and promotes `&gt;= 75%` matches to the <strong>STAGED</strong> queue.
             </p>
           </div>
 
@@ -317,7 +376,7 @@ export const AuditPanel: React.FC = () => {
         </div>
       </div>
 
-      {/* 1. Skills.md Attachment + 1-Click Multi-Industry Profile Switcher */}
+      {/* 1. Skills.md Upload & CandidateProfile Relational DB Ingestion */}
       <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl space-y-4 shadow-sm">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="flex items-start gap-3">
@@ -327,14 +386,14 @@ export const AuditPanel: React.FC = () => {
             <div>
               <div className="flex items-center gap-2 flex-wrap">
                 <h3 className="text-sm font-bold text-white">
-                  Attached Candidate Skills File: <code className="text-emerald-400">{skillsFilename}</code>
+                  SQL CandidateProfile (`POST /api/profile/upload-skills`): <code className="text-emerald-400">{skillsFilename}</code>
                 </h3>
                 <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800 font-semibold">
-                  {extractedSkillsCount} Skills Synced
+                  {extractedSkillsCount} Skills Indexed in DB
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
-                Upload your own <code className="text-slate-300">.md</code> file (in English or Georgian) or switch between ready-made industry profiles below:
+                Upload your <code className="text-slate-300">skills.md</code> or switch between ready-made industry profiles below — automatically re-scores all scraped DB jobs:
               </p>
             </div>
           </div>
@@ -352,7 +411,7 @@ export const AuditPanel: React.FC = () => {
               className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold transition-colors shadow-sm"
             >
               <Upload className="w-3.5 h-3.5" />
-              <span>Attach / Upload .md File</span>
+              <span>Upload skills.md to DB</span>
             </button>
             <button
               onClick={() => setShowSkillsEditor(!showSkillsEditor)}
@@ -368,7 +427,7 @@ export const AuditPanel: React.FC = () => {
         <div className="pt-2 border-t border-slate-800/80">
           <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-2 flex items-center gap-1.5">
             <Briefcase className="w-3.5 h-3.5 text-sky-400" />
-            <span>1-Click Profession Profile Templates (Loads Sample .md Skills & Matching Vacancy):</span>
+            <span>1-Click Profession Profile Templates (QA/Tech, Receptionist, Customer Service, Hospital):</span>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
             {INDUSTRY_PRESETS.map((preset) => {
@@ -414,27 +473,156 @@ export const AuditPanel: React.FC = () => {
                 onClick={handleSaveSkillsMdText}
                 className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold"
               >
-                Save & Sync skills.md
+                Save & Sync skills.md to SQL DB
               </button>
             </div>
           </div>
         )}
       </div>
 
-      {/* 2. Multi-Portal & Multi-Industry Vacancy Discovery Feed */}
+      {/* 2. Automated Multi-Portal Scraper Engine + Strict Language Gate + AI Salary Estimator */}
+      <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl space-y-4">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-bold text-white flex items-center gap-2">
+              <Database className="w-4 h-4 text-emerald-400" />
+              Automated Portal Scrapers & Intelligent Market Filter (`JobPosting` SQL Table)
+            </h3>
+            <p className="text-xs text-slate-400">
+              Scrapes <strong>Jobs.ge</strong>, <strong>HR.ge</strong>, <strong>DOU.ua</strong>, and <strong>Djinni.co</strong>. Automatically filters out Ukrainian/Russian language requirements (`FILTERED_OUT`), estimates salaries via AI, and promotes `&gt;= 75%` matches to <strong>STAGED</strong>.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={handleRunMultiPortalScrapers}
+              disabled={isScraping}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-md shadow-emerald-600/20 transition-all disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isScraping ? 'animate-spin' : ''}`} />
+              <span>{isScraping ? 'Scraping Portals...' : 'Run Multi-Portal Scrapers'}</span>
+            </button>
+
+            {['ALL', 'STAGED', 'FILTERED_OUT', 'AUDITED'].map((st) => (
+              <button
+                key={st}
+                onClick={() => setDbStatusFilter(st)}
+                className={`text-[11px] px-2.5 py-1.5 rounded-lg font-semibold transition-colors ${
+                  dbStatusFilter === st
+                    ? 'bg-sky-600 text-white'
+                    : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                }`}
+              >
+                {st === 'ALL' ? `All DB Jobs (${scrapedJobs.length})` : st}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {scrapeStats && (
+          <div className="text-xs bg-emerald-950/30 border border-emerald-800/60 text-emerald-300 px-3.5 py-2 rounded-xl flex items-center justify-between flex-wrap gap-2">
+            <span>
+              ✅ Scraper pipeline processed <strong>{scrapeStats.total}</strong> postings into SQLite DB:
+            </span>
+            <div className="flex items-center gap-3">
+              <span className="text-emerald-400 font-bold">
+                {scrapeStats.staged} Auto-Promoted to STAGED (&gt;= 75%)
+              </span>
+              <span className="text-rose-400 font-bold">
+                {scrapeStats.filteredOut} Filtered Out (Local Language Gate)
+              </span>
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+          {filteredDbJobs.map((job) => {
+            const isFilteredOut = job.status === 'FILTERED_OUT';
+            const isStaged = job.status === 'STAGED';
+            return (
+              <div
+                key={`${job.portal}-${job.external_id}`}
+                onClick={() => handleSelectScrapedDbJob(job)}
+                className={`p-3.5 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
+                  isFilteredOut
+                    ? 'bg-rose-950/15 border-rose-900/50 hover:border-rose-700'
+                    : isStaged
+                    ? 'bg-slate-950 border-emerald-700/60 hover:border-emerald-500'
+                    : 'bg-slate-950/70 border-slate-800 hover:border-slate-700'
+                }`}
+              >
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-1 flex-wrap">
+                    <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-slate-900 text-sky-400 border border-slate-700">
+                      {job.portal} • {job.market}
+                    </span>
+                    <span
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                        isFilteredOut
+                          ? 'bg-rose-950 text-rose-300 border border-rose-800'
+                          : isStaged
+                          ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                          : 'bg-amber-950 text-amber-300 border border-amber-800'
+                      }`}
+                    >
+                      {job.status} {isFilteredOut ? '' : `(${job.suitability_score}%)`}
+                    </span>
+                  </div>
+
+                  <h4 className="text-xs font-bold text-white line-clamp-2 leading-snug">{job.title}</h4>
+                  <div className="text-[11px] text-slate-400">{job.company}</div>
+
+                  {/* Dynamic AI-Driven or Extracted Salary Display */}
+                  {job.salary_min && job.salary_max && (
+                    <div className="flex items-center gap-1.5 text-[11px] pt-0.5">
+                      <DollarSign className="w-3 h-3 text-emerald-400 flex-shrink-0" />
+                      <span className="text-emerald-300 font-semibold">
+                        {job.salary_min.toLocaleString()}–{job.salary_max.toLocaleString()} {job.salary_currency}
+                      </span>
+                      <span
+                        className={`text-[9px] px-1.5 py-0.5 rounded ${
+                          job.salary_estimated_by_ai
+                            ? 'bg-indigo-950 text-indigo-300 border border-indigo-800'
+                            : 'bg-slate-900 text-slate-300 border border-slate-700'
+                        }`}
+                      >
+                        {job.salary_estimated_by_ai ? '🤖 AI Est.' : '📄 Extracted'}
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="text-[10px] text-slate-400 line-clamp-2 pt-1 border-t border-slate-800/60">
+                    {isFilteredOut ? (
+                      <span className="text-rose-300 flex items-center gap-1 font-medium">
+                        <ShieldAlert className="w-3 h-3 flex-shrink-0" />
+                        <span>Blocked: {job.match_rationale} ({job.language_requirements.join(', ')})</span>
+                      </span>
+                    ) : (
+                      <span>{job.match_rationale}</span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between pt-2 mt-2 border-t border-slate-800/60 text-[10px]">
+                  <span className="text-sky-400 font-semibold">Load into Auditor</span>
+                  <span className="text-slate-500">Lang: {job.language_requirements.join(', ')}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 3. Multi-Industry Curated Portal Feed */}
       <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
           <div>
             <h3 className="text-sm font-bold text-white flex items-center gap-2">
               <Globe className="w-4 h-4 text-sky-400" />
-              Live Multi-Industry Job Portals Feed (Click Any Vacancy to Audit & Generate Custom EN/KA CV)
+              Multi-Industry Interactive Portal Templates (QA, Hospitality, Customer Care & Hospital)
             </h3>
-            <p className="text-xs text-slate-400">
-              Vacancies from <strong>jobs.ge</strong>, <strong>hr.ge</strong>, <strong>headhunter.ge</strong>, <strong>dou.ua</strong>, <strong>djinni.co</strong>, <strong>justjoin.it</strong>, <strong>Greenhouse</strong>, and <strong>Lever</strong>.
-            </p>
           </div>
 
-          {/* Industry Filter Pills */}
           <div className="flex flex-wrap gap-1.5">
             {industryFilters.map((ind) => (
               <button
@@ -452,7 +640,6 @@ export const AuditPanel: React.FC = () => {
           </div>
         </div>
 
-        {/* Portal Filter Pills */}
         <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-slate-800/60">
           <span className="text-[10px] font-bold uppercase text-slate-500 mr-1">Portals:</span>
           {portalsList.map((p) => (
@@ -496,11 +683,6 @@ export const AuditPanel: React.FC = () => {
                   <div className="text-[11px] text-slate-400">
                     {vac.company} • <span className="text-emerald-300 font-medium">{vac.salary}</span>
                   </div>
-                  {vac.requires_motivational_letter && (
-                    <span className="inline-block text-[10px] bg-rose-950/60 text-rose-300 border border-rose-800/50 px-1.5 py-0.5 rounded">
-                      + DOU Motivational Letter
-                    </span>
-                  )}
                 </div>
 
                 <div className="flex items-center justify-between pt-2.5 mt-2 border-t border-slate-800/80 text-[11px]">
@@ -511,7 +693,6 @@ export const AuditPanel: React.FC = () => {
                     rel="noopener noreferrer"
                     onClick={(e) => e.stopPropagation()}
                     className="text-slate-400 hover:text-white flex items-center gap-1"
-                    title="Open interactive portal form in new tab"
                   >
                     <span>Portal Form</span>
                     <ExternalLink className="w-3 h-3" />
@@ -523,7 +704,7 @@ export const AuditPanel: React.FC = () => {
         </div>
       </div>
 
-      {/* 3. Main Audit Input & Output Grid */}
+      {/* 4. Main Audit Input & Output Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column: Job URL & Description Input */}
         <div className="lg:col-span-6 space-y-4">
@@ -559,13 +740,13 @@ export const AuditPanel: React.FC = () => {
                 <label className="block text-xs font-semibold uppercase text-slate-400">
                   Job Description (English or Georgian / ქართულად)
                 </label>
-                <span className="text-[11px] text-slate-500">QA, Receptionist, Customer Care, Hospital, etc.</span>
+                <span className="text-[11px] text-slate-500">Auto-estimates salary if unstated</span>
               </div>
               <textarea
                 rows={8}
                 value={jobText}
                 onChange={(e) => setJobText(e.target.value)}
-                placeholder="Paste any job description (Receptionist, Customer Service, Hospital Coordinator, QA Engineer) in English or Georgian..."
+                placeholder="Paste any job description in English or Georgian..."
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-xs text-slate-300 focus:outline-none focus:border-sky-500 leading-relaxed"
               />
             </div>
@@ -614,7 +795,7 @@ export const AuditPanel: React.FC = () => {
               className="w-full flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-xs text-indigo-300 bg-indigo-950/60 hover:bg-indigo-900/70 border border-indigo-700/60 transition-all"
             >
               <Play className="w-4 h-4 fill-current" />
-              <span>Launch Playwright Live Form Stager (Fills Form, Salary, 1-Week Start & CAPTCHA)</span>
+              <span>Launch Playwright Live Form Stager (Fills Form, AI Salary, 1-Week Start & CAPTCHA)</span>
             </button>
 
             {error && (
@@ -626,7 +807,7 @@ export const AuditPanel: React.FC = () => {
           </div>
         </div>
 
-        {/* Right Column: Match Breakdown, Company 3+ Reviews Gate, Tailored EN/KA PDF CV & Gaps */}
+        {/* Right Column: Match Breakdown, AI Salary Estimate, Company 3+ Reviews Gate, Tailored EN/KA PDF CV & Gaps */}
         <div className="lg:col-span-6 space-y-4">
           {auditResult ? (
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
@@ -643,6 +824,12 @@ export const AuditPanel: React.FC = () => {
                     <span className="text-xs text-slate-400 truncate">{auditResult.job_details.company}</span>
                   </div>
                   <h3 className="text-base sm:text-lg font-bold text-white mt-1">{auditResult.job_details.title}</h3>
+                  {auditResult.job_details.salary_range && (
+                    <div className="text-xs text-emerald-400 font-semibold mt-1 flex items-center gap-1.5">
+                      <DollarSign className="w-3.5 h-3.5" />
+                      <span>Market Compensation: {auditResult.job_details.salary_range}</span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="w-16 h-16 rounded-2xl flex flex-col items-center justify-center border font-bold text-lg bg-emerald-950/60 text-emerald-400 border-emerald-500/40 flex-shrink-0">
@@ -685,9 +872,6 @@ export const AuditPanel: React.FC = () => {
                   </span>
                 </div>
                 <p className="text-[11px] text-slate-300">{auditResult.company_validation.verdict}</p>
-                <div className="text-[10px] text-slate-400">
-                  Sources: {auditResult.company_validation.portals_checked.join(' • ')}
-                </div>
               </div>
 
               {/* Generated Per-Vacancy Human-Tone PDF & HTML CV Card */}
@@ -771,7 +955,7 @@ export const AuditPanel: React.FC = () => {
                 {auditResult.gaps && auditResult.gaps.length > 0 && (
                   <div className="space-y-1.5 pt-1">
                     <span className="text-xs font-semibold text-amber-400 block">
-                      🔍 Identified Gaps & How Your CV Bridges Them ({auditResult.gaps.length})
+                      🔍 Identified Gaps & Bridge Strategy ({auditResult.gaps.length})
                     </span>
                     {auditResult.gaps.map((g, i) => (
                       <div key={i} className="p-2.5 bg-slate-950 border border-slate-800 rounded-lg text-xs space-y-1">
@@ -795,7 +979,7 @@ export const AuditPanel: React.FC = () => {
                   className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 transition-colors"
                 >
                   <BookmarkPlus className="w-4 h-4 text-sky-400" />
-                  <span>Save to Tracker</span>
+                  <span>Save to SQL Tracker</span>
                 </button>
 
                 <button
@@ -823,7 +1007,7 @@ export const AuditPanel: React.FC = () => {
                   Ready to Audit & Generate Your English or Georgian (ქართული) PDF CV
                 </h4>
                 <p className="text-xs text-slate-400 max-w-md mt-1">
-                  Choose a profession preset above (<strong>QA Engineer, Hotel Receptionist, Customer Service, or Hospital Coordinator</strong>), select any vacancy, and click <strong>🇬🇧 Generate English CV</strong> or <strong>🇬🇪 Generate ქართული CV</strong>.
+                  Select any scraped vacancy from the <strong>SQLite JobPosting table</strong> above or choose an industry template, then click <strong>🇬🇧 Generate English CV</strong> or <strong>🇬🇪 Generate ქართული CV</strong>.
                 </p>
               </div>
             </div>
@@ -838,7 +1022,7 @@ export const AuditPanel: React.FC = () => {
             <div>
               <h3 className="text-base font-semibold text-white flex items-center gap-2">
                 <FileText className="w-4 h-4 text-sky-400" />
-                Grounded Screening Answers ({cvLanguage === 'ka' ? 'ქართულ ენაზე' : 'English'} — Summary, Motivation, Salary, 1-Week Start)
+                Grounded Screening Answers ({cvLanguage === 'ka' ? 'ქართულ ენაზე' : 'English'} — Summary, Motivation, AI Salary, 1-Week Start)
               </h3>
               <p className="text-xs text-slate-400">
                 All answers use a natural human tone and default to starting <strong>1 week after offer (1 კვირა შეთავაზებიდან)</strong>.

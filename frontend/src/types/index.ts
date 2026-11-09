@@ -98,6 +98,7 @@ export interface JobDetails {
   company: string;
   portal?: string;
   industry?: string;
+  market?: string;
   experience_years_required: number | null;
   required_skills: string[];
   nice_to_have_skills: string[];
@@ -106,7 +107,44 @@ export interface JobDetails {
   location: string | null;
   remote_policy: string | null;
   salary_range?: string | null;
+  salary_min?: number | null;
+  salary_max?: number | null;
+  salary_currency?: string | null;
+  salary_estimated_by_ai?: boolean;
   summary: string;
+}
+
+export interface DbJobPosting {
+  id: number;
+  portal: string;
+  external_id: string;
+  title: string;
+  company: string;
+  url: string;
+  market: 'GE' | 'UA_REMOTE' | 'INT_REMOTE' | string;
+  is_remote: boolean;
+  language_requirements: string[];
+  description_raw: string;
+  salary_min: number | null;
+  salary_max: number | null;
+  salary_currency: string | null;
+  salary_estimated_by_ai: boolean;
+  suitability_score: number;
+  match_rationale: string;
+  status: 'DISCOVERED' | 'FILTERED_OUT' | 'AUDITED' | 'STAGED' | 'APPLIED' | 'REJECTED' | string;
+  scraped_at: string;
+}
+
+export interface ParsedSkillsTaxonomy {
+  qa_automation: string[];
+  manual_qa: string[];
+  languages: string[];
+  api_and_performance: string[];
+  cicd_and_devops: string[];
+  tools: string[];
+  frameworks: string[];
+  years_of_experience: number;
+  all_skills: string[];
 }
 
 export interface GapItem {
