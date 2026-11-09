@@ -28,11 +28,19 @@ def init_db() -> None:
     """
     try:
         inspector = inspect(engine)
+        needs_upgrade = False
         if inspector.has_table("job_postings"):
             cols = {c["name"] for c in inspector.get_columns("job_postings")}
-            if "channel" not in cols or "filter_out_reason" not in cols or "salary_is_estimated" not in cols:
-                logger.info("Upgrading database schema to v2 production relational schema...")
-                SQLModel.metadata.drop_all(engine)
+            if "channel" not in cols or "filter_out_reason" not in cols or "salary_is_estimated" not in cols or "delivery_channel" not in cols:
+                needs_upgrade = True
+        if inspector.has_table("application_records"):
+            app_cols = {c["name"] for c in inspector.get_columns("application_records")}
+            if "vacancy_id" not in app_cols or "submitted_salary" not in app_cols:
+                needs_upgrade = True
+
+        if needs_upgrade:
+            logger.info("Upgrading database schema to v2 production relational schema...")
+            SQLModel.metadata.drop_all(engine)
     except Exception as e:
         logger.debug(f"Schema inspection note: {e}")
 

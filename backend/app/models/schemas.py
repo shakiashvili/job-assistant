@@ -196,10 +196,12 @@ class ApplicationItem(BaseModel):
     role: str
     portal: Optional[str] = "generic"
     url: str
-    status: str = "Saved"
+    status: str = "Discovered"
     match_score: Optional[int] = None
     ats_score: Optional[int] = None
     recruiter_score: Optional[int] = None
+    salary_estimate: Optional[str] = None
+    interview_date: Optional[str] = None
     company_reviews: Optional[int] = None
     cv_pdf_url: Optional[str] = None
     variant_used: Optional[str] = "qa_automation"
@@ -212,10 +214,12 @@ class ApplicationCreate(BaseModel):
     role: str
     portal: Optional[str] = "generic"
     url: str
-    status: Optional[str] = "Saved"
+    status: Optional[str] = "Discovered"
     match_score: Optional[int] = None
     ats_score: Optional[int] = None
     recruiter_score: Optional[int] = None
+    salary_estimate: Optional[str] = None
+    interview_date: Optional[str] = None
     company_reviews: Optional[int] = None
     cv_pdf_url: Optional[str] = None
     variant_used: Optional[str] = "qa_automation"
@@ -232,6 +236,8 @@ class ApplicationUpdate(BaseModel):
     match_score: Optional[int] = None
     ats_score: Optional[int] = None
     recruiter_score: Optional[int] = None
+    salary_estimate: Optional[str] = None
+    interview_date: Optional[str] = None
     company_reviews: Optional[int] = None
     cv_pdf_url: Optional[str] = None
     variant_used: Optional[str] = None

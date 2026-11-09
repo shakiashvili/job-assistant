@@ -117,8 +117,10 @@ async def list_scraped_jobs(
     market: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
     min_score: Optional[float] = Query(None),
+    include_filtered: bool = Query(False, description="Include FILTERED_OUT (language-blocked) jobs. Hidden by default."),
 ) -> List[Dict[str, Any]]:
-    """Lists JobPosting records from the relational database, auto-seeding if empty."""
+    """Lists JobPosting records from the relational database, auto-seeding if empty.
+    Jobs that do not match the candidate's requirements (FILTERED_OUT) are hidden unless include_filtered=true."""
     init_db()
     with Session(engine) as session:
         count = len(session.exec(select(JobPosting)).all())
@@ -135,6 +137,8 @@ async def list_scraped_jobs(
             if market and r.market != market:
                 continue
             if status and r.status != status:
+                continue
+            if not include_filtered and not status and r.status == "FILTERED_OUT":
                 continue
             if min_score is not None and r.suitability_score < min_score:
                 continue

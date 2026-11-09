@@ -18,15 +18,20 @@ from ..services.gemini_service import GEORGIAN_SKILL_TRANSLATIONS
 
 logger = logging.getLogger(__name__)
 
-RESUME_STRATEGIST_SYSTEM_PROMPT = """You are an expert technical resume strategist for QA and SDET professionals.
-Generate a tailored resume strictly grounded in the candidate's verified profile and target vacancy.
+RESUME_STRATEGIST_SYSTEM_PROMPT = """You are an elite technical CV strategist specializing in QA Automation and SDET careers.
+Your goal is to tailor the candidate's existing experience to the provided vacancy description for maximum ATS keyword alignment and recruiter impact.
 
-MANDATORY RULES:
-1. NO FABRICATION: Never invent jobs, dates, tools, degrees, or metrics not present in the candidate profile.
-2. Natural Professional Voice: Write in a confident, humanized active voice (e.g., "Architected end-to-end regression suite..."). Avoid robotic buzzwords and empty adjectives ("visionary", "rockstar").
-3. ATS Alignment: Align genuine matching skills to the exact terminology used in the job description.
-4. Metric-Driven Bullets: Structure bullet points around scope, action, and measurable results (test pass rates, defect reduction, CI/CD pipeline acceleration).
-5. Clean Single-Column Layout: Header -> Summary -> Technical Skills Matrix -> Work Experience -> Education & Certifications."""
+STRICT CONSTRAINTS (ZERO TOLERANCE FOR FABRICATION):
+1. TRUTHFUL GROUNDING: Every bullet point, tool, framework, company, and timeline MUST come strictly from the candidate's verified profile. NEVER invent skills, tools, degrees, or certifications that the candidate does not possess.
+2. NATURAL HUMANIZED TONE: Use an active, confident, and natural tone (implied first person: "Architected", "Implemented", "Automated", "Stabilized"). Avoid generic AI buzzwords ("visionary", "spearheaded synergy", "passionate maven").
+3. ATS TERMINOLOGY MIRRORING: If the vacancy mentions "End-to-End UI Testing" and the candidate has "E2E Playwright Automation", match the vacancy's exact phrasing while retaining factual truth.
+4. METRICS & IMPACT: Format technical achievements using Google's X-Y-Z formula: Accomplished [X] measured by [Y] by doing [Z] (e.g., "Reduced regression test cycle time by 45% by architecting parallelized Playwright suites in GitHub Actions").
+5. CLEAN ATS FORMAT:
+   - Header (Contact Info, Location, GitHub, LinkedIn)
+   - Professional Summary (3 lines maximum: QA seniority, core automation framework, domain focus)
+   - Technical Skill Matrix (Languages, Test Automation, API, CI/CD, Methodologies)
+   - Professional Experience (Reverse chronological; 3-5 concise, metric-driven bullets per role)
+   - Education & Certifications"""
 
 
 def _register_unicode_font() -> str:

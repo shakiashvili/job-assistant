@@ -12,15 +12,25 @@ logger = logging.getLogger(__name__)
 
 # Map between UI status names and ApplicationRecord.submission_status
 UI_TO_DB_STATUS = {
-    "Saved": "STAGED",
-    "Applied": "SUBMITTED",
-    "Interviewing": "INTERVIEW",
+    "Discovered": "DISCOVERED",
+    "Saved": "DISCOVERED",
+    "Applied": "APPLIED",
+    "HR Screening": "HR_SCREEN",
+    "Interviewing": "HR_SCREEN",
+    "Technical Interview": "TECH_INTERVIEW",
+    "Offer": "OFFER",
     "Rejected": "REJECTED",
 }
 DB_TO_UI_STATUS = {
-    "STAGED": "Saved",
+    "DISCOVERED": "Discovered",
+    "STAGED": "Discovered",
+    "Saved": "Discovered",
     "SUBMITTED": "Applied",
-    "INTERVIEW": "Interviewing",
+    "APPLIED": "Applied",
+    "HR_SCREEN": "HR Screening",
+    "INTERVIEW": "HR Screening",
+    "TECH_INTERVIEW": "Technical Interview",
+    "OFFER": "Offer",
     "REJECTED": "Rejected",
 }
 
@@ -84,8 +94,12 @@ class TrackerStore:
                 logger.warning(f"Tracker seed migration note: {e}")
 
     def _record_to_item(self, rec: ApplicationRecord, job: Optional[JobPosting]) -> ApplicationItem:
-        ui_status = DB_TO_UI_STATUS.get(rec.submission_status, "Saved")
+        ui_status = DB_TO_UI_STATUS.get(rec.submission_status, "Discovered")
         score = int(round(job.suitability_score)) if job and job.suitability_score else 85
+        salary_str = None
+        if job and job.salary_min and job.salary_max:
+            salary_str = f"{int(job.salary_min):,}–{int(job.salary_max):,} {job.salary_currency or 'USD'}"
+        interview_dt = rec.interview_date.strftime("%Y-%m-%d %H:%M") if rec.interview_date else None
         return ApplicationItem(
             id=f"app-{rec.id}",
             company=job.company if job else "Hiring Company",
@@ -96,6 +110,8 @@ class TrackerStore:
             match_score=score,
             ats_score=score,
             recruiter_score=min(100, score + 3),
+            salary_estimate=salary_str,
+            interview_date=interview_dt,
             company_reviews=25,
             cv_pdf_url=rec.custom_cv_path or None,
             variant_used="qa_automation",

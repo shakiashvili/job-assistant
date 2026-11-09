@@ -8,6 +8,7 @@ router = APIRouter(prefix="/api", tags=["Screening Answers"])
 
 
 @router.post("/generate-answers", response_model=GenerateAnswersResponse)
+@router.post("/answers/solve-screening", response_model=GenerateAnswersResponse)
 async def generate_answers_endpoint(request: GenerateAnswersRequest):
     """
     Takes portal screening questions + candidate ground_truth.json

@@ -282,10 +282,12 @@ export interface ApplicationItem {
   role: string;
   portal?: string;
   url: string;
-  status: 'Saved' | 'Applied' | 'Interviewing' | 'Rejected';
+  status: 'Discovered' | 'Applied' | 'HR Screening' | 'Technical Interview' | 'Offer / Rejected' | string;
   match_score?: number;
   ats_score?: number;
   recruiter_score?: number;
+  salary_estimate?: string | null;
+  interview_date?: string | null;
   company_reviews?: number;
   cv_pdf_url?: string;
   variant_used?: string;

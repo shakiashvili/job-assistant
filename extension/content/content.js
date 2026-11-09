@@ -154,6 +154,28 @@ class JobPortalAssistant {
     const cv = data.tailored_cv || {};
     const sb = data.score_breakdown || {};
 
+    // Detect direct email application (Jobs.ge, HR.ge, or raw email in text)
+    const pageText = document.body.innerText;
+    const emailMatch = pageText.match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
+    const targetEmail = emailMatch ? emailMatch[0] : null;
+    let emailBannerHtml = '';
+    if (targetEmail) {
+      const candName = this.groundTruth?.candidate?.full_name || 'Alex Mercer';
+      const roleTitle = data.job_details?.title || 'QA Automation Engineer';
+      const subject = encodeURIComponent(`Application: ${roleTitle} - ${candName}`);
+      const body = encodeURIComponent(
+        `Dear Hiring Team,\n\n${cv.applicant_summary || ''}\n\n${cv.motivation_statement || ''}\n\nAvailability: 1 week after offer.\nExpected Salary: ${cv.expected_salary || 'Market Rate'}\n\nPlease find my single-column ATS CV attached.\n\nBest regards,\n${candName}`
+      );
+      const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(targetEmail)}&su=${subject}&body=${body}`;
+      emailBannerHtml = `
+        <div class="ai-email-banner">
+          <div>📧 <strong>Direct Email Vacancy:</strong> ${targetEmail}</div>
+          <div style="font-size:10px; margin-top:2px;">Opens Gmail draft with prefilled cover note & subject. Remember to attach your downloaded ATS PDF resume!</div>
+          <a href="${gmailUrl}" target="_blank">✉️ Prepare Application Email</a>
+        </div>
+      `;
+    }
+
     container.innerHTML = `
       <div class="match-badge">
         <span>Overall: <strong>${data.match_score}%</strong></span>
@@ -167,7 +189,61 @@ class JobPortalAssistant {
           📄 Download Single-Column ATS CV (${cv.pdf_filename})
         </a>
       ` : ''}
+      ${emailBannerHtml}
     `;
+  }
+
+  async solveScreeningQuestions() {
+    const textareasAndInputs = Array.from(document.querySelectorAll("form textarea, form input[type='text']"));
+    const questionsToSolve = [];
+    for (const el of textareasAndInputs) {
+      if (el.value) continue;
+      let label = "";
+      if (el.id) {
+        const lbl = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+        if (lbl) label = lbl.innerText;
+      }
+      if (!label && el.closest("label")) label = el.closest("label").innerText;
+      if (!label) label = el.getAttribute("placeholder") || el.getAttribute("name") || "";
+      label = label.trim();
+      if (label && label.length > 5 && !/name|email|phone|linkedin|github|website|salary|start_date/i.test(label)) {
+        questionsToSolve.push({ el, question: label });
+      }
+    }
+
+    if (questionsToSolve.length === 0) return 0;
+
+    try {
+      const res = await fetch(`${this.apiBaseUrl}/api/answers/solve-screening`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          questions: questionsToSolve.map(q => ({ question: q.question })),
+          job_title: this.auditResult?.job_details?.title,
+          company: this.auditResult?.job_details?.company,
+          job_description: this.auditResult?.job_details?.summary,
+        })
+      });
+      if (!res.ok) return 0;
+      const data = await res.json();
+      let filled = 0;
+      (data.answers || []).forEach((ans, idx) => {
+        if (questionsToSolve[idx] && ans.answer) {
+          const el = questionsToSolve[idx].el;
+          el.focus();
+          el.value = ans.answer;
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          el.dispatchEvent(new Event("blur", { bubbles: true }));
+          el.classList.add("ai-autofilled-field");
+          filled++;
+        }
+      });
+      return filled;
+    } catch (err) {
+      console.warn("[AI Job Assistant] Screening solve warning:", err);
+      return 0;
+    }
   }
 
   /**
@@ -262,7 +338,11 @@ class JobPortalAssistant {
     setVal(this.findSemanticField(["salary", "compensation", "remuneration"], "input[name*='salary']"), salaryText);
     setVal(this.findSemanticField(["start date", "notice period", "when can you start"], "input[name*='start_date'], input[name*='notice']"), "1 week after offer");
 
-    // 4. Non-Clicking HITL Anti-Bot / CAPTCHA Detection (Never auto-click CAPTCHAs)
+    // 4. Solve Custom Screening Questions if any exist
+    const screeningFilled = await this.solveScreeningQuestions();
+    filledCount += screeningFilled;
+
+    // 5. Non-Clicking HITL Anti-Bot / CAPTCHA Detection (Never auto-click CAPTCHAs)
     const captchaChallenge = document.querySelector(
       "iframe[src*='recaptcha'], iframe[src*='turnstile'], iframe[src*='hcaptcha'], .g-recaptcha, .cf-turnstile, .h-captcha, #captcha-checkbox, input[name*='captcha']"
     );

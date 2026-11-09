@@ -98,7 +98,7 @@ export const AuditPanel: React.FC = () => {
         fetchScrapedJobs(),
       ]);
       setVacancies(vacs);
-      setScrapedJobs(dbJobs);
+      setScrapedJobs(dbJobs.filter((j) => j.status !== 'FILTERED_OUT'));
       if (vacs.length > 0) {
         setJobUrl(vacs[0].mock_url);
         setJobText(vacs[0].description);
@@ -116,7 +116,7 @@ export const AuditPanel: React.FC = () => {
     setError(null);
     try {
       const res = await triggerMultiPortalScrape(false);
-      setScrapedJobs(res.jobs);
+      setScrapedJobs(res.jobs.filter((j) => j.status !== 'FILTERED_OUT'));
       setScrapeStats({
         total: res.total_processed,
         staged: res.staged_ready_count,
@@ -313,7 +313,9 @@ export const AuditPanel: React.FC = () => {
     return matchesPortal && matchesInd;
   });
 
-  const filteredDbJobs = scrapedJobs.filter((j) => {
+  // Only jobs that match the candidate's requirements are shown — FILTERED_OUT jobs are hidden entirely.
+  const visibleJobs = scrapedJobs.filter((j) => j.status !== 'FILTERED_OUT');
+  const filteredDbJobs = visibleJobs.filter((j) => {
     if (dbStatusFilter === 'ALL') return true;
     return j.status === dbStatusFilter;
   });
@@ -332,7 +334,7 @@ export const AuditPanel: React.FC = () => {
               Automated Job Discovery, Strict Language Filtering & Bilingual CV Generation
             </h1>
             <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
-              Scrapes <strong>Jobs.ge, HR.ge, DOU.ua, and Djinni.co</strong> into a relational SQL database, automatically filters out Ukrainian/Russian-required postings (`FILTERED_OUT`), estimates unstated salaries via AI, and promotes `&gt;= 75%` matches to the <strong>STAGED</strong> queue.
+              Scrapes <strong>Jobs.ge, HR.ge, DOU.ua, and Djinni.co</strong> into a relational SQL database, shows only the vacancies that match your requirements, estimates unstated salaries via AI, and promotes `&gt;= 75%` matches to the <strong>STAGED</strong> queue.
             </p>
           </div>
 
@@ -489,7 +491,7 @@ export const AuditPanel: React.FC = () => {
               Automated Portal Scrapers & Intelligent Market Filter (`JobPosting` SQL Table)
             </h3>
             <p className="text-xs text-slate-400">
-              Scrapes <strong>Jobs.ge</strong>, <strong>HR.ge</strong>, <strong>DOU.ua</strong>, and <strong>Djinni.co</strong>. Automatically filters out Ukrainian/Russian language requirements (`FILTERED_OUT`), estimates salaries via AI, and promotes `&gt;= 75%` matches to <strong>STAGED</strong>.
+              Scrapes <strong>Jobs.ge</strong>, <strong>HR.ge</strong>, <strong>DOU.ua</strong>, and <strong>Djinni.co</strong>. Only jobs matching your requirements are shown, salaries are estimated via AI, and `&gt;= 75%` matches are promoted to <strong>STAGED</strong>.
             </p>
           </div>
 
@@ -503,7 +505,7 @@ export const AuditPanel: React.FC = () => {
               <span>{isScraping ? 'Scraping Portals...' : 'Run Multi-Portal Scrapers'}</span>
             </button>
 
-            {['ALL', 'STAGED', 'FILTERED_OUT', 'AUDITED'].map((st) => (
+            {['ALL', 'STAGED', 'DISCOVERED', 'AUDITED'].map((st) => (
               <button
                 key={st}
                 onClick={() => setDbStatusFilter(st)}
@@ -513,7 +515,7 @@ export const AuditPanel: React.FC = () => {
                     : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
                 }`}
               >
-                {st === 'ALL' ? `All DB Jobs (${scrapedJobs.length})` : st}
+                {st === 'ALL' ? `Matching Jobs (${visibleJobs.length})` : st}
               </button>
             ))}
           </div>
@@ -522,31 +524,29 @@ export const AuditPanel: React.FC = () => {
         {scrapeStats && (
           <div className="text-xs bg-emerald-950/30 border border-emerald-800/60 text-emerald-300 px-3.5 py-2 rounded-xl flex items-center justify-between flex-wrap gap-2">
             <span>
-              ✅ Scraper pipeline processed <strong>{scrapeStats.total}</strong> postings into SQLite DB:
+              ✅ Found <strong>{scrapeStats.total - scrapeStats.filteredOut}</strong> jobs matching your requirements
             </span>
-            <div className="flex items-center gap-3">
-              <span className="text-emerald-400 font-bold">
-                {scrapeStats.staged} Auto-Promoted to STAGED (&gt;= 75%)
-              </span>
-              <span className="text-rose-400 font-bold">
-                {scrapeStats.filteredOut} Filtered Out (Local Language Gate)
-              </span>
-            </div>
+            <span className="text-emerald-400 font-bold">
+              {scrapeStats.staged} ready to apply (&gt;= 75% match)
+            </span>
+          </div>
+        )}
+
+        {filteredDbJobs.length === 0 && (
+          <div className="text-xs text-slate-400 text-center py-6 border border-dashed border-slate-800 rounded-xl">
+            No matching jobs yet — click <strong>Run Multi-Portal Scrapers</strong> to discover new vacancies.
           </div>
         )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
           {filteredDbJobs.map((job) => {
-            const isFilteredOut = job.status === 'FILTERED_OUT';
             const isStaged = job.status === 'STAGED';
             return (
               <div
                 key={`${job.portal}-${job.external_id}`}
                 onClick={() => handleSelectScrapedDbJob(job)}
                 className={`p-3.5 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
-                  isFilteredOut
-                    ? 'bg-rose-950/15 border-rose-900/50 hover:border-rose-700'
-                    : isStaged
+                  isStaged
                     ? 'bg-slate-950 border-emerald-700/60 hover:border-emerald-500'
                     : 'bg-slate-950/70 border-slate-800 hover:border-slate-700'
                 }`}
@@ -558,14 +558,12 @@ export const AuditPanel: React.FC = () => {
                     </span>
                     <span
                       className={`text-[10px] font-bold px-2 py-0.5 rounded ${
-                        isFilteredOut
-                          ? 'bg-rose-950 text-rose-300 border border-rose-800'
-                          : isStaged
+                        isStaged
                           ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
                           : 'bg-amber-950 text-amber-300 border border-amber-800'
                       }`}
                     >
-                      {job.status} {isFilteredOut ? '' : `(${job.suitability_score}%)`}
+                      {job.status} ({job.suitability_score}%)
                     </span>
                   </div>
 
@@ -592,14 +590,7 @@ export const AuditPanel: React.FC = () => {
                   )}
 
                   <div className="text-[10px] text-slate-400 line-clamp-2 pt-1 border-t border-slate-800/60">
-                    {isFilteredOut ? (
-                      <span className="text-rose-300 flex items-center gap-1 font-medium">
-                        <ShieldAlert className="w-3 h-3 flex-shrink-0" />
-                        <span>Blocked: {job.match_rationale} ({job.language_requirements.join(', ')})</span>
-                      </span>
-                    ) : (
-                      <span>{job.match_rationale}</span>
-                    )}
+                    <span>{job.match_rationale}</span>
                   </div>
                 </div>
 

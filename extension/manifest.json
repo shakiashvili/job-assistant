@@ -43,8 +43,12 @@
   "permissions": [
     "activeTab",
     "scripting",
-    "storage"
+    "storage",
+    "sidePanel"
   ],
+  "side_panel": {
+    "default_path": "popup/popup.html"
+  },
   "host_permissions": [
     "*://*.djinni.co/*",
     "*://*.dou.ua/*",

@@ -111,8 +111,10 @@ class ScraperOrchestrator:
                     existing.market = market
                     existing.is_remote = bool(item.get("is_remote", True))
                     existing.channel = item.get("channel", "WEB_FORM")
+                    existing.delivery_channel = item.get("delivery_channel") or item.get("channel", "WEB_FORM")
                     existing.target_email = item.get("target_email")
                     existing.email_subject = item.get("email_subject")
+                    existing.email_subject_template = item.get("email_subject_template") or item.get("email_subject")
                     existing.detected_languages = langs
                     existing.language_requirements = langs
                     existing.description_raw = desc
@@ -122,6 +124,7 @@ class ScraperOrchestrator:
                     existing.salary_is_estimated = is_est
                     existing.salary_estimated_by_ai = is_est
                     existing.suitability_score = score
+                    existing.match_score = score
                     existing.filter_out_reason = filter_reason
                     existing.match_rationale = match_rationale
                     if existing.status not in ("APPLIED", "REJECTED"):
@@ -141,8 +144,10 @@ class ScraperOrchestrator:
                         market=market,
                         is_remote=bool(item.get("is_remote", True)),
                         channel=item.get("channel", "WEB_FORM"),
+                        delivery_channel=item.get("delivery_channel") or item.get("channel", "WEB_FORM"),
                         target_email=item.get("target_email"),
                         email_subject=item.get("email_subject"),
+                        email_subject_template=item.get("email_subject_template") or item.get("email_subject"),
                         detected_languages=langs,
                         language_requirements=langs,
                         description_raw=desc,
@@ -152,6 +157,7 @@ class ScraperOrchestrator:
                         salary_is_estimated=is_est,
                         salary_estimated_by_ai=is_est,
                         suitability_score=score,
+                        match_score=score,
                         status=final_status,
                         filter_out_reason=filter_reason,
                         match_rationale=match_rationale,

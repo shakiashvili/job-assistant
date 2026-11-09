@@ -10,9 +10,11 @@ import {
   Plus,
   Trash2,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  UploadCloud,
+  FileText
 } from 'lucide-react';
-import { fetchGroundTruth, saveGroundTruth } from '../services/api';
+import { fetchGroundTruth, saveGroundTruth, uploadSkillsMdFile } from '../services/api';
 import { GroundTruth } from '../types';
 
 export const ProfileVault: React.FC = () => {
@@ -24,6 +26,33 @@ export const ProfileVault: React.FC = () => {
 
   // New skill input
   const [newSkill, setNewSkill] = useState('');
+  const [isDragging, setIsDragging] = useState(false);
+  const [isUploadingSkills, setIsUploadingSkills] = useState(false);
+  const dropInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  const handleSkillsFileDrop = async (file: File) => {
+    if (!file) return;
+    setIsUploadingSkills(true);
+    setErrorMsg(null);
+    try {
+      const res = await uploadSkillsMdFile(file);
+      if (res.extracted_skills && res.extracted_skills.length > 0 && data) {
+        setData({
+          ...data,
+          skills: {
+            ...data.skills,
+            core: Array.from(new Set([...res.extracted_skills, ...data.skills.core])),
+          },
+        });
+      }
+      setSuccessMsg(`Successfully parsed ${file.name} into CandidateProfile with ${res.extracted_skills.length} skills!`);
+      setTimeout(() => setSuccessMsg(null), 4000);
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Failed to upload and parse skills file');
+    } finally {
+      setIsUploadingSkills(false);
+    }
+  };
 
   useEffect(() => {
     loadData();
@@ -290,8 +319,48 @@ export const ProfileVault: React.FC = () => {
       {/* Tab 3: Skills */}
       {activeTab === 'skills' && (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-6">
+          {/* Drag & Drop Zone for skills.md */}
+          <div
+            onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+            onDragLeave={() => setIsDragging(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setIsDragging(false);
+              const file = e.dataTransfer.files?.[0];
+              if (file) handleSkillsFileDrop(file);
+            }}
+            onClick={() => dropInputRef.current?.click()}
+            className={`border-2 border-dashed rounded-2xl p-6 text-center cursor-pointer transition-all ${
+              isDragging
+                ? 'border-sky-400 bg-sky-950/40 shadow-lg shadow-sky-500/20'
+                : 'border-slate-800 hover:border-slate-700 bg-slate-950/50'
+            }`}
+          >
+            <input
+              ref={dropInputRef}
+              type="file"
+              accept=".md,.txt,.markdown"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleSkillsFileDrop(file);
+              }}
+            />
+            <div className="flex flex-col items-center justify-center space-y-2">
+              <div className="w-10 h-10 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
+                <UploadCloud className={`w-5 h-5 ${isUploadingSkills ? 'animate-bounce' : ''}`} />
+              </div>
+              <div className="text-xs font-semibold text-slate-200">
+                {isUploadingSkills ? 'Parsing skills.md with Gemini...' : 'Drag & drop skills.md here, or click to browse'}
+              </div>
+              <p className="text-[11px] text-slate-500 max-w-sm">
+                Uploads and parses your technical competencies via Gemini into the relational database and refreshes verified skills instantly.
+              </p>
+            </div>
+          </div>
+
           <div className="flex items-center justify-between">
-            <h3 className="text-base font-semibold text-white">Core Technical Skills</h3>
+            <h3 className="text-base font-semibold text-white">Verified Technical Skills ({skills.core.length})</h3>
             <div className="flex items-center gap-2">
               <input
                 type="text"

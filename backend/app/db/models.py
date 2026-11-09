@@ -39,8 +39,10 @@ class JobPosting(SQLModel, table=True):
     market: str = Field(default="GLOBAL_REMOTE", index=True)  # "GE_DOMESTIC", "UA_REMOTE", "GLOBAL_REMOTE"
     is_remote: bool = Field(default=True)
     channel: str = Field(default="WEB_FORM")  # "WEB_FORM", "EMAIL", "EXTERNAL_LINK"
+    delivery_channel: str = Field(default="WEB_FORM")
     target_email: Optional[str] = Field(default=None)
     email_subject: Optional[str] = Field(default=None)
+    email_subject_template: Optional[str] = Field(default=None)
     description_raw: str = Field(default="", sa_column=Column(Text, nullable=False))
     detected_languages: List[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
     language_requirements: List[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
@@ -50,7 +52,9 @@ class JobPosting(SQLModel, table=True):
     salary_is_estimated: bool = Field(default=False)
     salary_estimated_by_ai: bool = Field(default=False)
     suitability_score: float = Field(default=0.0, index=True)
-    status: str = Field(default="DISCOVERED", index=True)  # "DISCOVERED", "FILTERED_OUT", "AUDITED", "STAGED", "APPLIED", "REJECTED"
+    match_score: float = Field(default=0.0)
+    match_breakdown: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
+    status: str = Field(default="DISCOVERED", index=True)  # "DISCOVERED", "FILTERED_OUT", "READY", "AUDITED", "STAGED", "APPLIED", "REJECTED"
     filter_out_reason: Optional[str] = Field(default=None)
     match_rationale: str = Field(default="", sa_column=Column(Text, nullable=False))
     scraped_at: datetime = Field(default_factory=utc_now, index=True)
@@ -60,14 +64,22 @@ class ApplicationRecord(SQLModel, table=True):
     __tablename__ = "application_records"
 
     id: Optional[int] = Field(default=None, primary_key=True)
+    vacancy_id: Optional[int] = Field(default=None, foreign_key="job_postings.id", index=True)
     job_id: Optional[int] = Field(default=None, foreign_key="job_postings.id", index=True)
     job_posting_id: Optional[int] = Field(default=None, foreign_key="job_postings.id", index=True)
     cv_pdf_path: str = Field(default="")
     custom_cv_path: str = Field(default="")
     cover_letter: str = Field(default="", sa_column=Column(Text, nullable=False))
     cover_letter_text: str = Field(default="", sa_column=Column(Text, nullable=False))
+    submitted_salary: Optional[str] = Field(default=None)
     screening_answers: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
-    submission_status: str = Field(default="STAGED", index=True)  # "STAGED", "APPLIED", "TECH_INTERVIEW", "OFFER", "REJECTED"
+    submission_status: str = Field(default="STAGED", index=True)  # "STAGED", "APPLIED", "HR_SCREEN", "TECH_INTERVIEW", "OFFER", "REJECTED"
+    interview_date: Optional[datetime] = Field(default=None)
     interview_notes: Optional[str] = Field(default=None, sa_column=Column(Text, nullable=True))
     applied_at: datetime = Field(default_factory=utc_now, index=True)
     updated_at: datetime = Field(default_factory=utc_now, index=True)
+
+
+# Backwards compatibility and master prompt aliases
+JobVacancy = JobPosting
+ApplicationTracker = ApplicationRecord
