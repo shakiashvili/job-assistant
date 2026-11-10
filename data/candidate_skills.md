@@ -1,145 +1,178 @@
-# Giorgi Shakiashvili
+# KLIPY Sticker Search API — QA Case Study
 
-**QA Engineer • Tech & FinTech Testing • QA Automation**  
-Tbilisi, Georgia • +995 571-15-68-07 • [giorgishakiashvili21@gmail.com](mailto:giorgishakiashvili21@gmail.com)  
-[LinkedIn Profile](https://linkedin.com/in/george-shakiashvili) • [GitHub Portfolio](https://github.com/GiorgiShakiashvili)
+**Portfolio project for a QA Engineer application**  
+**Author:** Giorgi Shakiashvili  
+**Status:** Test-design starter — execute the cases and add real evidence before presenting this as completed work.
 
----
+> This is an independent learning/portfolio project based on KLIPY's publicly available developer documentation. It is not an official KLIPY project and is not affiliated with KLIPY. No production credentials or private data are included.
 
-## Professional Summary
+## Objective
 
-Quality Assurance Engineer with practical commercial and lab testing experience across **EPAM Systems**, **Vention Development**, and **Exactpro Systems**. Specialized in manual functional, regression, and REST API testing, relational database auditing, and test automation using **TypeScript/Playwright** and **Python/Pytest**. 
+Demonstrate a structured QA approach to a REST API that powers sticker discovery. The focus is on turning documented behavior into test scenarios, validating HTTP responses and JSON, checking query-parameter boundaries, and documenting ambiguities without assuming undocumented behavior.
 
-Combines software quality assurance discipline with an academic foundation in Economics from **Tbilisi State University** (Graduated with Honors), bringing rigorous analytical reasoning to financial technology workflows, transaction integrity auditing, calculation constraints, and business-logic verification.
+## Documentation
 
----
+- Official KLIPY API documentation: <https://docs.klipy.com/>
+- Sticker API reference: <https://docs.klipy.com/stickers-api>
 
-## Technical Skills & Core Competencies
+The current public reference describes sticker search and trending endpoints, including parameters such as `page`, `per_page`, `q`, `locale`, and `content_filter`. It documents `page` with a minimum of `1`, and `per_page` with a documented range of `8` to `50` for the sticker search endpoint. Re-check the live documentation before execution in case the API changes.
 
-### Testing Methodologies & QA Fundamentals
-* **Testing Types**: Functional, Regression, Smoke, Sanity, Integration, Exploratory, User Acceptance Testing (UAT), Usability, Cross-Browser & Mobile Viewport Testing.
-* **Test Design Techniques**: Equivalence Partitioning (EP), Boundary Value Analysis (BVA), Decision Tables, State Transition Testing, Risk-Based Prioritization.
-* **QA Documentation**: Test Plans, Test Cases, Traceability Matrices (RTM), Checklists, and Acceptance Criteria (AC) decomposition.
-* **Defect Lifecycle Management**: Severity/Priority classification, reproducible bug reporting, root cause analysis (RCA), and remediation tracking in Atlassian Jira.
+## Scope
 
-### API Testing & Backend Verification
-* **API Protocols & Formats**: RESTful APIs, HTTP/HTTPS methods, headers, status codes (2xx, 4xx, 5xx), JSON payloads.
-* **Tooling**: Postman (Collections, Environments, Dynamic Pre-request & Test Scripts, Request Chaining, Postman Flows), Swagger / OpenAPI spec auditing.
-* **API Security & Auth**: Bearer Tokens, OAuth 2.0, JWT validation, role-based permission verification.
+### In scope
 
-### Database Testing & Data Integrity
-* **Databases**: PostgreSQL, SQLite.
-* **SQL Querying**: Complex queries, Multi-Table `JOIN`s, `GROUP BY`, `HAVING`, aggregations (`COUNT`, `SUM`, `AVG`), subqueries, and data extraction.
-* **Data Verification**: Three-layer verification (UI → API → DB), data persistence validation, relational constraints (PK/FK/ACID compliance), transaction auditing, and anomaly triage.
+- Valid sticker-search request and response structure
+- Required and optional query parameters
+- Pagination and `per_page` boundary values
+- Locale values and content-filter options documented by the API
+- Empty/unknown search queries and malformed parameters
+- Missing or invalid app key handling
+- Response headers, JSON validity, errors and basic response-time observation
+- Clear defect reports and test evidence
 
-### Test Automation & Development
-* **Automation Frameworks**: Playwright (TypeScript/JavaScript, Page Object Model, UI & API automation), Pytest (Python, fixtures, parametrization, markers), Selenium WebDriver, VIVIDUS.
-* **Languages**: TypeScript, JavaScript, Python, SQL, HTML5, CSS3 (DOM tree, CSS selectors, XPath locators).
-* **Framework Design & Patterns**: Page Object Model (POM), data factories, modular test architecture, API fixtures.
+### Out of scope
 
-### DevOps, CI/CD & Diagnostic Tools
-* **CI/CD & Version Control**: Git, GitHub, GitLab, GitHub Actions (automated test workflows, CI status checks), GitLab CI/CD.
-* **Containers & Environments**: Docker, Docker Compose basics, Linux CLI navigation and scripting fundamentals.
-* **Web Diagnostics**: Chrome DevTools (Network Waterfall inspection, Fetch/XHR payload tracing, Console logs, Storage/Cookies audit).
-* **Reporting**: Allure Reports, TestRail.
+- Load, stress or denial-of-service testing
+- Production data or production credentials
+- Security penetration testing
+- Assertions about relevance, filtering or error behavior where the public specification does not define an exact expected result
 
-### Domain & Business Acumen
-* **FinTech & Financial Workflows**: Payment gateway validation, trading systems, financial calculation constraints, clearing mechanisms, and transaction consistency.
-* **Agile Frameworks**: Scrum, Kanban, sprint planning, backlog grooming, daily standups, and retrospectives.
+## Tools
 
----
+- Postman for request execution and response assertions
+- Browser/API documentation for requirement review
+- Git for version control
+- Optional: a spreadsheet or Markdown table to record execution results
 
-## Work Experience
+## Setup
 
-### Full-Stack QA Trainee (Lab Program)
-**Vention Development / Vention Teams** • *Tbilisi, Georgia (Remote)*  
-*May 2026 – September 2026*
+1. Create or access an authorised KLIPY **test** API key through the official developer flow.
+2. Import `postman/KLIPY_Sticker_Search_API.postman_collection.json` into Postman.
+3. Create an environment with the variables below. Do not commit a real API key.
 
-* Analyzed product specifications and user stories to construct structured test plans, execution checklists, and test cases for enterprise web applications.
-* Conducted functional, regression, smoke, and exploratory testing across responsive platforms (including a Policy Management System), validating user input constraints and calculation accuracy.
-* Tested REST API endpoints in Postman, verifying request parameters, authentication tokens, JSON response schemas, and HTTP status codes.
-* Formulated multi-table SQL queries in PostgreSQL to audit backend relational data consistency, identifying transactional discrepancies and verifying data persistence.
-* Investigated client-server network traffic and JSON payloads using Chrome DevTools (Network tab, Console, Storage) to isolate frontend UI anomalies from backend API faults.
-* Authored automated smoke test paths in TypeScript using Playwright integrated into GitHub Actions CI workflows.
-* Logged and tracked defects in Atlassian Jira with detailed reproduction steps, environment details, and execution logs.
+| Variable | Example / value | Notes |
+|---|---|---|
+| `base_url` | `https://api.klipy.com` | API host from the official docs |
+| `app_key` | `YOUR_TEST_APP_KEY` | Set locally; never commit the real value |
+| `query` | `cats` | Search term |
+| `page` | `1` | Must be at least 1 according to the reference |
+| `per_page` | `24` | Documented range: 8–50 for sticker search |
+| `locale` | `us` | Use a supported two-letter country code from the docs |
+| `content_filter` | `medium` | Documented options include `off`, `low`, `medium`, and `high` |
+| `customer_id` | `qa-portfolio-user-01` | Stable synthetic identifier for testing, if needed |
 
-### Junior Software Testing Engineer
-**EPAM Systems** • *Tbilisi, Georgia (Remote)*  
-*January 2025 – June 2025*
+4. Run the collection against the test environment and keep the request rate within the current test-key limit. The KLIPY quickstart currently states that test keys are limited to 100 API requests per hour; verify this in the live docs before execution.
+5. Record actual results in the Execution Results section. Do not add a pass/fail result until the request has actually been run.
 
-* Participated in two-week Agile sprint cycles, decomposing business requirements into comprehensive test scenarios and executing functional, regression, and API test suites.
-* Developed and maintained automated test scripts for web applications and backend APIs, reducing manual regression overhead and improving UAT turnaround.
-* Designed automation strategies utilizing the VIVIDUS test automation framework and integrated test cases into continuous integration (CI/CD) pipelines.
-* Performed REST API verification in Postman, evaluating payload structures, response headers, and business logic calculations.
-* Conducted backend data audits using PostgreSQL (multi-table `JOIN`s, aggregations) to ensure transactional consistency across complex multi-step workflows.
-* Validated platform accessibility compliance in accordance with WCAG standards across major viewport configurations.
-* Monitored test execution trends and quality metrics using Allure Reports and managed the full defect lifecycle in Jira.
+## Request under test
 
-### Quality Assurance Engineer Intern
-**EPAM Systems** • *Tbilisi, Georgia (Remote)*  
-*August 2024 – January 2025*
+```http
+GET {{base_url}}/api/v1/{{app_key}}/stickers/search
+    ?q={{query}}
+    &page={{page}}
+    &per_page={{per_page}}
+    &locale={{locale}}
+    &content_filter={{content_filter}}
+```
 
-* Analyzed technical requirements and user stories to define testing scope, authoring modular Test Plans, Test Cases, and execution Checklists.
-* Performed smoke, regression, and cross-browser functional testing across desktop browsers and mobile responsive viewports.
-* Executed API testing via Postman using chained requests, environment variables, and schema validation.
-* Ran SQL queries against PostgreSQL databases to verify backend data persistence and table integrity.
+Postman will send the query parameters as a single URL. The line breaks above are for readability only.
 
-### Software QA Intern (Financial Systems)
-**Exactpro Systems** • *Tbilisi, Georgia*  
-*September 2023 – January 2024*
+## Test approach
 
-* Analyzed financial and trading software specifications to design and execute manual test cases in accordance with STLC best practices.
-* Validated mathematical calculation rules, boundary limits, and financial transaction workflows against formal benchmark specifications.
-* Developed Python automation scripts to parse, process, and verify structured financial test data against expected outputs.
-* Managed issue lifecycles and defect documentation in Jira, integrating validation scripts into GitLab CI pipelines.
+1. **Requirement review:** confirm the current endpoint, parameter definitions, response schema and documented error behavior.
+2. **Positive testing:** issue a valid search request and validate the success response against the published schema.
+3. **Boundary testing:** check the minimum/maximum supported pagination values and just-outside values.
+4. **Negative testing:** omit or corrupt parameters and app-key values. Compare the observed behavior with the documentation; do not assume a specific HTTP status if it is unspecified.
+5. **Data validation:** validate required response fields and types against the live schema, and check that returned items are structurally usable by a consuming application.
+6. **Evidence:** save sanitized request details, response snippets, timestamps and screenshots where useful. Never expose keys or user data.
 
----
+## Test scenarios
 
-## Technical Projects
+| ID | Scenario | Test data | Expected result / oracle | Status |
+|---|---|---|---|---|
+| API-01 | Valid search | `q=cats`, `page=1`, `per_page=24` | Successful response and JSON structure matching the current API specification | Not run |
+| API-02 | Minimum page | `page=1` | Request is accepted; response follows documented pagination schema | Not run |
+| API-03 | Page below minimum | `page=0` | Validate documented error/validation behavior; if unspecified, record observation and raise a specification question | Not run |
+| API-04 | Minimum page size | `per_page=8` | Request is accepted if the current documentation retains this lower bound | Not run |
+| API-05 | Maximum page size | `per_page=50` | Request is accepted if the current documentation retains this upper bound | Not run |
+| API-06 | Page size below minimum | `per_page=7` | Validate documented boundary handling; do not assume rejection versus clamping without a stated contract | Not run |
+| API-07 | Page size above maximum | `per_page=51` | Validate documented boundary handling and capture the actual response | Not run |
+| API-08 | Empty query | `q=` | Record whether the API rejects, returns empty results, or applies another documented behavior | Not run |
+| API-09 | Unknown search term | Unlikely/unique term | Response remains schema-valid; result semantics should match documented behavior | Not run |
+| API-10 | Locale variation | `locale=us`, then another supported code | Response is valid and locale behavior matches the documented contract | Not run |
+| API-11 | Content-filter options | `off`, `low`, `medium`, `high` | Each documented value is handled according to the specification | Not run |
+| API-12 | Unsupported content-filter value | `content_filter=invalid` | Validate the documented error/validation behavior; log ambiguity if unspecified | Not run |
+| API-13 | Missing app key | Empty `app_key` | Request is not treated as a valid authorised request; record exact status and error body | Not run |
+| API-14 | Invalid app key | Intentionally invalid test value | Authorisation/access error matches the documented contract | Not run |
+| API-15 | Response content type | Valid search | Response content type and JSON body are consistent with the API specification | Not run |
+| API-16 | Response-time observation | Repeat a small number of valid requests | Record elapsed time under the test conditions; do not declare a performance failure without an agreed SLA | Not run |
 
-### Policy Management System (Enterprise Web Platform)
-**Role**: QA Lead / Project Engineer • *2026*
-* **Three-Layer Auditing**: Implemented end-to-end data auditing across the UI, REST API, and PostgreSQL layers, ensuring 100% data integrity and zero transactional loss.
-* **Automated Postman Collection**: Built an automated Postman test suite comprising 30+ requests covering CRUD operations, Bearer token authentication, pre-request scripts, test assertions, and one-click execution via Postman Flows.
-* **Network & Resilience Emulation**: Conducted responsive testing across varied viewports using Chrome DevTools and validated client-side error handling under network throttling (Slow 3G, Offline).
+**Important:** API-03, API-06–API-08, API-12 and some error cases are partly specification-discovery tests. Where the documentation does not define a precise response, the correct QA action is to record the behavior and clarify the contract—not invent an expected status code.
 
-### FastAPI Microservice Testing Suite
-**Quantori Python School** • *2024*
-* Developed and containerized a Python FastAPI microservice with PostgreSQL integration using Docker.
-* Built automated CRUD test suites using Pytest with fixtures, parametrization, and automated test execution in GitHub Actions CI pipelines.
+## Example Postman assertions
 
----
+The collection includes basic checks for a successful HTTP response, JSON content type and parseable JSON body. After verifying the current response schema in the official documentation, add assertions for required fields and data types. Avoid tests that pass merely because a status code is 200.
 
-## Education
+Example starter script for a valid-search request:
 
-### Master of Science in Economics (MSc)
-**Ivane Javakhishvili Tbilisi State University (TSU)** • *Tbilisi, Georgia*  
-*2026 – Present*
-* Concentration: History of Economics and Economic Thought / Macroeconomic Policy.
-* Selected for Erasmus+ KA171 International Academic Mobility (Germany).
+```javascript
+pm.test("Valid search returns HTTP 200", function () {
+  pm.response.to.have.status(200);
+});
 
-### Bachelor of Science in Economics (BSc) — Graduated with Honors (წარჩინებით)
-**Ivane Javakhishvili Tbilisi State University (TSU)** • *Tbilisi, Georgia*  
-*2022 – 2026*
-* Academic Standing: Graduated with Honors (Cumulative GPA: 3.13 / 4.00).
-* Core Analytical Modules: Financial Accounting & Reporting, Corporate Finance, Applied Econometrics, Applied Statistics, Mathematical Economics, Relational Database Modeling.
+pm.test("Response declares JSON content", function () {
+  pm.expect(pm.response.headers.get("Content-Type") || "")
+    .to.include("application/json");
+});
 
----
+pm.test("Response body is valid JSON", function () {
+  pm.expect(function () { pm.response.json(); }).to.not.throw();
+});
 
-## Professional Training & Certifications
+pm.test("Response body is a JSON object", function () {
+  pm.expect(pm.response.json()).to.be.an("object");
+});
+```
 
-* **Fullstack QA Lab Program** — *Vention Development* (2026)  
-  *Intensive commercial QA program: requirements analysis, test design, API testing, SQL validation, and Agile execution.*
-* **Python Test Automation Mentoring Program** — *EPAM Systems* (2025)  
-  *In-depth automation curriculum: Pytest, Selenium WebDriver, Robot Framework, Page Object Model, PostgreSQL, and GitHub Actions CI.*
-* **Python School: FastAPI, SQL & Docker** — *Quantori* (2024)  
-  *Microservice architecture, asynchronous endpoint design, containerization, and automated API validation.*
+## Bug report template
 
----
+When an issue is reproducible, create a report containing:
 
-## Languages
+- **Title:** concise symptom + affected endpoint/parameter
+- **Environment:** test API key type (never the key), date/time, request method and endpoint
+- **Preconditions:** relevant variables and setup
+- **Steps to reproduce:** numbered, minimal steps
+- **Expected result:** quote or reference the relevant specification
+- **Actual result:** observed status, sanitized response and headers
+- **Impact/severity:** explain the user or integration risk
+- **Evidence:** sanitized Postman request/response or screenshot
+- **Regression checks:** related parameters/endpoints to retest
 
-* **Georgian**: Native
-* **English**: Advanced / Professional Working Proficiency (B2+ / C1 — Technical Documentation & Communication)
-* **Russian**: Conversational / Intermediate (B1)
-* **German**: Beginner (A1)
+Do not report an undocumented behavior as a confirmed defect until the contract is clarified.
+
+## Execution results
+
+This starter version has **not been executed against the API**. Populate this section after running the requests:
+
+| Date | Environment | Tests run | Passed | Failed | Blocked | Notes |
+|---|---|---:|---:|---:|---:|---|
+| To be completed after execution | Test key | — | — | — | — | No results claimed yet |
+
+Attach sanitized evidence or add an `evidence/` folder after execution. Keep real API keys, secrets, and personal data out of Git.
+
+## What this case study demonstrates
+
+- Requirement-based test design rather than guessing expected behavior
+- Positive, negative and boundary-value test coverage
+- API request/response validation with Postman
+- Attention to pagination, localization and filtering options
+- Defect communication, evidence handling and honest reporting of limitations
+
+## Suggested next steps
+
+- [ ] Verify the endpoint and response contract in the current official docs.
+- [ ] Run all valid requests with an authorised test key.
+- [ ] Run negative and boundary tests at a safe request rate.
+- [ ] Add actual execution results and sanitised evidence.
+- [ ] Add a concise summary of confirmed findings and open specification questions.
+- [ ] Only after completion, link this repository from the CV as a portfolio project.
