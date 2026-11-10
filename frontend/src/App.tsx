@@ -12,8 +12,42 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     checkHealth();
-    const interval = setInterval(checkHealth, 8000);
-    return () => clearInterval(interval);
+
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    const startPolling = () => {
+      if (!timer) {
+        timer = setInterval(() => {
+          if (!document.hidden) {
+            checkHealth();
+          }
+        }, 8000);
+      }
+    };
+
+    const stopPolling = () => {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        stopPolling();
+      } else {
+        checkHealth();
+        startPolling();
+      }
+    };
+
+    startPolling();
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      stopPolling();
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, []);
 
   const checkHealth = async () => {

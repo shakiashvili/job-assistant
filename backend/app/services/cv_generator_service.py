@@ -1,5 +1,8 @@
+import hashlib
 import logging
+import os
 import re
+import uuid
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from xml.sax.saxutils import escape
@@ -12,7 +15,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
 
-from ..config import GENERATED_RESUMES_DIR
+from ..config import GENERATED_RESUMES_DIR, FONTS_DIR
 from ..storage.ground_truth_store import ground_truth_store
 from ..services.gemini_service import GEORGIAN_SKILL_TRANSLATIONS
 
@@ -35,12 +38,32 @@ STRICT CONSTRAINTS (ZERO TOLERANCE FOR FABRICATION):
 
 
 def _register_unicode_font() -> str:
-    """Registers a Unicode TrueType font (Sylfaen / Segoe UI / Arial) in ReportLab for English & Georgian rendering."""
-    font_candidates = [
+    """
+    Registers a Unicode TrueType font in ReportLab with cross-platform support:
+    Checks repository assets/fonts, standard Linux paths, macOS paths, and Windows paths.
+    """
+    font_candidates = []
+
+    # 1. Check project assets/fonts directory for bundled fonts (Linux/Docker/Windows)
+    if FONTS_DIR.exists():
+        for f in FONTS_DIR.glob("*.ttf"):
+            font_candidates.append((f.stem, str(f)))
+
+    # 2. Cross-platform OS paths
+    font_candidates.extend([
+        # Windows
         ("Sylfaen", "C:/Windows/Fonts/sylfaen.ttf"),
         ("SegoeUI", "C:/Windows/Fonts/segoeui.ttf"),
         ("ArialUnicode", "C:/Windows/Fonts/arial.ttf"),
-    ]
+        # Linux / Docker
+        ("NotoSansGeorgian", "/usr/share/fonts/truetype/noto/NotoSansGeorgian-Regular.ttf"),
+        ("DejaVuSans", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        ("LiberationSans", "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
+        # macOS
+        ("ArialUnicodeMac", "/Library/Fonts/Arial Unicode.ttf"),
+        ("ArialMac", "/System/Library/Fonts/Supplemental/Arial.ttf"),
+    ])
+
     for font_name, font_path in font_candidates:
         if Path(font_path).exists():
             try:
@@ -53,6 +76,20 @@ def _register_unicode_font() -> str:
 
 
 UNICODE_FONT_NAME = _register_unicode_font()
+
+
+def safe_unicode_slug(text: str, default: str = "item", max_len: int = 24) -> str:
+    """
+    Produces a safe, cross-platform filename slug that preserves Unicode characters
+    (Georgian ქართული, Cyrillic, Umlauts) and falls back to a deterministic hash
+    if stripped of non-word symbols, avoiding empty filename bugs like CV___Role_EN.pdf.
+    """
+    if not text:
+        return default
+    slug = re.sub(r"[^\w\-]+", "_", text, flags=re.UNICODE).strip("_")
+    if not slug or len(slug.replace("_", "")) == 0:
+        slug = f"{default}_{hashlib.md5(text.encode('utf-8', errors='ignore')).hexdigest()[:6]}"
+    return slug[:max_len]
 
 
 class CVGeneratorService:
@@ -110,13 +147,19 @@ class CVGeneratorService:
             display_skills = prioritized_skills
 
         lang_suffix = "KA" if cv_language == "ka" else "EN"
-        safe_company = re.sub(r"[^A-Za-z0-9]+", "_", company or "Company").strip("_")[:22]
-        safe_role = re.sub(r"[^A-Za-z0-9]+", "_", job_title or "Role").strip("_")[:26]
-        base_name = f"CV_{safe_company}_{safe_role}_{lang_suffix}"
+        safe_company = safe_unicode_slug(company, default="Company", max_len=22)
+        safe_role = safe_unicode_slug(job_title, default="Role", max_len=26)
+        uid = uuid.uuid4().hex[:6]
+        base_name = f"CV_{safe_company}_{safe_role}_{uid}_{lang_suffix}"
         pdf_filename = f"{base_name}.pdf"
         html_filename = f"{base_name}.html"
         pdf_path = GENERATED_RESUMES_DIR / pdf_filename
         html_path = GENERATED_RESUMES_DIR / html_filename
+
+        # Also write the canonical non-versioned link so legacy lookups still succeed
+        canonical_base = f"CV_{safe_company}_{safe_role}_{lang_suffix}"
+        canonical_pdf = GENERATED_RESUMES_DIR / f"{canonical_base}.pdf"
+        canonical_html = GENERATED_RESUMES_DIR / f"{canonical_base}.html"
 
         tailored_highlights = []
         for job in work_history:
@@ -148,6 +191,13 @@ class CVGeneratorService:
             education=education,
             cv_language=cv_language,
         )
+
+        try:
+            canonical_html.write_text(html_content, encoding="utf-8")
+            import shutil
+            shutil.copy2(pdf_path, canonical_pdf)
+        except Exception as e:
+            logger.debug(f"Canonical resume copy note: {e}")
 
         start_date_str = "1 კვირა შეთავაზებიდან (1 week after offer)" if cv_language == "ka" else "1 week after offer"
 

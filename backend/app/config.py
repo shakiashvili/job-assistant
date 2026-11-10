@@ -16,6 +16,10 @@ MOCK_PORTALS_DIR = BASE_DIR / "mock_portals"
 
 GENERATED_RESUMES_DIR.mkdir(parents=True, exist_ok=True)
 
+ASSETS_DIR = BASE_DIR / "assets"
+FONTS_DIR = ASSETS_DIR / "fonts"
+FONTS_DIR.mkdir(parents=True, exist_ok=True)
+
 # Relational Database URL (Supports PostgreSQL or SQLite)
 DEFAULT_SQLITE_PATH = DATA_DIR / "job_assistant.db"
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DEFAULT_SQLITE_PATH.as_posix()}")

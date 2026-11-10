@@ -27,3 +27,4 @@ Thumbs.db
 *.db-shm
 *.db-wal
 data/resumes/generated/hitl_captcha_pause.png
+data/resumes/generated/CV_*

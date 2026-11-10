@@ -1,6 +1,9 @@
 import json
 import logging
+import os
 import re
+import threading
+from pathlib import Path
 from typing import Dict, Any, List, Optional
 from sqlmodel import Session, select
 from ..config import GROUND_TRUTH_FILE, SKILLS_MD_FILE
@@ -9,6 +12,26 @@ from ..models.db_models import CandidateProfile, utc_now
 from ..services.matcher_service import matcher_service
 
 logger = logging.getLogger(__name__)
+
+_storage_lock = threading.Lock()
+
+
+def atomic_write_text(filepath: Path, content: str, encoding: str = "utf-8") -> None:
+    """Performs thread-safe, atomic file writes using temp file + atomic os.replace."""
+    filepath = Path(filepath)
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+    with _storage_lock:
+        temp_file = filepath.with_suffix(f".tmp.{os.getpid()}")
+        try:
+            temp_file.write_text(content, encoding=encoding)
+            os.replace(temp_file, filepath)
+        except Exception as e:
+            if temp_file.exists():
+                try:
+                    temp_file.unlink()
+                except Exception:
+                    pass
+            logger.warning(f"Atomic file write warning for {filepath}: {e}")
 
 
 PROFESSION_MD_PRESETS: Dict[str, Dict[str, str]] = {
@@ -243,10 +266,7 @@ class GroundTruthStore:
 
             if raw_md is not None:
                 profile.raw_markdown = raw_md
-                try:
-                    self.skills_md_path.write_text(raw_md, encoding="utf-8")
-                except Exception:
-                    pass
+                atomic_write_text(self.skills_md_path, raw_md)
 
             taxonomy = matcher_service.parse_skills_markdown(profile.raw_markdown)
             taxonomy["ground_truth_vault"] = save_copy

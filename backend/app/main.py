@@ -24,7 +24,21 @@ logger = logging.getLogger("job_assistant_backend")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    if not gemini_service.is_available:
+        logger.warning(
+            "⚠️ GEMINI_API_KEY is not configured or invalid. The backend is running in "
+            "deterministic ground_truth_heuristic_engine mode with full multi-industry support."
+        )
+    else:
+        logger.info(f"✅ Gemini API active using model '{gemini_service.model_name}'.")
     yield
+    # Clean up lingering Playwright sessions and browser processes on shutdown
+    try:
+        from .services.playwright_service import playwright_service
+        await playwright_service.close_all_sessions()
+        logger.info("Playwright active browser sessions cleanly terminated.")
+    except Exception as e:
+        logger.debug(f"Playwright session shutdown cleanup: {e}")
 
 
 app = FastAPI(
@@ -38,10 +52,20 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS Middleware (permitting Chrome extension and Vite dev server)
+# Standards-compliant CORS Middleware (explicit origins + regex for Chrome extensions)
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ALLOWED_ORIGINS,
+    allow_origin_regex=r"^chrome-extension://[a-z0-9]+$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
