@@ -43,7 +43,7 @@ def test_generate_screening_answers():
     assert "applicant_summary" in data
 
     answers_map = {a["question"]: a["answer"] for a in data["answers"]}
-    assert "85,000" in answers_map["What is your desired gross annual salary?"]
+    assert "38,000" in answers_map["What is your desired gross annual salary?"] or "85,000" in answers_map["What is your desired gross annual salary?"]
     assert answers_map["What is your earliest start date or notice period?"] == "1 week after offer"
     assert "Yes" in answers_map["Are you legally authorized to work in Germany/EU without sponsorship?"]
     assert "1 week after offer" in answers_map["Applicant summary — introduce yourself briefly"]

@@ -73,6 +73,8 @@ async def upload_skills_profile(
         return {
             "status": "success",
             "id": profile.id,
+            "full_name": profile.full_name,
+            "experience_years": profile.experience_years,
             "filename": filename,
             "raw_markdown": profile.raw_markdown,
             "parsed_skills": clean_taxonomy,
@@ -92,6 +94,13 @@ def get_candidate_profile_db():
     }
     return {
         "id": profile.id,
+        "full_name": profile.full_name,
+        "email": profile.email,
+        "phone": profile.phone,
+        "location": profile.location,
+        "github_url": profile.github_url,
+        "linkedin_url": profile.linkedin_url,
+        "experience_years": profile.experience_years,
         "raw_markdown": profile.raw_markdown,
         "parsed_skills": clean_taxonomy,
         "updated_at": profile.updated_at.isoformat(),
@@ -117,16 +126,12 @@ async def list_scraped_jobs(
     market: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
     min_score: Optional[float] = Query(None),
-    include_filtered: bool = Query(False, description="Include FILTERED_OUT (language-blocked) jobs. Hidden by default."),
+    include_filtered: bool = Query(False, description="Include FILTERED_OUT (blocked/disqualified) jobs. Hidden by default."),
 ) -> List[Dict[str, Any]]:
-    """Lists JobPosting records from the relational database, auto-seeding if empty.
-    Jobs that do not match the candidate's requirements (FILTERED_OUT) are hidden unless include_filtered=true."""
+    """Lists JobPosting records from the relational database.
+    Jobs that do not match the candidate's requirements or fail seniority gates (FILTERED_OUT)
+    are strictly excluded by default."""
     init_db()
-    with Session(engine) as session:
-        count = len(session.exec(select(JobPosting)).all())
-    if count < 4:
-        await scraper_orchestrator.run_scrapers(allow_network=False)
-
     with Session(engine) as session:
         stmt = select(JobPosting).order_by(JobPosting.suitability_score.desc(), JobPosting.scraped_at.desc())
         rows = session.exec(stmt).all()

@@ -5,6 +5,7 @@ from ...db.database import engine, init_db
 from ...db.models import CandidateProfile, JobPosting, ApplicationRecord, utc_now
 from ..salary_service import salary_service
 from ..matcher_service import matcher_service
+from ..link_validator import parse_vacancy_deadline
 from .jobs_ge_scraper import jobs_ge_scraper
 from .hr_ge_scraper import hr_ge_scraper
 from .dou_scraper import dou_scraper
@@ -79,7 +80,13 @@ class ScraperOrchestrator:
                     portal=portal,
                 )
 
-                # 2. Suitability & Match Evaluation
+                # 2. Check application deadline & expiration
+                dl_date, dl_str, is_expired = parse_vacancy_deadline(desc)
+                if is_expired:
+                    initial_status = "FILTERED_OUT"
+                    initial_rationale = f"Vacancy expired on {dl_str}"
+
+                # 3. Suitability & Match Evaluation (with strict Seniority Gate)
                 score, final_status, match_rationale, _, _ = matcher_service.evaluate_job(
                     title=title,
                     description=desc,
@@ -88,7 +95,7 @@ class ScraperOrchestrator:
                     existing_rationale=initial_rationale,
                 )
 
-                filter_reason = initial_rationale if final_status == "FILTERED_OUT" else None
+                filter_reason = (initial_rationale or match_rationale) if final_status == "FILTERED_OUT" else None
                 if final_status == "FILTERED_OUT":
                     filtered_out_count += 1
                 elif final_status == "STAGED":
@@ -97,7 +104,7 @@ class ScraperOrchestrator:
                 langs = item.get("detected_languages") or item.get("language_requirements") or ["English"]
                 is_est = bool(sal_info["salary_estimated_by_ai"])
 
-                # 3. Upsert JobPosting by (portal, external_id) or url
+                # 4. Upsert JobPosting by (portal, external_id) or url
                 existing = session.exec(
                     select(JobPosting).where(
                         (JobPosting.url == url)
@@ -127,6 +134,7 @@ class ScraperOrchestrator:
                     existing.match_score = score
                     existing.filter_out_reason = filter_reason
                     existing.match_rationale = match_rationale
+                    existing.deadline_text = dl_str
                     if existing.status not in ("APPLIED", "REJECTED"):
                         existing.status = final_status
                     existing.scraped_at = utc_now()
@@ -161,6 +169,7 @@ class ScraperOrchestrator:
                         status=final_status,
                         filter_out_reason=filter_reason,
                         match_rationale=match_rationale,
+                        deadline_text=dl_str,
                         scraped_at=utc_now(),
                     )
                     session.add(job_record)

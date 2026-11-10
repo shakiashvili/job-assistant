@@ -138,7 +138,7 @@ def test_gmail_dispatch_and_mime_assembly():
     email_res = client.post(f"/api/applications/{app_id}/send-email", json={
         "mode": "draft",
         "recipient_email": "talent@autoqa-global.com",
-        "subject": "Application for Staff SDET - Alex Mercer",
+        "subject": "Application for QA Automation Engineer - Giorgi Shakiashvili",
         "body_text": "Attached is my tailored CV for the Staff SDET role."
     })
     assert email_res.status_code == 200

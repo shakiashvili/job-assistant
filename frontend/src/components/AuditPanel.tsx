@@ -32,6 +32,7 @@ import {
   saveSkillsMdText,
   applySkillsPreset,
   fetchScrapedJobs,
+  fetchDbProfile,
   triggerMultiPortalScrape,
   BACKEND_ORIGIN
 } from '../services/api';
@@ -65,6 +66,13 @@ export const AuditPanel: React.FC = () => {
   const [selectedVariant, setSelectedVariant] = useState('qa_automation');
   const [cvLanguage, setCvLanguage] = useState<'en' | 'ka'>('en');
   const [activePresetId, setActivePresetId] = useState<string>('qa_tech');
+  const [candidateProfile, setCandidateProfile] = useState<{
+    full_name?: string;
+    experience_years?: number;
+    seniority_level?: string;
+    target_industry?: string;
+    headline?: string;
+  } | null>(null);
 
   const [isAuditing, setIsAuditing] = useState(false);
   const [auditResult, setAuditResult] = useState<JobAuditResponse | null>(null);
@@ -90,7 +98,23 @@ export const AuditPanel: React.FC = () => {
     loadInitialData();
   }, []);
 
+  const refreshProfileData = async () => {
+    try {
+      const p: any = await fetchDbProfile();
+      if (p) {
+        setCandidateProfile({
+          full_name: p.full_name || 'Giorgi Shakiashvili',
+          experience_years: p.experience_years ?? 1.5,
+          seniority_level: p.parsed_skills?.seniority_level || 'JUNIOR',
+          target_industry: p.parsed_skills?.target_industry || 'qa_tech',
+          headline: p.parsed_skills?.headline || 'QA Engineer',
+        });
+      }
+    } catch {}
+  };
+
   const loadInitialData = async () => {
+    refreshProfileData();
     try {
       const [vacs, mdData, dbJobs] = await Promise.all([
         fetchVacancies(),
@@ -158,6 +182,7 @@ export const AuditPanel: React.FC = () => {
 
       const refreshedJobs = await fetchScrapedJobs();
       setScrapedJobs(refreshedJobs);
+      refreshProfileData();
 
       setSkillsStatusMsg(`✅ Switched SQL CandidateProfile to "${presetId}" (${res.extracted_skills.length} skills indexed)!`);
       setTimeout(() => setSkillsStatusMsg(null), 4500);
@@ -176,6 +201,7 @@ export const AuditPanel: React.FC = () => {
       setExtractedSkillsCount(res.extracted_skills.length);
       const refreshedJobs = await fetchScrapedJobs();
       setScrapedJobs(refreshedJobs);
+      refreshProfileData();
       setSkillsStatusMsg(res.message);
       setTimeout(() => setSkillsStatusMsg(null), 4500);
     } catch (err: any) {
@@ -189,6 +215,7 @@ export const AuditPanel: React.FC = () => {
       setExtractedSkillsCount(res.extracted_skills.length);
       const refreshedJobs = await fetchScrapedJobs();
       setScrapedJobs(refreshedJobs);
+      refreshProfileData();
       setSkillsStatusMsg(`✅ Updated CandidateProfile in SQL DB (${res.extracted_skills.length} skills synced)!`);
       setShowSkillsEditor(false);
       setTimeout(() => setSkillsStatusMsg(null), 4000);
@@ -425,6 +452,28 @@ export const AuditPanel: React.FC = () => {
           </div>
         </div>
 
+        {/* Dynamic Candidate Seniority & Industry Profile Gate Badges */}
+        <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-slate-800/60">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Active Profile Gate:</span>
+          <span className="text-xs px-2.5 py-1 rounded-lg bg-sky-950 text-sky-300 border border-sky-800 font-semibold flex items-center gap-1">
+            <span>👤 {candidateProfile?.full_name || 'Giorgi Shakiashvili'}</span>
+          </span>
+          <span className="text-xs px-2.5 py-1 rounded-lg bg-indigo-950 text-indigo-300 border border-indigo-800 font-semibold flex items-center gap-1">
+            <span>Industry: {candidateProfile?.target_industry === 'qa_tech' ? '💻 Software QA & Tech' : candidateProfile?.target_industry || '💻 Software QA'}</span>
+          </span>
+          <span className="text-xs px-2.5 py-1 rounded-lg bg-emerald-950 text-emerald-300 border border-emerald-800 font-semibold flex items-center gap-1">
+            <span>Experience: {candidateProfile?.experience_years ?? 1.5} Years</span>
+          </span>
+          <span className="text-xs px-2.5 py-1 rounded-lg bg-amber-950 text-amber-300 border border-amber-800 font-semibold flex items-center gap-1">
+            <span>Target: {candidateProfile?.seniority_level === 'JUNIOR' ? 'Junior - Mid' : candidateProfile?.seniority_level || 'Junior - Mid'}</span>
+          </span>
+          {candidateProfile?.headline && (
+            <span className="text-[11px] px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-medium">
+              {candidateProfile.headline}
+            </span>
+          )}
+        </div>
+
         {/* 1-Click Industry Profile Preset Selector */}
         <div className="pt-2 border-t border-slate-800/80">
           <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-2 flex items-center gap-1.5">
@@ -534,7 +583,15 @@ export const AuditPanel: React.FC = () => {
 
         {filteredDbJobs.length === 0 && (
           <div className="text-xs text-slate-400 text-center py-6 border border-dashed border-slate-800 rounded-xl">
-            No matching jobs yet — click <strong>Run Multi-Portal Scrapers</strong> to discover new vacancies.
+            <div className="space-y-1">
+              <h4 className="text-sm font-bold text-white">Discovery Feed Ready (Zero Dead Seed Data)</h4>
+              <p className="text-xs text-slate-400">
+                Feed is 100% clean. Upload your skills.md or click <strong>Run Multi-Portal Scrapers</strong> to discover jobs.
+              </p>
+              <p className="text-[11px] text-slate-500">
+                Seniority Gate strictly excludes Senior/Lead roles exceeding your {candidateProfile?.experience_years ?? 1.5} yrs experience.
+              </p>
+            </div>
           </div>
         )}
 
@@ -586,6 +643,12 @@ export const AuditPanel: React.FC = () => {
                       >
                         {job.salary_estimated_by_ai ? '🤖 AI Est.' : '📄 Extracted'}
                       </span>
+                    </div>
+                  )}
+
+                  {job.deadline_text && (
+                    <div className="text-[10px] text-amber-300 bg-amber-950/40 border border-amber-800/60 px-2 py-0.5 rounded-md inline-block">
+                      📅 Deadline: {job.deadline_text}
                     </div>
                   )}
 

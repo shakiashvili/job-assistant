@@ -90,29 +90,29 @@ class JobsGeScraper(BasePortalScraper):
             {
                 "portal": "jobs.ge",
                 "external_id": "jobsge-541092",
-                "title": "Senior QA Automation Engineer (Playwright / Python)",
+                "title": "QA Automation Engineer (Playwright / Python)",
                 "company": "TBC Digital",
                 "url": "https://jobs.ge/en/?view=jobs&id=541092",
                 "market": "GE_DOMESTIC",
                 "is_remote": True,
                 "description_raw": (
-                    "Senior QA Automation Engineer at TBC Digital (Jobs.ge IT / Programming / QA). "
+                    "QA Automation Engineer at TBC Digital (Jobs.ge IT / Programming / QA). "
                     "Stack: Playwright, Cypress, Python, TypeScript, PyTest, Postman, REST API, SQL, Docker, GitHub Actions. "
-                    "Compensation: 6500-8500 GEL. Please send your CV to talent@tbcbank.com.ge with subject line \"Senior QA Automation Engineer - [Name]\"."
+                    "1-2 years experience. Compensation: 4500-6000 GEL. ბოლო ვადა: 28.12.2026. Please send your CV to talent@tbcbank.com.ge with subject line \"QA Automation Engineer - [Name]\"."
                 ),
             },
             {
                 "portal": "jobs.ge",
                 "external_id": "jobsge-541880",
-                "title": "Middle / Senior SDET (API & Cloud Testing)",
+                "title": "SDET / QA Engineer (API & Cloud Testing)",
                 "company": "Bank of Georgia (BOG FinTech)",
                 "url": "https://jobs.ge/en/?view=jobs&id=541880",
                 "market": "GE_DOMESTIC",
                 "is_remote": True,
                 "description_raw": (
-                    "Middle/Senior SDET at BOG FinTech (Jobs.ge IT / Programming). "
+                    "SDET / QA Engineer at BOG FinTech (Jobs.ge IT / Programming). "
                     "Requirements: Python, TypeScript, Playwright, Selenium, PyTest, REST Assured, Postman, k6, GitLab CI, Docker, SQL. "
-                    "Apply via web form or email hr@bog.ge with subject: \"SDET - [Name]\"."
+                    "1.5+ years experience. Apply via web form or email hr@bog.ge with subject: \"SDET - [Name]\"."
                 ),
             },
             {

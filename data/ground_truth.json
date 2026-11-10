@@ -1,25 +1,24 @@
 {
   "candidate": {
-    "first_name": "Alex",
-    "last_name": "Mercer",
-    "full_name": "Alex Mercer",
-    "headline": "Senior QA Automation Engineer & SDET",
-    "email": "alex.mercer.dev@gmail.com",
-    "phone": "+49 152 98765432\n-",
+    "first_name": "Giorgi",
+    "last_name": "Shakiashvili",
+    "full_name": "Giorgi Shakiashvili",
+    "headline": "QA Automation & API Testing Engineer",
+    "email": "giorgi.shakiashvili.dev@gmail.com",
+    "phone": "+995 599 123456",
     "location": {
-      "city": "Berlin",
-      "country": "Germany",
-      "postal_code": "10115",
-      "address_line": "Torstrasse 42",
-      "timezone": "Europe/Berlin",
+      "city": "Tbilisi",
+      "country": "Georgia",
+      "postal_code": "0105",
+      "address_line": "Rustaveli Ave",
+      "timezone": "Asia/Tbilisi",
       "open_to_relocation": true,
-      "remote_preference": "Remote / Hybrid (EU or US timezones)"
+      "remote_preference": "Remote / Hybrid (Global / EU timezones)"
     },
     "links": {
-      "linkedin": "https://linkedin.com/in/alex-mercer-qa",
-      "github": "https://github.com/alex-mercer-automation",
-      "portfolio": "https://alexmercer.dev",
-      "twitter": "https://x.com/alex_mercer_qa"
+      "linkedin": "https://linkedin.com/in/giorgi-shakiashvili",
+      "github": "https://github.com/shakiashvili",
+      "portfolio": "https://shakiashvili.github.io"
     },
     "work_authorization": {
       "citizenship": [
@@ -35,22 +34,18 @@
     },
     "languages": [
       {
+        "language": "Georgian",
+        "proficiency": "Native (C2)"
+      },
+      {
         "language": "English",
-        "proficiency": "Native / Bilingual (C2)"
-      },
-      {
-        "language": "German",
-        "proficiency": "Professional Working (B2)"
-      },
-      {
-        "language": "Spanish",
-        "proficiency": "Elementary (A2)"
+        "proficiency": "Fluent / Professional (C1)"
       }
     ],
     "compensation": {
-      "expected_salary_eur": 85000,
-      "min_salary_eur": 75000,
-      "expected_salary_usd": 105000,
+      "expected_salary_eur": 38000,
+      "min_salary_eur": 30000,
+      "expected_salary_usd": 42000,
       "notice_period": "1 week after offer"
     }
   },
@@ -158,8 +153,8 @@
   "cv_variants": {
     "qa_automation": {
       "id": "qa_automation",
-      "title": "Lead QA Automation Engineer / SDET",
-      "summary": "Results-driven SDET and QA Automation Specialist with 5+ years of experience engineering robust test frameworks in Playwright, Cypress, and Python. Proven track record of accelerating CI/CD pipeline throughput by 70% and ensuring 99.9% production release stability.",
+      "title": "QA Automation Engineer",
+      "summary": "Results-driven QA Automation and API Testing Engineer with 1.5 years of practical experience engineering test suites in Playwright, Cypress, Python, and Postman.",
       "keywords": [
         "Playwright",
         "Cypress",
@@ -271,7 +266,7 @@
         "about you",
         "introduce yourself"
       ],
-      "answer": "I am a Senior QA Automation Engineer and SDET with 5+ years of hands-on experience building reliable Playwright, Cypress, and Python test suites. I focus on practical automation that cuts regression time, catches real edge cases in CI/CD, and helps engineering teams ship with confidence."
+      "answer": "I am a QA Automation Engineer with 1.5 years of hands-on experience building reliable Playwright, Cypress, and Python test suites. I focus on practical automation that reduces regression time and integrates smoothly into CI/CD."
     },
     {
       "question_trigger": "why interested",

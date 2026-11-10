@@ -132,6 +132,8 @@ export interface DbJobPosting {
   suitability_score: number;
   match_rationale: string;
   status: 'DISCOVERED' | 'FILTERED_OUT' | 'AUDITED' | 'STAGED' | 'APPLIED' | 'REJECTED' | string;
+  deadline_text?: string | null;
+  is_link_live?: boolean;
   scraped_at: string;
 }
 

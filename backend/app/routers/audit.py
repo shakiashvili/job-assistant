@@ -70,57 +70,58 @@ CURATED_PORTAL_VACANCIES: List[PortalVacancyItem] = [
     ),
     PortalVacancyItem(
         id="vac-dou-1",
-        title="Senior QA Automation Engineer (Playwright / Python)",
+        title="QA Automation Engineer (Playwright / Python)",
         company="MacPaw",
         portal="dou.ua",
         industry="qa_tech",
         location="Remote (Ukraine / EU / Georgia / Worldwide)",
-        salary="$4,200 – $5,500 / mo",
+        salary="$2,800 – $3,600 / mo",
         url="https://jobs.dou.ua/companies/macpaw/vacancies/289104/",
         mock_url="http://localhost:8000/mock-portals/dou_sample.html",
         company_reviews_count=142,
         company_rating=4.8,
         requires_motivational_letter=True,
         description=(
-            "Senior QA Automation Engineer at MacPaw (DOU.ua). Requirements: 4+ years experience in Playwright or Cypress, "
-            "Python, TypeScript, PyTest, REST API, GraphQL, GitHub Actions, Docker, English Upper-Intermediate+. "
+            "QA Automation Engineer at MacPaw (DOU.ua). Requirements: 1-2 years experience in Playwright or Cypress, "
+            "Python, TypeScript, PyTest, REST API, Postman, GitHub Actions, Docker, English Upper-Intermediate+. "
             "Note: DOU.ua requires an additional personalized Motivational Letter."
         )
     ),
     PortalVacancyItem(
         id="vac-djinni-1",
-        title="Lead SDET / QA Automation Engineer",
+        title="QA Engineer / SDET (API & Test Automation)",
         company="Grammarly",
         portal="djinni.co",
         industry="qa_tech",
         location="Full Remote (Abroad / Worldwide)",
-        salary="$5,000 – $6,200 / mo",
-        url="https://djinni.co/jobs/654321-lead-sdet-playwright/",
+        salary="$3,200 – $4,200 / mo",
+        url="https://djinni.co/jobs/654321-qa-engineer-playwright/",
         mock_url="http://localhost:8000/mock-portals/djinni_sample.html",
         company_reviews_count=215,
         company_rating=4.6,
         requires_motivational_letter=False,
         description=(
-            "Lead SDET / QA Automation Engineer at Grammarly via Djinni.co. Stack: Playwright, TypeScript, Python, "
-            "PyTest, Docker, GitHub Actions, AWS, k6 load testing. Full remote abroad contract."
+            "QA Engineer / SDET at Grammarly via Djinni.co. Stack: Playwright, TypeScript, Python, "
+            "PyTest, Postman, Docker, GitHub Actions, REST API. 1.5+ years experience. Full remote abroad contract."
         )
     ),
     PortalVacancyItem(
         id="vac-jobsge-1",
-        title="Senior QA Automation Engineer (Remote / Tbilisi)",
+        title="QA Automation Engineer (Remote / Tbilisi)",
         company="TBC Digital",
         portal="jobs.ge",
         industry="qa_tech",
         location="Tbilisi, Georgia / Remote",
-        salary="$4,000 – $5,000 / mo",
+        salary="$2,500 – $3,200 / mo",
         url="https://jobs.ge/en/?view=jobs&id=541092",
         mock_url="http://localhost:8000/mock-portals/jobs_ge_sample.html",
         company_reviews_count=89,
         company_rating=4.4,
         requires_motivational_letter=False,
         description=(
-            "Senior QA Automation Engineer at TBC Digital (listed on Jobs.ge, HR.ge, and HeadHunter.ge). "
-            "Requirements: Playwright, Cypress, Python, PyTest, REST API, SQL, Docker, CI/CD pipelines."
+            "QA Automation Engineer at TBC Digital (listed on Jobs.ge, HR.ge, and HeadHunter.ge). "
+            "Requirements: Playwright, Cypress, Python, PyTest, REST API, Postman, SQL, Docker, CI/CD pipelines. "
+            "1-2 years experience. ბოლო ვადა: 25.12.2026."
         )
     ),
     PortalVacancyItem(
@@ -144,56 +145,56 @@ CURATED_PORTAL_VACANCIES: List[PortalVacancyItem] = [
     ),
     PortalVacancyItem(
         id="vac-justjoin-1",
-        title="Senior QA Automation Engineer (100% Remote B2B)",
+        title="QA Automation Engineer (100% Remote B2B)",
         company="Allegro",
         portal="justjoin.it",
         industry="qa_tech",
         location="Remote EU / Abroad B2B",
-        salary="€6,500 – €8,000 / mo",
-        url="https://justjoin.it/offers/allegro-senior-qa-automation-engineer",
+        salary="€3,500 – €4,500 / mo",
+        url="https://justjoin.it/offers/allegro-qa-automation-engineer",
         mock_url="http://localhost:8000/mock-portals/justjoin_sample.html",
         company_reviews_count=180,
         company_rating=4.4,
         requires_motivational_letter=False,
         description=(
-            "Senior QA Automation Engineer at Allegro via JustJoin.it (100% Remote B2B). "
-            "Stack: Playwright, TypeScript, Python, PyTest, Docker, GitHub Actions, k6, Kubernetes."
+            "QA Automation Engineer at Allegro via JustJoin.it (100% Remote B2B). "
+            "Stack: Playwright, TypeScript, Python, PyTest, Docker, GitHub Actions, Postman. 1.5+ years experience."
         )
     ),
     PortalVacancyItem(
         id="vac-gh-1",
-        title="Senior QA Automation Engineer",
+        title="QA Automation Engineer",
         company="CloudScale Technologies",
         portal="greenhouse",
         industry="qa_tech",
         location="Berlin / Remote EU",
-        salary="€85,000 / yr",
+        salary="€52,000 / yr",
         url="https://boards.greenhouse.io/cloudscale/jobs/7123910",
         mock_url="http://localhost:8000/mock-portals/greenhouse_sample.html",
         company_reviews_count=48,
         company_rating=4.3,
         requires_motivational_letter=False,
         description=(
-            "Senior QA Automation Engineer at CloudScale Technologies (Greenhouse). "
-            "4+ years Playwright, Cypress, Python, TypeScript, REST API, GitHub Actions, Docker."
+            "QA Automation Engineer at CloudScale Technologies (Greenhouse). "
+            "1.5+ years experience with Playwright, Cypress, Python, TypeScript, REST API, GitHub Actions, Docker."
         )
     ),
     PortalVacancyItem(
         id="vac-lever-1",
-        title="Senior SDET / QA Automation Engineer",
+        title="Software Development Engineer in Test (SDET)",
         company="DataSphere Technologies",
         portal="lever",
         industry="qa_tech",
         location="Remote EU / CET",
-        salary="€88,000 / yr",
-        url="https://jobs.lever.co/datasphere/senior-sdet",
+        salary="€54,000 / yr",
+        url="https://jobs.lever.co/datasphere/sdet",
         mock_url="http://localhost:8000/mock-portals/lever_sample.html",
         company_reviews_count=64,
         company_rating=4.5,
         requires_motivational_letter=False,
         description=(
-            "Senior SDET at DataSphere Technologies (Lever). "
-            "3-5+ years Python, TypeScript, Playwright, Cypress, REST APIs, SQL, Docker, CI/CD."
+            "SDET at DataSphere Technologies (Lever). "
+            "1-2 years experience with Python, TypeScript, Playwright, Cypress, REST APIs, SQL, Docker, CI/CD."
         )
     ),
 ]

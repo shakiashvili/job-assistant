@@ -290,6 +290,34 @@ export async function registerUser(email: string, password: string, full_name: s
   return data;
 }
 
+export async function sendOtp(email: string): Promise<{ status: string; message: string; demo_code?: string }> {
+  const res = await fetch(`${API_BASE}/auth/send-otp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to send OTP code' }));
+    throw new Error(err.detail || 'Failed to send OTP code');
+  }
+  return res.json();
+}
+
+export async function verifyOtp(email: string, otp_code: string): Promise<AuthResponse> {
+  const res = await fetch(`${API_BASE}/auth/verify-otp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, otp_code }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Invalid or expired OTP code' }));
+    throw new Error(err.detail || 'Invalid or expired OTP code');
+  }
+  const data: AuthResponse = await res.json();
+  localStorage.setItem('talentflow_token', data.access_token);
+  return data;
+}
+
 export async function fetchCurrentUser(): Promise<UserProfile> {
   const res = await fetch(`${API_BASE}/auth/me`, {
     headers: getAuthHeaders(),

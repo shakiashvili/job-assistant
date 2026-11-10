@@ -39,36 +39,32 @@ PROFESSION_MD_PRESETS: Dict[str, Dict[str, str]] = {
         "id": "qa_tech",
         "label": "💻 QA Automation & Tech Engineer",
         "industry": "qa_tech",
-        "content": """# Alex Mercer — Senior QA Automation Engineer & SDET
+        "content": """# Giorgi Shakiashvili — QA Automation & API Testing Engineer
 
 ## Contact & Personal Info
-- **Full Name:** Alex Mercer
-- **Email:** alex.mercer.dev@gmail.com
-- **Phone:** +49 152 98765432
-- **Location:** Berlin / Tbilisi (Remote & Abroad Ready)
-- **LinkedIn:** https://linkedin.com/in/alex-mercer-qa
-- **GitHub:** https://github.com/alex-mercer-automation
+- **Full Name:** Giorgi Shakiashvili
+- **Email:** giorgi.shakiashvili.dev@gmail.com
+- **Phone:** +995 599 123456
+- **Location:** Tbilisi, Georgia (Remote & Abroad Ready)
+- **LinkedIn:** https://linkedin.com/in/giorgi-shakiashvili
+- **GitHub:** https://github.com/shakiashvili
 - **Availability / Notice Period:** 1 week after offer
-- **Salary Expectation:** €85,000 gross/year (or $4,500/mo remote)
+- **Salary Expectation:** $3,000 - $3,500/mo remote
 
 ## Applicant Summary
-I build reliable test automation that helps engineering teams ship faster without breaking production. Over the past 5+ years, I have worked across web, API, and cloud microservices using Playwright, Cypress, and Python.
+I build reliable test automation and API test suites that help engineering teams ship faster with high quality. Over the past 1.5 years, I have engineered test suites across web and API architectures using Playwright, Cypress, Python, and Postman.
 
 ## Core Skills
 - **UI & End-to-End Automation:** Playwright, Cypress, Selenium WebDriver, Appium
-- **Programming & Scripting:** Python, TypeScript, JavaScript, Java, SQL, Bash
-- **API & Integration Testing:** PyTest, JUnit, Postman, REST Assured, REST API, GraphQL, k6, JMeter
-- **CI/CD & DevOps:** GitHub Actions, GitLab CI, Docker, Kubernetes, AWS, Jira, Xray
+- **Programming & Scripting:** Python, TypeScript, JavaScript, SQL, Bash
+- **API & Integration Testing:** PyTest, JUnit, Postman, REST Assured, REST API, GraphQL, k6
+- **CI/CD & DevOps:** GitHub Actions, Docker, Git, Jira
 
-## Work Experience
-### Senior QA Automation Engineer | TechNova Cloud Solutions
+## Work Experience & Portfolio
+### QA Automation Engineer / Test Designer | Portfolio Project
 *Jan 2023 – Present*
-- Built the Playwright + TypeScript end-to-end test suite from scratch, cutting regression time from 14 hours to 35 minutes.
-- Integrated parallel CI test runs across GitHub Actions and Docker with 99.4% pipeline reliability.
-
-### QA Engineer / Automation Specialist | Apex Fintech Labs
-*Mar 2021 – Dec 2022*
-- Automated critical payment and onboarding flows using Cypress and TypeScript for a high-volume banking platform.
+- Engineered comprehensive REST API test framework in Postman and Playwright with automated boundary value analysis and JSON schema validation.
+- Built automated test runners with CI/CD integration, cutting manual verification cycles significantly.
 """
     },
     "receptionist_hospitality": {
@@ -205,28 +201,17 @@ class GroundTruthStore:
             profile = session.exec(
                 select(CandidateProfile).order_by(CandidateProfile.updated_at.desc())
             ).first()
-            if profile:
+            if profile and profile.full_name:
                 return profile
 
-            raw_md = ""
-            if self.skills_md_path.exists():
-                raw_md = self.skills_md_path.read_text(encoding="utf-8")
-            if not raw_md:
-                raw_md = PROFESSION_MD_PRESETS["qa_tech"]["content"]
+        from ..services.profile_service import profile_service
+        raw_md = ""
+        if self.skills_md_path.exists():
+            raw_md = self.skills_md_path.read_text(encoding="utf-8")
+        if not raw_md:
+            raw_md = PROFESSION_MD_PRESETS["qa_tech"]["content"]
 
-            seed_gt = self._load_seed_json()
-            taxonomy = matcher_service.parse_skills_markdown(raw_md)
-            taxonomy["ground_truth_vault"] = seed_gt
-
-            profile = CandidateProfile(
-                raw_markdown=raw_md,
-                parsed_skills=taxonomy,
-                updated_at=utc_now(),
-            )
-            session.add(profile)
-            session.commit()
-            session.refresh(profile)
-            return profile
+        return profile_service.upsert_candidate_profile(raw_md)
 
     def get_profile_record(self) -> CandidateProfile:
         return self._ensure_seeded()

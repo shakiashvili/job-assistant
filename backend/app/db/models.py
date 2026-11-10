@@ -25,6 +25,17 @@ class User(SQLModel, table=True):
     action_plans: List["SkillActionPlan"] = Relationship(back_populates="user")
 
 
+class UserOTP(SQLModel, table=True):
+    __tablename__ = "user_otps"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    email: str = Field(index=True)
+    otp_code: str = Field(index=True)
+    expires_at: datetime = Field(index=True)
+    is_used: bool = Field(default=False, index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class ApplicationTracker(SQLModel, table=True):
     __tablename__ = "application_tracker"
 
@@ -125,6 +136,8 @@ class JobPosting(SQLModel, table=True):
     status: str = Field(default="DISCOVERED", index=True)  # "DISCOVERED", "FILTERED_OUT", "READY", "AUDITED", "STAGED", "APPLIED", "REJECTED"
     filter_out_reason: Optional[str] = Field(default=None)
     match_rationale: str = Field(default="", sa_column=Column(Text, nullable=False))
+    deadline_text: Optional[str] = Field(default=None)
+    is_link_live: bool = Field(default=True)
     scraped_at: datetime = Field(default_factory=utc_now, index=True)
 
 

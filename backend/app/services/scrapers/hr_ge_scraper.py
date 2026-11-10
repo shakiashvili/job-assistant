@@ -71,15 +71,15 @@ class HrGeScraper(BasePortalScraper):
             {
                 "portal": "hr.ge",
                 "external_id": "hrge-391042",
-                "title": "QA Automation Lead (Playwright & Python)",
+                "title": "QA Automation Engineer (Playwright & Python)",
                 "company": "Space International / TBC Group",
-                "url": "https://hr.ge/announcement/391042/qa-automation-lead",
+                "url": "https://hr.ge/announcement/391042/qa-automation-engineer",
                 "market": "GE_DOMESTIC",
                 "is_remote": True,
                 "description_raw": (
-                    "QA Automation Lead at Space International (HR.ge IT / Programming / QA). "
-                    "Requirements: 4+ years in Playwright, Cypress, Python, TypeScript, PyTest, Postman, REST API, "
-                    "SQL, Docker, GitHub Actions, Kubernetes. Apply via web form or email jobs@space.ge with subject \"QA Automation Lead - [Name]\"."
+                    "QA Automation Engineer at Space International (HR.ge IT / Programming / QA). "
+                    "Requirements: 1-2 years in Playwright, Cypress, Python, TypeScript, PyTest, Postman, REST API, "
+                    "SQL, Docker, GitHub Actions. ბოლო ვადა: 30.12.2026. Apply via web form or email jobs@space.ge with subject \"QA Automation Engineer - [Name]\"."
                 ),
             },
             {

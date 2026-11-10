@@ -72,7 +72,7 @@ class DjinniScraper(BasePortalScraper):
         raw_listings = [
             {
                 "external_id": "djinni-654321",
-                "title": "Lead SDET / QA Automation Engineer (Playwright + Python)",
+                "title": "QA Engineer / SDET (API & Automation)",
                 "company": "Grammarly",
                 "url": "https://djinni.co/jobs/654321-lead-sdet-playwright/",
                 "location": "Full Remote Worldwide",
@@ -85,7 +85,7 @@ class DjinniScraper(BasePortalScraper):
             },
             {
                 "external_id": "djinni-654889",
-                "title": "Senior QA Automation Engineer (FinTech EU Remote)",
+                "title": "QA Automation Engineer (FinTech EU Remote)",
                 "company": "PayFlow Europe",
                 "url": "https://djinni.co/jobs/654889-senior-qa-automation-eu/",
                 "location": "Remote (EU / Georgia / Worldwide)",

@@ -71,7 +71,7 @@ class DouScraper(BasePortalScraper):
         raw_listings = [
             {
                 "external_id": "dou-289104",
-                "title": "Senior QA Automation Engineer (Playwright / Python)",
+                "title": "QA Automation Engineer (Playwright / Python)",
                 "company": "MacPaw",
                 "url": "https://jobs.dou.ua/companies/macpaw/vacancies/289104/",
                 "location": "Remote / Relocation Worldwide",

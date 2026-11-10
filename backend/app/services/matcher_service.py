@@ -69,14 +69,28 @@ class MatcherService:
             "tools": [],
             "frameworks": [],
             "spoken_languages": [],
-            "years_of_experience": 5.0,
+            "years_of_experience": 1.5,
+            "seniority_level": "JUNIOR",
             "all_skills": [],
         }
 
-        # Extract years of experience (e.g., "5+ years", "4 years")
-        yr_match = re.search(r"(\d+)\+?\s*(?:years|yrs|წელი)", lower_text)
+        # Extract years of experience (e.g., "1.5 years", "1-2 years", "5+ years", "4 years")
+        yr_match = re.search(r"(\d+(?:\.\d+)?)\s*\+?\s*(?:years?|yrs?|წელი|წლიანი)", lower_text)
         if yr_match:
             taxonomy["years_of_experience"] = float(yr_match.group(1))
+        elif any(w in lower_text for w in ["portfolio project", "entry-level", "junior", "intern", "დამწყები"]):
+            taxonomy["years_of_experience"] = 1.5
+
+        # Infer seniority level from years
+        exp = taxonomy["years_of_experience"]
+        if exp <= 2.5:
+            taxonomy["seniority_level"] = "JUNIOR"
+        elif exp <= 5.0:
+            taxonomy["seniority_level"] = "MID"
+        elif exp <= 8.0:
+            taxonomy["seniority_level"] = "SENIOR"
+        else:
+            taxonomy["seniority_level"] = "LEAD"
 
         # Match QA/SDET taxonomy categories
         for category, items in QA_TAXONOMY_CATALOG.items():
@@ -203,6 +217,70 @@ Markdown:
 
         return required
 
+    def validate_seniority_gate(
+        self,
+        candidate_years: float,
+        candidate_seniority: str,
+        job_title: str,
+        job_description: str,
+    ) -> Tuple[bool, str]:
+        """
+        Enforces strict seniority and experience boundaries:
+        - If candidate has <= 2.5 years of experience (Junior to early Mid):
+          * Immediately disqualifies "Senior", "Lead", "Principal", "Head of", "Staff", "Director", "Architect", "Sr."
+          * Disqualifies jobs requiring > (candidate_years + 1.0) years of experience.
+        - If candidate has <= 5.0 years:
+          * Disqualifies "Principal", "Staff", "Head of", "Director", "Chief".
+        Returns (is_allowed, reason).
+        """
+        combined = f"{job_title}\n{job_description}".lower()
+        title_lower = job_title.lower()
+
+        # Check job title for senior/lead level
+        senior_lead_titles = ["lead", "principal", "head of", "staff", "director", "architect", "chief", "vp", "manager"]
+        senior_titles = ["senior", "sr.", "sr "]
+
+        # Extract explicit years of experience required by job
+        job_req_years: Optional[float] = None
+        yr_m = re.search(r"(\d+(?:\.\d+)?)\s*\+?\s*(?:years?|yrs?|წელი|წლიანი)(?:\s+of)?\s*(?:experience|გამოცდილება)?", combined)
+        if yr_m:
+            try:
+                job_req_years = float(yr_m.group(1))
+            except Exception:
+                pass
+
+        # Gate 1: Candidate is Junior or early Mid (<= 2.5 years)
+        if candidate_years <= 2.5:
+            for s in senior_lead_titles + senior_titles:
+                pattern = r"\b" + re.escape(s) + r"\b"
+                if re.search(pattern, title_lower):
+                    return (
+                        False,
+                        f"Disqualified by Seniority Gate: Role requires {s.title()}, but candidate is Junior-Mid ({candidate_years:.1f} yrs exp).",
+                    )
+            if job_req_years is not None and job_req_years > (candidate_years + 1.0):
+                return (
+                    False,
+                    f"Disqualified by Experience Gate: Role requires {job_req_years:g}+ years exp, exceeding candidate's {candidate_years:.1f} yrs.",
+                )
+
+        # Gate 2: Candidate is Mid level (2.5 to 5.0 years)
+        elif candidate_years <= 5.0:
+            for s in senior_lead_titles:
+                pattern = r"\b" + re.escape(s) + r"\b"
+                if re.search(pattern, title_lower):
+                    return (
+                        False,
+                        f"Disqualified by Seniority Gate: Role requires executive/lead {s.title()}, but candidate is Mid-level ({candidate_years:.1f} yrs exp).",
+                    )
+            if job_req_years is not None and job_req_years > (candidate_years + 2.5):
+                return (
+                    False,
+                    f"Disqualified by Experience Gate: Role requires {job_req_years:g}+ years exp, exceeding candidate's {candidate_years:.1f} yrs.",
+                )
+
+        return (True, "Seniority and experience requirements satisfied.")
+
     def evaluate_job(
         self,
         title: str,
@@ -216,6 +294,7 @@ Markdown:
         Returns:
           (suitability_score, new_status, match_rationale, matched_skills, missing_skills)
         - Preserves "FILTERED_OUT" if already filtered out by market/language gate.
+        - Enforces Seniority Gate: disqualifies Senior/Lead roles for Junior/Mid candidates.
         - Promotes listings with suitability_score >= 75.0 to "STAGED" ("Ready to Apply / Staging").
         """
         if current_status == "FILTERED_OUT":
@@ -223,6 +302,19 @@ Markdown:
                 0.0,
                 "FILTERED_OUT",
                 existing_rationale or "Requires local language",
+                [],
+                [],
+            )
+
+        # Seniority validation
+        candidate_years = float(parsed_skills.get("years_of_experience") or 1.5)
+        candidate_seniority = str(parsed_skills.get("seniority_level") or "JUNIOR")
+        sen_passed, sen_reason = self.validate_seniority_gate(candidate_years, candidate_seniority, title, description)
+        if not sen_passed:
+            return (
+                0.0,
+                "FILTERED_OUT",
+                sen_reason,
                 [],
                 [],
             )

@@ -5,6 +5,7 @@ from sqlalchemy import event, inspect
 from ..config import DATABASE_URL
 from .models import (
     User,
+    UserOTP,
     ApplicationTracker,
     InterviewRound,
     SkillActionPlan,
@@ -39,7 +40,7 @@ def init_db() -> None:
         needs_upgrade = False
         if inspector.has_table("job_postings"):
             cols = {c["name"] for c in inspector.get_columns("job_postings")}
-            if "channel" not in cols or "filter_out_reason" not in cols or "salary_is_estimated" not in cols or "delivery_channel" not in cols:
+            if "channel" not in cols or "filter_out_reason" not in cols or "salary_is_estimated" not in cols or "delivery_channel" not in cols or "deadline_text" not in cols or "is_link_live" not in cols:
                 needs_upgrade = True
         if inspector.has_table("application_records"):
             app_cols = {c["name"] for c in inspector.get_columns("application_records")}

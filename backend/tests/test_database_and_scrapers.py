@@ -44,10 +44,13 @@ def test_bug2_canonical_hostname_portal_detection():
 
 
 def test_upload_skills_endpoint_and_candidate_profile_db():
-    sample_skills_md = """# Alex Mercer — Lead QA Automation Engineer & SDET
+    from backend.app.config import SKILLS_MD_FILE
+    original_text = SKILLS_MD_FILE.read_text(encoding="utf-8") if SKILLS_MD_FILE.exists() else None
+    try:
+        sample_skills_md = """# Giorgi Shakiashvili — QA Automation Engineer
 
 ## Summary
-Senior QA Automation Engineer with 6+ years of experience building scalable test suites.
+QA Automation Engineer with 1.5 years of experience building scalable test suites.
 
 ## Core Skills
 - **Automation:** Playwright, Selenium, Cypress, Appium, PyTest, JUnit
@@ -55,25 +58,28 @@ Senior QA Automation Engineer with 6+ years of experience building scalable test
 - **API & Performance:** Postman, REST Assured, REST API, k6, JMeter
 - **CI/CD & DevOps:** GitHub Actions, GitLab CI, Docker, Kubernetes
 """
-    files = {"file": ("skills.md", io.BytesIO(sample_skills_md.encode("utf-8")), "text/markdown")}
-    res = client.post("/api/profile/upload-skills", files=files)
-    assert res.status_code == 200
-    data = res.json()
-    assert data["status"] == "success"
-    parsed = data["parsed_skills"]
-    assert "Playwright" in parsed["qa_automation"]
-    assert "Selenium" in parsed["qa_automation"]
-    assert "Cypress" in parsed["qa_automation"]
-    assert "PyTest" in parsed["qa_automation"]
-    assert "Python" in parsed["languages"]
-    assert "TypeScript" in parsed["languages"]
-    assert "SQL" in parsed["languages"]
-    assert "Postman" in parsed["api_and_performance"]
-    assert "k6" in parsed["api_and_performance"]
-    assert "GitHub Actions" in parsed["cicd_and_devops"]
-    assert "Docker" in parsed["cicd_and_devops"]
-    assert "Kubernetes" in parsed["cicd_and_devops"]
-    assert parsed["years_of_experience"] == 6.0
+        files = {"file": ("skills.md", io.BytesIO(sample_skills_md.encode("utf-8")), "text/markdown")}
+        res = client.post("/api/profile/upload-skills", files=files)
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "success"
+        parsed = data["parsed_skills"]
+        assert "Playwright" in parsed["qa_automation"]
+        assert "Selenium" in parsed["qa_automation"]
+        assert "Cypress" in parsed["qa_automation"]
+        assert "PyTest" in parsed["qa_automation"]
+        assert "Python" in parsed["languages"]
+        assert "TypeScript" in parsed["languages"]
+        assert "SQL" in parsed["languages"]
+        assert "Postman" in parsed["api_and_performance"]
+        assert "k6" in parsed["api_and_performance"]
+        assert "GitHub Actions" in parsed["cicd_and_devops"]
+        assert "Docker" in parsed["cicd_and_devops"]
+        assert "Kubernetes" in parsed["cicd_and_devops"]
+        assert parsed["years_of_experience"] == 1.5
+    finally:
+        if original_text is not None:
+            SKILLS_MD_FILE.write_text(original_text, encoding="utf-8")
 
     # Verify persistence in relational CandidateProfile table
     with Session(engine) as session:

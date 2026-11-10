@@ -26,14 +26,16 @@ class ExtractedSkillsTaxonomy(BaseModel):
 
 
 class ParsedCandidateProfileSchema(BaseModel):
-    full_name: str = "Alex Mercer"
-    headline: str = "Senior QA Automation Engineer & SDET"
-    email: str = "alex.mercer.dev@gmail.com"
-    phone: str = "+49 152 98765432"
-    location: str = "Berlin / Tbilisi (Remote)"
-    github_url: str = "https://github.com/alex-mercer-automation"
-    linkedin_url: str = "https://linkedin.com/in/alex-mercer-qa"
-    experience_years: float = 5.0
+    full_name: str = "Giorgi Shakiashvili"
+    headline: str = "QA Engineer"
+    email: str = "giorgi.shakiashvili.dev@gmail.com"
+    phone: str = "+995 599 123456"
+    location: str = "Tbilisi, Georgia (Remote / Abroad)"
+    github_url: str = "https://github.com/shakiashvili"
+    linkedin_url: str = "https://linkedin.com/in/giorgi-shakiashvili"
+    experience_years: float = 1.5
+    seniority_level: str = "JUNIOR"
+    target_industry: str = "qa_tech"
     parsed_skills: ExtractedSkillsTaxonomy = Field(default_factory=ExtractedSkillsTaxonomy)
 
 
@@ -59,30 +61,59 @@ class ProfileService:
 
     def extract_structured_profile(self, raw_markdown: str) -> ParsedCandidateProfileSchema:
         text = raw_markdown or ""
+        lower_text = text.lower()
 
         # Deterministic extraction baseline
         taxonomy_dict = matcher_service.parse_skills_markdown(text)
-        full_name = "Alex Mercer"
-        headline = "Senior QA Automation Engineer & SDET"
-        email = "alex.mercer.dev@gmail.com"
-        phone = "+49 152 98765432"
-        location = "Berlin / Tbilisi (Remote)"
-        github_url = "https://github.com/alex-mercer-automation"
-        linkedin_url = "https://linkedin.com/in/alex-mercer-qa"
+        full_name = "Giorgi Shakiashvili"
+        target_industry = "qa_tech"
+        headline = "QA Engineer"
+        email = "giorgi.shakiashvili.dev@gmail.com"
+        phone = "+995 599 123456"
+        location = "Tbilisi, Georgia (Remote / Abroad)"
+        github_url = "https://github.com/shakiashvili"
+        linkedin_url = "https://linkedin.com/in/giorgi-shakiashvili"
 
-        for line in text.splitlines():
-            s = line.strip()
-            if s.startswith("# "):
-                parts = re.split(r"\s+[—–-]\s+", s[2:].strip(), maxsplit=1)
-                if parts[0]:
-                    full_name = parts[0].strip()
-                if len(parts) > 1:
-                    headline = parts[1].strip()
-                break
-
-        name_m = re.search(r"(?:Full Name|სახელი და გვარი|Name)\**\s*:\**\s*([^\n]+)", text, re.I)
+        # 1. Name extraction
+        name_m = re.search(r"(?:\*\*Author:\*\*|\*\*Name:\*\*|Full Name|Author|Candidate|სახელი და გვარი|Name)\**\s*:\**\s*([^\n\r*]+)", text, re.I)
         if name_m:
-            full_name = name_m.group(1).strip()
+            candidate_cand = name_m.group(1).strip()
+            if len(candidate_cand) > 2 and not any(w in candidate_cand.lower() for w in ["http", "api", "case study"]):
+                full_name = candidate_cand
+        else:
+            # Check # heading, but skip if it is a project / case study title
+            for line in text.splitlines():
+                s = line.strip()
+                if s.startswith("# "):
+                    candidate_cand = s[2:].strip()
+                    parts = re.split(r"\s+[—–-]\s+", candidate_cand, maxsplit=1)
+                    cand_first = parts[0].strip()
+                    # Skip project / case study headings
+                    if not any(w in cand_first.lower() for w in ["api", "case study", "project", "test", "sticker", "portfolio", "guide", "docs", "documentation"]):
+                        full_name = cand_first
+                    break
+
+        # 2. Industry & Headline extraction
+        if any(w in lower_text for w in ["receptionist", "hotel", "opera pms", "fidelio", "hospitality", "guest relations", "მიმღები"]):
+            target_industry = "receptionist_hospitality"
+            headline = "Front Desk Receptionist & Hospitality Specialist"
+        elif any(w in lower_text for w in ["patient coordinator", "medical receptionist", "hospital", "clinic", "ehr", "emr", "სამედიცინო"]):
+            target_industry = "healthcare_hospital"
+            headline = "Hospital Patient Coordinator & Medical Receptionist"
+        elif any(w in lower_text for w in ["customer service", "client care", "zendesk", "intercom", "omnichannel support", "მომხმარებელთა მხარდაჭერა"]):
+            target_industry = "customer_service"
+            headline = "Customer Service & Client Care Specialist"
+        else:
+            target_industry = "qa_tech"
+            if any(w in lower_text for w in ["portfolio project", "entry-level", "starter", "junior", "1.5"]):
+                headline = "QA Engineer (Test Design & API Quality)"
+            else:
+                headline = "QA Automation Engineer"
+
+        # Check explicit headline in markdown
+        headline_m = re.search(r"(?:Headline|Target Role|პოზიცია|როლი)\**\s*:\**\s*([^\n]+)", text, re.I)
+        if headline_m:
+            headline = headline_m.group(1).strip()
 
         email_m = re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", text)
         if email_m:
@@ -110,12 +141,19 @@ class ProfileService:
             if s.startswith(("- ", "* ")) and any(ch.isdigit() for ch in s):
                 achievements.append(re.sub(r"^[-*]\s*", "", s))
 
+        exp_years = float(taxonomy_dict.get("years_of_experience") or 1.5)
+        seniority_level = taxonomy_dict.get("seniority_level") or ("JUNIOR" if exp_years <= 2.5 else "MID")
+
         # Live Gemini 2.5 Flash structured extraction with Pydantic schema if key is configured
         if self.client:
             try:
                 from google.genai import types
-                prompt = f"""Extract the candidate profile and technical QA/SDET taxonomy from the following markdown.
-Strictly ground all extracted fields in the provided text without inventing skills or metrics.
+                prompt = f"""Extract the candidate profile and technical/domain taxonomy from the following markdown.
+CRITICAL INSTRUCTIONS:
+- Candidate full_name: Look for Author, Name, or candidate bio. Do NOT use document or project titles (such as "KLIPY Sticker Search API") as the candidate's name.
+- Experience years: Ground accurately. If the document describes a starter portfolio project, entry-level, or 1.5 years experience, reflect that (e.g. 1.5 years). Never hallucinate 5+ years or Senior level unless explicitly stated.
+- Seniority level: Must be "JUNIOR", "MID", "SENIOR", or "LEAD".
+- Target industry: One of "qa_tech", "receptionist_hospitality", "customer_service", "healthcare_hospital".
 
 Markdown:
 {text[:4500]}
@@ -148,7 +186,9 @@ Markdown:
             location=location,
             github_url=github_url,
             linkedin_url=linkedin_url,
-            experience_years=float(taxonomy_dict.get("years_of_experience", 5.0)),
+            experience_years=exp_years,
+            seniority_level=seniority_level,
+            target_industry=target_industry,
             parsed_skills=ExtractedSkillsTaxonomy(
                 qa_automation=taxonomy_dict.get("qa_automation", []),
                 manual_qa=taxonomy_dict.get("manual_qa", []),
@@ -157,7 +197,7 @@ Markdown:
                 cicd_and_devops=taxonomy_dict.get("cicd_and_devops", []),
                 tools=taxonomy_dict.get("tools", []),
                 frameworks=taxonomy_dict.get("frameworks", []),
-                spoken_languages=taxonomy_dict.get("spoken_languages", ["English"]),
+                spoken_languages=taxonomy_dict.get("spoken_languages", ["English", "Georgian"]),
                 achievements=achievements,
                 all_skills=taxonomy_dict.get("all_skills", []),
             ),
@@ -176,6 +216,9 @@ Markdown:
         extracted = self.extract_structured_profile(raw_markdown)
         skills_payload: Dict[str, Any] = extracted.parsed_skills.model_dump()
         skills_payload["years_of_experience"] = extracted.experience_years
+        skills_payload["seniority_level"] = extracted.seniority_level
+        skills_payload["target_industry"] = extracted.target_industry
+        skills_payload["headline"] = extracted.headline
 
         with Session(engine, expire_on_commit=False) as session:
             profile = session.exec(
@@ -194,8 +237,8 @@ Markdown:
             cand = existing_vault.setdefault("candidate", {})
             cand["full_name"] = extracted.full_name
             parts = extracted.full_name.split()
-            cand["first_name"] = parts[0] if parts else "Alex"
-            cand["last_name"] = " ".join(parts[1:]) if len(parts) > 1 else ""
+            cand["first_name"] = parts[0] if parts else "Giorgi"
+            cand["last_name"] = " ".join(parts[1:]) if len(parts) > 1 else "Shakiashvili"
             cand["headline"] = extracted.headline
             cand["email"] = extracted.email
             cand["phone"] = extracted.phone

@@ -34,6 +34,28 @@ async function checkBackendStatus(apiBaseUrl) {
       badge.classList.add("online");
       text.textContent = data.gemini.connected ? "Gemini Live" : "FastAPI Online";
       text.title = `Model: ${data.gemini.model} (${data.gemini.mode})`;
+
+      // Fetch dynamic profile
+      try {
+        const profRes = await fetch(`${baseUrl}/api/profile`);
+        if (profRes.ok) {
+          const profData = await profRes.json();
+          if (profData.full_name) {
+            const nameEl = document.getElementById("cand-name");
+            if (nameEl) nameEl.textContent = profData.full_name;
+            const avatarEl = document.querySelector(".candidate-avatar");
+            if (avatarEl) {
+              const initials = profData.full_name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
+              avatarEl.textContent = initials || "GS";
+            }
+          }
+          const headline = (profData.parsed_skills && profData.parsed_skills.headline) || profData.headline;
+          if (headline) {
+            const titleEl = document.getElementById("cand-title");
+            if (titleEl) titleEl.textContent = headline;
+          }
+        }
+      } catch (err) {}
     } else {
       throw new Error();
     }
