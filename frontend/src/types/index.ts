@@ -294,3 +294,85 @@ export interface ApplicationItem {
   applied_date?: string | null;
   notes?: string | null;
 }
+
+export interface UserProfile {
+  id: number;
+  email: string;
+  full_name: string;
+  is_active: boolean;
+  is_admin: boolean;
+  has_gmail_oauth: boolean;
+}
+
+export interface AuthResponse {
+  access_token: string;
+  token_type: string;
+  user: UserProfile;
+}
+
+export interface Milestone {
+  day: number;
+  task: string;
+  completed: boolean;
+  resource_url?: string;
+}
+
+export interface SkillActionPlan {
+  id: number;
+  skill_name: string;
+  category: string;
+  days_to_learn: number;
+  milestones: Milestone[];
+  is_completed: boolean;
+  progress_percent: number;
+}
+
+export interface StarStrategy {
+  situation: string;
+  task: string;
+  action: string;
+  result: string;
+}
+
+export interface PredictedQuestion {
+  id: number;
+  category: 'Technical' | 'Behavioral' | 'Scenario' | string;
+  question: string;
+  star_strategy: StarStrategy;
+}
+
+export interface InterviewBrief {
+  round_id: number;
+  application_id: number;
+  company_name: string;
+  job_title: string;
+  round_type: string;
+  status: string;
+  company_intel: string;
+  predicted_questions: PredictedQuestion[];
+  candidate_notes: string;
+}
+
+export interface PlatformMetrics {
+  total_users: number;
+  active_users: number;
+  admin_users: number;
+  total_tracked_applications: number;
+  applications_by_status: Record<string, number>;
+  interview_conversion_rate: number;
+  total_discovered_jobs: number;
+  gemini_api_status: string;
+  database_status: string;
+}
+
+export interface AdminUser {
+  id: number;
+  email: string;
+  full_name: string;
+  is_active: boolean;
+  is_admin: boolean;
+  created_at: string;
+  application_count: number;
+  has_gmail_oauth: boolean;
+}
+

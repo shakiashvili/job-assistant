@@ -213,7 +213,7 @@ class ApplicationCreate(BaseModel):
     company: str
     role: str
     portal: Optional[str] = "generic"
-    url: str
+    url: Optional[str] = None
     status: Optional[str] = "Discovered"
     match_score: Optional[int] = None
     ats_score: Optional[int] = None

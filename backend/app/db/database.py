@@ -3,7 +3,15 @@ from typing import Generator
 from sqlmodel import SQLModel, Session, create_engine
 from sqlalchemy import event, inspect
 from ..config import DATABASE_URL
-from .models import CandidateProfile, JobPosting, ApplicationRecord  # noqa: F401
+from .models import (
+    User,
+    ApplicationTracker,
+    InterviewRound,
+    SkillActionPlan,
+    CandidateProfile,
+    JobPosting,
+    ApplicationRecord,
+)  # noqa: F401
 
 logger = logging.getLogger(__name__)
 

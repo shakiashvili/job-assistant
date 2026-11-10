@@ -1,11 +1,79 @@
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
-from sqlmodel import SQLModel, Field, Column
+from sqlmodel import SQLModel, Field, Column, Relationship
 from sqlalchemy import JSON, Text, UniqueConstraint
 
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class User(SQLModel, table=True):
+    __tablename__ = "users"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    email: str = Field(unique=True, index=True)
+    hashed_password: str
+    full_name: str = Field(default="Candidate")
+    is_active: bool = Field(default=True)
+    is_admin: bool = Field(default=False)
+    gmail_oauth_token: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utc_now)
+
+    # Relationships
+    applications: List["ApplicationTracker"] = Relationship(back_populates="user")
+    action_plans: List["SkillActionPlan"] = Relationship(back_populates="user")
+
+
+class ApplicationTracker(SQLModel, table=True):
+    __tablename__ = "application_tracker"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
+    company_name: str = Field(index=True)
+    job_title: str
+    job_url: Optional[str] = None
+    portal: str = Field(default="custom")
+    status: str = Field(default="STAGED", index=True)  # STAGED, APPLIED, HR_SCREEN, TECH_INTERVIEW, FINAL_ROUND, OFFER, REJECTED
+    salary_offered: Optional[str] = None
+    cv_pdf_path: Optional[str] = None
+    cover_letter_text: Optional[str] = None
+    applied_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    is_deleted: bool = Field(default=False, index=True)
+
+    user: Optional[User] = Relationship(back_populates="applications")
+    interviews: List["InterviewRound"] = Relationship(back_populates="application")
+
+
+class InterviewRound(SQLModel, table=True):
+    __tablename__ = "interview_rounds"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    application_id: int = Field(foreign_key="application_tracker.id", index=True)
+    round_type: str = Field(default="HR_SCREEN")  # HR_SCREEN, TECH_INTERVIEW, FINAL_ROUND, SYSTEM_DESIGN
+    scheduled_at: Optional[datetime] = None
+    company_intel_summary: Optional[str] = None
+    predicted_questions: Optional[List[Dict[str, Any]]] = Field(default=[], sa_column=Column(JSON))
+    candidate_notes: Optional[str] = None
+    status: str = Field(default="SCHEDULED")  # SCHEDULED, COMPLETED, CANCELLED
+
+    application: Optional[ApplicationTracker] = Relationship(back_populates="interviews")
+
+
+class SkillActionPlan(SQLModel, table=True):
+    __tablename__ = "skill_action_plans"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
+    skill_name: str = Field(index=True)  # e.g. "Docker", "k6 Performance Testing"
+    category: str = Field(default="AUTOMATION")  # AUTOMATION, API, DEVOPS, CODING
+    days_to_learn: int = Field(default=7)
+    milestones: List[Dict[str, Any]] = Field(default=[], sa_column=Column(JSON))
+    is_completed: bool = Field(default=False)
+    created_at: datetime = Field(default_factory=utc_now)
+
+    user: Optional[User] = Relationship(back_populates="action_plans")
 
 
 class CandidateProfile(SQLModel, table=True):
@@ -82,4 +150,3 @@ class ApplicationRecord(SQLModel, table=True):
 
 # Backwards compatibility and master prompt aliases
 JobVacancy = JobPosting
-ApplicationTracker = ApplicationRecord

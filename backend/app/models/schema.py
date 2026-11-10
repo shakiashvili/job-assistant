@@ -1,17 +1,23 @@
 from ..db.models import (
+    User,
+    ApplicationTracker,
+    InterviewRound,
+    SkillActionPlan,
     CandidateProfile,
     JobPosting,
     JobVacancy,
     ApplicationRecord,
-    ApplicationTracker,
     utc_now,
 )
 
 __all__ = [
+    "User",
+    "ApplicationTracker",
+    "InterviewRound",
+    "SkillActionPlan",
     "CandidateProfile",
     "JobPosting",
     "JobVacancy",
     "ApplicationRecord",
-    "ApplicationTracker",
     "utc_now",
 ]

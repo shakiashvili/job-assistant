@@ -9,11 +9,26 @@ import {
   PortalVacancyItem,
   SkillsPresetItem,
   DbJobPosting,
-  ParsedSkillsTaxonomy
+  ParsedSkillsTaxonomy,
+  UserProfile,
+  AuthResponse,
+  SkillActionPlan,
+  InterviewBrief,
+  PlatformMetrics,
+  AdminUser,
 } from '../types';
 
 export const BACKEND_ORIGIN = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 const API_BASE = `${BACKEND_ORIGIN}/api`;
+
+export function getAuthHeaders(): HeadersInit {
+  const token = localStorage.getItem('talentflow_token');
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
+}
 
 export async function fetchHealth(): Promise<{ status: string; gemini: { connected: boolean; model: string; mode: string } }> {
   const res = await fetch(`${API_BASE}/health`);
@@ -238,6 +253,176 @@ export async function updateApplication(id: string, update: Partial<ApplicationI
 export async function deleteApplication(id: string): Promise<void> {
   const res = await fetch(`${API_BASE}/applications/${id}`, {
     method: 'DELETE',
+    headers: getAuthHeaders(),
   });
   if (!res.ok) throw new Error('Failed to delete application');
 }
+
+// --- Authentication & User API ---
+
+export async function loginUser(email: string, password: string): Promise<AuthResponse> {
+  const res = await fetch(`${API_BASE}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Login failed' }));
+    throw new Error(err.detail || 'Invalid email or password');
+  }
+  const data: AuthResponse = await res.json();
+  localStorage.setItem('talentflow_token', data.access_token);
+  return data;
+}
+
+export async function registerUser(email: string, password: string, full_name: string): Promise<AuthResponse> {
+  const res = await fetch(`${API_BASE}/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password, full_name }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Registration failed' }));
+    throw new Error(err.detail || 'Registration failed');
+  }
+  const data: AuthResponse = await res.json();
+  localStorage.setItem('talentflow_token', data.access_token);
+  return data;
+}
+
+export async function fetchCurrentUser(): Promise<UserProfile> {
+  const res = await fetch(`${API_BASE}/auth/me`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error('Unauthorized');
+  return res.json();
+}
+
+export function logoutUser(): void {
+  localStorage.removeItem('talentflow_token');
+}
+
+// --- Dedicated Admin API ---
+
+export async function fetchAdminUsers(): Promise<AdminUser[]> {
+  const res = await fetch(`${API_BASE}/admin/users`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to load admin user list');
+  return res.json();
+}
+
+export async function fetchAdminMetrics(): Promise<PlatformMetrics> {
+  const res = await fetch(`${API_BASE}/admin/metrics`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to load admin metrics');
+  return res.json();
+}
+
+export async function updateAdminUser(userId: number, updates: { is_active?: boolean; is_admin?: boolean }): Promise<AdminUser> {
+  const res = await fetch(`${API_BASE}/admin/users/${userId}`, {
+    method: 'PATCH',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(updates),
+  });
+  if (!res.ok) throw new Error('Failed to update user');
+  return res.json();
+}
+
+export async function deactivateAdminUser(userId: number): Promise<void> {
+  const res = await fetch(`${API_BASE}/admin/users/${userId}`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to deactivate user');
+}
+
+// --- Gmail OAuth & Dispatch API ---
+
+export async function fetchGoogleLoginUrl(): Promise<string> {
+  const res = await fetch(`${API_BASE}/auth/google/login`);
+  if (!res.ok) throw new Error('Failed to get Google login URL');
+  const data = await res.json();
+  return data.authorization_url;
+}
+
+export async function dispatchApplicationEmail(
+  appId: string,
+  params: { recipient_email?: string; subject?: string; body_text?: string; mode: 'draft' | 'send' }
+): Promise<any> {
+  const res = await fetch(`${API_BASE}/applications/${appId}/send-email`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) throw new Error('Failed to dispatch application email');
+  return res.json();
+}
+
+// --- Interview Preparation Copilot API ---
+
+export async function prepareInterview(appId: string, roundType: string = 'HR_SCREEN'): Promise<InterviewBrief> {
+  const res = await fetch(`${API_BASE}/applications/${appId}/prepare-interview`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ round_type: roundType }),
+  });
+  if (!res.ok) throw new Error('Failed to generate interview intelligence');
+  return res.json();
+}
+
+export async function fetchApplicationInterviews(appId: string): Promise<any[]> {
+  const res = await fetch(`${API_BASE}/applications/${appId}/interviews`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function updateInterviewNotes(appId: string, roundId: number, notes: string, status?: string): Promise<any> {
+  const res = await fetch(`${API_BASE}/applications/${appId}/interviews/${roundId}`, {
+    method: 'PATCH',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ candidate_notes: notes, status }),
+  });
+  if (!res.ok) throw new Error('Failed to save interview notes');
+  return res.json();
+}
+
+// --- Skill Gap Action Plans API ---
+
+export async function fetchActionPlans(): Promise<SkillActionPlan[]> {
+  const res = await fetch(`${API_BASE}/action-plans`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to load action plans');
+  return res.json();
+}
+
+export async function generateActionPlans(): Promise<SkillActionPlan[]> {
+  const res = await fetch(`${API_BASE}/profile/generate-action-plan`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to generate action plans');
+  return res.json();
+}
+
+export async function toggleMilestone(planId: number, milestoneIndex: number): Promise<SkillActionPlan> {
+  const res = await fetch(`${API_BASE}/action-plans/${planId}/milestones/${milestoneIndex}`, {
+    method: 'PATCH',
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to toggle milestone');
+  return res.json();
+}
+
+export async function deleteActionPlan(planId: number): Promise<void> {
+  const res = await fetch(`${API_BASE}/action-plans/${planId}`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to delete action plan');
+}
+

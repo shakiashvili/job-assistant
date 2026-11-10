@@ -13,10 +13,21 @@ import {
   Clock,
   DollarSign,
   FileText,
-  Edit3
+  Edit3,
+  Sparkles,
+  Mail,
+  Send,
 } from 'lucide-react';
-import { fetchApplications, createApplication, updateApplication, deleteApplication, BACKEND_ORIGIN } from '../services/api';
+import {
+  fetchApplications,
+  createApplication,
+  updateApplication,
+  deleteApplication,
+  BACKEND_ORIGIN,
+} from '../services/api';
 import { ApplicationItem } from '../types';
+import { InterviewPrepModal } from './InterviewPrepModal';
+import { EmailDispatchModal } from './EmailDispatchModal';
 
 export const KANBAN_STAGES = [
   'Discovered',
@@ -32,6 +43,10 @@ export const ApplicationTracker: React.FC = () => {
   const [applications, setApplications] = useState<ApplicationItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+
+  // Modal states for Copilot & Email
+  const [prepModalApp, setPrepModalApp] = useState<ApplicationItem | null>(null);
+  const [emailModalApp, setEmailModalApp] = useState<ApplicationItem | null>(null);
 
   // Interview Notes Modal State
   const [editingApp, setEditingApp] = useState<ApplicationItem | null>(null);
@@ -81,17 +96,17 @@ export const ApplicationTracker: React.FC = () => {
 
     try {
       const updated = await updateApplication(appId, { status: targetStage });
-      setApplications(applications.map(a => a.id === appId ? updated : a));
+      setApplications(applications.map((a) => (a.id === appId ? updated : a)));
     } catch (err) {
       console.error(err);
     }
   };
 
   const handleDelete = async (appId: string) => {
-    if (!confirm('Remove this application from the tracker?')) return;
+    if (!window.confirm('Are you sure you want to delete this tracked application?')) return;
     try {
       await deleteApplication(appId);
-      setApplications(applications.filter(a => a.id !== appId));
+      setApplications(applications.filter((a) => a.id !== appId));
     } catch (err) {
       console.error(err);
     }
@@ -110,7 +125,7 @@ export const ApplicationTracker: React.FC = () => {
         interview_date: modalInterviewDate,
         notes: modalNotes,
       });
-      setApplications(applications.map(a => a.id === editingApp.id ? updated : a));
+      setApplications(applications.map((a) => (a.id === editingApp.id ? updated : a)));
       setEditingApp(null);
     } catch (err) {
       console.error(err);
@@ -159,31 +174,44 @@ export const ApplicationTracker: React.FC = () => {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-sm">
         <div>
-          <h2 className="text-xl font-bold text-white flex items-center gap-2">
-            <LayoutDashboard className="w-5 h-5 text-sky-400" />
-            Visual Kanban Application Pipeline
-          </h2>
-          <p className="text-sm text-slate-400 mt-1">
-            Track applications across <strong>Discovered &rarr; Applied &rarr; HR Screening &rarr; Technical Interview &rarr; Offer / Rejected</strong> with 1-click stage advancement.
+          <div className="flex items-center gap-2">
+            <h2 className="text-lg sm:text-xl font-bold text-white flex items-center gap-2">
+              <LayoutDashboard className="w-5 h-5 text-sky-400" />
+              Visual Kanban Application Pipeline
+            </h2>
+            <span className="hidden sm:inline-block text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-sky-950 text-sky-300 border border-sky-800">
+              Mobile Touch Ready
+            </span>
+          </div>
+          <p className="text-xs sm:text-sm text-slate-400 mt-1">
+            Track applications across <strong>Discovered &rarr; Applied &rarr; HR Screening &rarr; Technical Interview &rarr; Offer / Rejected</strong> with 1-click stage advancement, interview prep, and Gmail dispatch.
           </p>
         </div>
 
         <button
           onClick={() => setIsAddModalOpen(true)}
-          className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold text-white bg-sky-600 hover:bg-sky-500 shadow-lg shadow-sky-600/20 transition-all"
+          className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold text-white bg-sky-600 hover:bg-sky-500 shadow-lg shadow-sky-600/20 transition-all self-start sm:self-auto"
         >
           <Plus className="w-4 h-4" />
           <span>Add Application</span>
         </button>
       </div>
 
-      {/* 5-Column Kanban Board */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3.5">
+      {/* Mobile Swipe Peek Hint (visible only on mobile viewports) */}
+      <div className="lg:hidden text-center text-[11px] text-slate-400 font-medium">
+        &larr; Swipe horizontally to navigate stages &rarr;
+      </div>
+
+      {/* 5-Column Kanban Board with Mobile Horizontal Snap Scrolling */}
+      <div className="snap-x snap-mandatory flex overflow-x-auto space-x-4 pb-4 lg:grid lg:grid-cols-5 lg:gap-3.5 lg:space-x-0">
         {KANBAN_STAGES.map((stage, stageIdx) => {
           const colApps = applications.filter((a) => normalizeStage(a.status) === stage);
 
           return (
-            <div key={stage} className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-3.5 flex flex-col min-h-[540px]">
+            <div
+              key={stage}
+              className="snap-center w-[85vw] sm:w-80 lg:w-auto flex-shrink-0 bg-slate-900/60 border border-slate-800/80 rounded-2xl p-3.5 flex flex-col min-h-[540px]"
+            >
               {/* Column Header */}
               <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-800">
                 <div className="flex items-center gap-1.5">
@@ -200,7 +228,9 @@ export const ApplicationTracker: React.FC = () => {
               <div className="space-y-3 flex-1 overflow-y-auto pr-0.5">
                 {colApps.map((app) => {
                   const pdfUrl = app.cv_pdf_url
-                    ? (app.cv_pdf_url.startsWith('http') ? app.cv_pdf_url : `${BACKEND_ORIGIN}${app.cv_pdf_url}`)
+                    ? app.cv_pdf_url.startsWith('http')
+                      ? app.cv_pdf_url
+                      : `${BACKEND_ORIGIN}${app.cv_pdf_url}`
                     : null;
 
                   return (
@@ -255,9 +285,28 @@ export const ApplicationTracker: React.FC = () => {
                         </p>
                       )}
 
-                      {/* Card Actions: PDF Download, Interview Modal, Delete, Stage Navigation */}
+                      {/* Card Actions: Interview Prep, Gmail Dispatch, PDF Download, Stage Shift */}
                       <div className="flex items-center justify-between pt-2 border-t border-slate-800/70 text-[10px]">
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1">
+                          {/* Interview Copilot Button */}
+                          <button
+                            onClick={() => setPrepModalApp(app)}
+                            title="Interview Copilot (10 Questions & STAR Frameworks)"
+                            className="p-1 rounded hover:bg-slate-800 text-indigo-400 hover:text-indigo-300 transition-colors flex items-center gap-0.5"
+                          >
+                            <Sparkles className="w-3.5 h-3.5" />
+                          </button>
+
+                          {/* Gmail Dispatch Button */}
+                          <button
+                            onClick={() => setEmailModalApp(app)}
+                            title="Save as Gmail Draft or Send via Email"
+                            className="p-1 rounded hover:bg-slate-800 text-rose-400 hover:text-rose-300 transition-colors"
+                          >
+                            <Mail className="w-3.5 h-3.5" />
+                          </button>
+
+                          {/* Resume Download */}
                           {pdfUrl && (
                             <a
                               href={pdfUrl}
@@ -269,24 +318,17 @@ export const ApplicationTracker: React.FC = () => {
                               <Download className="w-3.5 h-3.5" />
                             </a>
                           )}
+
+                          {/* Notes / Date Edit */}
                           <button
                             onClick={() => openInterviewModal(app)}
-                            title="Edit Interview Date & Notes"
+                            title="Edit Notes & Interview Date"
                             className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
                           >
                             <Calendar className="w-3.5 h-3.5" />
                           </button>
-                          {app.url && (
-                            <a
-                              href={app.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              title="Open Vacancy URL"
-                              className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-sky-400 transition-colors"
-                            >
-                              <ExternalLink className="w-3.5 h-3.5" />
-                            </a>
-                          )}
+
+                          {/* Delete */}
                           <button
                             onClick={() => handleDelete(app.id)}
                             title="Remove from board"
@@ -332,6 +374,30 @@ export const ApplicationTracker: React.FC = () => {
           );
         })}
       </div>
+
+      {/* Interview Prep Modal */}
+      {prepModalApp && (
+        <InterviewPrepModal
+          isOpen={Boolean(prepModalApp)}
+          onClose={() => setPrepModalApp(null)}
+          appId={prepModalApp.id}
+          companyName={prepModalApp.company}
+          jobTitle={prepModalApp.role}
+        />
+      )}
+
+      {/* Gmail Email Dispatch Modal */}
+      {emailModalApp && (
+        <EmailDispatchModal
+          isOpen={Boolean(emailModalApp)}
+          onClose={() => setEmailModalApp(null)}
+          appId={emailModalApp.id}
+          companyName={emailModalApp.company}
+          jobTitle={emailModalApp.role}
+          cvPdfPath={emailModalApp.cv_pdf_url}
+          onEmailSent={loadApps}
+        />
+      )}
 
       {/* Interview Date & Notes Modal */}
       {editingApp && (
@@ -380,7 +446,7 @@ export const ApplicationTracker: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleSaveInterviewModal}
-                  className="px-5 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold shadow-sm"
+                  className="px-5 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold"
                 >
                   Save Notes
                 </button>
@@ -393,9 +459,12 @@ export const ApplicationTracker: React.FC = () => {
       {/* Add Application Modal */}
       {isAddModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg p-6 space-y-4 shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h3 className="text-base font-bold text-white">Add Application to Pipeline</h3>
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <Building2 className="w-5 h-5 text-sky-400" />
+                Add New Tracked Application
+              </h3>
               <button onClick={() => setIsAddModalOpen(false)} className="text-slate-400 hover:text-white">
                 <X className="w-5 h-5" />
               </button>
@@ -403,13 +472,13 @@ export const ApplicationTracker: React.FC = () => {
 
             <form onSubmit={handleCreate} className="space-y-3.5 text-xs">
               <div>
-                <label className="block text-slate-400 uppercase font-semibold mb-1">Company</label>
+                <label className="block text-slate-400 uppercase font-semibold mb-1">Company Name</label>
                 <input
                   type="text"
                   required
                   value={newCompany}
                   onChange={(e) => setNewCompany(e.target.value)}
-                  placeholder="e.g. TBC Bank, MacPaw, Spotify"
+                  placeholder="e.g. MacPaw, Rooms Hotel, TBC"
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-sky-500"
                 />
               </div>
@@ -442,10 +511,14 @@ export const ApplicationTracker: React.FC = () => {
                   <label className="block text-slate-400 uppercase font-semibold mb-1">Pipeline Stage</label>
                   <select
                     value={newStatus}
-                    onChange={(e) => setNewStatus(e.target.value as any)}
+                    onChange={(e) => setNewStatus(e.target.value as KanbanStage)}
                     className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none"
                   >
-                    {KANBAN_STAGES.map(s => <option key={s} value={s}>{s}</option>)}
+                    {KANBAN_STAGES.map((st) => (
+                      <option key={st} value={st}>
+                        {st}
+                      </option>
+                    ))}
                   </select>
                 </div>
 
@@ -480,7 +553,7 @@ export const ApplicationTracker: React.FC = () => {
                     type="text"
                     value={newSalary}
                     onChange={(e) => setNewSalary(e.target.value)}
-                    placeholder="e.g. 5,000–7,000 GEL"
+                    placeholder="e.g. 5,000-7,000 GEL"
                     className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none"
                   />
                 </div>

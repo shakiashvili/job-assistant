@@ -12,23 +12,42 @@ import {
   Check,
   Copy,
   Building2,
-  Globe2
+  Globe2,
+  GraduationCap,
+  Shield,
+  LogIn,
+  LogOut,
+  Menu,
 } from 'lucide-react';
+import { UserProfile } from '../types';
+
+export type NavTab = 'audit' | 'vault' | 'variants' | 'tracker' | 'plans' | 'admin';
 
 interface NavbarProps {
-  activeTab: 'audit' | 'vault' | 'variants' | 'tracker';
-  setActiveTab: (tab: 'audit' | 'vault' | 'variants' | 'tracker') => void;
+  activeTab: NavTab;
+  setActiveTab: (tab: NavTab) => void;
   backendHealth: { connected: boolean; model: string; mode: string } | null;
+  currentUser: UserProfile | null;
+  onOpenAuth: () => void;
+  onLogout: () => void;
 }
 
-export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, backendHealth }) => {
+export const Navbar: React.FC<NavbarProps> = ({
+  activeTab,
+  setActiveTab,
+  backendHealth,
+  currentUser,
+  onOpenAuth,
+  onLogout,
+}) => {
   const [isShareOpen, setIsShareOpen] = useState(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [copiedCmd, setCopiedCmd] = useState(false);
 
   const gitCommands = `cd "C:\\Users\\giorg\\.gemini\\antigravity\\scratch\\job-application-assistant"
 git init
 git add .
-git commit -m "feat: Universal AI Job & CV Assistant (EN/KA + Multi-Industry)"
+git commit -m "feat: Mobile-First Career Platform with Auth, Admin Panel & Interview Copilot"
 git branch -M main
 # Create a new repo on https://github.com/new then run:
 git remote add origin https://github.com/YOUR_USERNAME/ai-job-application-assistant.git
@@ -40,11 +59,20 @@ git push -u origin main`;
     setTimeout(() => setCopiedCmd(false), 3000);
   };
 
+  const navItems: Array<{ id: NavTab; label: string; icon: React.FC<{ className?: string }>; adminOnly?: boolean }> = [
+    { id: 'tracker', label: 'Kanban Tracker', icon: LayoutDashboard },
+    { id: 'audit', label: 'Audit & Feed', icon: Compass },
+    { id: 'plans', label: 'Action Plans', icon: GraduationCap },
+    { id: 'vault', label: 'Profile Vault', icon: User },
+    { id: 'variants', label: 'CV Variants', icon: FileText },
+    { id: 'admin', label: 'Admin Panel', icon: Shield, adminOnly: true },
+  ];
+
   return (
     <>
-      <header className="border-b border-slate-800/80 bg-slate-950/90 backdrop-blur-xl sticky top-0 z-50 shadow-lg shadow-black/20">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex flex-wrap items-center justify-between gap-3">
-          {/* Brand — Never wraps awkwardly or overflows */}
+      <header className="border-b border-slate-800/80 bg-slate-950/95 backdrop-blur-xl sticky top-0 z-40 shadow-lg shadow-black/20">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between gap-3">
+          {/* Brand */}
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-sky-500 via-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-sky-500/25 flex-shrink-0">
               <Bot className="w-5 h-5 text-white" />
@@ -55,102 +83,165 @@ git push -u origin main`;
                   TalentFlow AI
                 </span>
                 <span className="text-[10px] font-bold uppercase tracking-wider bg-sky-950/90 text-sky-300 border border-sky-700/60 px-2 py-0.5 rounded-full whitespace-nowrap">
-                  Enterprise HITL v2.0
+                  Mobile Pro v3.0
                 </span>
-                <span className="hidden xl:inline-flex items-center gap-1 text-[10px] font-semibold bg-emerald-950/80 text-emerald-300 border border-emerald-800/60 px-2 py-0.5 rounded-full whitespace-nowrap">
-                  🇬🇧 EN / 🇬🇪 KA ქართული
-                </span>
+                {currentUser?.is_admin && (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-amber-950/80 text-amber-300 border border-amber-800/60 px-2 py-0.5 rounded-full whitespace-nowrap">
+                    <Shield className="w-3 h-3" />
+                    Admin
+                  </span>
+                )}
               </div>
-              <p className="text-[11px] text-slate-400 truncate">
-                Universal Multi-Industry CV & Application Platform • QA, Hospitality, Customer Care & Healthcare
+              <p className="text-[11px] text-slate-400 truncate hidden sm:block">
+                Mobile-First Autonomous Job Hunter • Auth, Action Plans & Interview Copilot
               </p>
             </div>
           </div>
 
-          {/* Navigation Tabs — Scrollable on ultra-small viewports, crisp pills on desktop */}
-          <nav className="flex items-center gap-1 bg-slate-900/90 p-1 rounded-xl border border-slate-800 overflow-x-auto max-w-full order-3 lg:order-2 w-full lg:w-auto justify-start sm:justify-center">
-            <button
-              onClick={() => setActiveTab('audit')}
-              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
-                activeTab === 'audit'
-                  ? 'bg-gradient-to-r from-sky-600 to-blue-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/70'
-              }`}
-            >
-              <Compass className="w-3.5 h-3.5 flex-shrink-0" />
-              <span>Audit & Stage</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab('tracker')}
-              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
-                activeTab === 'tracker'
-                  ? 'bg-gradient-to-r from-sky-600 to-blue-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/70'
-              }`}
-            >
-              <LayoutDashboard className="w-3.5 h-3.5 flex-shrink-0" />
-              <span>Tracker Board</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab('vault')}
-              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
-                activeTab === 'vault'
-                  ? 'bg-gradient-to-r from-sky-600 to-blue-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/70'
-              }`}
-            >
-              <User className="w-3.5 h-3.5 flex-shrink-0" />
-              <span>Profile Vault</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab('variants')}
-              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
-                activeTab === 'variants'
-                  ? 'bg-gradient-to-r from-sky-600 to-blue-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/70'
-              }`}
-            >
-              <FileText className="w-3.5 h-3.5 flex-shrink-0" />
-              <span>CV Variants & PDFs</span>
-            </button>
+          {/* Desktop Navigation Tabs */}
+          <nav className="hidden lg:flex items-center gap-1 bg-slate-900/90 p-1 rounded-xl border border-slate-800">
+            {navItems
+              .filter((item) => !item.adminOnly || currentUser?.is_admin)
+              .map((item) => {
+                const Icon = item.icon;
+                const isActive = activeTab === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => setActiveTab(item.id)}
+                    className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
+                      isActive
+                        ? 'bg-gradient-to-r from-sky-600 to-blue-600 text-white shadow-sm'
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/70'
+                    }`}
+                  >
+                    <Icon className="w-3.5 h-3.5 flex-shrink-0" />
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })}
           </nav>
 
-          {/* Right Actions: Share Repository Button + Backend Status */}
-          <div className="flex items-center gap-2.5 order-2 lg:order-3">
+          {/* Right Actions: User Profile / Auth Button & Mobile Menu Toggle */}
+          <div className="flex items-center gap-2">
             <button
               onClick={() => setIsShareOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-950/80 hover:bg-indigo-900/80 text-indigo-300 border border-indigo-700/60 text-xs font-semibold whitespace-nowrap transition-colors"
-              title="How to Share Repository & B2B Pitch"
+              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-950/80 hover:bg-indigo-900/80 text-indigo-300 border border-indigo-700/60 text-xs font-semibold whitespace-nowrap transition-colors"
+              title="Share Repository"
             >
               <Share2 className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Share Repo</span>
+              <span>Share</span>
             </button>
 
-            {backendHealth ? (
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 text-xs whitespace-nowrap">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
-                <div className="flex flex-col text-left leading-tight">
-                  <span className="text-[11px] font-semibold text-slate-200 flex items-center gap-1">
-                    <Sparkles className="w-3 h-3 text-sky-400 flex-shrink-0" />
-                    <span>{backendHealth.connected ? 'Gemini 2.5 Flash' : 'AI Engine Ready'}</span>
-                  </span>
-                  <span className="text-[9px] text-slate-400 capitalize hidden sm:inline">
-                    {backendHealth.mode.replace(/_/g, ' ')}
+            {currentUser ? (
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-xs">
+                  <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-sky-500 to-blue-600 flex items-center justify-center text-[10px] font-bold text-white uppercase">
+                    {currentUser.full_name[0] || 'U'}
+                  </div>
+                  <span className="font-semibold text-white max-w-[100px] truncate hidden sm:inline">
+                    {currentUser.full_name}
                   </span>
                 </div>
+                <button
+                  onClick={onLogout}
+                  title="Sign Out"
+                  className="p-2 rounded-xl text-slate-400 hover:text-rose-400 hover:bg-slate-900 border border-transparent hover:border-slate-800"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
               </div>
             ) : (
-              <div className="flex items-center gap-1.5 text-xs text-rose-400 px-3 py-1.5 rounded-xl bg-rose-950/30 border border-rose-900/50 whitespace-nowrap">
-                <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
-                <span>Backend Offline</span>
-              </div>
+              <button
+                onClick={onOpenAuth}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold shadow-md shadow-sky-600/20"
+              >
+                <LogIn className="w-3.5 h-3.5" />
+                <span>Sign In</span>
+              </button>
             )}
+
+            {/* Mobile Menu Hamburger Toggle */}
+            <button
+              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+              className="lg:hidden p-2 rounded-xl text-slate-400 hover:text-white bg-slate-900 border border-slate-800"
+              aria-label="Toggle navigation menu"
+            >
+              {isMobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+            </button>
           </div>
         </div>
+
+        {/* Mobile Dropdown Menu (on toggle) */}
+        {isMobileMenuOpen && (
+          <div className="lg:hidden border-t border-slate-800/80 bg-slate-950 px-4 py-3 space-y-1 animate-in fade-in slide-in-from-top-2">
+            {navItems
+              .filter((item) => !item.adminOnly || currentUser?.is_admin)
+              .map((item) => {
+                const Icon = item.icon;
+                const isActive = activeTab === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => {
+                      setActiveTab(item.id);
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                      isActive
+                        ? 'bg-sky-600 text-white'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-900'
+                    }`}
+                  >
+                    <Icon className="w-4 h-4" />
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })}
+
+            <div className="pt-2 border-t border-slate-900 flex items-center justify-between text-xs text-slate-400">
+              <button
+                onClick={() => {
+                  setIsShareOpen(true);
+                  setIsMobileMenuOpen(false);
+                }}
+                className="flex items-center gap-1.5 text-indigo-400 py-1"
+              >
+                <Share2 className="w-3.5 h-3.5" />
+                <span>Share Repository</span>
+              </button>
+              {backendHealth && (
+                <span className="text-[11px] text-emerald-400 font-medium">
+                  ● {backendHealth.connected ? 'Gemini Active' : 'Offline'}
+                </span>
+              )}
+            </div>
+          </div>
+        )}
       </header>
+
+      {/* Mobile Bottom Navigation Bar (1-Thumb Touch Ready) */}
+      <div className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-950/95 border-t border-slate-800 backdrop-blur-xl px-2 py-1.5 flex items-center justify-around shadow-2xl">
+        {navItems
+          .filter((item) => !item.adminOnly || currentUser?.is_admin)
+          .slice(0, 5)
+          .map((item) => {
+            const Icon = item.icon;
+            const isActive = activeTab === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => setActiveTab(item.id)}
+                className={`flex flex-col items-center justify-center py-1 px-2 rounded-xl transition-all ${
+                  isActive ? 'text-sky-400 font-bold' : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Icon className={`w-4 h-4 mb-0.5 ${isActive ? 'scale-110' : ''}`} />
+                <span className="text-[10px] tracking-tight">{item.label.split(' ')[0]}</span>
+              </button>
+            );
+          })}
+      </div>
 
       {/* Share Repository & B2B SaaS Modal */}
       {isShareOpen && (
@@ -212,8 +303,8 @@ git push -u origin main`;
                     <span>3. Why Businesses Love TalentFlow AI</span>
                   </div>
                   <p className="text-[11px] text-slate-400 leading-relaxed">
-                    Supports <strong>Tech/QA, Hospitality & Receptionists, Customer Care, and Hospitals</strong> with bilingual{' '}
-                    <strong>English & Georgian (ქართული)</strong> CV synthesis, 3+ review employer verification, and Playwright autofill.
+                    Supports <strong>Mobile-First Kanban, JWT Auth, Admin Dashboard, Skill Action Plans, Interview Copilot & Gmail Dispatch</strong> with bilingual{' '}
+                    <strong>English & Georgian (ქართული)</strong> CV synthesis.
                   </p>
                 </div>
               </div>

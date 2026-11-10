@@ -13,6 +13,9 @@ from .routers.stage import router as stage_router
 from .routers.ground_truth import router as ground_truth_router
 from .routers.tracker import router as tracker_router
 from .routers.jobs import router as jobs_router
+from .routers.auth import router as auth_router
+from .routers.admin import router as admin_router
+from .routers.plans import router as plans_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -72,6 +75,9 @@ app.add_middleware(
 )
 
 # Include Routers
+app.include_router(auth_router)
+app.include_router(admin_router)
+app.include_router(plans_router)
 app.include_router(jobs_router)
 app.include_router(audit_router)
 app.include_router(answers_router)
