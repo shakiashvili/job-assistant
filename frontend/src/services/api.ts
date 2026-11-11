@@ -166,9 +166,90 @@ export async function triggerMultiPortalScrape(allowNetwork = true): Promise<{
   return res.json();
 }
 
-export async function fetchGeneratedResumes(): Promise<Array<{ filename: string; url: string; html_url?: string | null; size_kb: number }>> {
+export async function fetchGeneratedResumes(): Promise<Array<{ filename: string; url: string; docx_url?: string | null; html_url?: string | null; size_kb: number }>> {
   const res = await fetch(`${API_BASE}/resumes/generated`);
   if (!res.ok) return [];
+  return res.json();
+}
+
+export async function fetchMyCvs(): Promise<Array<{ filename: string; url: string; ext: string; size_kb: number }>> {
+  const res = await fetch(`${API_BASE}/resumes/my-cvs`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function uploadPersonalCv(file: File): Promise<{ status: string; filename: string; url: string; ext: string; size_kb: number }> {
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await fetch(`${API_BASE}/resumes/my-cvs/upload`, {
+    method: 'POST',
+    body: formData,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to upload CV' }));
+    throw new Error(err.detail || 'Failed to upload CV');
+  }
+  return res.json();
+}
+
+export async function deletePersonalCv(filename: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/resumes/my-cvs/${encodeURIComponent(filename)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error('Failed to delete CV');
+}
+
+export async function generateCvEdition(params: {
+  edition: 'ats' | 'recruiter' | 'tailored';
+  target_role?: string;
+  target_company?: string;
+  job_description?: string;
+  cv_language?: 'en' | 'ka';
+}): Promise<{
+  status: string;
+  edition: string;
+  company: string;
+  title: string;
+  subject: string;
+  cover_letter: string;
+  cv_language: string;
+  docx_filename: string;
+  docx_url: string;
+  pdf_filename: string;
+  pdf_url: string;
+}> {
+  const res = await fetch(`${API_BASE}/resumes/generate-edition`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) throw new Error('Failed to generate CV edition');
+  return res.json();
+}
+
+export async function prepareJobEmailPackage(
+  jobId: number,
+  cvLanguage: string = 'auto'
+): Promise<{
+  company: string;
+  title: string;
+  recipient_email: string;
+  subject: string;
+  cover_letter: string;
+  cv_language: string;
+  docx_filename: string;
+  docx_url: string;
+  pdf_filename: string;
+  pdf_url: string;
+}> {
+  const res = await fetch(`${API_BASE}/jobs/${jobId}/prepare-email-package?cv_language=${encodeURIComponent(cvLanguage)}`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to prepare Gmail application package' }));
+    throw new Error(err.detail || 'Failed to prepare Gmail application package');
+  }
   return res.json();
 }
 

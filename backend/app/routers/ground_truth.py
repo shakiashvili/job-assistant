@@ -1,5 +1,6 @@
 import logging
-from typing import Dict, Any
+from pathlib import Path
+from typing import Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -8,10 +9,20 @@ from ..config import RESUMES_DIR, GENERATED_RESUMES_DIR
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["Ground Truth, Skills.md & Resumes"])
+USER_CV_DIR = RESUMES_DIR / "user_uploads"
+USER_CV_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class SkillsMdPayload(BaseModel):
     content: str
+
+
+class GenerateEditionRequest(BaseModel):
+    edition: str = "ats"  # "ats", "recruiter", or "tailored"
+    target_role: Optional[str] = None
+    target_company: Optional[str] = None
+    job_description: Optional[str] = ""
+    cv_language: str = "en"
 
 
 @router.get("/ground-truth")
@@ -140,16 +151,103 @@ def get_cv_variants():
     return ground_truth_store.get_cv_variants()
 
 
+@router.get("/resumes/my-cvs")
+def list_my_uploaded_cvs():
+    """Lists user-uploaded personal CV files (.pdf, .docx, .md) cleanly."""
+    files = []
+    USER_CV_DIR.mkdir(parents=True, exist_ok=True)
+    for f in sorted(USER_CV_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        if f.is_file() and f.suffix.lower() in (".pdf", ".docx", ".doc", ".md", ".txt"):
+            files.append({
+                "filename": f.name,
+                "url": f"/api/resumes/user/{f.name}",
+                "ext": f.suffix.lower().lstrip("."),
+                "size_kb": round(f.stat().st_size / 1024, 1),
+            })
+    return files
+
+
+@router.post("/resumes/my-cvs/upload")
+async def upload_personal_cv(file: UploadFile = File(...)):
+    """Uploads a personal resume (.pdf, .docx, .md, .txt) into local gitignored storage."""
+    safe_name = Path(file.filename or "resume.pdf").name
+    ext = Path(safe_name).suffix.lower()
+    if ext not in (".pdf", ".docx", ".doc", ".md", ".txt"):
+        raise HTTPException(status_code=400, detail="Unsupported format. Upload .pdf, .docx, .md, or .txt.")
+    USER_CV_DIR.mkdir(parents=True, exist_ok=True)
+    dest = USER_CV_DIR / safe_name
+    content = await file.read()
+    dest.write_bytes(content)
+    return {
+        "status": "ok",
+        "filename": safe_name,
+        "url": f"/api/resumes/user/{safe_name}",
+        "ext": ext.lstrip("."),
+        "size_kb": round(len(content) / 1024, 1),
+    }
+
+
+@router.delete("/resumes/my-cvs/{filename}")
+def delete_personal_cv(filename: str):
+    """Deletes an uploaded personal resume."""
+    safe_name = Path(filename).name
+    target = USER_CV_DIR / safe_name
+    if target.exists() and target.is_file():
+        target.unlink()
+        return {"status": "deleted", "filename": safe_name}
+    raise HTTPException(status_code=404, detail="File not found")
+
+
+@router.get("/resumes/user/{filename}")
+def get_user_cv_file(filename: str):
+    """Downloads or previews a user-uploaded personal CV."""
+    safe_name = Path(filename).name
+    target = USER_CV_DIR / safe_name
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Uploaded CV not found")
+    lower = safe_name.lower()
+    if lower.endswith(".docx"):
+        media = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    elif lower.endswith(".pdf"):
+        media = "application/pdf"
+    else:
+        media = "text/plain; charset=utf-8"
+    return FileResponse(path=target, filename=safe_name, media_type=media)
+
+
+@router.post("/resumes/generate-edition")
+def generate_cv_edition(req: GenerateEditionRequest):
+    """Generates an ATS-Optimized, Recruiter-Ready, or Job-Tailored CV (Word .docx + PDF) + Cover Letter."""
+    from ..services.cv_generator_service import cv_generator_service
+
+    gt = ground_truth_store.get_data()
+    cand = gt.get("candidate", {})
+    default_role = cand.get("headline") or "QA Automation & Manual QA Engineer"
+    role = (req.target_role or "").strip() or default_role
+    company = (req.target_company or "").strip() or ("ATS Edition" if req.edition == "ats" else "Recruiter Edition" if req.edition == "recruiter" else "Target Company")
+
+    pkg = cv_generator_service.prepare_email_application_package(
+        job_title=role,
+        company=company,
+        description=req.job_description or "",
+        cv_language=req.cv_language or "en",
+        cv_style=req.edition or "ats",
+    )
+    return {"status": "ok", "edition": req.edition, **pkg}
+
+
 @router.get("/resumes/generated")
 def list_generated_resumes():
-    """Lists all dynamically generated per-vacancy PDF & HTML CVs."""
+    """Lists all dynamically generated per-vacancy PDF, DOCX & HTML CVs."""
     files = []
     if GENERATED_RESUMES_DIR.exists():
         for f in sorted(GENERATED_RESUMES_DIR.glob("*.pdf"), key=lambda p: p.stat().st_mtime, reverse=True):
             html_sibling = f.with_suffix(".html")
+            docx_sibling = f.with_suffix(".docx")
             files.append({
                 "filename": f.name,
                 "url": f"/api/resumes/generated/{f.name}",
+                "docx_url": f"/api/resumes/generated/{docx_sibling.name}" if docx_sibling.exists() else None,
                 "html_url": f"/api/resumes/generated/{html_sibling.name}" if html_sibling.exists() else None,
                 "size_kb": round(f.stat().st_size / 1024, 1)
             })
@@ -158,13 +256,21 @@ def list_generated_resumes():
 
 @router.get("/resumes/generated/{filename}")
 def get_generated_resume_file(filename: str):
-    """Downloads or previews a dynamically generated per-vacancy PDF or HTML resume."""
-    file_path = GENERATED_RESUMES_DIR / filename
+    """Downloads or previews a generated PDF, Word (.docx), or HTML resume."""
+    safe_name = Path(filename).name
+    file_path = GENERATED_RESUMES_DIR / safe_name
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Generated Resume file not found")
-    if filename.lower().endswith(".html"):
+    lower = safe_name.lower()
+    if lower.endswith(".html"):
         return FileResponse(path=file_path, media_type="text/html; charset=utf-8")
-    return FileResponse(path=file_path, filename=filename, media_type="application/pdf")
+    if lower.endswith(".docx"):
+        return FileResponse(
+            path=file_path,
+            filename=safe_name,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+    return FileResponse(path=file_path, filename=safe_name, media_type="application/pdf")
 
 
 @router.get("/resumes/{filename}")

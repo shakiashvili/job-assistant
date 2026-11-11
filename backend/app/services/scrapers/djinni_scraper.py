@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 from typing import Dict, Any, List, Optional
@@ -9,9 +10,9 @@ logger = logging.getLogger(__name__)
 class DjinniScraper(BasePortalScraper):
     """
     Live Remote Scraper for Djinni.co.
-    Search URL dynamically driven by candidate role (e.g., primary_keyword=QA&employment=remote).
-    Enforces Strict Remote Gate & Strict Slavic Language Filter:
-    - Any vacancy requiring Ukrainian or Russian fluency is marked FILTERED_OUT.
+    Searches multiple pages & role queries dynamically (e.g., QA + QA Automation),
+    fetches detail pages for full technical requirements, and strictly filters
+    against Ukrainian/Russian requirements and non-remote / Ukraine-only restrictions.
     """
 
     portal_name = "djinni.co"
@@ -23,7 +24,6 @@ class DjinniScraper(BasePortalScraper):
         results: List[Dict[str, Any]] = []
         seen_ids: set[str] = set()
 
-        # Live Djinni DOM uses div.job-item (legacy fallback li.list-jobs__item / div.job-list-item)
         items = soup.select("div.job-item, li[id^='job-item-'], li.list-jobs__item, div.job-list-item")
         for idx, item in enumerate(items):
             title_link = item.select_one(
@@ -36,9 +36,9 @@ class DjinniScraper(BasePortalScraper):
             if "/jobs/" not in href or "primary_keyword=" in href:
                 continue
 
-            # Extract title from h2.job-item__position if present
-            title_el = item.select_one("h2.job-item__position") or title_link
-            title = title_el.get_text(" ", strip=True)
+            # Extract clean job title from the anchor text (NOT h2 wrapper which includes company/$ badges)
+            title = title_link.get_text(" ", strip=True)
+            title = re.sub(r"\s+\$+\s*$", "", title).strip()
             if not title or len(title) < 3:
                 continue
 
@@ -50,13 +50,12 @@ class DjinniScraper(BasePortalScraper):
                 continue
             seen_ids.add(ext_id)
 
-            comp_el = item.select_one("span.font-weight-500, a[href*='/jobs/company-'], a.mr-2")
-            company = comp_el.get_text(" ", strip=True) if comp_el else "Djinni Global Partner"
+            comp_el = item.select_one("a[href*='/jobs/company-'], span.font-weight-500, a.mr-2")
+            company = comp_el.get_text(" ", strip=True) if comp_el else "Djinni Global Employer"
 
             meta_el = item.select_one("div.fw-medium")
             meta_text = meta_el.get_text(" ", strip=True) if meta_el else "Full Remote"
 
-            # Prefer full untruncated description text when available
             desc_el = item.select_one(
                 "span.js-original-text, span.js-truncated-text, .job-list-item__description"
             )
@@ -65,7 +64,7 @@ class DjinniScraper(BasePortalScraper):
 
             is_remote, status, filter_reason, langs = evaluate_remote_and_language_gate(
                 title=title,
-                description=description,
+                description=desc_body,
                 location_text=meta_text,
                 portal=self.portal_name,
             )
@@ -78,6 +77,7 @@ class DjinniScraper(BasePortalScraper):
                 "url": url,
                 "market": self.market,
                 "is_remote": is_remote,
+                "location_meta": meta_text,
                 "channel": "WEB_FORM",
                 "detected_languages": langs,
                 "language_requirements": langs,
@@ -93,6 +93,38 @@ class DjinniScraper(BasePortalScraper):
         """Purged: never return fake static listings when offline."""
         return []
 
+    async def _enrich_and_verify_item(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Fetches the live Djinni detail page for deep skill/language/salary/location inspection."""
+        html = await self.fetch_html(item["url"], timeout=8.0)
+        if not html:
+            return item
+
+        soup = self.make_soup(html)
+        desc_el = soup.select_one("div.job-post__description, main, article")
+        full_body = desc_el.get_text(" ", strip=True) if desc_el else ""
+        if len(full_body) < 80:
+            return item
+
+        sal_el = soup.select_one("span.public-salary-item")
+        sal_txt = sal_el.get_text(" ", strip=True) if sal_el else ""
+        loc_meta = item.get("location_meta") or "Full Remote"
+        full_desc = f"{loc_meta} | {sal_txt} | {full_body}".strip(" |")
+
+        is_remote, status, filter_reason, langs = evaluate_remote_and_language_gate(
+            title=item["title"],
+            description=full_body,
+            location_text=loc_meta,
+            portal=self.portal_name,
+        )
+        item["is_remote"] = is_remote
+        item["status"] = status
+        item["filter_out_reason"] = filter_reason or None
+        item["match_rationale"] = filter_reason
+        item["detected_languages"] = langs
+        item["language_requirements"] = langs
+        item["description_raw"] = full_desc[:6000]
+        return item
+
     async def scrape(
         self,
         allow_network: bool = True,
@@ -100,13 +132,40 @@ class DjinniScraper(BasePortalScraper):
     ) -> List[Dict[str, Any]]:
         if not allow_network:
             return []
-        target_url = search_url or self.SEARCH_URL
-        html = await self.fetch_html(target_url)
-        if html:
-            parsed = self.parse_html_listings(html)
-            if parsed:
-                return parsed[:15]
-        return []
+
+        base_url = search_url or self.SEARCH_URL
+        urls = [base_url, f"{base_url}&page=2"]
+        if "primary_keyword=QA&" in base_url:
+            urls.append(base_url.replace("primary_keyword=QA", "primary_keyword=QA+Automation"))
+
+        pages = await asyncio.gather(*(self.fetch_html(u) for u in urls), return_exceptions=True)
+
+        candidates: List[Dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for html in pages:
+            if isinstance(html, str) and html:
+                for item in self.parse_html_listings(html):
+                    if item["external_id"] not in seen_ids:
+                        seen_ids.add(item["external_id"])
+                        candidates.append(item)
+
+        if not candidates:
+            return []
+
+        # Keep already non-filtered candidates first for deep detail page enrichment (top 22)
+        non_filtered = [c for c in candidates if c.get("status") != "FILTERED_OUT"][:22]
+        filtered_stub = [c for c in candidates if c.get("status") == "FILTERED_OUT"]
+
+        if non_filtered:
+            enriched = await asyncio.gather(
+                *(self._enrich_and_verify_item(c) for c in non_filtered),
+                return_exceptions=True,
+            )
+            verified_non_filtered = [x for x in enriched if isinstance(x, dict)]
+        else:
+            verified_non_filtered = []
+
+        return verified_non_filtered + filtered_stub
 
 
 djinni_scraper = DjinniScraper()

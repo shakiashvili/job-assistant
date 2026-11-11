@@ -195,3 +195,33 @@ def estimate_job_salary(req: SalaryEstimateRequest):
         market=req.market,
         portal=req.portal,
     )
+
+
+@router.post("/jobs/{job_id}/prepare-email-package")
+def prepare_job_email_package(
+    job_id: int,
+    cv_language: str = Query("auto"),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Prepares a complete tailored Word (.docx) CV + Cover Letter + clean Subject line
+    for drafting an application email to a vacancy (e.g. from Jobs.ge / HR.ge).
+    """
+    from ..services.cv_generator_service import cv_generator_service
+
+    init_db()
+    with Session(engine) as session:
+        job = session.get(JobPosting, job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Vacancy not found")
+
+        return cv_generator_service.prepare_email_application_package(
+            job_title=job.title,
+            company=job.company,
+            description=job.description_raw,
+            portal=job.portal,
+            target_email=job.target_email,
+            email_subject_template=job.email_subject,
+            cv_language=cv_language,
+            cv_style="tailored",
+        )

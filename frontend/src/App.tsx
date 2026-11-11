@@ -11,6 +11,39 @@ import { AuthModal } from './components/AuthModal';
 import { fetchHealth, fetchCurrentUser, logoutUser } from './services/api';
 import { UserProfile } from './types';
 
+class TabErrorBoundary extends React.Component<
+  { children: React.ReactNode; onReset: () => void },
+  { error: Error | null }
+> {
+  constructor(props: { children: React.ReactNode; onReset: () => void }) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="bg-slate-900 border border-rose-800/60 rounded-2xl p-6 text-center space-y-3">
+          <h3 className="text-base font-bold text-rose-300">A view error occurred</h3>
+          <p className="text-xs text-slate-400">{this.state.error.message}</p>
+          <button
+            onClick={() => {
+              this.setState({ error: null });
+              this.props.onReset();
+            }}
+            className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold"
+          >
+            Recover View
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<NavTab>('audit');
   const [backendHealth, setBackendHealth] = useState<{ connected: boolean; model: string; mode: string } | null>(null);
@@ -144,12 +177,14 @@ export const App: React.FC = () => {
       />
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-6 pb-24 lg:pb-10">
-        {activeTab === 'tracker' && <ApplicationTracker />}
-        {activeTab === 'audit' && <AuditPanel />}
-        {activeTab === 'plans' && <ActionPlanView />}
-        {activeTab === 'vault' && <ProfileVault />}
-        {activeTab === 'variants' && <CVVariantManager />}
-        {activeTab === 'admin' && <AdminDashboard currentUser={currentUser} />}
+        <TabErrorBoundary key={activeTab} onReset={() => setActiveTab('audit')}>
+          {activeTab === 'tracker' && <ApplicationTracker />}
+          {activeTab === 'audit' && <AuditPanel />}
+          {activeTab === 'plans' && <ActionPlanView />}
+          {activeTab === 'vault' && <ProfileVault />}
+          {activeTab === 'variants' && <CVVariantManager />}
+          {activeTab === 'admin' && <AdminDashboard currentUser={currentUser} />}
+        </TabErrorBoundary>
       </main>
 
       <footer className="hidden lg:block border-t border-slate-900 bg-slate-950/60 py-6 mt-12 text-center text-xs text-slate-500">

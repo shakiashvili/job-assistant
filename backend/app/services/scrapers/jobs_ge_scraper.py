@@ -128,10 +128,15 @@ class JobsGeScraper(BasePortalScraper):
         )
 
         channel, target_email, email_subj = parse_contact_method_and_email(clean_text, raw_html)
+        # Extract authentic company name from detail page 'მომწოდებელი:' if table fell back
+        comp_m = re.search(r"მომწოდებელი:\s*([^\n<]{2,60}?)(?:\s+გამოქვეყნდა|\s*$)", clean_text)
+        if comp_m and item.get("company") in ("Georgian Employer", "Company", ""):
+            item["company"] = comp_m.group(1).strip()
+
         item["channel"] = channel
         item["delivery_channel"] = channel
         item["target_email"] = target_email
-        item["email_subject"] = email_subj or (f"{item['title']} - [Name]" if target_email else None)
+        item["email_subject"] = email_subj
         return item
 
     async def scrape(
@@ -157,9 +162,9 @@ class JobsGeScraper(BasePortalScraper):
         if not candidates:
             return []
 
-        # Live health-check and full text enrichment concurrently (cap to top 12 listings)
+        # Live health-check and full text enrichment concurrently (cap to top 20 listings)
         enriched = await asyncio.gather(
-            *(self._enrich_and_verify_item(c) for c in candidates[:12]),
+            *(self._enrich_and_verify_item(c) for c in candidates[:20]),
             return_exceptions=True,
         )
         return [item for item in enriched if isinstance(item, dict)]

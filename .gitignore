@@ -35,5 +35,6 @@ data/candidate_skills.md
 data/ground_truth.json
 data/applications.json
 data/resumes/generated/
+data/resumes/user_uploads/
 data/resumes/generated/hitl_captcha_pause.png
 data/resumes/generated/CV_*

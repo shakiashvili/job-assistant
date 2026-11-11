@@ -47,12 +47,25 @@ def parse_contact_method_and_email(text: str, html: str = "") -> Tuple[str, Opti
         subject_line = subj_match.group(1).strip()
 
     if target_email:
-        return ("EMAIL", target_email, subject_line or "QA Automation Engineer - [Name]")
+        return ("EMAIL", target_email, subject_line)
 
     if "apply" in combined.lower() or "<form" in html.lower():
         return ("WEB_FORM", None, None)
 
     return ("EXTERNAL_LINK", None, None)
+
+
+POLISH_LANGUAGE_REQUIREMENT_PATTERNS = [
+    r"język polski",
+    r"języka polskiego",
+    r"wymagany polski",
+    r"bardzo dobra znajomość języka polskiego",
+    r"poszukujemy",
+    r"doświadczenia",
+    r"umowa o pracę",
+    r"długofalowa współpraca",
+    r"polski wymagany",
+]
 
 
 def evaluate_remote_and_language_gate(
@@ -62,42 +75,48 @@ def evaluate_remote_and_language_gate(
     portal: str = "dou.ua",
 ) -> Tuple[bool, str, str, List[str]]:
     """
-    Evaluates a scraped vacancy against the Mandatory Remote & Slavic Language Gate:
+    Evaluates a scraped vacancy against the Mandatory Remote & Local-Language Gate:
     Returns:
       (is_remote, status, filter_out_reason, detected_languages)
-    - For Ukrainian / Regional portals (dou.ua, djinni.co):
-      1. Vacancies must explicitly allow remote work (or relocation).
-      2. Checks description text using regex & semantic parsing for required Slavic fluency
-         (вільно, українськ, русский, разговорный, fluent Ukrainian, etc.).
-         If present, sets status = "FILTERED_OUT" and
-         filter_out_reason = "Mandatory local Slavic language requirement (Requires local language)".
-      3. Only accepts positions where English is the required business language.
+    - For dou.ua / djinni.co / justjoin.it:
+      1. Vacancies must allow remote work / relocation.
+      2. Checks title + actual job description (excluding portal UI city metadata) for
+         mandatory Ukrainian, Russian, or Polish fluency requirements.
+      3. Only accepts positions where English is the working language.
     """
+    body_only = f"{title}\n{description}".lower()
     combined = f"{title}\n{description}\n{location_text}".lower()
     langs_detected: List[str] = []
 
     if any(w in combined for w in ["english", "upper-intermediate", "b2", "c1", "fluent english", "spoken english"]):
         langs_detected.append("English")
 
-    has_slavic_keyword = any(re.search(pat, combined, re.IGNORECASE) for pat in SLAVIC_LANGUAGE_REQUIREMENT_PATTERNS)
+    has_slavic_keyword = any(re.search(pat, body_only, re.IGNORECASE) for pat in SLAVIC_LANGUAGE_REQUIREMENT_PATTERNS)
+    has_polish_keyword = any(re.search(pat, body_only, re.IGNORECASE) for pat in POLISH_LANGUAGE_REQUIREMENT_PATTERNS)
 
+    # Measure Cyrillic density on actual job title + body (NOT portal Ukrainian city metadata lists)
     cyrillic_chars = len(re.findall(r"[а-яА-ЯіїєґІЇЄҐ]", f"{title}\n{description}"))
+    polish_diacritics = len(re.findall(r"[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]", f"{title}\n{description}"))
+
     if cyrillic_chars > 35 or has_slavic_keyword:
-        if any(w in combined for w in ["україн", "ukrainian", "вільно"]) or re.search(r"[іїєґІЇЄҐ]", description):
+        if any(w in body_only for w in ["україн", "ukrainian", "вільно"]) or re.search(r"[іїєґІЇЄҐ]", description):
             langs_detected.append("Ukrainian")
-        if any(w in combined for w in ["русск", "russian", "разговорн"]):
+        if any(w in body_only for w in ["русск", "russian", "разговорн"]):
             langs_detected.append("Russian")
         if "Ukrainian" not in langs_detected and "Russian" not in langs_detected:
             langs_detected.append("Ukrainian")
+
+    if portal == "justjoin.it" and (has_polish_keyword or polish_diacritics >= 12):
+        langs_detected.append("Polish")
 
     if not langs_detected:
         langs_detected.append("English")
 
     is_office_only = any(
-        w in combined for w in ["office only", "on-site only", "onsite only", "тільки офіс", "only office"]
+        w in combined for w in ["office only", "on-site only", "onsite only", "тільки офіс", "only office", "stacjonarnie"]
     )
     is_remote = not is_office_only and any(
-        w in combined for w in ["remote", "relocate", "relocation", "anywhere", "worldwide", "abroad", "tbilisi", "georgia"]
+        w in combined for w in ["remote", "віддалено", "zdalnie", "relocate", "relocation", "anywhere", "worldwide", "abroad", "tbilisi", "georgia"]
     )
 
     loc_lower = (location_text or "").lower()
@@ -110,15 +129,29 @@ def evaluate_remote_and_language_gate(
         or "office in the center of lviv" in combined
         or "office in lviv" in combined
         or "office in kyiv" in combined
-        or ("ukraine" in loc_lower and not any(w in loc_lower for w in ["worldwide", "europe", "eu", "global", "abroad", "georgia", "relocat", "other countries"]))
+        or ("ukraine" in loc_lower and not any(w in loc_lower for w in ["worldwide", "europe", "eu", "global", "abroad", "georgia", "relocat", "other countries", "віддалено"]))
     )
 
-    if portal in ("dou.ua", "djinni.co"):
+    if portal in ("dou.ua", "djinni.co", "justjoin.it"):
         if has_slavic_keyword or "Ukrainian" in langs_detected or "Russian" in langs_detected:
             return (
                 is_remote,
                 "FILTERED_OUT",
                 "Mandatory local Slavic language requirement (Requires local language)",
+                langs_detected,
+            )
+        if "Polish" in langs_detected and "english" not in body_only:
+            return (
+                is_remote,
+                "FILTERED_OUT",
+                "Mandatory Polish language requirement (Requires local language)",
+                langs_detected,
+            )
+        if "Polish" in langs_detected and polish_diacritics >= 15:
+            return (
+                is_remote,
+                "FILTERED_OUT",
+                "Job description written in Polish (Requires local language)",
                 langs_detected,
             )
         if ukraine_restricted and not ("global remote" in combined or "remote worldwide" in combined):

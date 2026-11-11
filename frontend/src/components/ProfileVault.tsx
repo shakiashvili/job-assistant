@@ -24,8 +24,11 @@ export const ProfileVault: React.FC = () => {
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // New skill input
+  // New skill & FAQ inputs
   const [newSkill, setNewSkill] = useState('');
+  const [newFaqTrigger, setNewFaqTrigger] = useState('');
+  const [newFaqAnswer, setNewFaqAnswer] = useState('');
+  const [newFaqTags, setNewFaqTags] = useState('');
   const [isDragging, setIsDragging] = useState(false);
   const [isUploadingSkills, setIsUploadingSkills] = useState(false);
   const dropInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -36,16 +39,8 @@ export const ProfileVault: React.FC = () => {
     setErrorMsg(null);
     try {
       const res = await uploadSkillsMdFile(file);
-      if (res.extracted_skills && res.extracted_skills.length > 0 && data) {
-        setData({
-          ...data,
-          skills: {
-            ...data.skills,
-            core: Array.from(new Set([...res.extracted_skills, ...data.skills.core])),
-          },
-        });
-      }
-      setSuccessMsg(`Successfully parsed ${file.name} into CandidateProfile with ${res.extracted_skills.length} skills!`);
+      await loadData();
+      setSuccessMsg(`Successfully parsed ${file.name} into CandidateProfile with ${res.extracted_skills.length} clean skills!`);
       setTimeout(() => setSuccessMsg(null), 4000);
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to upload and parse skills file');
@@ -87,24 +82,54 @@ export const ProfileVault: React.FC = () => {
 
   const addCoreSkill = () => {
     if (!newSkill.trim() || !data) return;
+    const currentCore = data.skills?.core || [];
     setData({
       ...data,
       skills: {
-        ...data.skills,
-        core: [...data.skills.core, newSkill.trim()]
-      }
+        ...(data.skills || { secondary: [] }),
+        core: Array.from(new Set([...currentCore, newSkill.trim()])),
+      },
     });
     setNewSkill('');
   };
 
   const removeCoreSkill = (skillToRemove: string) => {
     if (!data) return;
+    const currentCore = data.skills?.core || [];
     setData({
       ...data,
       skills: {
-        ...data.skills,
-        core: data.skills.core.filter(s => s !== skillToRemove)
-      }
+        ...(data.skills || { secondary: [] }),
+        core: currentCore.filter((s) => s !== skillToRemove),
+      },
+    });
+  };
+
+  const addFaqItem = () => {
+    if (!data || !newFaqTrigger.trim() || !newFaqAnswer.trim()) return;
+    const tags = newFaqTags
+      .split(',')
+      .map((t) => t.trim())
+      .filter(Boolean);
+    const nextFaq = [
+      ...(data.faq_bank || []),
+      {
+        question_trigger: newFaqTrigger.trim(),
+        tags: tags.length > 0 ? tags : ['general'],
+        answer: newFaqAnswer.trim(),
+      },
+    ];
+    setData({ ...data, faq_bank: nextFaq });
+    setNewFaqTrigger('');
+    setNewFaqAnswer('');
+    setNewFaqTags('');
+  };
+
+  const removeFaqItem = (idxToRemove: number) => {
+    if (!data) return;
+    setData({
+      ...data,
+      faq_bank: (data.faq_bank || []).filter((_, i) => i !== idxToRemove),
     });
   };
 
@@ -116,7 +141,26 @@ export const ProfileVault: React.FC = () => {
     );
   }
 
-  const { candidate, skills, work_history, faq_bank } = data;
+  const candidate = data.candidate || ({} as GroundTruth['candidate']);
+  const links = candidate.links || { linkedin: '', github: '', portfolio: '' };
+  const workAuth = candidate.work_authorization || {
+    citizenship: ['Georgia'],
+    eu_work_permit: false,
+    requires_eu_visa: true,
+    us_work_authorization: 'Remote B2B Contractor (No US Work Permit)',
+    requires_us_visa_sponsorship: true,
+    uk_work_authorization: 'Remote B2B Contractor',
+    security_clearance: false,
+  };
+  const compensation = candidate.compensation || {
+    expected_salary_eur: 0,
+    min_salary_eur: 0,
+    expected_salary_usd: 0,
+    notice_period: '1 week after offer',
+  };
+  const skillsCore = data.skills?.core || [];
+  const work_history = Array.isArray(data.work_history) ? data.work_history : [];
+  const faq_bank = Array.isArray(data.faq_bank) ? data.faq_bank : [];
 
   return (
     <div className="space-y-6">
@@ -192,7 +236,7 @@ export const ProfileVault: React.FC = () => {
               <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">First Name</label>
               <input
                 type="text"
-                value={candidate.first_name}
+                value={candidate.first_name || ''}
                 onChange={(e) => setData({ ...data, candidate: { ...candidate, first_name: e.target.value } })}
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
               />
@@ -201,7 +245,7 @@ export const ProfileVault: React.FC = () => {
               <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Last Name</label>
               <input
                 type="text"
-                value={candidate.last_name}
+                value={candidate.last_name || ''}
                 onChange={(e) => setData({ ...data, candidate: { ...candidate, last_name: e.target.value } })}
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
               />
@@ -210,7 +254,7 @@ export const ProfileVault: React.FC = () => {
               <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Email</label>
               <input
                 type="email"
-                value={candidate.email}
+                value={candidate.email || ''}
                 onChange={(e) => setData({ ...data, candidate: { ...candidate, email: e.target.value } })}
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
               />
@@ -219,7 +263,7 @@ export const ProfileVault: React.FC = () => {
               <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Phone</label>
               <input
                 type="text"
-                value={candidate.phone}
+                value={candidate.phone || ''}
                 onChange={(e) => setData({ ...data, candidate: { ...candidate, phone: e.target.value } })}
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
               />
@@ -228,7 +272,7 @@ export const ProfileVault: React.FC = () => {
               <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Professional Headline</label>
               <input
                 type="text"
-                value={candidate.headline}
+                value={candidate.headline || ''}
                 onChange={(e) => setData({ ...data, candidate: { ...candidate, headline: e.target.value } })}
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
               />
@@ -241,8 +285,8 @@ export const ProfileVault: React.FC = () => {
               <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">LinkedIn</label>
               <input
                 type="text"
-                value={candidate.links.linkedin}
-                onChange={(e) => setData({ ...data, candidate: { ...candidate, links: { ...candidate.links, linkedin: e.target.value } } })}
+                value={links.linkedin || ''}
+                onChange={(e) => setData({ ...data, candidate: { ...candidate, links: { ...links, linkedin: e.target.value } } })}
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-sky-500 font-mono text-[11px]"
               />
             </div>
@@ -250,8 +294,8 @@ export const ProfileVault: React.FC = () => {
               <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">GitHub</label>
               <input
                 type="text"
-                value={candidate.links.github}
-                onChange={(e) => setData({ ...data, candidate: { ...candidate, links: { ...candidate.links, github: e.target.value } } })}
+                value={links.github || ''}
+                onChange={(e) => setData({ ...data, candidate: { ...candidate, links: { ...links, github: e.target.value } } })}
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-sky-500 font-mono text-[11px]"
               />
             </div>
@@ -259,8 +303,8 @@ export const ProfileVault: React.FC = () => {
               <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Portfolio</label>
               <input
                 type="text"
-                value={candidate.links.portfolio}
-                onChange={(e) => setData({ ...data, candidate: { ...candidate, links: { ...candidate.links, portfolio: e.target.value } } })}
+                value={links.portfolio || ''}
+                onChange={(e) => setData({ ...data, candidate: { ...candidate, links: { ...links, portfolio: e.target.value } } })}
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-sky-500 font-mono text-[11px]"
               />
             </div>
@@ -271,44 +315,118 @@ export const ProfileVault: React.FC = () => {
       {/* Tab 2: Visas & Work Auth */}
       {activeTab === 'auth' && (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-6">
-          <h3 className="text-base font-semibold text-white">Work Authorization & Visas</h3>
+          <div>
+            <h3 className="text-base font-semibold text-white">Work Authorization & Remote Eligibility</h3>
+            <p className="text-xs text-slate-400 mt-1">
+              Matching prioritizes verified technical skills and English remote / Georgian eligibility instead of blocking on foreign work permits.
+            </p>
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
-              <span className="text-xs font-semibold text-slate-300 block">EU / European Union Status</span>
+            <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
+              <span className="text-xs font-semibold text-slate-300 block">Primary Work Base & B2B Status</span>
               <div className="text-xs text-emerald-400 flex items-center gap-1.5 font-medium">
                 <CheckCircle2 className="w-4 h-4" />
-                <span>EU Citizen / Permanent Work Rights</span>
+                <span>{(workAuth.citizenship || ['Georgia']).join(', ')} • Remote B2B Contractor Ready</span>
               </div>
-              <p className="text-[11px] text-slate-400">
-                Authorized to work across all 27 EU member states without requiring visa sponsorship.
-              </p>
+              <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={Boolean(workAuth.eu_work_permit)}
+                  onChange={(e) =>
+                    setData({
+                      ...data,
+                      candidate: {
+                        ...candidate,
+                        work_authorization: {
+                          ...workAuth,
+                          eu_work_permit: e.target.checked,
+                          requires_eu_visa: !e.target.checked,
+                        },
+                      },
+                    })
+                  }
+                  className="rounded border-slate-700 bg-slate-900 text-sky-500"
+                />
+                <span>Hold direct EU work permit / citizenship</span>
+              </label>
             </div>
 
             <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
-              <span className="text-xs font-semibold text-slate-300 block">United States Status</span>
-              <div className="text-xs text-amber-400 flex items-center gap-1.5 font-medium">
-                <AlertCircle className="w-4 h-4" />
-                <span>Requires H-1B / O-1 or B2B Contractor</span>
-              </div>
+              <span className="text-xs font-semibold text-slate-300 block">International / US Work Authorization</span>
+              <input
+                type="text"
+                value={workAuth.us_work_authorization || 'Remote B2B Contractor'}
+                onChange={(e) =>
+                  setData({
+                    ...data,
+                    candidate: {
+                      ...candidate,
+                      work_authorization: { ...workAuth, us_work_authorization: e.target.value },
+                    },
+                  })
+                }
+                className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
+              />
               <p className="text-[11px] text-slate-400">
-                Does not hold US citizenship or active green card. Open to independent B2B contractor engagements.
+                Audits validate role skills first and only flag positions strictly demanding citizenship or security clearance.
               </p>
             </div>
 
             <div className="md:col-span-2">
-              <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Compensation Expectations</label>
+              <label className="block text-xs font-semibold uppercase text-slate-400 mb-2">Compensation & Notice Preferences</label>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
-                  <span className="text-[10px] text-slate-500 uppercase block">Expected Salary (EUR)</span>
-                  <span className="text-sm font-bold text-white">€{candidate.compensation.expected_salary_eur.toLocaleString()}</span>
+                  <span className="text-[10px] text-slate-500 uppercase block mb-1">Expected Salary (EUR)</span>
+                  <input
+                    type="number"
+                    min={0}
+                    value={Number(compensation.expected_salary_eur ?? 0)}
+                    onChange={(e) =>
+                      setData({
+                        ...data,
+                        candidate: {
+                          ...candidate,
+                          compensation: { ...compensation, expected_salary_eur: Number(e.target.value) || 0 },
+                        },
+                      })
+                    }
+                    className="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1 text-sm font-bold text-white"
+                  />
                 </div>
                 <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
-                  <span className="text-[10px] text-slate-500 uppercase block">Expected Salary (USD)</span>
-                  <span className="text-sm font-bold text-white">${candidate.compensation.expected_salary_usd.toLocaleString()}</span>
+                  <span className="text-[10px] text-slate-500 uppercase block mb-1">Expected Salary (USD)</span>
+                  <input
+                    type="number"
+                    min={0}
+                    value={Number(compensation.expected_salary_usd ?? 0)}
+                    onChange={(e) =>
+                      setData({
+                        ...data,
+                        candidate: {
+                          ...candidate,
+                          compensation: { ...compensation, expected_salary_usd: Number(e.target.value) || 0 },
+                        },
+                      })
+                    }
+                    className="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1 text-sm font-bold text-white"
+                  />
                 </div>
                 <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
-                  <span className="text-[10px] text-slate-500 uppercase block">Notice Period</span>
-                  <span className="text-sm font-bold text-white">{candidate.compensation.notice_period}</span>
+                  <span className="text-[10px] text-slate-500 uppercase block mb-1">Notice Period</span>
+                  <input
+                    type="text"
+                    value={compensation.notice_period || '1 week after offer'}
+                    onChange={(e) =>
+                      setData({
+                        ...data,
+                        candidate: {
+                          ...candidate,
+                          compensation: { ...compensation, notice_period: e.target.value },
+                        },
+                      })
+                    }
+                    className="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1 text-sm font-bold text-white"
+                  />
                 </div>
               </div>
             </div>
@@ -351,16 +469,16 @@ export const ProfileVault: React.FC = () => {
                 <UploadCloud className={`w-5 h-5 ${isUploadingSkills ? 'animate-bounce' : ''}`} />
               </div>
               <div className="text-xs font-semibold text-slate-200">
-                {isUploadingSkills ? 'Parsing skills.md with Gemini...' : 'Drag & drop skills.md here, or click to browse'}
+                {isUploadingSkills ? 'Parsing skills.md...' : 'Drag & drop skills.md here, or click to browse'}
               </div>
               <p className="text-[11px] text-slate-500 max-w-sm">
-                Uploads and parses your technical competencies via Gemini into the relational database and refreshes verified skills instantly.
+                Uploads and extracts clean technical competencies into the encrypted database and refreshes verified skills instantly.
               </p>
             </div>
           </div>
 
-          <div className="flex items-center justify-between">
-            <h3 className="text-base font-semibold text-white">Verified Technical Skills ({skills.core.length})</h3>
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <h3 className="text-base font-semibold text-white">Verified Technical Skills ({skillsCore.length})</h3>
             <div className="flex items-center gap-2">
               <input
                 type="text"
@@ -380,7 +498,7 @@ export const ProfileVault: React.FC = () => {
           </div>
 
           <div className="flex flex-wrap gap-2">
-            {skills.core.map((skill) => (
+            {skillsCore.map((skill) => (
               <span
                 key={skill}
                 className="flex items-center gap-1.5 bg-slate-950 text-sky-300 border border-slate-800 px-3 py-1.5 rounded-xl text-xs font-medium"
@@ -402,45 +520,105 @@ export const ProfileVault: React.FC = () => {
       {activeTab === 'history' && (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-6">
           <h3 className="text-base font-semibold text-white">Verified Career Experience</h3>
-          <div className="space-y-4">
-            {work_history.map((job, idx) => (
-              <div key={idx} className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <h4 className="text-sm font-semibold text-white">{job.role}</h4>
-                    <span className="text-xs text-sky-400 font-medium">{job.company}</span>
-                    <span className="text-xs text-slate-500"> • {job.location}</span>
+          {work_history.length === 0 ? (
+            <div className="text-xs text-slate-400 py-6 text-center bg-slate-950 rounded-xl border border-slate-800">
+              No work history entries parsed yet. Upload your skills.md with a Work Experience section.
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {work_history.map((job, idx) => (
+                <div key={idx} className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h4 className="text-sm font-semibold text-white">{job.role || 'Role'}</h4>
+                      <span className="text-xs text-sky-400 font-medium">{job.company || 'Organization'}</span>
+                      {job.location && <span className="text-xs text-slate-500"> • {job.location}</span>}
+                    </div>
+                    {(job.start_date || job.end_date) && (
+                      <span className="text-xs text-slate-400 font-mono bg-slate-900 px-2 py-0.5 rounded">
+                        {[job.start_date, job.end_date].filter(Boolean).join(' – ')}
+                      </span>
+                    )}
                   </div>
-                  <span className="text-xs text-slate-400 font-mono bg-slate-900 px-2 py-0.5 rounded">
-                    {job.start_date} – {job.end_date}
-                  </span>
+                  <ul className="list-disc list-inside text-xs text-slate-400 space-y-1 pt-1">
+                    {(job.highlights || []).map((h, i) => (
+                      <li key={i}>{h}</li>
+                    ))}
+                  </ul>
                 </div>
-                <ul className="list-disc list-inside text-xs text-slate-400 space-y-1 pt-1">
-                  {job.highlights.map((h, i) => (
-                    <li key={i}>{h}</li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
       {/* Tab 5: FAQ Bank */}
       {activeTab === 'faq' && (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-6">
-          <h3 className="text-base font-semibold text-white">Pre-vetted Screening Question Answers Bank</h3>
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div>
+              <h3 className="text-base font-semibold text-white">Pre-vetted Screening Question Answers Bank</h3>
+              <p className="text-xs text-slate-400">Used to auto-fill screening questions cleanly. Click Save Ground Truth above after changes.</p>
+            </div>
+          </div>
+
+          <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <input
+                type="text"
+                value={newFaqTrigger}
+                onChange={(e) => setNewFaqTrigger(e.target.value)}
+                placeholder="Question keyword trigger (e.g. work authorization / notice period)"
+                className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
+              />
+              <input
+                type="text"
+                value={newFaqTags}
+                onChange={(e) => setNewFaqTags(e.target.value)}
+                placeholder="Tags (comma-separated, e.g. remote, b2b)"
+                className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
+              />
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={newFaqAnswer}
+                onChange={(e) => setNewFaqAnswer(e.target.value)}
+                placeholder="Standard candidate answer..."
+                className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
+              />
+              <button
+                type="button"
+                onClick={addFaqItem}
+                className="px-3.5 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add FAQ</span>
+              </button>
+            </div>
+          </div>
+
           <div className="space-y-3">
             {faq_bank.map((item, idx) => (
               <div key={idx} className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-semibold text-slate-300">Trigger: "{item.question_trigger}"</span>
-                  <div className="flex gap-1">
-                    {item.tags.map((t) => (
-                      <span key={t} className="text-[10px] bg-slate-900 text-slate-400 px-2 py-0.5 rounded font-mono">
-                        #{t}
-                      </span>
-                    ))}
+                  <div className="flex items-center gap-2">
+                    <div className="flex gap-1">
+                      {(item.tags || []).map((t) => (
+                        <span key={t} className="text-[10px] bg-slate-900 text-slate-400 px-2 py-0.5 rounded font-mono">
+                          #{t}
+                        </span>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => removeFaqItem(idx)}
+                      className="text-slate-500 hover:text-rose-400"
+                      title="Delete FAQ entry"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 </div>
                 <p className="text-xs text-slate-400 leading-relaxed bg-slate-900/60 p-3 rounded-lg border border-slate-800/80">

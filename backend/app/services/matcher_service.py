@@ -30,6 +30,108 @@ QA_TAXONOMY_CATALOG: Dict[str, List[str]] = {
     ],
 }
 
+CANONICAL_SKILL_NAMES: Dict[str, str] = {
+    "playwright": "Playwright",
+    "selenium": "Selenium",
+    "selenium webdriver": "Selenium WebDriver",
+    "cypress": "Cypress",
+    "appium": "Appium",
+    "pytest": "PyTest",
+    "junit": "JUnit",
+    "testng": "TestNG",
+    "jest": "Jest",
+    "webdriverio": "WebdriverIO",
+    "robot framework": "Robot Framework",
+    "typescript": "TypeScript",
+    "javascript": "JavaScript",
+    "python": "Python",
+    "java": "Java",
+    "c#": "C#",
+    "sql": "SQL",
+    "bash": "Bash",
+    "go": "Go",
+    "postman": "Postman",
+    "rest assured": "REST Assured",
+    "rest api": "REST API",
+    "graphql": "GraphQL",
+    "swagger": "Swagger",
+    "openapi": "OpenAPI",
+    "k6": "k6",
+    "jmeter": "JMeter",
+    "locust": "Locust",
+    "gatling": "Gatling",
+    "soapui": "SoapUI",
+    "github actions": "GitHub Actions",
+    "gitlab ci": "GitLab CI",
+    "ci/cd": "CI/CD",
+    "jenkins": "Jenkins",
+    "docker": "Docker",
+    "kubernetes": "Kubernetes",
+    "aws": "AWS",
+    "gcp": "GCP",
+    "azure": "Azure",
+    "linux": "Linux",
+    "git": "Git",
+    "jira": "Jira",
+    "xray": "Xray",
+    "testrail": "TestRail",
+    "uat": "UAT",
+    "bdd": "BDD",
+    "api": "API",
+    "html": "HTML",
+    "css": "CSS",
+    "json": "JSON",
+    "xml": "XML",
+    "chrome devtools": "Chrome DevTools",
+    "devtools": "Chrome DevTools",
+}
+
+_DATE_OR_PROSE_RE = re.compile(
+    r"\b(?:19\d{2}|20\d{2}|january|february|march|april|may|june|july|august|"
+    r"september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec|"
+    r"present|current|tbilisi|batumi|kutaisi|georgia|remote|hybrid|onsite)\b",
+    re.I,
+)
+_PROSE_START_RE = re.compile(
+    r"^(?:and|or|the|a|an|in|on|at|to|for|with|from|by|of|as|"
+    r"conducted|tested|verifying|verified|built|created|maintained|executed|"
+    r"designed|reported|documented|collaborated|participated|managed|assisted|supported)\b",
+    re.I,
+)
+
+
+def _clean_skill_token(raw: str) -> str:
+    s = re.sub(r"[*_`~]+", "", raw or "").strip()
+    s = s.strip("•·–—-.,:;()[]{}").strip()
+    if not s or len(s) < 2 or len(s) > 36:
+        return ""
+    if "@" in s or "http" in s.lower() or "://" in s or "•" in raw:
+        return ""
+    if _DATE_OR_PROSE_RE.search(s) or _PROSE_START_RE.search(s):
+        return ""
+    # Reject full sentence fragments (> 4 words or trailing period in original)
+    if len(s.split()) > 4 or raw.strip().endswith("."):
+        return ""
+    lower = s.lower()
+    if lower in CANONICAL_SKILL_NAMES:
+        return CANONICAL_SKILL_NAMES[lower]
+    return s
+
+
+def dedupe_skills_case_insensitive(items: List[str]) -> List[str]:
+    """Deduplicates skills preserving canonical technical casing."""
+    seen: Dict[str, str] = {}
+    ordered_keys: List[str] = []
+    for item in items:
+        cleaned = _clean_skill_token(item) if item else ""
+        if not cleaned:
+            continue
+        key = cleaned.lower()
+        if key not in seen:
+            seen[key] = CANONICAL_SKILL_NAMES.get(key, cleaned)
+            ordered_keys.append(key)
+    return [seen[k] for k in ordered_keys]
+
 
 class MatcherService:
     """
@@ -128,28 +230,43 @@ class MatcherService:
 
         for ind_skills in MULTI_INDUSTRY_SKILLS.values():
             for skill_kw in ind_skills:
-                canonical = skill_kw.title() if len(skill_kw) > 3 else skill_kw.upper()
-                if skill_kw.lower() in lower_text and canonical not in all_skills:
-                    all_skills.append(canonical)
+                low_kw = skill_kw.lower()
+                if low_kw in CANONICAL_SKILL_NAMES:
+                    canonical = CANONICAL_SKILL_NAMES[low_kw]
+                else:
+                    canonical = skill_kw.upper() if len(skill_kw) <= 3 else skill_kw.title()
+                pat = r"\b" + re.escape(low_kw) + r"\b" if low_kw not in ("c#", "k6") else re.escape(low_kw)
+                if (low_kw in lower_text if low_kw in ("c#", "k6") else re.search(pat, lower_text)):
+                    if all(existing.lower() != canonical.lower() for existing in all_skills):
+                        all_skills.append(canonical)
 
-        # Also extract bullet items under any ## Skills section
+        # Extract bullet items strictly under dedicated ## Skills headings (stop before ### roles or Experience)
         in_skills = False
         for line in text.splitlines():
             s = line.strip()
-            if s.startswith("##"):
-                in_skills = any(w in s.lower() for w in ["skill", "stack", "tech", "უნარ", "კომპეტენც"])
+            if s.startswith("## "):
+                header_l = s.lower()
+                is_exp_header = any(w in header_l for w in ["experience", "history", "work", "project", "education", "გამოცდილება"])
+                in_skills = (not is_exp_header) and any(
+                    w in header_l for w in ["skill", "stack", "tech", "უნარ", "კომპეტენც"]
+                )
+                continue
+            if s.startswith("### ") or (s.startswith("# ") and not s.startswith("## ")):
+                in_skills = False
                 continue
             if in_skills and s.startswith(("-", "*")):
-                cleaned = re.sub(r"^[-*]\s*(\*\*.*?\*\*:?)?\s*", "", s)
-                for part in re.split(r"[,;/]", cleaned):
-                    p = part.strip()
-                    if 1 < len(p) <= 45 and p not in all_skills:
-                        all_skills.append(p)
+                # Stop collecting as skills if bullet looks like a company/date sub-header
+                if _DATE_OR_PROSE_RE.search(s):
+                    continue
+                cleaned = re.sub(r"^[-*]\s*(?:\*\*[^*]+?\*\*:?)?\s*", "", s)
+                for part in re.split(r"[,;/|]", cleaned):
+                    token = _clean_skill_token(part)
+                    if token and all(existing.lower() != token.lower() for existing in all_skills):
+                        all_skills.append(token)
 
-        taxonomy["frameworks"] = list(dict.fromkeys(taxonomy["qa_automation"] + ["PyTest", "Playwright", "Cypress"]))
-        taxonomy["tools"] = list(
-            dict.fromkeys(taxonomy["api_and_performance"] + taxonomy["cicd_and_devops"] + ["Jira", "Git"])
-        )
+        all_skills = dedupe_skills_case_insensitive(all_skills)
+        taxonomy["frameworks"] = dedupe_skills_case_insensitive(taxonomy["qa_automation"] + ["PyTest", "Playwright", "Cypress"])
+        taxonomy["tools"] = dedupe_skills_case_insensitive(taxonomy["api_and_performance"] + taxonomy["cicd_and_devops"] + ["Jira", "Git"])
         taxonomy["all_skills"] = all_skills
 
         # Optionally enrich via Gemini 2.5 Flash if live key is present

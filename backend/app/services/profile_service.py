@@ -269,6 +269,7 @@ Markdown:
                 ],
                 "djinni_url": "https://djinni.co/jobs/?primary_keyword=Support&employment=remote",
                 "dou_url": "https://jobs.dou.ua/vacancies/?category=Support&remote",
+                "justjoin_url": "https://justjoin.it/job-offers/all-locations/support?workplace=remote",
                 "hr_ge_url": "https://www.hr.ge/search-posting?q=support",
                 "domain_keywords": [
                     "support", "customer service", "client care", "call center", "helpdesk",
@@ -287,6 +288,7 @@ Markdown:
             ],
             "djinni_url": "https://djinni.co/jobs/?primary_keyword=QA&employment=remote",
             "dou_url": "https://jobs.dou.ua/vacancies/?category=QA&remote",
+            "justjoin_url": "https://justjoin.it/job-offers/all-locations/testing?workplace=remote",
             "hr_ge_url": "https://www.hr.ge/search-posting?q=QA",
             "domain_keywords": [
                 "qa", "quality assurance", "tester", "test engineer", "sdet",
@@ -297,12 +299,9 @@ Markdown:
     def upsert_candidate_profile(self, raw_markdown: str, mark_uploaded: bool = True) -> CandidateProfile:
         """
         Extracts structured profile data from raw_markdown and upserts it into CandidateProfile in SQLite/PostgreSQL.
+        All PII stays encrypted at rest in CandidateProfile; never writes plaintext markdown to disk.
         """
         init_db()
-        try:
-            SKILLS_MD_FILE.write_text(raw_markdown, encoding="utf-8")
-        except Exception:
-            pass
 
         extracted = self.extract_structured_profile(raw_markdown)
         skills_payload: Dict[str, Any] = extracted.parsed_skills.model_dump()

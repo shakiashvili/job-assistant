@@ -1,299 +1,410 @@
-import React, { useState, useEffect } from 'react';
-import { FileText, Download, CheckCircle, Tag, Sparkles, RefreshCw, Eye } from 'lucide-react';
-import { fetchGeneratedResumes, BACKEND_ORIGIN } from '../services/api';
-
-type VariantKey =
-  | 'qa_automation'
-  | 'receptionist_hospitality'
-  | 'customer_service'
-  | 'healthcare_hospital'
-  | 'qa_manual'
-  | 'tech_support';
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  FileText,
+  Download,
+  UploadCloud,
+  Trash2,
+  Sparkles,
+  Briefcase,
+  ShieldCheck,
+  UserCheck,
+  Copy,
+  Check,
+  Languages,
+} from 'lucide-react';
+import {
+  fetchMyCvs,
+  uploadPersonalCv,
+  deletePersonalCv,
+  generateCvEdition,
+  fetchScrapedJobs,
+  BACKEND_ORIGIN,
+} from '../services/api';
+import { DbJobPosting } from '../types';
 
 export const CVVariantManager: React.FC = () => {
-  const [activeVariant, setActiveVariant] = useState<VariantKey>('qa_automation');
-  const [generatedResumes, setGeneratedResumes] = useState<
-    Array<{ filename: string; url: string; html_url?: string | null; size_kb: number }>
-  >([]);
+  const [myCvs, setMyCvs] = useState<Array<{ filename: string; url: string; ext: string; size_kb: number }>>([]);
+  const [uploading, setUploading] = useState(false);
+  const [cvLanguage, setCvLanguage] = useState<'en' | 'ka'>('en');
+  const [generatingKey, setGeneratingKey] = useState<string | null>(null);
+  const [targetRole, setTargetRole] = useState('');
+  const [targetCompany, setTargetCompany] = useState('');
+  const [jobsList, setJobsList] = useState<DbJobPosting[]>([]);
+  const [selectedJobId, setSelectedJobId] = useState<string>('');
+  const [generatedOutput, setGeneratedOutput] = useState<{
+    edition: string;
+    title: string;
+    company: string;
+    subject: string;
+    cover_letter: string;
+    docx_filename: string;
+    docx_url: string;
+    pdf_filename: string;
+    pdf_url: string;
+  } | null>(null);
+  const [copiedLetter, setCopiedLetter] = useState(false);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const uploadRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
-    loadGeneratedResumes();
+    loadInitial();
   }, []);
 
-  const loadGeneratedResumes = async () => {
-    const list = await fetchGeneratedResumes();
-    setGeneratedResumes(list);
+  const loadInitial = async () => {
+    const [cvs, jobs] = await Promise.all([
+      fetchMyCvs().catch(() => []),
+      fetchScrapedJobs().catch(() => []),
+    ]);
+    setMyCvs(cvs);
+    setJobsList(jobs);
   };
 
-  const variants: Record<
-    VariantKey,
-    {
-      id: VariantKey;
-      title: string;
-      badge: string;
-      summary: string;
-      keywords: string[];
-      resume_file: string;
-      idealFor: string;
+  const handleUploadFile = async (file: File) => {
+    if (!file) return;
+    setUploading(true);
+    setStatusError(null);
+    try {
+      await uploadPersonalCv(file);
+      const cvs = await fetchMyCvs();
+      setMyCvs(cvs);
+    } catch (err: any) {
+      setStatusError(err.message || 'Failed to upload CV');
+    } finally {
+      setUploading(false);
     }
-  > = {
-    qa_automation: {
-      id: 'qa_automation',
-      title: 'QA Automation Engineer & SDET',
-      badge: '💻 Tech & QA',
-      summary:
-        'QA Automation Engineer with 1.5 years of practical experience building fast, reliable test suites in Playwright, Cypress, and Python. Focused on keeping CI/CD pipelines green and cutting regression cycles from hours to minutes. Available to start 1 week after offer.',
-      keywords: ['Playwright', 'Cypress', 'Python', 'TypeScript', 'CI/CD', 'Docker', 'PyTest', 'API Testing', 'SDET'],
-      resume_file: 'resume_qa_automation.pdf',
-      idealFor: 'Roles on DOU.ua, Djinni.co, Jobs.ge, JustJoin.it requiring Playwright, Cypress, Python, SDET, and CI/CD.',
-    },
-    receptionist_hospitality: {
-      id: 'receptionist_hospitality',
-      title: 'Front Desk Receptionist & Guest Relations (მიმღები-რეცეფციონისტი)',
-      badge: '🏨 Hospitality & Hotels',
-      summary:
-        'Warm, organized, and detail-oriented Front Desk Receptionist and Hospitality Specialist with experience at boutique and international hotels. Skilled in Opera PMS, Fidelio, Booking.com/Expedia channel management, VIP guest check-in/check-out, and calm multi-line phone handling in Georgian and English.',
-      keywords: [
-        'Opera PMS',
-        'Fidelio',
-        'Guest Check-in / Check-out',
-        'Booking.com & Expedia',
-        'Reservation Management',
-        'VIP Guest Relations',
-        'POS & Cash Billing',
-        'Georgian & English',
-      ],
-      resume_file: 'resume_qa_automation.pdf',
-      idealFor: 'Hotel Receptionist, Front Office, Concierge, and Guest Relations roles on Jobs.ge, HR.ge, and HeadHunter.ge.',
-    },
-    customer_service: {
-      id: 'customer_service',
-      title: 'Customer Service & Client Care Specialist (მომხმარებელთა მხარდაჭერა)',
-      badge: '🎧 Customer Care',
-      summary:
-        'Empathetic and high-performing Customer Service & Client Success Specialist with proven experience supporting international customers across live chat, email, and phone. Expert in Zendesk, Intercom, Salesforce CRM, conflict de-escalation, and maintaining 98%+ CSAT scores.',
-      keywords: [
-        'Omnichannel Support',
-        'Zendesk',
-        'Intercom',
-        'Salesforce CRM',
-        'Conflict De-escalation',
-        'CSAT / NPS',
-        'Live Chat & Phone',
-        'SLA Management',
-      ],
-      resume_file: 'resume_tech_support.pdf',
-      idealFor: 'Customer Support, Call Center, Client Relations, and Account Care roles on Jobs.ge, Djinni, and remote BPOs.',
-    },
-    healthcare_hospital: {
-      id: 'healthcare_hospital',
-      title: 'Hospital Patient Coordinator & Medical Receptionist (სამედიცინო კოორდინატორი)',
-      badge: '🏥 Hospital & Clinic',
-      summary:
-        'Compassionate, composed, and highly organized Hospital Patient Coordinator & Medical Receptionist with experience in modern multi-profile clinics and hospitals. Proficient in Electronic Medical Records (EMR/EHR), patient registration, insurance claims verification, and doctor appointment scheduling.',
-      keywords: [
-        'Patient Registration',
-        'EMR / EHR Systems',
-        'Health Insurance Verification',
-        'Appointment Scheduling',
-        'Medical Front Desk',
-        'Triage Coordination',
-        'Medical Confidentiality',
-      ],
-      resume_file: 'resume_qa_manual.pdf',
-      idealFor: 'Hospitals, Multi-profile Clinics, Medical Reception, and Patient Coordination roles on HR.ge and Jobs.ge.',
-    },
-    qa_manual: {
-      id: 'qa_manual',
-      title: 'Quality Assurance & Release Specialist',
-      badge: '🔍 Product QA',
-      summary:
-        'Quality Assurance Specialist focused on exploratory testing, BDD requirements validation, test case design, regression management, and cross-browser quality audits across SaaS and FinTech platforms. Available 1 week after offer.',
-      keywords: ['Manual Testing', 'Test Plans', 'Jira', 'Xray', 'Exploratory Testing', 'Bug Reporting', 'BDD', 'Agile'],
-      resume_file: 'resume_qa_manual.pdf',
-      idealFor: 'Roles emphasizing exploratory testing, user acceptance testing, compliance, and release governance.',
-    },
-    tech_support: {
-      id: 'tech_support',
-      title: 'Technical Support Engineer / Solutions Specialist',
-      badge: '🛠️ Tech Support',
-      summary:
-        'Technical Support & QA Engineer with strong debugging skills in REST APIs, SQL queries, network logs, and web UI diagnostics. Bridges customer escalations and engineering teams. Available 1 week after offer.',
-      keywords: ['Tier 3 Support', 'REST APIs', 'SQL Debugging', 'Log Analysis', 'SaaS Troubleshooting', 'Postman'],
-      resume_file: 'resume_tech_support.pdf',
-      idealFor: 'Roles focusing on Tier-3 customer support, API escalation, and technical solutions engineering.',
-    },
   };
 
-  const current = variants[activeVariant];
+  const handleDeleteCv = async (filename: string) => {
+    try {
+      await deletePersonalCv(filename);
+      setMyCvs((prev) => prev.filter((c) => c.filename !== filename));
+    } catch (err: any) {
+      setStatusError(err.message || 'Failed to remove CV');
+    }
+  };
+
+  const handleSelectVacancy = (idStr: string) => {
+    setSelectedJobId(idStr);
+    const found = jobsList.find((j) => String(j.id) === idStr);
+    if (found) {
+      setTargetRole(found.title);
+      setTargetCompany(found.company);
+    }
+  };
+
+  const handleGenerate = async (edition: 'ats' | 'recruiter' | 'tailored') => {
+    setGeneratingKey(edition);
+    setStatusError(null);
+    try {
+      const selectedJob = jobsList.find((j) => String(j.id) === selectedJobId);
+      const res = await generateCvEdition({
+        edition,
+        target_role: edition === 'tailored' ? targetRole || selectedJob?.title : undefined,
+        target_company: edition === 'tailored' ? targetCompany || selectedJob?.company : undefined,
+        job_description: edition === 'tailored' ? selectedJob?.description_raw || '' : '',
+        cv_language: cvLanguage,
+      });
+      setGeneratedOutput({
+        edition: res.edition,
+        title: res.title,
+        company: res.company,
+        subject: res.subject,
+        cover_letter: res.cover_letter,
+        docx_filename: res.docx_filename,
+        docx_url: res.docx_url,
+        pdf_filename: res.pdf_filename,
+        pdf_url: res.pdf_url,
+      });
+    } catch (err: any) {
+      setStatusError(err.message || 'Could not generate CV edition. Make sure skills.md is uploaded.');
+    } finally {
+      setGeneratingKey(null);
+    }
+  };
+
+  const copyCoverLetter = () => {
+    if (!generatedOutput?.cover_letter) return;
+    navigator.clipboard.writeText(generatedOutput.cover_letter);
+    setCopiedLetter(true);
+    setTimeout(() => setCopiedLetter(false), 2500);
+  };
 
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl">
-        <h2 className="text-xl font-bold text-white flex items-center gap-2">
-          <FileText className="w-5 h-5 text-sky-400" />
-          Multi-Industry & Bilingual (EN / KA ქართული) CV Variants
-        </h2>
-        <p className="text-sm text-slate-400 mt-1">
-          Every time you audit or stage a vacancy, the system generates a custom PDF & Printable HTML CV in{' '}
-          <strong className="text-slate-200">English</strong> or <strong className="text-emerald-300">Georgian (ქართული ენა)</strong>{' '}
-          tailored to that exact company and role from your <code className="text-sky-300">candidate_skills.md</code>.
-        </p>
+      <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-bold text-white flex items-center gap-2">
+            <FileText className="w-5 h-5 text-sky-400" />
+            My CVs &amp; Ready Word / PDF Editions
+          </h2>
+          <p className="text-sm text-slate-400 mt-1">
+            Store your personal resumes and generate clean <strong className="text-white">Word (.docx)</strong> and{' '}
+            <strong className="text-white">PDF</strong> editions built specifically for <strong className="text-sky-300">ATS</strong>,{' '}
+            <strong className="text-emerald-300">Recruiters</strong>, and <strong className="text-amber-300">Specific Jobs</strong>.
+          </p>
+        </div>
+
+        {/* Language Selector */}
+        <div className="flex items-center gap-1.5 bg-slate-950 p-1.5 rounded-xl border border-slate-800 self-start sm:self-auto">
+          <Languages className="w-4 h-4 text-slate-400 ml-1" />
+          <button
+            type="button"
+            onClick={() => setCvLanguage('en')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+              cvLanguage === 'en' ? 'bg-sky-600 text-white' : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            English
+          </button>
+          <button
+            type="button"
+            onClick={() => setCvLanguage('ka')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+              cvLanguage === 'ka' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            ქართული
+          </button>
+        </div>
       </div>
 
-      {/* Dynamically Generated Per-Vacancy PDF CVs */}
+      {statusError && (
+        <div className="p-3 bg-rose-950/40 border border-rose-800 rounded-xl text-xs text-rose-300">
+          {statusError}
+        </div>
+      )}
+
+      {/* 1. My Uploaded CVs */}
       <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl space-y-4">
-        <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h3 className="text-base font-bold text-white flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-emerald-400" />
-              Dynamically Generated Per-Vacancy CVs ({generatedResumes.length})
+              <UploadCloud className="w-4 h-4 text-sky-400" />
+              My Uploaded CVs ({myCvs.length})
             </h3>
             <p className="text-xs text-slate-400">
-              Generated in a natural human tone in English (EN) and Georgian (KA) across QA, Hospitality, Customer Care, and Healthcare.
+              Keep your own master Word (<code>.docx</code>) or PDF resumes ready here (stored privately, never pushed to Git).
             </p>
           </div>
+          <input
+            ref={uploadRef}
+            type="file"
+            accept=".pdf,.docx,.doc,.md,.txt"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleUploadFile(f);
+            }}
+          />
           <button
-            onClick={loadGeneratedResumes}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-300"
+            type="button"
+            onClick={() => uploadRef.current?.click()}
+            disabled={uploading}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold shadow-sm transition-colors disabled:opacity-50"
           >
-            <RefreshCw className="w-3.5 h-3.5" />
-            <span>Refresh</span>
+            <UploadCloud className="w-4 h-4" />
+            <span>{uploading ? 'Uploading...' : 'Upload My CV (.docx / .pdf)'}</span>
           </button>
         </div>
 
-        {generatedResumes.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {generatedResumes.map((item) => {
-              const isGeorgian = item.filename.includes('_KA.');
-              return (
-                <div
-                  key={item.filename}
-                  className="p-4 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-3"
-                >
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <span
-                        className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                          isGeorgian
-                            ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
-                            : 'bg-sky-950 text-sky-300 border border-sky-800'
-                        }`}
-                      >
-                        {isGeorgian ? '🇬🇪 KA' : '🇬🇧 EN'}
-                      </span>
-                      <div className="text-xs font-bold text-white truncate">{item.filename}</div>
-                    </div>
-                    <div className="text-[11px] text-slate-500 mt-0.5">
-                      Human-Tone Tailored CV • {item.size_kb} KB
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1.5 flex-shrink-0">
-                    <a
-                      href={`${BACKEND_ORIGIN}${item.url}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      <span>PDF</span>
-                    </a>
-                    {item.html_url && (
-                      <a
-                        href={`${BACKEND_ORIGIN}${item.html_url}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700"
-                        title="Open Printable HTML View"
-                      >
-                        <Eye className="w-3.5 h-3.5" />
-                      </a>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+        {myCvs.length === 0 ? (
+          <div className="text-xs text-slate-500 border border-dashed border-slate-800 bg-slate-950/50 rounded-xl p-6 text-center">
+            No personal CV uploaded yet. Click <strong>Upload My CV</strong> above to store your own <code>.docx</code> or <code>.pdf</code> file.
           </div>
         ) : (
-          <div className="text-xs text-slate-500 italic py-4">
-            No per-vacancy PDFs generated yet — click "Audit & Generate CV" in the Audit & Stage tab to generate one!
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {myCvs.map((cv) => (
+              <div
+                key={cv.filename}
+                className="p-4 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-3"
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-sky-950 text-sky-300 border border-sky-800">
+                      .{cv.ext}
+                    </span>
+                    <div className="text-xs font-semibold text-white truncate">{cv.filename}</div>
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-1">{cv.size_kb} KB</div>
+                </div>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <a
+                    href={`${BACKEND_ORIGIN}${cv.url}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-2 rounded-lg bg-slate-900 hover:bg-sky-600 text-slate-300 hover:text-white border border-slate-800 transition-colors"
+                    title="Download CV"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteCv(cv.filename)}
+                    className="p-2 rounded-lg bg-slate-900 hover:bg-rose-600 text-slate-400 hover:text-white border border-slate-800 transition-colors"
+                    title="Delete CV"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>
 
-      {/* Variant Selector Tabs (6 Multi-Industry Templates) */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {(Object.keys(variants) as VariantKey[]).map((key) => {
-          const v = variants[key];
-          const isSelected = activeVariant === key;
-          return (
-            <div
-              key={key}
-              onClick={() => setActiveVariant(key)}
-              className={`p-5 rounded-2xl border cursor-pointer transition-all ${
-                isSelected
-                  ? 'bg-slate-900 border-sky-500/80 shadow-lg shadow-sky-500/10'
-                  : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] font-semibold uppercase px-2.5 py-0.5 rounded-full bg-sky-950 text-sky-400 border border-sky-800">
-                  {v.badge}
-                </span>
-                {isSelected && <CheckCircle className="w-4 h-4 text-sky-400" />}
-              </div>
-              <h3 className="text-sm font-bold text-white leading-snug">{v.title}</h3>
-              <p className="text-xs text-slate-400 line-clamp-2 mt-1.5">{v.summary}</p>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Active Variant Deep Dive */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-5">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
-          <div>
-            <span className="text-xs font-semibold uppercase tracking-wider text-sky-400">Industry Profile Template</span>
-            <h3 className="text-lg font-bold text-white">{current.title}</h3>
-            <p className="text-xs text-slate-400 mt-0.5">{current.idealFor}</p>
+      {/* 2. Curated CV Editions (ATS, Recruiter, Job-Specific) */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* Card 1: ATS-Optimized */}
+        <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl flex flex-col justify-between space-y-4">
+          <div className="space-y-2">
+            <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase px-2.5 py-1 rounded-full bg-sky-950 text-sky-300 border border-sky-800">
+              <ShieldCheck className="w-3.5 h-3.5" />
+              ATS-Optimized
+            </span>
+            <h3 className="text-base font-bold text-white">ATS-Parser Clean CV</h3>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Strict single-column structure with zero tables or columns so Greenhouse, Lever, and portal ATS scanners extract 100% of your skills.
+            </p>
           </div>
-
-          <a
-            href={`${BACKEND_ORIGIN}/api/resumes/${current.resume_file}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 transition-colors self-start sm:self-auto"
+          <button
+            type="button"
+            onClick={() => handleGenerate('ats')}
+            disabled={generatingKey !== null}
+            className="w-full py-2.5 px-4 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
           >
-            <Download className="w-4 h-4" />
-            <span>Download Base PDF</span>
-          </a>
+            <Sparkles className="w-4 h-4" />
+            <span>{generatingKey === 'ats' ? 'Generating Word & PDF...' : 'Build ATS Word (.docx) + PDF'}</span>
+          </button>
         </div>
 
-        <div>
-          <h4 className="text-xs font-semibold uppercase text-slate-400 mb-2">Human-Tone Summary</h4>
-          <p className="text-xs text-slate-300 leading-relaxed bg-slate-950 p-4 rounded-xl border border-slate-800">
-            {current.summary}
-          </p>
-        </div>
-
-        <div>
-          <h4 className="text-xs font-semibold uppercase text-slate-400 mb-2 flex items-center gap-1.5">
-            <Tag className="w-3.5 h-3.5" />
-            <span>Target Industry & ATS Keywords</span>
-          </h4>
-          <div className="flex flex-wrap gap-2">
-            {current.keywords.map((kw) => (
-              <span
-                key={kw}
-                className="text-xs px-3 py-1 rounded-lg bg-slate-950 border border-slate-800 text-slate-300 font-medium"
-              >
-                {kw}
-              </span>
-            ))}
+        {/* Card 2: Recruiter-Ready */}
+        <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl flex flex-col justify-between space-y-4">
+          <div className="space-y-2">
+            <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase px-2.5 py-1 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800">
+              <UserCheck className="w-3.5 h-3.5" />
+              For Recruiters
+            </span>
+            <h3 className="text-base font-bold text-white">Recruiter Fast-Scan CV</h3>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Highlights impact bullets, clear stack grouping, availability, and concise human-tone executive summary crafted for 10-second recruiter review.
+            </p>
           </div>
+          <button
+            type="button"
+            onClick={() => handleGenerate('recruiter')}
+            disabled={generatingKey !== null}
+            className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+          >
+            <Sparkles className="w-4 h-4" />
+            <span>{generatingKey === 'recruiter' ? 'Generating Word & PDF...' : 'Build Recruiter Word (.docx) + PDF'}</span>
+          </button>
+        </div>
+
+        {/* Card 3: Job-Specific Tailored */}
+        <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl flex flex-col justify-between space-y-4">
+          <div className="space-y-3">
+            <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase px-2.5 py-1 rounded-full bg-amber-950 text-amber-300 border border-amber-800">
+              <Briefcase className="w-3.5 h-3.5" />
+              For Specific Jobs
+            </span>
+            <h3 className="text-base font-bold text-white">Job-Tailored CV &amp; Cover Letter</h3>
+            {jobsList.length > 0 && (
+              <select
+                value={selectedJobId}
+                onChange={(e) => handleSelectVacancy(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
+              >
+                <option value="">-- Optional: pick matched vacancy --</option>
+                {jobsList.slice(0, 20).map((j) => (
+                  <option key={j.id} value={String(j.id)}>
+                    {j.title} ({j.company})
+                  </option>
+                ))}
+              </select>
+            )}
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                type="text"
+                placeholder="Role (e.g. Manual QA)"
+                value={targetRole}
+                onChange={(e) => setTargetRole(e.target.value)}
+                className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
+              />
+              <input
+                type="text"
+                placeholder="Company (e.g. GenofIT)"
+                value={targetCompany}
+                onChange={(e) => setTargetCompany(e.target.value)}
+                className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
+              />
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => handleGenerate('tailored')}
+            disabled={generatingKey !== null}
+            className="w-full py-2.5 px-4 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+          >
+            <Sparkles className="w-4 h-4" />
+            <span>{generatingKey === 'tailored' ? 'Generating Package...' : 'Build Job Word (.docx) + Letter'}</span>
+          </button>
         </div>
       </div>
+
+      {/* 3. Output Download & Cover Letter Preview Card */}
+      {generatedOutput && (
+        <div className="bg-slate-900 border border-sky-700/60 p-6 rounded-2xl space-y-4 shadow-xl">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-sky-400">
+                Ready for Application ({generatedOutput.edition.toUpperCase()})
+              </span>
+              <h3 className="text-base font-bold text-white">
+                {generatedOutput.title} — {generatedOutput.company}
+              </h3>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <a
+                href={`${BACKEND_ORIGIN}${generatedOutput.docx_url}`}
+                download={generatedOutput.docx_filename}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-sm"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Download Word (.docx)</span>
+              </a>
+              <a
+                href={`${BACKEND_ORIGIN}${generatedOutput.pdf_url}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Download PDF</span>
+              </a>
+            </div>
+          </div>
+
+          <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-300">
+                Email Subject: <code className="text-sky-300">{generatedOutput.subject}</code>
+              </span>
+              <button
+                type="button"
+                onClick={copyCoverLetter}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-xs text-slate-300 border border-slate-700"
+              >
+                {copiedLetter ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedLetter ? 'Copied Cover Letter!' : 'Copy Cover Letter'}</span>
+              </button>
+            </div>
+            <pre className="text-xs text-slate-300 whitespace-pre-wrap font-sans leading-relaxed pt-2 border-t border-slate-800">
+              {generatedOutput.cover_letter}
+            </pre>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -113,23 +113,25 @@ class AuditService:
         raw_details = gemini_service.extract_job_details(extracted_text, portal=inferred_portal)
         details = JobDetails(**raw_details)
 
-        # Market & Dynamic AI Salary Estimation (never asks the user for salary)
+        # Market & Strict Explicit Salary Extraction (never fabricates unstated salary amounts)
         market = "GE" if details.portal in ("jobs.ge", "hr.ge", "headhunter.ge") else (
             "UA_REMOTE" if details.portal == "dou.ua" else "INT_REMOTE"
         )
         details.market = market
-        sal_est = salary_service.estimate_salary(
+        sal_info = salary_service.extract_vacancy_salary(
             title=details.title,
             description=extracted_text,
-            market=market,
-            portal=details.portal,
         )
-        details.salary_min = sal_est["min_salary"]
-        details.salary_max = sal_est["max_salary"]
-        details.salary_currency = sal_est["currency"]
-        details.salary_estimated_by_ai = sal_est["salary_estimated_by_ai"]
-        est_badge = "AI Estimated" if sal_est["salary_estimated_by_ai"] else "Extracted from Job"
-        details.salary_range = f"{sal_est['min_salary']:g} – {sal_est['max_salary']:g} {sal_est['currency']}/mo ({est_badge})"
+        details.salary_min = sal_info["min_salary"]
+        details.salary_max = sal_info["max_salary"]
+        details.salary_currency = sal_info["currency"]
+        details.salary_estimated_by_ai = False
+        if sal_info["min_salary"] and sal_info["max_salary"]:
+            details.salary_range = f"{sal_info['min_salary']:g} – {sal_info['max_salary']:g} {sal_info['currency']}/mo (Extracted from Job)"
+        elif sal_info.get("is_unpaid"):
+            details.salary_range = "Unpaid Internship / No Compensation"
+        else:
+            details.salary_range = "Salary not specified"
 
         # 1. Skills Match & Gaps Analysis
         req_skills = details.required_skills or []
@@ -177,9 +179,10 @@ class AuditService:
         skills_score = int((len(matched) / max(len(req_skills), 1)) * 100) if req_skills else 92
         skills_score = min(100, skills_score)
 
-        # 2. Experience Match
-        candidate_exp_years = 5.0
-        required_exp = details.experience_years_required or 2
+        # 2. Experience Match (read real experience from uploaded CandidateProfile)
+        prof_record = ground_truth_store.get_profile_record()
+        candidate_exp_years = float(getattr(prof_record, "experience_years", 1.5) or 1.5)
+        required_exp = details.experience_years_required or 1
         if candidate_exp_years >= required_exp:
             exp_score = 100
         else:
@@ -203,16 +206,16 @@ class AuditService:
                 candidate_status="Policy requires 3+ verified employee reviews on job portals before applying."
             ))
 
-        # 5. Visa / Work Auth Match
+        # 5. Work Authorization & Remote B2B Compatibility (prioritizes skills, flags only strict citizenship clearances)
         visa_score = 100
         visa_text = (details.visa_requirements or "").lower()
-        if "us citizen" in visa_text or "citizenship required" in visa_text:
+        if "us citizen" in visa_text or "citizenship required" in visa_text or "citizenship mandatory" in visa_text:
             visa_score = 10
             blockers.append(Blocker(
                 category="visa",
                 severity="critical",
                 description="Position mandates US Citizenship / Clearances.",
-                candidate_status="Candidate operates from Georgia / EU / Remote Abroad."
+                candidate_status="Candidate operates from Georgia / Remote B2B Contractor."
             ))
         elif "security clearance" in visa_text:
             visa_score = 10
@@ -235,15 +238,16 @@ class AuditService:
             blockers.append(Blocker(
                 category="language",
                 severity="critical",
-                description=f"Filtered Out ({gate_reason}): Vacancy requires Ukrainian/Russian or non-remote attendance.",
-                candidate_status="Strict English-only Remote filter active for Ukrainian/Regional platforms."
+                description=f"Filtered Out ({gate_reason}): Vacancy requires local Slavic/Polish fluency or non-remote attendance.",
+                candidate_status="Strict English Remote filter active for international portals."
             ))
 
+        # Overall score prioritizes verified skills, ATS fit, and recruiter alignment rather than visa hurdles
         overall_score = int(
-            (skills_score * 0.35) +
+            (skills_score * 0.45) +
             (ats_score * 0.25) +
             (recruiter_score * 0.25) +
-            (visa_score * 0.15)
+            (visa_score * 0.05)
         )
         if any(b.severity == "critical" for b in blockers):
             overall_score = min(overall_score, 45)

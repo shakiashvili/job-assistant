@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 from typing import Dict, Any, List, Optional
@@ -8,11 +9,10 @@ logger = logging.getLogger(__name__)
 
 class DouScraper(BasePortalScraper):
     """
-    Ukrainian & Regional Portal Scraper for DOU.ua (jobs.dou.ua)
-    Query Filters: QA, QA Automation, SDET positions (Remote / Relocation).
-    Enforces Strict Remote Gate & Strict Slavic Language Filter:
-    - Any vacancy requiring Ukrainian or Russian fluency (вільно, українськ, русский, разговорный)
-      is marked status = "FILTERED_OUT" with filter_out_reason = "Mandatory local Slavic language requirement".
+    Ukrainian & Regional Portal Scraper for DOU.ua (jobs.dou.ua).
+    Fetches full detail pages so Ukrainian city/UI metadata does not trigger
+    false language rejections on English-language Global Remote openings, while
+    still strictly filtering out roles whose requirements demand Ukrainian/Russian.
     """
 
     portal_name = "dou.ua"
@@ -22,6 +22,7 @@ class DouScraper(BasePortalScraper):
     def parse_html_listings(self, html: str) -> List[Dict[str, Any]]:
         soup = self.make_soup(html)
         results: List[Dict[str, Any]] = []
+        seen_ids: set[str] = set()
 
         items = soup.select("li.l-vacancy, div.vacancy")
         for idx, item in enumerate(items):
@@ -40,6 +41,9 @@ class DouScraper(BasePortalScraper):
 
             id_match = re.search(r"vacancies/(\d+)", url)
             ext_id = f"dou-{id_match.group(1)}" if id_match else f"dou-row-{idx}"
+            if ext_id in seen_ids:
+                continue
+            seen_ids.add(ext_id)
 
             is_remote, status, filter_reason, langs = evaluate_remote_and_language_gate(
                 title=title,
@@ -56,6 +60,7 @@ class DouScraper(BasePortalScraper):
                 "url": url,
                 "market": self.market,
                 "is_remote": is_remote,
+                "location_meta": location_text,
                 "channel": "WEB_FORM",
                 "detected_languages": langs,
                 "language_requirements": langs,
@@ -71,6 +76,38 @@ class DouScraper(BasePortalScraper):
         """Purged: never inject dead static vacancies when offline."""
         return []
 
+    async def _enrich_and_verify_item(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Fetches full DOU vacancy body so English remote listings evaluate accurately."""
+        html = await self.fetch_html(item["url"], timeout=8.0)
+        if not html:
+            return item
+
+        soup = self.make_soup(html)
+        desc_el = soup.select_one("div.b-typo.vacancy-section, div.l-vacancy")
+        if not desc_el:
+            return item
+
+        body_text = desc_el.get_text(" ", strip=True)
+        sal_el = soup.select_one("span.salary")
+        sal_txt = sal_el.get_text(" ", strip=True) if sal_el else ""
+        loc_meta = item.get("location_meta") or "Remote"
+
+        is_remote, status, filter_reason, langs = evaluate_remote_and_language_gate(
+            title=item["title"],
+            description=body_text,
+            location_text=loc_meta,
+            portal=self.portal_name,
+        )
+        full_desc = f"{sal_txt} | {body_text}".strip(" |") if sal_txt else body_text
+        item["is_remote"] = is_remote
+        item["status"] = status
+        item["filter_out_reason"] = filter_reason or None
+        item["match_rationale"] = filter_reason
+        item["detected_languages"] = langs
+        item["language_requirements"] = langs
+        item["description_raw"] = full_desc[:6000]
+        return item
+
     async def scrape(
         self,
         allow_network: bool = True,
@@ -79,12 +116,28 @@ class DouScraper(BasePortalScraper):
         if not allow_network:
             return []
         target_url = search_url or self.SEARCH_URL
-        html = await self.fetch_html(target_url)
-        if html:
-            parsed = self.parse_html_listings(html)
-            if parsed:
-                return parsed[:10]
-        return []
+        urls = [target_url]
+        if "category=QA" in target_url and "search=" not in target_url:
+            urls.append("https://jobs.dou.ua/vacancies/?category=QA&search=Automation&remote")
+
+        pages = await asyncio.gather(*(self.fetch_html(u) for u in urls), return_exceptions=True)
+        candidates: List[Dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for html in pages:
+            if isinstance(html, str) and html:
+                for item in self.parse_html_listings(html):
+                    if item["external_id"] not in seen_ids:
+                        seen_ids.add(item["external_id"])
+                        candidates.append(item)
+
+        if not candidates:
+            return []
+
+        enriched = await asyncio.gather(
+            *(self._enrich_and_verify_item(c) for c in candidates[:18]),
+            return_exceptions=True,
+        )
+        return [x for x in enriched if isinstance(x, dict)]
 
 
 dou_scraper = DouScraper()

@@ -114,6 +114,7 @@ class CVGeneratorService:
         dou_motivational_letter: str,
         skills_md_override: Optional[str] = None,
         cv_language: str = "en",
+        cv_style: str = "tailored",
     ) -> Dict[str, Any]:
         gt = ground_truth_store.get_data()
         skills_md = skills_md_override or gt.get("skills_md_raw") or ground_truth_store.get_skills_md()
@@ -129,8 +130,7 @@ class CVGeneratorService:
         if parsed_md.get("phone"):
             candidate["phone"] = parsed_md["phone"]
 
-        md_skills = parsed_md.get("skills") or []
-        core_skills = md_skills or gt.get("skills", {}).get("core", [])
+        core_skills = gt.get("skills", {}).get("core", []) or parsed_md.get("skills") or []
         work_history = parsed_md.get("work_history") or gt.get("work_history", [])
         education = gt.get("education", [])
 
@@ -152,13 +152,16 @@ class CVGeneratorService:
         uid = uuid.uuid4().hex[:6]
         base_name = f"CV_{safe_company}_{safe_role}_{uid}_{lang_suffix}"
         pdf_filename = f"{base_name}.pdf"
+        docx_filename = f"{base_name}.docx"
         html_filename = f"{base_name}.html"
         pdf_path = GENERATED_RESUMES_DIR / pdf_filename
+        docx_path = GENERATED_RESUMES_DIR / docx_filename
         html_path = GENERATED_RESUMES_DIR / html_filename
 
         # Also write the canonical non-versioned link so legacy lookups still succeed
         canonical_base = f"CV_{safe_company}_{safe_role}_{lang_suffix}"
         canonical_pdf = GENERATED_RESUMES_DIR / f"{canonical_base}.pdf"
+        canonical_docx = GENERATED_RESUMES_DIR / f"{canonical_base}.docx"
         canonical_html = GENERATED_RESUMES_DIR / f"{canonical_base}.html"
 
         tailored_highlights = []
@@ -179,7 +182,7 @@ class CVGeneratorService:
         )
         html_path.write_text(html_content, encoding="utf-8")
 
-        # 2. Build Clean Single-Column ATS PDF via ReportLab
+        # 2. Build Clean Single-Column PDF via ReportLab
         self._build_reportlab_single_column_pdf(
             filepath=pdf_path,
             candidate=candidate,
@@ -192,10 +195,25 @@ class CVGeneratorService:
             cv_language=cv_language,
         )
 
+        # 3. Build Ready Microsoft Word (.docx) CV via python-docx
+        self._build_docx_cv(
+            filepath=docx_path,
+            candidate=candidate,
+            target_role=job_title,
+            target_company=company,
+            human_summary=human_summary,
+            display_skills=display_skills,
+            work_history=work_history,
+            education=education,
+            cv_language=cv_language,
+            cv_style=cv_style,
+        )
+
         try:
             canonical_html.write_text(html_content, encoding="utf-8")
             import shutil
             shutil.copy2(pdf_path, canonical_pdf)
+            shutil.copy2(docx_path, canonical_docx)
         except Exception as e:
             logger.debug(f"Canonical resume copy note: {e}")
 
@@ -204,10 +222,13 @@ class CVGeneratorService:
         return {
             "pdf_filename": pdf_filename,
             "pdf_url": f"/api/resumes/generated/{pdf_filename}",
+            "docx_filename": docx_filename,
+            "docx_url": f"/api/resumes/generated/{docx_filename}",
             "html_preview_url": f"/api/resumes/generated/{html_filename}",
             "pdf_path": str(pdf_path),
+            "docx_path": str(docx_path),
             "cv_language": cv_language,
-            "candidate_name": candidate.get("full_name", "Alex Mercer"),
+            "candidate_name": candidate.get("full_name", "Candidate"),
             "target_role": job_title,
             "human_tone_summary": human_summary,
             "applicant_summary": human_summary,
@@ -216,8 +237,136 @@ class CVGeneratorService:
             "tailored_highlights": tailored_highlights,
             "ats_keywords_covered": matched_skills or display_skills[:8],
             "start_date_default": start_date_str,
-            "expected_salary": f"EUR {candidate.get('compensation', {}).get('expected_salary_eur', 85000):,} / year (or local market rate)",
+            "expected_salary": "Negotiable / Market Rate",
         }
+
+    def _build_docx_cv(
+        self,
+        filepath: Path,
+        candidate: Dict[str, Any],
+        target_role: str,
+        target_company: str,
+        human_summary: str,
+        display_skills: List[str],
+        work_history: List[Dict[str, Any]],
+        education: List[Dict[str, Any]],
+        cv_language: str = "en",
+        cv_style: str = "tailored",
+    ) -> None:
+        """Builds a clean, editable Microsoft Word (.docx) CV in ATS, Recruiter, or Job-Tailored edition."""
+        from docx import Document
+        from docx.shared import Inches, Pt, RGBColor
+
+        is_ka = cv_language == "ka"
+        doc = Document()
+        for sec in doc.sections:
+            sec.top_margin = Inches(0.6)
+            sec.bottom_margin = Inches(0.6)
+            sec.left_margin = Inches(0.7)
+            sec.right_margin = Inches(0.7)
+
+        accent = RGBColor(0x0F, 0x17, 0x2A) if cv_style == "ats" else RGBColor(0x03, 0x69, 0xA1)
+        subtle = RGBColor(0x47, 0x55, 0x69)
+
+        full_name = str(candidate.get("full_name", "Candidate"))
+        email = str(candidate.get("email", "candidate@example.com"))
+        phone = str(candidate.get("phone", "+000 000 0000"))
+        loc_dict = candidate.get("location", {})
+        loc = (
+            f"{loc_dict.get('city', 'Tbilisi')}, {loc_dict.get('country', 'Georgia')}"
+            if isinstance(loc_dict, dict)
+            else str(loc_dict)
+        )
+        links = candidate.get("links", {}) if isinstance(candidate.get("links"), dict) else {}
+        linkedin = str(links.get("linkedin", ""))
+        github = str(links.get("github", ""))
+
+        p_name = doc.add_paragraph()
+        p_name.paragraph_format.space_after = Pt(2)
+        r_name = p_name.add_run(full_name)
+        r_name.bold = True
+        r_name.font.size = Pt(18)
+        r_name.font.color.rgb = RGBColor(0x0F, 0x17, 0x2A)
+
+        role_heading = target_role if cv_style != "ats" else f"{target_role} | ATS Edition"
+        p_role = doc.add_paragraph()
+        p_role.paragraph_format.space_after = Pt(3)
+        r_role = p_role.add_run(role_heading)
+        r_role.bold = True
+        r_role.font.size = Pt(11.5)
+        r_role.font.color.rgb = accent
+
+        contact_parts = [x for x in [email, phone, loc, linkedin, github] if x]
+        p_contact = doc.add_paragraph()
+        p_contact.paragraph_format.space_after = Pt(8)
+        r_contact = p_contact.add_run("  |  ".join(contact_parts))
+        r_contact.font.size = Pt(9.5)
+        r_contact.font.color.rgb = subtle
+
+        def add_section_heading(title_text: str) -> None:
+            p_h = doc.add_paragraph()
+            p_h.paragraph_format.space_before = Pt(8)
+            p_h.paragraph_format.space_after = Pt(3)
+            run = p_h.add_run(title_text)
+            run.bold = True
+            run.font.size = Pt(10.5)
+            run.font.color.rgb = accent
+
+        lbl_summary = "პროფესიული მიმოხილვა" if is_ka else ("PROFESSIONAL SUMMARY" if cv_style != "recruiter" else f"EXECUTIVE PROFILE — {target_role.upper()}")
+        lbl_skills = "ძირითადი უნარები" if is_ka else ("TECHNICAL SKILLS MATRIX" if cv_style == "ats" else "CORE COMPETENCIES & STACK")
+        lbl_exp = "სამუშაო გამოცდილება" if is_ka else "WORK EXPERIENCE"
+        lbl_edu = "განათლება და ენები" if is_ka else "EDUCATION & LANGUAGES"
+
+        add_section_heading(lbl_summary)
+        p_sum = doc.add_paragraph(human_summary)
+        p_sum.paragraph_format.space_after = Pt(4)
+        for r in p_sum.runs:
+            r.font.size = Pt(10)
+
+        add_section_heading(lbl_skills)
+        skills_text = ", ".join(display_skills[:24]) if display_skills else "QA Testing, Test Automation, REST API"
+        p_sk = doc.add_paragraph(skills_text)
+        p_sk.paragraph_format.space_after = Pt(4)
+        for r in p_sk.runs:
+            r.font.size = Pt(10)
+
+        if work_history:
+            add_section_heading(lbl_exp)
+            for job in work_history[:5]:
+                dates = f"{job.get('start_date', '')} – {job.get('end_date', '')}".strip(" –")
+                p_j = doc.add_paragraph()
+                p_j.paragraph_format.space_before = Pt(4)
+                p_j.paragraph_format.space_after = Pt(2)
+                rj = p_j.add_run(f"{job.get('role', '')} — {job.get('company', '')}")
+                rj.bold = True
+                rj.font.size = Pt(10.5)
+                if dates:
+                    rd = p_j.add_run(f"   ({dates})")
+                    rd.font.size = Pt(9.5)
+                    rd.font.color.rgb = subtle
+                for b in job.get("highlights", [])[:5]:
+                    p_b = doc.add_paragraph(style="List Bullet")
+                    p_b.paragraph_format.space_after = Pt(2)
+                    rb = p_b.add_run(str(b))
+                    rb.font.size = Pt(9.5)
+
+        add_section_heading(lbl_edu)
+        if education:
+            for edu in education:
+                p_e = doc.add_paragraph(f"{edu.get('degree', '')} — {edu.get('institution', '')} ({edu.get('graduation_year', '')})")
+                p_e.paragraph_format.space_after = Pt(2)
+                for r in p_e.runs:
+                    r.font.size = Pt(9.5)
+        langs_line = (
+            "ენები: ქართული (მშობლიური), ინგლისური (თავისუფლად)"
+            if is_ka
+            else "Languages: English (Fluent), Georgian (Native)  |  Availability: 1 week after offer"
+        )
+        p_lang = doc.add_paragraph(langs_line)
+        for r in p_lang.runs:
+            r.font.size = Pt(9.5)
+
+        doc.save(str(filepath))
 
     def _build_reportlab_single_column_pdf(
         self,
@@ -489,6 +638,112 @@ class CVGeneratorService:
   </div>
 </body>
 </html>"""
+
+    def prepare_email_application_package(
+        self,
+        job_title: str,
+        company: str,
+        description: str = "",
+        portal: str = "jobs.ge",
+        target_email: Optional[str] = None,
+        email_subject_template: Optional[str] = None,
+        cv_language: str = "auto",
+        cv_style: str = "tailored",
+    ) -> Dict[str, Any]:
+        """
+        Generates a complete, ready-to-send email package for any vacancy:
+        - Tailored Word (.docx) and PDF CV built from the candidate's live skills.md
+        - Job-specific Cover Letter (Georgian for Georgian postings, English otherwise)
+        - Clean email subject with [Name] resolved to actual candidate full_name
+        """
+        from .gemini_service import gemini_service
+        from .matcher_service import matcher_service
+
+        gt = ground_truth_store.get_data()
+        candidate = dict(gt.get("candidate", {}))
+        skills_md = gt.get("skills_md_raw") or ""
+        cand_name = str(candidate.get("full_name") or "Candidate").strip()
+        cand_email = str(candidate.get("email") or "").strip()
+        cand_phone = str(candidate.get("phone") or "").strip()
+        links = candidate.get("links", {}) if isinstance(candidate.get("links"), dict) else {}
+        cand_linkedin = str(links.get("linkedin") or "").strip()
+
+        lang = cv_language
+        if lang == "auto":
+            ka_chars = len(re.findall(r"[\u10A0-\u10FF]", f"{job_title}\n{description}"))
+            lang = "ka" if ka_chars >= 25 else "en"
+
+        req_skills = matcher_service.extract_job_requirements(job_title, description)
+        cand_skills = [str(s) for s in (gt.get("skills", {}).get("core") or [])]
+        matched = [
+            r for r in req_skills if any(r.lower() in c.lower() or c.lower() in r.lower() for c in cand_skills)
+        ] or cand_skills[:6]
+        missing = [r for r in req_skills if r not in matched]
+
+        narratives = gemini_service.craft_human_tone_narratives(
+            job_details={"title": job_title, "company": company, "portal": portal, "required_skills": req_skills},
+            skills_md=skills_md,
+            matched_skills=matched,
+            missing_skills=missing,
+            cv_language=lang,
+            candidate_name=cand_name,
+        )
+
+        cv_res = self.generate_vacancy_cv(
+            job_title=job_title,
+            company=company,
+            portal=portal,
+            matched_skills=matched,
+            missing_skills=missing,
+            human_summary=narratives["human_tone_summary"],
+            motivation_statement=narratives["motivation_statement"],
+            dou_motivational_letter=narratives["dou_motivational_letter"],
+            skills_md_override=skills_md,
+            cv_language=lang,
+            cv_style=cv_style,
+        )
+
+        # Clean subject: never leave '[Name]' or hardcoded wrong roles
+        if email_subject_template and "qa automation engineer - [name]" not in email_subject_template.lower():
+            clean_subject = re.sub(r"\[(?:your\s+)?name\]", cand_name, email_subject_template, flags=re.I).strip()
+        else:
+            clean_subject = f"{job_title} — {cand_name}" if lang == "ka" else f"Application for {job_title} — {cand_name}"
+
+        contact_footer = "\n".join(x for x in [cand_name, cand_email, cand_phone, cand_linkedin] if x)
+        skills_highlight = ", ".join(matched[:6]) if matched else ", ".join(cand_skills[:6])
+
+        if lang == "ka":
+            cover_letter = (
+                f"მოგესალმებით {company}-ის გუნდს,\n\n"
+                f"გწერთ თქვენს მიერ გამოქვეყნებულ „{job_title}“ პოზიციასთან დაკავშირებით. "
+                f"პროფესიული ინტერესითა და პრაქტიკული გამოცდილებით ვფლობ ისეთ უნარებს, როგორიცაა {skills_highlight}, "
+                f"და მზად ვარ მაქსიმალურად ჩავერთო {company}-ის პროექტებში.\n\n"
+                f"{narratives['motivation_statement']}\n\n"
+                f"თანდართული სახით გიგზავნით ჩემს რეზიუმეს (Word / PDF: {cv_res['docx_filename']}).\n\n"
+                f"პატივისცემით,\n{contact_footer}"
+            )
+        else:
+            cover_letter = (
+                f"Dear {company} Hiring Team,\n\n"
+                f"I am writing to apply for the {job_title} position at {company}. "
+                f"With hands-on experience across {skills_highlight}, I can contribute immediately to product quality and reliable test execution.\n\n"
+                f"{narratives['motivation_statement']}\n\n"
+                f"Please find my tailored CV ({cv_res['docx_filename']}) attached. I am available to start 1 week after offer.\n\n"
+                f"Best regards,\n{contact_footer}"
+            )
+
+        return {
+            "company": company,
+            "title": job_title,
+            "recipient_email": target_email or "",
+            "subject": clean_subject,
+            "cover_letter": cover_letter,
+            "cv_language": lang,
+            "docx_filename": cv_res["docx_filename"],
+            "docx_url": cv_res["docx_url"],
+            "pdf_filename": cv_res["pdf_filename"],
+            "pdf_url": cv_res["pdf_url"],
+        }
 
 
 cv_generator_service = CVGeneratorService()

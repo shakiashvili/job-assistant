@@ -64,7 +64,7 @@ git push -u origin main`;
     { id: 'audit', label: 'Audit & Feed', icon: Compass },
     { id: 'plans', label: 'Action Plans', icon: GraduationCap },
     { id: 'vault', label: 'Profile Vault', icon: User },
-    { id: 'variants', label: 'CV Variants', icon: FileText },
+    { id: 'variants', label: 'CVs', icon: FileText },
     { id: 'admin', label: 'Admin Panel', icon: Shield, adminOnly: true },
   ];
 

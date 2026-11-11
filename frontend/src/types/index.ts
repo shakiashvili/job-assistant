@@ -176,6 +176,8 @@ export interface CompanyValidation {
 export interface TailoredCVResult {
   pdf_filename: string;
   pdf_url: string;
+  docx_filename?: string;
+  docx_url?: string;
   html_preview_url?: string;
   cv_language?: 'en' | 'ka' | string;
   candidate_name?: string;

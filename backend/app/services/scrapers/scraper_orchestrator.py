@@ -12,18 +12,19 @@ from .jobs_ge_scraper import jobs_ge_scraper
 from .hr_ge_scraper import hr_ge_scraper
 from .dou_scraper import dou_scraper
 from .djinni_scraper import djinni_scraper
+from .justjoin_scraper import justjoin_scraper
 
 logger = logging.getLogger(__name__)
 
 
 class ScraperOrchestrator:
     """
-    Coordinates live role-based scraping across Jobs.ge, HR.ge, DOU.ua, and Djinni.co:
+    Coordinates live role-based scraping across Jobs.ge, HR.ge, DOU.ua, Djinni.co, and JustJoin.it:
     1. Builds role-specific search URLs directly from the uploaded CandidateProfile (skills.md).
     2. Deduplicates against JobPosting by (portal, external_id) and (url).
-    3. Applies Mandatory Remote & Slavic Language Gate for Ukrainian/Regional portals.
-    4. Enforces Domain Gate & Seniority Gate + Live Link Content Health Check (rejects blank 200 OK pages).
-    5. Estimates or extracts salary via SalaryService & auto-promotes >= 75% matches to STAGED.
+    3. Applies Mandatory Remote & Slavic/Local-Language Gates on international portals.
+    4. Enforces Domain Gate, Seniority Gate, & Live Link Content Health Check.
+    5. Extracts ONLY explicitly stated salaries without fabricating missing pay figures.
     """
 
     SCRAPER_MAP = {
@@ -31,6 +32,7 @@ class ScraperOrchestrator:
         "hr.ge": hr_ge_scraper,
         "dou.ua": dou_scraper,
         "djinni.co": djinni_scraper,
+        "justjoin.it": justjoin_scraper,
     }
 
     async def run_scrapers(
@@ -66,6 +68,10 @@ class ScraperOrchestrator:
                 djinni_url = search_cfg.get("djinni_url")
                 if djinni_url:
                     tasks.append(djinni_scraper.scrape(allow_network=True, search_url=djinni_url))
+            elif p == "justjoin.it":
+                justjoin_url = search_cfg.get("justjoin_url")
+                if justjoin_url:
+                    tasks.append(justjoin_scraper.scrape(allow_network=True, search_url=justjoin_url))
 
         raw_discovered: List[Dict[str, Any]] = []
         if tasks:
@@ -101,12 +107,10 @@ class ScraperOrchestrator:
                 initial_status = item.get("status", "DISCOVERED")
                 initial_rationale = item.get("filter_out_reason") or item.get("match_rationale") or ""
 
-                # 1. Salary extraction or AI estimation
-                sal_info = salary_service.estimate_salary(
+                # 1. Explicit salary extraction ONLY (never fabricate fake salary if unmentioned)
+                sal_info = salary_service.extract_vacancy_salary(
                     title=title,
                     description=desc,
-                    market=market,
-                    portal=portal,
                 )
 
                 # 2. Check application deadline & expiration

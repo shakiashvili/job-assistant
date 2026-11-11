@@ -9,7 +9,7 @@ from sqlmodel import Session, select
 from ..config import GROUND_TRUTH_FILE, SKILLS_MD_FILE
 from ..database import engine, init_db
 from ..models.db_models import CandidateProfile, utc_now
-from ..services.matcher_service import matcher_service
+from ..services.matcher_service import matcher_service, dedupe_skills_case_insensitive
 
 logger = logging.getLogger(__name__)
 
@@ -225,18 +225,128 @@ class GroundTruthStore:
             raise ValueError(f"Unknown preset_id: {preset_id}")
         return preset["content"]
 
+    def _default_faq_bank(self, cand: Dict[str, Any]) -> List[Dict[str, Any]]:
+        loc = cand.get("location", {})
+        city = loc.get("city", "Tbilisi") if isinstance(loc, dict) else "Tbilisi"
+        return [
+            {
+                "question_trigger": "notice period / earliest start date",
+                "tags": ["availability", "notice", "start_date"],
+                "answer": "Available to start 1 week after offer acceptance (or immediately upon contract signing).",
+            },
+            {
+                "question_trigger": "work authorization / remote B2B & visa status",
+                "tags": ["visa", "b2b", "remote", "authorization"],
+                "answer": f"Based in {city}, Georgia; authorized to work locally and collaborate globally on remote B2B / independent contractor engagements without employer relocation sponsorship.",
+            },
+            {
+                "question_trigger": "remote collaboration / timezone overlap",
+                "tags": ["remote", "timezone", "communication"],
+                "answer": "Comfortable working asynchronously and overlapping core EU (CET/EET) and US morning business hours with clear English communication.",
+            },
+        ]
+
+    def _normalize_vault(self, vault: Dict[str, Any], profile: CandidateProfile) -> Dict[str, Any]:
+        """Guarantees complete, null-safe vault structure so Profile Vault / Visas / FAQ Bank never crash."""
+        data = dict(vault or {})
+        raw_md = profile.raw_markdown or ""
+        parsed_md = self.parse_profile_from_md(raw_md) if raw_md else {}
+        ps = dict(profile.parsed_skills or {})
+
+        cand = dict(data.get("candidate") or {})
+        full_name = cand.get("full_name") or profile.full_name or "Candidate"
+        parts = full_name.split()
+        cand.setdefault("first_name", parts[0] if parts else "Candidate")
+        cand.setdefault("last_name", " ".join(parts[1:]) if len(parts) > 1 else "")
+        cand["full_name"] = full_name
+        cand.setdefault("headline", ps.get("headline") or parsed_md.get("headline") or "QA Engineer")
+        cand.setdefault("email", profile.email or "candidate@example.com")
+        cand.setdefault("phone", profile.phone or "+000 000 0000")
+
+        loc = cand.get("location")
+        if not isinstance(loc, dict):
+            loc = {}
+        loc.setdefault("city", "Tbilisi")
+        loc.setdefault("country", "Georgia")
+        loc.setdefault("timezone", "Asia/Tbilisi (UTC+4)")
+        loc.setdefault("open_to_relocation", True)
+        loc.setdefault("remote_preference", "Remote / Hybrid / Georgia")
+        cand["location"] = loc
+
+        links = cand.get("links")
+        if not isinstance(links, dict):
+            links = {}
+        links.setdefault("linkedin", profile.linkedin_url or "")
+        links.setdefault("github", profile.github_url or "")
+        links.setdefault("portfolio", "")
+        cand["links"] = links
+
+        wa = cand.get("work_authorization")
+        if not isinstance(wa, dict):
+            wa = {}
+        wa.setdefault("citizenship", ["Georgia"])
+        wa.setdefault("eu_work_permit", False)
+        wa.setdefault("requires_eu_visa", True)
+        wa.setdefault("us_work_authorization", "Remote B2B Contractor (No US Work Permit)")
+        wa.setdefault("requires_us_visa_sponsorship", True)
+        wa.setdefault("uk_work_authorization", "Remote B2B Contractor")
+        wa.setdefault("security_clearance", False)
+        cand["work_authorization"] = wa
+
+        comp = cand.get("compensation")
+        if not isinstance(comp, dict):
+            comp = {}
+        if not comp.get("expected_salary_eur"):
+            comp["expected_salary_eur"] = 38000
+        if not comp.get("min_salary_eur"):
+            comp["min_salary_eur"] = 32000
+        if not comp.get("expected_salary_usd"):
+            comp["expected_salary_usd"] = 42000
+        comp.setdefault("notice_period", "1 week after offer")
+        cand["compensation"] = comp
+
+        langs = cand.get("languages")
+        if not isinstance(langs, list) or not langs:
+            spoken = ps.get("spoken_languages") or ["English", "Georgian"]
+            langs = [{"language": str(l), "proficiency": "Fluent / Native"} for l in spoken]
+        cand["languages"] = langs
+        data["candidate"] = cand
+
+        # Skills normalization & clean deduplication
+        skills = dict(data.get("skills") or {})
+        raw_core = skills.get("core") or ps.get("all_skills") or []
+        skills["core"] = dedupe_skills_case_insensitive([str(x) for x in raw_core])
+        skills["secondary"] = dedupe_skills_case_insensitive([str(x) for x in (skills.get("secondary") or [])])
+        data["skills"] = skills
+
+        wh = data.get("work_history")
+        if not isinstance(wh, list) or not wh:
+            wh = parsed_md.get("work_history") or []
+        data["work_history"] = wh
+
+        edu = data.get("education")
+        if not isinstance(edu, list):
+            edu = []
+        data["education"] = edu
+
+        faq = data.get("faq_bank")
+        if not isinstance(faq, list) or not faq:
+            faq = self._default_faq_bank(cand)
+        data["faq_bank"] = faq
+
+        data.setdefault("cv_variants", {})
+        data["skills_md_raw"] = raw_md
+        data["parsed_skills_taxonomy"] = {k: v for k, v in ps.items() if k != "ground_truth_vault"}
+        return data
+
     def get_data(self) -> Dict[str, Any]:
         """Returns the full candidate vault backed by CandidateProfile in SQLite/PostgreSQL."""
         profile = self.get_profile_record()
-        vault = dict(profile.parsed_skills.get("ground_truth_vault") or self._load_seed_json())
-        vault["skills_md_raw"] = profile.raw_markdown
-        vault["parsed_skills_taxonomy"] = {
-            k: v for k, v in profile.parsed_skills.items() if k != "ground_truth_vault"
-        }
-        return vault
+        raw_vault = dict(profile.parsed_skills.get("ground_truth_vault") or self._load_seed_json())
+        return self._normalize_vault(raw_vault, profile)
 
     def update_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Persists updated candidate vault into CandidateProfile in the relational DB."""
+        """Persists updated candidate vault into CandidateProfile in the relational DB (encrypted at rest)."""
         save_copy = dict(data)
         raw_md = save_copy.pop("skills_md_raw", None)
         save_copy.pop("parsed_skills_taxonomy", None)
@@ -251,9 +361,29 @@ class GroundTruthStore:
 
             if raw_md is not None:
                 profile.raw_markdown = raw_md
-                atomic_write_text(self.skills_md_path, raw_md)
 
+            cand_in = save_copy.get("candidate")
+            if isinstance(cand_in, dict):
+                if cand_in.get("full_name"):
+                    profile.full_name = str(cand_in["full_name"])
+                elif cand_in.get("first_name") or cand_in.get("last_name"):
+                    profile.full_name = f"{cand_in.get('first_name', '')} {cand_in.get('last_name', '')}".strip()
+                if cand_in.get("email"):
+                    profile.email = str(cand_in["email"])
+                if cand_in.get("phone"):
+                    profile.phone = str(cand_in["phone"])
+
+            existing_ps = dict(profile.parsed_skills or {})
             taxonomy = matcher_service.parse_skills_markdown(profile.raw_markdown)
+            # Preserve user-edited skills if provided in Profile Vault
+            if isinstance(save_copy.get("skills"), dict) and isinstance(save_copy["skills"].get("core"), list):
+                cleaned_core = dedupe_skills_case_insensitive([str(x) for x in save_copy["skills"]["core"]])
+                save_copy["skills"]["core"] = cleaned_core
+                taxonomy["all_skills"] = cleaned_core
+            if "user_uploaded" in existing_ps:
+                taxonomy["user_uploaded"] = existing_ps["user_uploaded"]
+            if "owner_email" in existing_ps:
+                taxonomy["owner_email"] = existing_ps["owner_email"]
             taxonomy["ground_truth_vault"] = save_copy
             profile.parsed_skills = taxonomy
             profile.updated_at = utc_now()
@@ -326,7 +456,7 @@ class GroundTruthStore:
                 if s.startswith("### "):
                     if current_job:
                         work_history.append(current_job)
-                    header = s[4:].strip()
+                    header = re.sub(r"[*_`]+", "", s[4:]).strip()
                     parts = [p.strip() for p in re.split(r"[|@—–]", header, maxsplit=1)]
                     role = parts[0]
                     comp = parts[1] if len(parts) > 1 else "Organization"
@@ -334,16 +464,32 @@ class GroundTruthStore:
                         "role": role,
                         "company": comp,
                         "location": "Tbilisi / Remote",
-                        "start_date": "2021",
+                        "start_date": "",
                         "end_date": "Present",
                         "highlights": []
                     }
-                elif current_job and s.startswith(("*", "-")) and not s.startswith("* ") and s.endswith("*"):
-                    meta = s.strip("* ")
-                    current_job["start_date"] = meta
-                    current_job["end_date"] = ""
+                elif current_job and (
+                    (s.startswith(("*", "-")) and not s.startswith("* ") and s.endswith("*"))
+                    or re.search(r"(?:20\d{2}|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|present)", s, re.I)
+                    and len(s) < 90
+                    and "•" in s or ("*" in s and ("–" in s or "-" in s) and len(s) < 90)
+                ):
+                    meta = re.sub(r"[*_`]+", "", s).strip()
+                    if "•" in meta:
+                        left, right = [x.strip() for x in meta.split("•", 1)]
+                        if re.search(r"20\d{2}", right):
+                            current_job["location"] = left or current_job["location"]
+                            current_job["start_date"] = right
+                            current_job["end_date"] = ""
+                        else:
+                            current_job["company"] = left or current_job["company"]
+                            current_job["location"] = right
+                    else:
+                        current_job["start_date"] = meta
+                        current_job["end_date"] = ""
                 elif current_job and s.startswith(("-", "*")):
                     bullet = re.sub(r"^[-*]\s*", "", s).strip()
+                    bullet = re.sub(r"[*_`]+", "", bullet).strip()
                     if bullet:
                         current_job["highlights"].append(bullet)
         if current_job:
@@ -382,24 +528,11 @@ class GroundTruthStore:
         return self.get_data()
 
     def extract_skills_from_md(self, md_content: str) -> List[str]:
-        """Extracts individual skills from English or Georgian markdown bullet lists."""
-        skills = []
-        in_skills_section = False
-        for line in md_content.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("##"):
-                header_lower = stripped.lower()
-                in_skills_section = any(
-                    w in header_lower for w in ["skill", "stack", "tech", "უნარ", "კომპეტენც", "ენები"]
-                )
-                continue
-            if in_skills_section and stripped.startswith(("-", "*")):
-                cleaned = re.sub(r"^[-*]\s*(\*\*.*?\*\*:?)?\s*", "", stripped)
-                parts = [p.strip() for p in re.split(r"[,;/]", cleaned) if p.strip()]
-                for p in parts:
-                    if 1 < len(p) <= 55 and p not in skills:
-                        skills.append(p)
-        return skills
+        """Extracts clean, deduplicated technical & domain skills from markdown via MatcherService."""
+        if not md_content:
+            return []
+        taxonomy = matcher_service.parse_skills_markdown(md_content)
+        return list(taxonomy.get("all_skills") or [])
 
     def get_candidate(self) -> Dict[str, Any]:
         return self.get_data().get("candidate", {})

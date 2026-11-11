@@ -129,6 +129,56 @@ class SalaryService:
             return "Junior"
         return "Middle"
 
+    def extract_vacancy_salary(
+        self,
+        title: str,
+        description: str,
+    ) -> Dict[str, Any]:
+        """
+        Extracts salary ONLY when explicitly stated in the vacancy title or description.
+        Never fabricates estimated USD/GEL numbers when a posting omits compensation or is unpaid.
+        """
+        combined_text = f"{title}\n{description}"
+        lower = combined_text.lower()
+        explicit = self.extract_explicit_salary(combined_text)
+        if explicit:
+            min_sal, max_sal, currency = explicit
+            return {
+                "min_salary": min_sal,
+                "max_salary": max_sal,
+                "currency": currency,
+                "salary_estimated_by_ai": False,
+                "is_unpaid": False,
+                "confidence_score": 0.96,
+                "seniority_detected": self._detect_seniority(title, description),
+                "rationale": f"Extracted explicit salary ({min_sal:g} - {max_sal:g} {currency}) directly from job description.",
+            }
+
+        is_unpaid = any(
+            kw in lower
+            for kw in [
+                "არ ითვალისწინებს ანაზღაურებას",
+                "ანაზღაურების გარეშე",
+                "unpaid internship",
+                "unpaid position",
+                "no compensation",
+            ]
+        )
+        return {
+            "min_salary": None,
+            "max_salary": None,
+            "currency": None,
+            "salary_estimated_by_ai": False,
+            "is_unpaid": is_unpaid,
+            "confidence_score": 1.0 if is_unpaid else 0.0,
+            "seniority_detected": self._detect_seniority(title, description),
+            "rationale": (
+                "Unpaid internship program (explicitly noted in job description)."
+                if is_unpaid
+                else "Salary not specified in job description."
+            ),
+        }
+
     def estimate_salary(
         self,
         title: str,

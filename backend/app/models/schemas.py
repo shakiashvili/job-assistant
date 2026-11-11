@@ -50,6 +50,8 @@ class CompanyValidation(BaseModel):
 class TailoredCVResult(BaseModel):
     pdf_filename: str
     pdf_url: str
+    docx_filename: Optional[str] = None
+    docx_url: Optional[str] = None
     html_preview_url: Optional[str] = None
     cv_language: str = "en"  # "en" or "ka" (Georgian)
     candidate_name: str = "Candidate"

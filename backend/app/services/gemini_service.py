@@ -431,7 +431,7 @@ Return JSON with keys:
             else:
                 found_req = ["Playwright", "Python", "TypeScript", "CI/CD", "REST API", "Docker"]
 
-        visa = "Local / EU / Remote Work Authorized."
+        visa = "Georgia / Remote B2B Authorized."
         if "security clearance" in lower or "clearance required" in lower or "top secret" in lower:
             visa = "US Citizenship required. Active Security Clearance mandatory."
         elif "us citizen" in lower or "citizenship mandatory" in lower:
@@ -453,7 +453,7 @@ Return JSON with keys:
             "language_requirements": langs,
             "location": "Tbilisi, Georgia / Remote",
             "remote_policy": "On-site / Hybrid" if industry in ["hospitality_reception", "healthcare_hospital"] else "Remote / Hybrid",
-            "salary_range": "Market Competitive",
+            "salary_range": "Salary not specified",
             "summary": f"{title} position at {company} ({portal})."
         }
 
@@ -483,7 +483,8 @@ Return JSON with keys:
                 ans = "1 კვირა შეთავაზებიდან (1 week after offer)" if is_ka else "1 week after offer"
                 matched_faq = True
             elif any(k in q_lower for k in ["salary", "compensation", "rate", "remuneration", "ანაზღაურება", "ხელფასი"]):
-                ans = f"€{comp.get('expected_salary_eur', 85000):,} gross/year (or local market equivalent)"
+                eur_val = comp.get("expected_salary_eur") or 38000
+                ans = f"€{eur_val:,} gross/year (or local market equivalent)"
                 matched_faq = True
             elif any(k in q_lower for k in ["authorized", "sponsorship", "visa"]):
                 if field_type in ["select", "radio", "boolean"]:

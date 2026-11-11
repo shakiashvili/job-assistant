@@ -35,6 +35,7 @@ import {
   fetchScrapedJobs,
   fetchDbProfile,
   triggerMultiPortalScrape,
+  prepareJobEmailPackage,
   BACKEND_ORIGIN
 } from '../services/api';
 import { JobAuditResponse, ScreeningAnswer, PortalVacancyItem, DbJobPosting } from '../types';
@@ -91,6 +92,52 @@ export const AuditPanel: React.FC = () => {
   // Screening Answers
   const [answers, setAnswers] = useState<ScreeningAnswer[]>([]);
   const [isGeneratingAnswers, setIsGeneratingAnswers] = useState(false);
+
+  // Ready Gmail Draft + Tailored .docx Package State
+  const [draftingJobId, setDraftingJobId] = useState<number | null>(null);
+  const [preparedEmailPkg, setPreparedEmailPkg] = useState<{
+    company: string;
+    title: string;
+    recipient_email: string;
+    subject: string;
+    cover_letter: string;
+    docx_filename: string;
+    docx_url: string;
+    pdf_filename: string;
+    pdf_url: string;
+    gmailUrl: string;
+  } | null>(null);
+
+  const handleDraftInGmail = async (job: DbJobPosting) => {
+    setDraftingJobId(job.id);
+    setError(null);
+    try {
+      const pkg = await prepareJobEmailPackage(job.id, 'auto');
+      const toEmail = pkg.recipient_email || job.target_email || '';
+      const gmailUrl =
+        `https://mail.google.com/mail/?view=cm&fs=1` +
+        `&to=${encodeURIComponent(toEmail)}` +
+        `&su=${encodeURIComponent(pkg.subject)}` +
+        `&body=${encodeURIComponent(pkg.cover_letter)}`;
+
+      setPreparedEmailPkg({ ...pkg, gmailUrl });
+
+      // Automatically trigger download of the ready tailored Word (.docx) CV
+      const dlLink = document.createElement('a');
+      dlLink.href = `${BACKEND_ORIGIN}${pkg.docx_url}`;
+      dlLink.download = pkg.docx_filename;
+      document.body.appendChild(dlLink);
+      dlLink.click();
+      document.body.removeChild(dlLink);
+
+      // Open Gmail Compose with full Cover Letter & clean Subject
+      window.open(gmailUrl, '_blank', 'noopener,noreferrer');
+    } catch (err: any) {
+      setError(err.message || 'Failed to prepare Gmail cover letter and Word CV.');
+    } finally {
+      setDraftingJobId(null);
+    }
+  };
 
   // Staging Modal
   const [isStageModalOpen, setIsStageModalOpen] = useState(false);
@@ -621,7 +668,7 @@ export const AuditPanel: React.FC = () => {
         {visibleJobs.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-slate-800/60">
             <span className="text-[10px] font-bold uppercase text-slate-500 mr-1">Portals:</span>
-            {['ALL', 'jobs.ge', 'hr.ge', 'djinni.co', 'dou.ua'].map((p) => (
+            {['ALL', 'jobs.ge', 'hr.ge', 'djinni.co', 'dou.ua', 'justjoin.it'].map((p) => (
               <button
                 key={p}
                 onClick={() => setSelectedPortalFilter(p)}
@@ -634,6 +681,59 @@ export const AuditPanel: React.FC = () => {
                 {p}
               </button>
             ))}
+          </div>
+        )}
+
+        {preparedEmailPkg && (
+          <div className="p-4 rounded-xl bg-sky-950/35 border border-sky-700/60 text-xs space-y-2.5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <span className="text-[10px] font-bold uppercase text-sky-400 block">
+                  Gmail Draft + Tailored Word CV Ready
+                </span>
+                <span className="text-white font-semibold">
+                  {preparedEmailPkg.title} ({preparedEmailPkg.company}) &mdash; Subject: <code className="text-sky-300">{preparedEmailPkg.subject}</code>
+                </span>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <a
+                  href={`${BACKEND_ORIGIN}${preparedEmailPkg.docx_url}`}
+                  download={preparedEmailPkg.docx_filename}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Word (.docx)</span>
+                </a>
+                <a
+                  href={`${BACKEND_ORIGIN}${preparedEmailPkg.pdf_url}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>PDF CV</span>
+                </a>
+                <a
+                  href={preparedEmailPkg.gmailUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-semibold"
+                >
+                  <Mail className="w-3.5 h-3.5" />
+                  <span>Re-open Gmail</span>
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setPreparedEmailPkg(null)}
+                  className="px-2 py-1 text-slate-400 hover:text-white"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+            <div className="bg-slate-950/80 border border-slate-800 rounded-lg p-2.5 text-[11px] text-slate-300 whitespace-pre-wrap">
+              {preparedEmailPkg.cover_letter}
+            </div>
           </div>
         )}
 
@@ -654,7 +754,7 @@ export const AuditPanel: React.FC = () => {
               <>
                 <h4 className="text-sm font-bold text-white">Upload your skills.md file to scan tailored live vacancies</h4>
                 <p className="text-xs text-slate-400 max-w-md mx-auto">
-                  Your discovery feed stays 100% empty until your profile is uploaded. Upload <code className="text-sky-300">skills.md</code> to search live Jobs.ge, HR.ge, DOU.ua & Djinni.co roles matched to your exact stack and 1.5 yrs level.
+                  Your discovery feed stays 100% empty until your profile is uploaded. Upload <code className="text-sky-300">skills.md</code> to search live Jobs.ge, HR.ge, DOU.ua, Djinni.co &amp; JustJoin.it roles matched to your exact stack.
                 </p>
                 <button
                   onClick={() => fileInputRef.current?.click()}
@@ -707,22 +807,23 @@ export const AuditPanel: React.FC = () => {
                   <h4 className="text-xs font-bold text-white line-clamp-2 leading-snug">{job.title}</h4>
                   <div className="text-[11px] text-slate-400">{job.company}</div>
 
-                  {/* Dynamic AI-Driven or Extracted Salary Display */}
-                  {job.salary_min && job.salary_max && (
+                  {/* Honest Salary Display: ONLY show numbers if explicitly stated in job description */}
+                  {job.salary_min && job.salary_max ? (
                     <div className="flex items-center gap-1.5 text-[11px] pt-0.5">
                       <DollarSign className="w-3 h-3 text-emerald-400 flex-shrink-0" />
                       <span className="text-emerald-300 font-semibold">
                         {job.salary_min.toLocaleString()}–{job.salary_max.toLocaleString()} {job.salary_currency}
                       </span>
-                      <span
-                        className={`text-[9px] px-1.5 py-0.5 rounded ${
-                          job.salary_estimated_by_ai
-                            ? 'bg-indigo-950 text-indigo-300 border border-indigo-800'
-                            : 'bg-slate-900 text-slate-300 border border-slate-700'
-                        }`}
-                      >
-                        {job.salary_estimated_by_ai ? '🤖 AI Est.' : '📄 Extracted'}
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-900 text-slate-300 border border-slate-700">
+                        📄 Stated
                       </span>
+                    </div>
+                  ) : (
+                    <div className="text-[10px] text-slate-500 pt-0.5">
+                      {(job.description_raw || '').includes('არ ითვალისწინებს ანაზღაურებას') ||
+                      (job.description_raw || '').toLowerCase().includes('unpaid')
+                        ? 'Salary: Unpaid Internship'
+                        : 'Salary not specified'}
                     </div>
                   )}
 
@@ -745,17 +846,19 @@ export const AuditPanel: React.FC = () => {
 
                   <div className="flex items-center gap-1.5 pt-1">
                     {(job.delivery_channel === 'EMAIL' || Boolean(job.target_email)) ? (
-                      <a
-                        href={`https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(job.target_email || 'hr@company.ge')}&su=${encodeURIComponent(job.email_subject || 'Application: ' + job.title)}&body=${encodeURIComponent('Dear Hiring Team,\n\nI am applying for the ' + job.title + ' role at ' + job.company + '.\n\nPlease find my tailored resume attached.\n\nBest regards,\n' + (candidateProfile?.full_name || 'Candidate'))}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        className="flex-1 flex items-center justify-center gap-1 py-1 px-2 rounded-lg bg-rose-600/90 hover:bg-rose-500 text-white font-semibold transition-colors"
-                        title="Prefill Gmail Draft with Recipient and Cover Note"
+                      <button
+                        type="button"
+                        disabled={draftingJobId === job.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDraftInGmail(job);
+                        }}
+                        className="flex-1 flex items-center justify-center gap-1 py-1 px-2 rounded-lg bg-rose-600/90 hover:bg-rose-500 text-white font-semibold transition-colors disabled:opacity-50"
+                        title="Generate Tailored Word CV (.docx) + Cover Letter and open Gmail Draft"
                       >
                         <Mail className="w-3 h-3" />
-                        <span>Draft in Gmail</span>
-                      </a>
+                        <span>{draftingJobId === job.id ? 'Preparing...' : 'Draft in Gmail'}</span>
+                      </button>
                     ) : (
                       <button
                         type="button"
@@ -971,6 +1074,16 @@ export const AuditPanel: React.FC = () => {
                     </span>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
+                    {auditResult.tailored_cv.docx_url && (
+                      <a
+                        href={`${BACKEND_ORIGIN}${auditResult.tailored_cv.docx_url}`}
+                        download={auditResult.tailored_cv.docx_filename}
+                        className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-sm transition-colors"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Download Word (.docx)</span>
+                      </a>
+                    )}
                     <a
                       href={`${BACKEND_ORIGIN}${auditResult.tailored_cv.pdf_url}`}
                       target="_blank"

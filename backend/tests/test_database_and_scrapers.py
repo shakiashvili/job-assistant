@@ -347,12 +347,12 @@ def test_multi_portal_scrapers_and_suitability_promotion():
     assert len(email_jobs) >= 1
     assert email_jobs[0]["target_email"] == "talent@bog.ge"
 
-    # Verify jobs with suitability_score >= 75% were auto-promoted to STAGED and linked to ApplicationRecord
+    # Verify jobs with suitability_score >= 75% were auto-promoted to STAGED without fabricating unstated salaries
     staged_jobs = [j for j in jobs if j["status"] == "STAGED"]
     assert len(staged_jobs) >= 3
     for sj in staged_jobs:
         assert sj["suitability_score"] >= 75.0
-        assert sj["salary_min"] is not None and sj["salary_max"] is not None
+        assert sj["salary_estimated_by_ai"] is False
 
     with Session(engine) as session:
         app_records = session.exec(select(ApplicationRecord)).all()
