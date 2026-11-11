@@ -268,7 +268,7 @@ Return JSON with keys:
                 )
             elif industry == "customer_service":
                 human_summary = (
-                    f"მომხმარებელთა მომსახურებისა და მხარდაჭერის (Customer Care) უფროსი სპეციალისტი 4+ წლიანი გამოცდილებით საერთაშორისო და ადგილობრივ კომპანიებში. "
+                    f"მომხმარებელთა მომსახურებისა და მხარდაჭერის (Customer Care) სპეციალისტი პრაქტიკული გამოცდილებით საერთაშორისო და ადგილობრივ კომპანიებში. "
                     f"აქტიურად ვიყენებ {ka_skills_str} ინსტრუმენტებს, ვუზრუნველყოფ სწრაფ რეაგირებას ჩატსა და სატელეფონო ზარებზე და ვინარჩუნებ მომხმარებელთა კმაყოფილების 98%+ მაჩვენებელს. "
                     f"მზად ვარ მუშაობის დასაწყებად შეთავაზებიდან 1 კვირაში."
                 )
@@ -278,7 +278,7 @@ Return JSON with keys:
                 )
             else:
                 human_summary = (
-                    f"უფროსი QA Automation ინჟინერი და ტესტირების სპეციალისტი 5+ წლიანი პრაქტიკული გამოცდილებით ({ka_skills_str}). "
+                    f"QA Automation ინჟინერი და ტესტირების სპეციალისტი 1.5 წლიანი პრაქტიკული გამოცდილებით ({ka_skills_str}). "
                     f"ვქმნი სწრაფ და საიმედო ავტომატიზებულ ტესტებს, რაც ამცირებს რეგრესიის დროს და ეხმარება დეველოპერების გუნდს ხარისხიანი პროდუქტის გამოშვებაში. "
                     f"მზად ვარ მუშაობის დასაწყებად შეთავაზებიდან 1 კვირაში."
                 )
@@ -304,7 +304,7 @@ Return JSON with keys:
         # --- ENGLISH HUMAN-TONE NARRATIVES ACROSS ALL INDUSTRIES ---
         if industry == "hospitality_reception":
             human_summary = (
-                f"Warm, dependable Front Desk Receptionist and Hospitality Specialist with 4+ years of hands-on experience "
+                f"Warm, dependable Front Desk Receptionist and Hospitality Specialist with hands-on experience "
                 f"managing guest check-ins, reservations, and VIP care using {top_skills}. I love creating a welcoming first "
                 f"impression for every guest at {company} while keeping front-office operations running smoothly. Available to start 1 week after offer."
             )
@@ -314,7 +314,7 @@ Return JSON with keys:
             )
         elif industry == "healthcare_hospital":
             human_summary = (
-                f"Compassionate and organized Hospital Patient Coordinator & Medical Receptionist with 5 years of experience in "
+                f"Compassionate and organized Hospital Patient Coordinator & Medical Receptionist with hands-on experience in "
                 f"{top_skills}. I take pride in reassuring patients and families, keeping clinic schedules on time, and handling "
                 f"EMR/insurance records accurately for {company}. Available to start 1 week after offer."
             )
@@ -324,7 +324,7 @@ Return JSON with keys:
             )
         elif industry == "customer_service":
             human_summary = (
-                f"Empathetic, fast-thinking Customer Service & Client Care Specialist with 4+ years of experience in {top_skills}. "
+                f"Empathetic, fast-thinking Customer Service & Client Care Specialist with practical experience in {top_skills}. "
                 f"I enjoy turning frustrated customers into loyal advocates through clear communication and first-contact resolution "
                 f"(maintaining 98%+ CSAT). Available to start at {company} 1 week after offer."
             )
@@ -334,7 +334,7 @@ Return JSON with keys:
             )
         else:
             human_summary = (
-                f"Senior QA Automation Engineer with 5+ years of practical experience building fast, reliable test suites "
+                f"QA Automation Engineer with 1.5 years of practical experience building fast, reliable test suites "
                 f"using {top_skills}. I focus on keeping CI/CD pipelines green, cutting regression time from hours to minutes, "
                 f"and working directly with developers at {company} to ship clean releases. Available to start 1 week after offer."
             )

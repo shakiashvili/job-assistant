@@ -1,6 +1,6 @@
 import logging
 from typing import Generator
-from sqlmodel import SQLModel, Session, create_engine
+from sqlmodel import SQLModel, Session, create_engine, select
 from sqlalchemy import event, inspect
 from ..config import DATABASE_URL
 from .models import (
@@ -46,10 +46,24 @@ def init_db() -> None:
             app_cols = {c["name"] for c in inspector.get_columns("application_records")}
             if "vacancy_id" not in app_cols or "submitted_salary" not in app_cols:
                 needs_upgrade = True
+        if inspector.has_table("users"):
+            user_cols = {c["name"] for c in inspector.get_columns("users")}
+            if "email_hash" not in user_cols:
+                needs_upgrade = True
+        if inspector.has_table("user_otps"):
+            otp_cols = {c["name"] for c in inspector.get_columns("user_otps")}
+            if "email_hash" not in otp_cols:
+                needs_upgrade = True
 
         if needs_upgrade:
-            logger.info("Upgrading database schema to v2 production relational schema...")
+            logger.info("Upgrading database schema to encrypted relational schema...")
             SQLModel.metadata.drop_all(engine)
+            if is_sqlite:
+                try:
+                    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+                        conn.exec_driver_sql("VACUUM")
+                except Exception as ve:
+                    logger.debug(f"SQLite vacuum skipped: {ve}")
     except Exception as e:
         logger.debug(f"Schema inspection note: {e}")
 
@@ -59,3 +73,18 @@ def init_db() -> None:
 def get_session() -> Generator[Session, None, None]:
     with Session(engine, expire_on_commit=False) as session:
         yield session
+
+
+def delete_job_posting_cascade(session: Session, job: JobPosting) -> None:
+    """Safely deletes child ApplicationRecord references before deleting a JobPosting."""
+    if job.id is not None:
+        children = session.exec(
+            select(ApplicationRecord).where(
+                (ApplicationRecord.job_id == job.id)
+                | (ApplicationRecord.job_posting_id == job.id)
+                | (ApplicationRecord.vacancy_id == job.id)
+            )
+        ).all()
+        for child in children:
+            session.delete(child)
+    session.delete(job)

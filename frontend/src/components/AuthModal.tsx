@@ -1,26 +1,71 @@
-import React, { useState } from 'react';
-import { X, Lock, Mail, User, ShieldCheck, AlertCircle, ArrowRight, KeyRound, Sparkles, CheckCircle2 } from 'lucide-react';
-import { loginUser, registerUser, sendOtp, verifyOtp } from '../services/api';
+import React, { useState, useEffect } from 'react';
+import { X, Lock, Mail, User, ShieldCheck, AlertCircle, ArrowRight, KeyRound, Sparkles, CheckCircle2, Settings2 } from 'lucide-react';
+import { loginUser, registerUser, sendOtp, verifyOtp, fetchSmtpStatus, configureSmtp } from '../services/api';
 import { UserProfile } from '../types';
 
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
   onAuthSuccess: (user: UserProfile) => void;
+  isGate?: boolean;
 }
 
-export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuccess }) => {
-  const [mode, setMode] = useState<'otp' | 'login' | 'register'>('otp');
+export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuccess, isGate = false }) => {
+  const [mode, setMode] = useState<'otp' | 'login' | 'register'>('login');
   const [otpStep, setOtpStep] = useState<'request' | 'verify'>('request');
   const [email, setEmail] = useState('');
   const [otpCode, setOtpCode] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [fullName, setFullName] = useState('');
   const [infoMsg, setInfoMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // Local encrypted/gitignored Gmail SMTP configuration state
+  const [smtpConfigured, setSmtpConfigured] = useState<boolean | null>(null);
+  const [showSmtpSetup, setShowSmtpSetup] = useState(false);
+  const [smtpUser, setSmtpUser] = useState('');
+  const [smtpAppPassword, setSmtpAppPassword] = useState('');
+  const [smtpSaving, setSmtpSaving] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen || mode !== 'otp') return;
+    let active = true;
+    fetchSmtpStatus()
+      .then((res) => {
+        if (active) {
+          setSmtpConfigured(res.smtp_configured);
+          if (!res.smtp_configured) setShowSmtpSetup(true);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [isOpen, mode]);
+
   if (!isOpen) return null;
+
+  const handleSaveSmtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setInfoMsg(null);
+    setSmtpSaving(true);
+    try {
+      const targetUser = (smtpUser || email).trim();
+      const res = await configureSmtp(targetUser, smtpAppPassword);
+      setSmtpConfigured(res.smtp_configured);
+      setShowSmtpSetup(false);
+      setSmtpAppPassword('');
+      if (!email) setEmail(targetUser);
+      setInfoMsg(res.message);
+    } catch (err: any) {
+      setError(err.message || 'Could not authenticate Gmail App Password.');
+    } finally {
+      setSmtpSaving(false);
+    }
+  };
 
   const handleSendOtp = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -30,10 +75,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
 
     try {
       const res = await sendOtp(email);
-      setInfoMsg(res.message);
-      if (res.demo_code) {
-        setOtpCode(res.demo_code);
+      setSmtpConfigured(res.smtp_configured);
+      if (res.delivered === false) {
+        setShowSmtpSetup(true);
+        setError(
+          res.message ||
+            'Gmail SMTP is not configured locally. Save your Gmail App Password below or use Sign In / Register with Password.'
+        );
+        return;
       }
+      setInfoMsg(res.message);
       setOtpStep('verify');
     } catch (err: any) {
       setError(err.message || 'Failed to send verification code. Please check your email.');
@@ -61,6 +112,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
   const handlePasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+
+    if (mode === 'register' && password !== confirmPassword) {
+      setError('Passwords do not match. Please verify both password fields.');
+      return;
+    }
+
     setLoading(true);
 
     try {
@@ -69,7 +126,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
         onAuthSuccess(res.user);
         onClose();
       } else {
-        const res = await registerUser(email, password, fullName || 'Candidate');
+        const res = await registerUser(email, password, fullName.trim() || 'Candidate');
         onAuthSuccess(res.user);
         onClose();
       }
@@ -83,12 +140,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
       <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
-        <button
-          onClick={onClose}
-          className="absolute top-4 right-4 text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors"
-        >
-          <X className="w-5 h-5" />
-        </button>
+        {!isGate && (
+          <button
+            onClick={onClose}
+            className="absolute top-4 right-4 text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        )}
 
         <div className="flex items-center gap-2 mb-6">
           <div className="w-9 h-9 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
@@ -112,13 +171,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
         <div className="grid grid-cols-3 gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 mb-5">
           <button
             type="button"
-            onClick={() => { setMode('otp'); setOtpStep('request'); setError(null); setInfoMsg(null); }}
+            onClick={() => { setMode('register'); setError(null); setInfoMsg(null); }}
             className={`py-2 text-[11px] font-semibold rounded-lg transition-all flex items-center justify-center gap-1 ${
-              mode === 'otp' ? 'bg-sky-600 text-white shadow' : 'text-slate-400 hover:text-white'
+              mode === 'register' ? 'bg-sky-600 text-white shadow' : 'text-slate-400 hover:text-white'
             }`}
           >
-            <Sparkles className="w-3 h-3" />
-            <span>Email OTP</span>
+            <User className="w-3 h-3" />
+            <span>Register</span>
           </button>
           <button
             type="button"
@@ -128,24 +187,67 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
             }`}
           >
             <Lock className="w-3 h-3" />
-            <span>Password</span>
+            <span>Sign In</span>
           </button>
           <button
             type="button"
-            onClick={() => { setMode('register'); setError(null); setInfoMsg(null); }}
+            onClick={() => { setMode('otp'); setOtpStep('request'); setError(null); setInfoMsg(null); }}
             className={`py-2 text-[11px] font-semibold rounded-lg transition-all flex items-center justify-center gap-1 ${
-              mode === 'register' ? 'bg-sky-600 text-white shadow' : 'text-slate-400 hover:text-white'
+              mode === 'otp' ? 'bg-sky-600 text-white shadow' : 'text-slate-400 hover:text-white'
             }`}
           >
-            <User className="w-3 h-3" />
-            <span>Register</span>
+            <Sparkles className="w-3 h-3" />
+            <span>Email OTP</span>
           </button>
         </div>
 
         {error && (
-          <div className="mb-4 p-3 rounded-xl bg-rose-950/40 border border-rose-900/60 text-rose-300 text-xs flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 flex-shrink-0" />
-            <span>{error}</span>
+          <div className="mb-4 p-3 rounded-xl bg-rose-950/40 border border-rose-900/60 text-rose-300 text-xs space-y-2">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+              <span>{error}</span>
+            </div>
+            {mode === 'register' && error.toLowerCase().includes('already exists') && (
+              <div className="flex flex-wrap gap-2 pl-6">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode('login');
+                    setError(null);
+                    setInfoMsg('Switched to Sign In. Enter your password or switch to Email OTP.');
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold text-[11px] transition-colors"
+                >
+                  Switch to Sign In &rarr;
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode('otp');
+                    setOtpStep('request');
+                    setError(null);
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-[11px] transition-colors"
+                >
+                  Use Email OTP
+                </button>
+              </div>
+            )}
+            {mode === 'login' && error.toLowerCase().includes('invalid email or password') && (
+              <div className="pl-6">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode('register');
+                    setError(null);
+                    setInfoMsg(null);
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-sky-600/20 hover:bg-sky-600/30 border border-sky-500/40 text-sky-300 font-semibold text-[11px] transition-colors"
+                >
+                  New user? Create Account &rarr;
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -158,36 +260,82 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
 
         {/* 1. Passwordless OTP Flow */}
         {mode === 'otp' && otpStep === 'request' && (
-          <form onSubmit={handleSendOtp} className="space-y-4">
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
-                Your Email Address
-              </label>
-              <div className="relative">
-                <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="e.g. giorgi.shakiashvili.dev@gmail.com"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2.5 text-xs text-white focus:outline-none focus:border-sky-500"
-                />
+          <div className="space-y-4">
+            <form onSubmit={handleSendOtp} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                  Your Email Address
+                </label>
+                <div className="relative">
+                  <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
+                  <input
+                    type="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="name@example.com"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2.5 text-xs text-white focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+                <p className="text-[11px] text-slate-500 mt-1.5">
+                  We will send a 6-digit verification code to your inbox. No password needed.
+                </p>
               </div>
-              <p className="text-[11px] text-slate-500 mt-1.5">
-                We will send a 6-digit verification code to your inbox. No password needed.
-              </p>
-            </div>
 
-            <button
-              type="submit"
-              disabled={loading || !email}
-              className="w-full py-2.5 rounded-xl bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-lg shadow-sky-600/25 transition-all mt-4 disabled:opacity-50"
-            >
-              <span>{loading ? 'Sending Verification Code...' : 'Send One-Time Code'}</span>
-              <ArrowRight className="w-4 h-4" />
-            </button>
-          </form>
+              <button
+                type="submit"
+                disabled={loading || !email}
+                className="w-full py-2.5 rounded-xl bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-lg shadow-sky-600/25 transition-all disabled:opacity-50"
+              >
+                <span>{loading ? 'Sending Verification Code...' : 'Send One-Time Code'}</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </form>
+
+            {smtpConfigured === false && (
+              <div className="pt-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setShowSmtpSetup((v) => !v)}
+                  className="text-[11px] text-sky-400 hover:text-sky-300 flex items-center gap-1.5 font-medium"
+                >
+                  <Settings2 className="w-3.5 h-3.5" />
+                  <span>{showSmtpSetup ? 'Hide local Gmail SMTP setup' : 'Configure Gmail SMTP Sender (Local Only)'}</span>
+                </button>
+
+                {showSmtpSetup && (
+                  <form onSubmit={handleSaveSmtp} className="mt-3 p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5">
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      Stored strictly in local gitignored <code className="text-sky-300">backend/.env</code> &mdash; never pushed to Git or logged. Requires a 16-char Google App Password.
+                    </p>
+                    <input
+                      type="email"
+                      required
+                      value={smtpUser || email}
+                      onChange={(e) => setSmtpUser(e.target.value)}
+                      placeholder="Sender Gmail address"
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500"
+                    />
+                    <input
+                      type="password"
+                      required
+                      value={smtpAppPassword}
+                      onChange={(e) => setSmtpAppPassword(e.target.value)}
+                      placeholder="16-char Google App Password"
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500"
+                    />
+                    <button
+                      type="submit"
+                      disabled={smtpSaving}
+                      className="w-full py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-[11px] transition-colors disabled:opacity-50"
+                    >
+                      {smtpSaving ? 'Verifying with Gmail SMTP...' : 'Verify & Save Local SMTP'}
+                    </button>
+                  </form>
+                )}
+              </div>
+            )}
+          </div>
         )}
 
         {mode === 'otp' && otpStep === 'verify' && (
@@ -259,7 +407,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
                     required
                     value={fullName}
                     onChange={(e) => setFullName(e.target.value)}
-                    placeholder="e.g. Giorgi Shakiashvili"
+                    placeholder="Your Full Name"
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2.5 text-xs text-white focus:outline-none focus:border-sky-500"
                   />
                 </div>
@@ -300,6 +448,26 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
                 />
               </div>
             </div>
+
+            {mode === 'register' && (
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                  Confirm Password
+                </label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
+                  <input
+                    type="password"
+                    required
+                    minLength={8}
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="••••••••••••"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2.5 text-xs text-white focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+              </div>
+            )}
 
             <button
               type="submit"

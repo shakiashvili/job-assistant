@@ -216,28 +216,28 @@ class PlaywrightStagerService:
                 re.compile(r"last\s*name|გვარი", re.I),
                 re.compile(r"last\s*name", re.I),
                 "input[name*='last_name'], input[autocomplete='family-name']",
-                candidate.get("last_name", "Mercer"),
+                candidate.get("last_name", "Candidate"),
                 "last_name",
             )
             await fill_semantic_cascade(
                 re.compile(r"full\s*name|your\s*name|სახელი\s*და\s*გვარი", re.I),
                 re.compile(r"full\s*name|your\s*name", re.I),
                 "input[name='name'], input[name*='full_name'], input[autocomplete='name']",
-                candidate.get("full_name", "Alex Mercer"),
+                candidate.get("full_name", "Candidate"),
                 "full_name",
             )
             await fill_semantic_cascade(
                 re.compile(r"e-?mail|ელ\.?\s*ფოსტა", re.I),
                 re.compile(r"email|@", re.I),
                 "input[type='email'], input[name*='email']",
-                candidate.get("email", "alex.mercer.dev@gmail.com"),
+                candidate.get("email", "candidate@example.com"),
                 "email",
             )
             await fill_semantic_cascade(
                 re.compile(r"phone|mobile|tel|ტელეფონი", re.I),
                 re.compile(r"phone|\+", re.I),
                 "input[type='tel'], input[name*='phone']",
-                candidate.get("phone", "+49 152 98765432"),
+                candidate.get("phone", "+000 000 0000"),
                 "phone",
             )
             await fill_semantic_cascade(
@@ -307,7 +307,7 @@ class PlaywrightStagerService:
                 re.compile(r"playwright|cypress|automation\s*framework|experience", re.I),
                 re.compile(r"experience|framework", re.I),
                 "textarea[name*='experience' i]",
-                "5+ years building modular Playwright (TS/Python) and Cypress test suites, cutting CI regression from 14h to 35m.",
+                "1.5+ years building modular Playwright (TS/Python) and Cypress test suites, cutting CI regression time.",
                 "framework_experience",
             )
 

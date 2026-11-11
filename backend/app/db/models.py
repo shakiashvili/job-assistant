@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from sqlmodel import SQLModel, Field, Column, Relationship
-from sqlalchemy import JSON, Text, UniqueConstraint
+from sqlalchemy import JSON, Text, UniqueConstraint, event
+from ..services.crypto_service import EncryptedString, EncryptedText, EncryptedJSON, blind_index
 
 
 def utc_now() -> datetime:
@@ -12,12 +13,13 @@ class User(SQLModel, table=True):
     __tablename__ = "users"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    email: str = Field(unique=True, index=True)
+    email: str = Field(sa_column=Column(EncryptedString, nullable=False))
+    email_hash: str = Field(default="", unique=True, index=True)
     hashed_password: str
-    full_name: str = Field(default="Candidate")
+    full_name: str = Field(default="Candidate", sa_column=Column(EncryptedString, nullable=False))
     is_active: bool = Field(default=True)
     is_admin: bool = Field(default=False)
-    gmail_oauth_token: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON))
+    gmail_oauth_token: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(EncryptedJSON))
     created_at: datetime = Field(default_factory=utc_now)
 
     # Relationships
@@ -29,8 +31,9 @@ class UserOTP(SQLModel, table=True):
     __tablename__ = "user_otps"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    email: str = Field(index=True)
-    otp_code: str = Field(index=True)
+    email: str = Field(sa_column=Column(EncryptedString, nullable=False))
+    email_hash: str = Field(default="", index=True)
+    otp_code: str = Field(sa_column=Column(EncryptedString, nullable=False))
     expires_at: datetime = Field(index=True)
     is_used: bool = Field(default=False, index=True)
     created_at: datetime = Field(default_factory=utc_now)
@@ -91,15 +94,15 @@ class CandidateProfile(SQLModel, table=True):
     __tablename__ = "candidate_profiles"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    raw_markdown: str = Field(default="", sa_column=Column(Text, nullable=False))
-    full_name: str = Field(default="Alex Mercer")
-    email: str = Field(default="alex.mercer.dev@gmail.com")
-    phone: str = Field(default="+49 152 98765432")
-    location: str = Field(default="Berlin / Tbilisi (Remote)")
-    github_url: str = Field(default="https://github.com/alex-mercer-automation")
-    linkedin_url: str = Field(default="https://linkedin.com/in/alex-mercer-qa")
-    parsed_skills: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
-    experience_years: float = Field(default=5.0)
+    raw_markdown: str = Field(default="", sa_column=Column(EncryptedText, nullable=False))
+    full_name: str = Field(default="Candidate", sa_column=Column(EncryptedString, nullable=False))
+    email: str = Field(default="candidate@example.com", sa_column=Column(EncryptedString, nullable=False))
+    phone: str = Field(default="+000 000 0000", sa_column=Column(EncryptedString, nullable=False))
+    location: str = Field(default="Remote / Georgia", sa_column=Column(EncryptedString, nullable=False))
+    github_url: str = Field(default="https://github.com/example-candidate", sa_column=Column(EncryptedString, nullable=False))
+    linkedin_url: str = Field(default="https://linkedin.com/in/example-candidate", sa_column=Column(EncryptedString, nullable=False))
+    parsed_skills: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(EncryptedJSON, nullable=False))
+    experience_years: float = Field(default=0.0)
     updated_at: datetime = Field(default_factory=utc_now, index=True)
 
 
@@ -163,3 +166,16 @@ class ApplicationRecord(SQLModel, table=True):
 
 # Backwards compatibility and master prompt aliases
 JobVacancy = JobPosting
+LiveJobVacancy = JobPosting
+
+
+@event.listens_for(User, "before_insert")
+@event.listens_for(User, "before_update")
+def _sync_user_email_hash(mapper, connection, target: User) -> None:
+    target.email_hash = blind_index(target.email)
+
+
+@event.listens_for(UserOTP, "before_insert")
+@event.listens_for(UserOTP, "before_update")
+def _sync_otp_email_hash(mapper, connection, target: UserOTP) -> None:
+    target.email_hash = blind_index(target.email)

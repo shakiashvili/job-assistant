@@ -1,11 +1,12 @@
 import logging
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query, Depends
 from pydantic import BaseModel
 from sqlmodel import Session, select
-from ..database import engine, init_db
-from ..models.db_models import CandidateProfile, JobPosting
+from ..database import engine, init_db, delete_job_posting_cascade
+from ..models.db_models import CandidateProfile, JobPosting, User
 from ..storage.ground_truth_store import ground_truth_store
+from ..services.auth_service import get_current_user
 from ..services.scrapers.scraper_orchestrator import scraper_orchestrator
 from ..services.salary_service import salary_service
 from ..services.matcher_service import matcher_service
@@ -16,7 +17,7 @@ router = APIRouter(prefix="/api", tags=["Database Profile, Scrapers & Market Int
 
 class ScrapeRequest(BaseModel):
     portals: Optional[List[str]] = None  # ["jobs.ge", "hr.ge", "dou.ua", "djinni.co"]
-    allow_network: bool = False
+    allow_network: bool = True
 
 
 class SalaryEstimateRequest(BaseModel):
@@ -26,15 +27,29 @@ class SalaryEstimateRequest(BaseModel):
     portal: str = "generic"
 
 
+def _is_profile_uploaded_for_user(profile: Optional[CandidateProfile], user_email: str) -> bool:
+    if not profile:
+        return False
+    ps = profile.parsed_skills or {}
+    if not bool(ps.get("user_uploaded", False)):
+        return False
+    owner = ps.get("owner_email")
+    if owner and user_email != "guest@talentflow.local" and owner != user_email:
+        return False
+    return True
+
+
 @router.post("/profile/upload-skills")
 async def upload_skills_profile(
     file: Optional[UploadFile] = File(None),
     content: Optional[str] = Form(None),
+    run_live_scrape: bool = Form(True),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Accepts a .md or .txt file upload (e.g., skills.md) or markdown form content,
-    parses QA/SDET technical capabilities (Automation, Languages, API & Performance, CI/CD & DevOps)
-    via Gemini 2.5 Flash + taxonomy parser, and persists it into CandidateProfile in the SQL database.
+    extracts role & technical capabilities into CandidateProfile, purges stale off-domain rows,
+    and dynamically scrapes live role-matching suitable vacancies across portals.
     """
     md_text = ""
     filename = "skills.md"
@@ -50,22 +65,31 @@ async def upload_skills_profile(
     try:
         profile: CandidateProfile = ground_truth_store.ingest_skills_markdown(md_text)
 
-        # Re-evaluate all existing JobPosting records in DB against the new CandidateProfile
+        # Stamp ownership and clear old unapplied vacancies so ONLY suitable matches for this skills.md remain
         with Session(engine) as session:
+            db_prof = session.get(CandidateProfile, profile.id)
+            if db_prof:
+                skills_copy = dict(db_prof.parsed_skills or {})
+                skills_copy["user_uploaded"] = True
+                if current_user.email != "guest@talentflow.local":
+                    skills_copy["owner_email"] = current_user.email
+                db_prof.parsed_skills = skills_copy
+                session.add(db_prof)
             jobs = session.exec(select(JobPosting)).all()
             for job in jobs:
-                score, new_status, rationale, _, _ = matcher_service.evaluate_job(
-                    title=job.title,
-                    description=job.description_raw,
-                    parsed_skills=profile.parsed_skills,
-                    current_status=job.status,
-                    existing_rationale=job.match_rationale,
-                )
-                job.suitability_score = score
-                job.status = new_status
-                job.match_rationale = rationale
-                session.add(job)
+                if job.status != "APPLIED":
+                    delete_job_posting_cascade(session, job)
             session.commit()
+            if db_prof:
+                session.refresh(db_prof)
+                profile = db_prof
+
+        scrape_summary: Optional[Dict[str, Any]] = None
+        if run_live_scrape:
+            try:
+                scrape_summary = await scraper_orchestrator.run_scrapers(allow_network=True)
+            except Exception as sc_err:
+                logger.warning(f"Post-upload live scrape skipped/partial: {sc_err}")
 
         clean_taxonomy = {
             k: v for k, v in profile.parsed_skills.items() if k != "ground_truth_vault"
@@ -75,9 +99,11 @@ async def upload_skills_profile(
             "id": profile.id,
             "full_name": profile.full_name,
             "experience_years": profile.experience_years,
+            "profile_uploaded": True,
             "filename": filename,
             "raw_markdown": profile.raw_markdown,
             "parsed_skills": clean_taxonomy,
+            "scrape_summary": scrape_summary,
             "updated_at": profile.updated_at.isoformat(),
         }
     except Exception as e:
@@ -86,9 +112,10 @@ async def upload_skills_profile(
 
 
 @router.get("/profile")
-def get_candidate_profile_db():
+def get_candidate_profile_db(current_user: User = Depends(get_current_user)):
     """Returns the current CandidateProfile record from the relational database."""
     profile = ground_truth_store.get_profile_record()
+    uploaded = _is_profile_uploaded_for_user(profile, current_user.email)
     clean_taxonomy = {
         k: v for k, v in profile.parsed_skills.items() if k != "ground_truth_vault"
     }
@@ -101,8 +128,9 @@ def get_candidate_profile_db():
         "github_url": profile.github_url,
         "linkedin_url": profile.linkedin_url,
         "experience_years": profile.experience_years,
-        "raw_markdown": profile.raw_markdown,
-        "parsed_skills": clean_taxonomy,
+        "profile_uploaded": uploaded,
+        "raw_markdown": profile.raw_markdown if uploaded else "",
+        "parsed_skills": clean_taxonomy if uploaded else {},
         "updated_at": profile.updated_at.isoformat(),
     }
 
@@ -110,13 +138,13 @@ def get_candidate_profile_db():
 @router.post("/jobs/scrape")
 async def trigger_multi_portal_scrape(request: Optional[ScrapeRequest] = None):
     """
-    Runs the multi-portal scraper engine across Jobs.ge, HR.ge, DOU.ua, and Djinni.co:
-    - Enforces Remote & Strict English-only Language Gate (marks Ukrainian/Russian required roles as FILTERED_OUT).
-    - Extracts or AI-estimates salary ranges (salary_estimated_by_ai).
-    - Computes suitability_score (0-100%) and auto-promotes >= 75% matches to STAGED.
+    Runs the live multi-portal scraper engine across Jobs.ge, HR.ge, DOU.ua, and Djinni.co:
+    - Uses target role & search queries from uploaded CandidateProfile (skills.md).
+    - Enforces Live HTTP GET content health check (rejects blank 200 OK pages).
+    - Enforces Domain, Seniority, Suitability (>=60%), Remote & Strict English-only Language Gates.
     """
     portals = request.portals if request else None
-    allow_net = request.allow_network if request else False
+    allow_net = request.allow_network if request else True
     return await scraper_orchestrator.run_scrapers(portals=portals, allow_network=allow_net)
 
 
@@ -125,25 +153,32 @@ async def list_scraped_jobs(
     portal: Optional[str] = Query(None),
     market: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
-    min_score: Optional[float] = Query(None),
+    min_score: Optional[float] = Query(60.0, description="Minimum suitability score threshold (default 60% so only suitable vacancies return)."),
     include_filtered: bool = Query(False, description="Include FILTERED_OUT (blocked/disqualified) jobs. Hidden by default."),
+    current_user: User = Depends(get_current_user),
 ) -> List[Dict[str, Any]]:
-    """Lists JobPosting records from the relational database.
-    Jobs that do not match the candidate's requirements or fail seniority gates (FILTERED_OUT)
-    are strictly excluded by default."""
+    """Lists ONLY suitable JobPosting records matching the candidate's uploaded skills.md profile.
+    Returns an empty list until the candidate uploads skills.md.
+    """
     init_db()
     with Session(engine) as session:
+        profile = session.exec(
+            select(CandidateProfile).order_by(CandidateProfile.updated_at.desc())
+        ).first()
+        if not _is_profile_uploaded_for_user(profile, current_user.email):
+            return []
+
         stmt = select(JobPosting).order_by(JobPosting.suitability_score.desc(), JobPosting.scraped_at.desc())
         rows = session.exec(stmt).all()
         filtered = []
         for r in rows:
+            if not include_filtered and r.status == "FILTERED_OUT":
+                continue
             if portal and r.portal != portal:
                 continue
             if market and r.market != market:
                 continue
             if status and r.status != status:
-                continue
-            if not include_filtered and not status and r.status == "FILTERED_OUT":
                 continue
             if min_score is not None and r.suitability_score < min_score:
                 continue

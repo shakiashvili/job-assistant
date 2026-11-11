@@ -23,8 +23,17 @@ Thumbs.db
 .vscode/
 .idea/
 
-# SQLite WAL runtime files & HITL temporary screenshots
+# Local database, encryption keys, private candidate profiles & runtime data
+*.db
+*.sqlite
+*.sqlite3
 *.db-shm
 *.db-wal
+data/.fernet.key
+data/job_assistant.db
+data/candidate_skills.md
+data/ground_truth.json
+data/applications.json
+data/resumes/generated/
 data/resumes/generated/hitl_captcha_pause.png
 data/resumes/generated/CV_*

@@ -85,11 +85,6 @@ app.include_router(stage_router)
 app.include_router(ground_truth_router)
 app.include_router(tracker_router)
 
-# Mount Mock Portals for local testing and extension preview
-if MOCK_PORTALS_DIR.exists():
-    app.mount("/mock-portals", StaticFiles(directory=str(MOCK_PORTALS_DIR), html=True), name="mock-portals")
-
-
 @app.get("/")
 def root():
     return {
@@ -98,8 +93,6 @@ def root():
         "status": "online",
         "database": "SQLModel / SQLAlchemy Active",
         "docs_url": "/docs",
-        "mock_greenhouse": "/mock-portals/greenhouse_sample.html",
-        "mock_lever": "/mock-portals/lever_sample.html",
     }
 
 

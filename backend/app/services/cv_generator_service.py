@@ -302,9 +302,9 @@ class CVGeneratorService:
             spaceAfter=2.5,
         )
 
-        full_name = escape(str(candidate.get("full_name", "Alex Mercer")))
-        email = escape(str(candidate.get("email", "alex.mercer.dev@gmail.com")))
-        phone = escape(str(candidate.get("phone", "+49 152 98765432")))
+        full_name = escape(str(candidate.get("full_name", "Candidate")))
+        email = escape(str(candidate.get("email", "candidate@example.com")))
+        phone = escape(str(candidate.get("phone", "+000 000 0000")))
         loc_dict = candidate.get("location", {})
         loc = escape(
             f"{loc_dict.get('city', 'Tbilisi')}, {loc_dict.get('country', 'Georgia')}"
@@ -388,9 +388,9 @@ class CVGeneratorService:
         cv_language: str = "en",
     ) -> str:
         is_ka = cv_language == "ka"
-        full_name = candidate.get("full_name", "Alex Mercer")
-        email = candidate.get("email", "alex.mercer.dev@gmail.com")
-        phone = candidate.get("phone", "+995 599 12 34 56")
+        full_name = candidate.get("full_name", "Candidate")
+        email = candidate.get("email", "candidate@example.com")
+        phone = candidate.get("phone", "+000 000 0000")
         loc_dict = candidate.get("location", {})
         loc = (
             f"{loc_dict.get('city', 'Tbilisi')}, {loc_dict.get('country', 'Georgia')}"

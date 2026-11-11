@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from .base_scraper import BasePortalScraper, evaluate_remote_and_language_gate
 
 logger = logging.getLogger(__name__)
@@ -68,67 +68,23 @@ class DouScraper(BasePortalScraper):
         return results
 
     def _fallback_curated_listings(self) -> List[Dict[str, Any]]:
-        raw_listings = [
-            {
-                "external_id": "dou-289104",
-                "title": "QA Automation Engineer (Playwright / Python)",
-                "company": "MacPaw",
-                "url": "https://jobs.dou.ua/companies/macpaw/vacancies/289104/",
-                "location": "Remote / Relocation Worldwide",
-                "description": (
-                    "Senior QA Automation Engineer at MacPaw (100% Remote / Relocation). "
-                    "Working language: English only (Upper-Intermediate / Fluent English). "
-                    "Tech stack: Playwright, Cypress, Python, TypeScript, PyTest, Postman, REST API, "
-                    "GitHub Actions, Docker, SQL. Compensation: $4,200 - $5,500."
-                ),
-            },
-            {
-                "external_id": "dou-289512",
-                "title": "Middle/Senior QA Engineer (Українська мова)",
-                "company": "KyivLocalBank",
-                "url": "https://jobs.dou.ua/companies/kyivlocalbank/vacancies/289512/",
-                "location": "Remote (Ukraine)",
-                "description": (
-                    "Middle/Senior QA Automation Engineer. Requirements: Python, PyTest, Playwright. "
-                    "Обов'язково: вільно українська мова для спілкування з командою, fluent Ukrainian required."
-                ),
-            },
-        ]
+        """Purged: never inject dead static vacancies when offline."""
+        return []
 
-        processed: List[Dict[str, Any]] = []
-        for item in raw_listings:
-            is_remote, status, filter_reason, langs = evaluate_remote_and_language_gate(
-                title=item["title"],
-                description=item["description"],
-                location_text=item["location"],
-                portal=self.portal_name,
-            )
-            processed.append({
-                "portal": self.portal_name,
-                "external_id": item["external_id"],
-                "title": item["title"],
-                "company": item["company"],
-                "url": item["url"],
-                "market": self.market,
-                "is_remote": is_remote,
-                "channel": "WEB_FORM",
-                "detected_languages": langs,
-                "language_requirements": langs,
-                "description_raw": item["description"],
-                "status": status,
-                "filter_out_reason": filter_reason or None,
-                "match_rationale": filter_reason,
-            })
-        return processed
-
-    async def scrape(self, allow_network: bool = True) -> List[Dict[str, Any]]:
-        if allow_network:
-            html = await self.fetch_html(self.SEARCH_URL)
-            if html:
-                parsed = self.parse_html_listings(html)
-                if parsed:
-                    return parsed[:10]
-        return self._fallback_curated_listings()
+    async def scrape(
+        self,
+        allow_network: bool = True,
+        search_url: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        if not allow_network:
+            return []
+        target_url = search_url or self.SEARCH_URL
+        html = await self.fetch_html(target_url)
+        if html:
+            parsed = self.parse_html_listings(html)
+            if parsed:
+                return parsed[:10]
+        return []
 
 
 dou_scraper = DouScraper()

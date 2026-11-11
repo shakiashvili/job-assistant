@@ -1,7 +1,7 @@
 import json
 import logging
 import re
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 from ..config import GEMINI_API_KEY, GEMINI_MODEL, SKILLS_MD_FILE, GROUND_TRUTH_FILE
@@ -26,13 +26,13 @@ class ExtractedSkillsTaxonomy(BaseModel):
 
 
 class ParsedCandidateProfileSchema(BaseModel):
-    full_name: str = "Giorgi Shakiashvili"
+    full_name: str = "Candidate"
     headline: str = "QA Engineer"
-    email: str = "giorgi.shakiashvili.dev@gmail.com"
-    phone: str = "+995 599 123456"
+    email: str = "candidate@example.com"
+    phone: str = "+000 000 0000"
     location: str = "Tbilisi, Georgia (Remote / Abroad)"
-    github_url: str = "https://github.com/shakiashvili"
-    linkedin_url: str = "https://linkedin.com/in/giorgi-shakiashvili"
+    github_url: str = "https://github.com/example-candidate"
+    linkedin_url: str = "https://linkedin.com/in/example-candidate"
     experience_years: float = 1.5
     seniority_level: str = "JUNIOR"
     target_industry: str = "qa_tech"
@@ -65,14 +65,14 @@ class ProfileService:
 
         # Deterministic extraction baseline
         taxonomy_dict = matcher_service.parse_skills_markdown(text)
-        full_name = "Giorgi Shakiashvili"
+        full_name = "Candidate"
         target_industry = "qa_tech"
         headline = "QA Engineer"
-        email = "giorgi.shakiashvili.dev@gmail.com"
-        phone = "+995 599 123456"
+        email = "candidate@example.com"
+        phone = "+000 000 0000"
         location = "Tbilisi, Georgia (Remote / Abroad)"
-        github_url = "https://github.com/shakiashvili"
-        linkedin_url = "https://linkedin.com/in/giorgi-shakiashvili"
+        github_url = "https://github.com/example-candidate"
+        linkedin_url = "https://linkedin.com/in/example-candidate"
 
         # 1. Name extraction
         name_m = re.search(r"(?:\*\*Author:\*\*|\*\*Name:\*\*|Full Name|Author|Candidate|სახელი და გვარი|Name)\**\s*:\**\s*([^\n\r*]+)", text, re.I)
@@ -203,7 +203,98 @@ Markdown:
             ),
         )
 
-    def upsert_candidate_profile(self, raw_markdown: str) -> CandidateProfile:
+    def get_search_queries_for_profile(
+        self,
+        parsed_skills: Optional[Dict[str, Any]] = None,
+        headline: str = "",
+    ) -> Dict[str, Any]:
+        """
+        Determines portal-specific role search parameters directly from CandidateProfile
+        so scrapers dynamically search by the candidate's target role (e.g., QA / Software Tester).
+        """
+        skills = parsed_skills or {}
+        target_industry = str(skills.get("target_industry") or "qa_tech").lower()
+        hl = str(headline or skills.get("headline") or "").lower()
+        has_qa_skills = bool(skills.get("qa_automation") or skills.get("manual_qa")) or any(
+            w in hl for w in ["qa", "test", "sdet", "quality"]
+        )
+
+        if target_industry == "receptionist_hospitality" or any(
+            w in hl for w in ["receptionist", "hospitality", "hotel", "front desk"]
+        ):
+            return {
+                "target_role": "Receptionist",
+                "search_terms": ["Receptionist", "Hospitality", "მიმღები", "ადმინისტრატორი"],
+                "jobs_ge_urls": [
+                    "https://jobs.ge/ge/?page=1&q=Receptionist",
+                    "https://jobs.ge/ge/?page=1&q=%E1%83%9B%E1%83%98%E1%83%9B%E1%83%A6%E1%83%94%E1%83%91%E1%83%98",
+                ],
+                "djinni_url": None,
+                "dou_url": None,
+                "hr_ge_url": "https://www.hr.ge/search-posting?q=receptionist",
+                "domain_keywords": [
+                    "receptionist", "front desk", "hospitality", "concierge", "hotel", "guest",
+                    "მიმღები", "რეცეფციონისტი", "სასტუმრო", "ადმინისტრატორი",
+                ],
+            }
+
+        if target_industry == "healthcare_hospital" or any(
+            w in hl for w in ["medical", "hospital", "clinic", "patient coordinator"]
+        ):
+            return {
+                "target_role": "Medical Coordinator",
+                "search_terms": ["Medical", "Clinic", "სამედიცინო"],
+                "jobs_ge_urls": [
+                    "https://jobs.ge/ge/?page=1&q=%E1%83%A1%E1%83%90%E1%83%9B%E1%83%94%E1%83%93%E1%83%98%E1%83%AA%E1%83%98%E1%83%9C%E1%83%9D",
+                    "https://jobs.ge/ge/?page=1&q=Medical",
+                ],
+                "djinni_url": None,
+                "dou_url": None,
+                "hr_ge_url": "https://www.hr.ge/search-posting?q=medical",
+                "domain_keywords": [
+                    "medical", "hospital", "clinic", "patient", "coordinator",
+                    "სამედიცინო", "კლინიკა", "პაციენტ", "რეგისტრატორი",
+                ],
+            }
+
+        if target_industry == "customer_service" or any(
+            w in hl for w in ["customer service", "support specialist", "client care", "call center"]
+        ):
+            return {
+                "target_role": "Customer Support",
+                "search_terms": ["Support", "Customer Service", "მხარდაჭერა"],
+                "jobs_ge_urls": [
+                    "https://jobs.ge/ge/?page=1&q=Support",
+                    "https://jobs.ge/ge/?page=1&q=Customer",
+                ],
+                "djinni_url": "https://djinni.co/jobs/?primary_keyword=Support&employment=remote",
+                "dou_url": "https://jobs.dou.ua/vacancies/?category=Support&remote",
+                "hr_ge_url": "https://www.hr.ge/search-posting?q=support",
+                "domain_keywords": [
+                    "support", "customer service", "client care", "call center", "helpdesk",
+                    "მხარდაჭერა", "ოპერატორი", "ქოლ",
+                ],
+            }
+
+        # Default: QA / Software Testing profile
+        role_label = "QA" if has_qa_skills else "QA"
+        return {
+            "target_role": role_label,
+            "search_terms": ["QA", "Tester", "Software Tester"],
+            "jobs_ge_urls": [
+                "https://jobs.ge/ge/?page=1&q=QA&cid=6",
+                "https://jobs.ge/ge/?page=1&q=Tester&cid=6",
+            ],
+            "djinni_url": "https://djinni.co/jobs/?primary_keyword=QA&employment=remote",
+            "dou_url": "https://jobs.dou.ua/vacancies/?category=QA&remote",
+            "hr_ge_url": "https://www.hr.ge/search-posting?q=QA",
+            "domain_keywords": [
+                "qa", "quality assurance", "tester", "test engineer", "sdet",
+                "manual qa", "automation", "playwright", "cypress", "selenium", "ტესტ",
+            ],
+        }
+
+    def upsert_candidate_profile(self, raw_markdown: str, mark_uploaded: bool = True) -> CandidateProfile:
         """
         Extracts structured profile data from raw_markdown and upserts it into CandidateProfile in SQLite/PostgreSQL.
         """
@@ -219,6 +310,10 @@ Markdown:
         skills_payload["seniority_level"] = extracted.seniority_level
         skills_payload["target_industry"] = extracted.target_industry
         skills_payload["headline"] = extracted.headline
+        search_cfg = self.get_search_queries_for_profile(skills_payload, headline=extracted.headline)
+        skills_payload["target_role"] = search_cfg["target_role"]
+        skills_payload["search_queries"] = search_cfg
+        skills_payload["user_uploaded"] = mark_uploaded
 
         with Session(engine, expire_on_commit=False) as session:
             profile = session.exec(
@@ -237,8 +332,8 @@ Markdown:
             cand = existing_vault.setdefault("candidate", {})
             cand["full_name"] = extracted.full_name
             parts = extracted.full_name.split()
-            cand["first_name"] = parts[0] if parts else "Giorgi"
-            cand["last_name"] = " ".join(parts[1:]) if len(parts) > 1 else "Shakiashvili"
+            cand["first_name"] = parts[0] if parts else "Candidate"
+            cand["last_name"] = " ".join(parts[1:]) if len(parts) > 1 else ""
             cand["headline"] = extracted.headline
             cand["email"] = extracted.email
             cand["phone"] = extracted.phone

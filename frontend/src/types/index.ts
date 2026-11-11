@@ -134,6 +134,9 @@ export interface DbJobPosting {
   status: 'DISCOVERED' | 'FILTERED_OUT' | 'AUDITED' | 'STAGED' | 'APPLIED' | 'REJECTED' | string;
   deadline_text?: string | null;
   is_link_live?: boolean;
+  delivery_channel?: string | null;
+  target_email?: string | null;
+  email_subject?: string | null;
   scraped_at: string;
 }
 

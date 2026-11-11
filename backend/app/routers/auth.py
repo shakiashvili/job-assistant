@@ -1,19 +1,26 @@
 import logging
 import re
 import secrets
-from datetime import timedelta
+from datetime import timedelta, timezone
+from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, EmailStr, Field
+from fastapi.security import HTTPAuthorizationCredentials
+from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
-from ..db.database import get_session
-from ..db.models import User, UserOTP, utc_now
+from ..config import BASE_DIR, reload_env_files, get_smtp_config
+from ..db.database import get_session, delete_job_posting_cascade
+from ..db.models import User, UserOTP, CandidateProfile, JobPosting, utc_now
+from ..services.crypto_service import blind_index, mask_email
 from ..services.auth_service import (
     hash_password,
     verify_password,
     create_access_token,
+    decode_access_token,
     get_current_user,
+    get_user_by_email,
+    security_bearer,
     check_rate_limit,
     record_login_failure,
     reset_login_attempts,
@@ -43,6 +50,11 @@ class VerifyOTPRequest(BaseModel):
     otp_code: str = Field(..., min_length=6, max_length=6, description="6-digit verification code")
 
 
+class ConfigureSmtpRequest(BaseModel):
+    gmail_user: str = Field(..., min_length=5, description="Gmail address for outgoing OTPs")
+    gmail_app_password: str = Field(..., min_length=8, description="16-character Google App Password")
+
+
 class UserOut(BaseModel):
     id: int
     email: str
@@ -62,11 +74,28 @@ def sanitize_email(email: str) -> str:
     return email.strip().lower()
 
 
+def _sync_profile_owner_on_auth(session: Session, clean_email: str, force_reset: bool = False) -> None:
+    """Ensures a newly registered user or switched account starts with an empty feed until skills.md upload."""
+    for prof in session.exec(select(CandidateProfile)).all():
+        skills_copy = dict(prof.parsed_skills or {})
+        if force_reset or skills_copy.get("owner_email") != clean_email:
+            skills_copy["user_uploaded"] = False
+            skills_copy["owner_email"] = clean_email
+            prof.parsed_skills = skills_copy
+            session.add(prof)
+            for stale_job in session.exec(select(JobPosting).where(JobPosting.status != "APPLIED")).all():
+                delete_job_posting_cascade(session, stale_job)
+    if force_reset:
+        for stale_job in session.exec(select(JobPosting).where(JobPosting.status != "APPLIED")).all():
+            delete_job_posting_cascade(session, stale_job)
+    session.commit()
+
+
 @router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
 def register_user(req: RegisterRequest, session: Session = Depends(get_session)):
     clean_email = sanitize_email(req.email)
 
-    existing = session.exec(select(User).where(User.email == clean_email)).first()
+    existing = get_user_by_email(session, clean_email)
     if existing:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -92,6 +121,8 @@ def register_user(req: RegisterRequest, session: Session = Depends(get_session))
     session.commit()
     session.refresh(user)
 
+    _sync_profile_owner_on_auth(session, clean_email, force_reset=True)
+
     token = create_access_token({"sub": user.email, "is_admin": user.is_admin, "user_id": user.id})
     return AuthResponse(
         access_token=token,
@@ -112,7 +143,7 @@ def login_user(req: LoginRequest, session: Session = Depends(get_session)):
     clean_email = sanitize_email(req.email)
     check_rate_limit(clean_email)
 
-    user = session.exec(select(User).where(User.email == clean_email)).first()
+    user = get_user_by_email(session, clean_email)
     if not user or not verify_password(req.password, user.hashed_password):
         record_login_failure(clean_email)
         # Constant-time message prevents user enumeration attacks
@@ -129,6 +160,8 @@ def login_user(req: LoginRequest, session: Session = Depends(get_session)):
         )
 
     reset_login_attempts(clean_email)
+    _sync_profile_owner_on_auth(session, clean_email, force_reset=False)
+
     token = create_access_token({"sub": user.email, "is_admin": user.is_admin, "user_id": user.id})
     return AuthResponse(
         access_token=token,
@@ -144,18 +177,100 @@ def login_user(req: LoginRequest, session: Session = Depends(get_session)):
     )
 
 
+@router.get("/smtp-status")
+def get_smtp_delivery_status():
+    """Returns whether local Gmail SMTP delivery is configured without exposing credentials."""
+    cfg = get_smtp_config()
+    return {"smtp_configured": cfg["configured"]}
+
+
+def _write_env_updates(env_path: Path, updates: dict[str, str]) -> None:
+    """Safely updates keys in local gitignored backend/.env while preserving existing entries."""
+    existing_lines = []
+    if env_path.exists():
+        existing_lines = env_path.read_text(encoding="utf-8").splitlines()
+
+    remaining = dict(updates)
+    new_lines = []
+    for line in existing_lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            k = stripped.split("=", 1)[0].strip()
+            if k in remaining:
+                val = remaining.pop(k)
+                new_lines.append(f"{k}={val}")
+                continue
+        new_lines.append(line)
+
+    for k, val in remaining.items():
+        new_lines.append(f"{k}={val}")
+
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+
+
+@router.post("/configure-smtp")
+def configure_smtp_sender(
+    req: ConfigureSmtpRequest,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_bearer),
+):
+    """
+    Validates and saves local Gmail SMTP credentials into gitignored backend/.env
+    so passwordless OTP codes can be dispatched without manually editing files.
+    """
+    cfg = get_smtp_config()
+    if cfg["configured"]:
+        payload = decode_access_token(credentials.credentials) if credentials else None
+        if not payload or not payload.get("sub"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="SMTP is already configured. Sign in first to change sender credentials.",
+            )
+
+    clean_user = req.gmail_user.strip().lower()
+    clean_pass = req.gmail_app_password.replace(" ", "").strip()
+    if any(ch in clean_user + clean_pass for ch in ("\r", "\n", "\x00")):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid characters in SMTP credentials.")
+
+    from ..services.gmail_service import gmail_service
+
+    ok, msg = gmail_service.verify_smtp_credentials(clean_user, clean_pass)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=msg)
+
+    _write_env_updates(
+        BASE_DIR / ".env",
+        {
+            "GMAIL_USER": clean_user,
+            "GMAIL_APP_PASSWORD": clean_pass,
+            "SMTP_USER": clean_user,
+            "SMTP_PASSWORD": clean_pass,
+        },
+    )
+    reload_env_files()
+
+    return {
+        "status": "ok",
+        "smtp_configured": True,
+        "sender_masked": mask_email(clean_user),
+        "message": f"Verified and saved local Gmail SMTP sender ({mask_email(clean_user)}). Git ignores backend/.env.",
+    }
+
+
+@router.post("/request-otp")
 @router.post("/send-otp")
 def send_otp_code(req: SendOTPRequest, session: Session = Depends(get_session)):
     """
     Generates a secure 6-digit numeric OTP code for passwordless Gmail/email authentication.
-    Valid for 10 minutes. Dispatches via Gmail/SMTP or logs for offline development.
+    Valid for 10 minutes. Dispatches via Gmail/SMTP (never logged in plaintext).
     """
     clean_email = sanitize_email(req.email)
+    email_digest = blind_index(clean_email)
     check_rate_limit(clean_email)
 
     # Invalidate previous unused OTPs for this email
     prev_otps = session.exec(
-        select(UserOTP).where((UserOTP.email == clean_email) & (UserOTP.is_used == False))
+        select(UserOTP).where((UserOTP.email_hash == email_digest) & (UserOTP.is_used == False))
     ).all()
     for o in prev_otps:
         o.is_used = True
@@ -167,6 +282,7 @@ def send_otp_code(req: SendOTPRequest, session: Session = Depends(get_session)):
 
     otp_record = UserOTP(
         email=clean_email,
+        email_hash=email_digest,
         otp_code=code,
         expires_at=expires_at,
         is_used=False,
@@ -174,29 +290,36 @@ def send_otp_code(req: SendOTPRequest, session: Session = Depends(get_session)):
     session.add(otp_record)
     session.commit()
 
-    logger.info(f"Generated passwordless OTP for {clean_email}: {code} (expires in 10 mins)")
+    logger.info(f"Generated passwordless OTP for {mask_email(clean_email)} (expires in 10 mins)")
 
-    # Send via Gmail OAuth / SMTP if user is connected
-    try:
-        from ..services.gmail_service import gmail_service
-        gmail_service.send_application_email(
-            to_email=clean_email,
-            subject=f"Your TalentFlow Login Verification Code: {code}",
-            body_text=(
-                f"Hello,\n\nYour 6-digit one-time verification code for TalentFlow AI is:\n\n"
-                f"    {code}\n\n"
-                f"This code will expire in 10 minutes.\n\n"
-                f"If you did not request this code, please ignore this email.\n\n"
-                f"Best regards,\nTalentFlow AI Team"
-            ),
+    # Send via real Gmail SMTP
+    from ..services.gmail_service import gmail_service
+    delivery = gmail_service.send_otp_email(to_email=clean_email, code=code)
+
+    if delivery["smtp_configured"] and not delivery["delivered"]:
+        logger.error(f"Failed to send OTP email to {mask_email(clean_email)}: {delivery['error']}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=delivery["error"] or "Failed to send OTP verification email via Gmail SMTP.",
         )
-    except Exception as e:
-        logger.debug(f"Direct Gmail dispatch note: {e}")
+
+    if not delivery["smtp_configured"]:
+        logger.warning(f"OTP generated for {mask_email(clean_email)}, but Gmail SMTP is not configured in backend/.env.")
+        return {
+            "status": "ok",
+            "delivered": False,
+            "smtp_configured": False,
+            "message": (
+                "Email could not be delivered to Gmail because GMAIL_USER and GMAIL_APP_PASSWORD "
+                "are not set in backend/.env. Configure them below (local only) or use Register / Sign In with Password."
+            ),
+        }
 
     return {
         "status": "ok",
-        "message": f"Verification code sent to {clean_email} (valid for 10 minutes).",
-        "demo_code": code,  # Returned to facilitate testing and local dev
+        "delivered": True,
+        "smtp_configured": True,
+        "message": f"Verification code sent to {mask_email(clean_email)}. Check your Gmail inbox (valid for 10 minutes).",
     }
 
 
@@ -208,16 +331,26 @@ def verify_otp_code(req: VerifyOTPRequest, session: Session = Depends(get_sessio
     """
     clean_email = sanitize_email(req.email)
     clean_code = req.otp_code.strip()
+    email_digest = blind_index(clean_email)
 
-    otp_record = session.exec(
-        select(UserOTP).where(
-            (UserOTP.email == clean_email)
-            & (UserOTP.otp_code == clean_code)
-            & (UserOTP.is_used == False)
-        )
-    ).first()
+    active_otps = session.exec(
+        select(UserOTP)
+        .where((UserOTP.email_hash == email_digest) & (UserOTP.is_used == False))
+        .order_by(UserOTP.id.desc())
+    ).all()
 
-    if not otp_record or otp_record.expires_at < utc_now():
+    otp_record = None
+    for cand in active_otps:
+        if cand.otp_code and secrets.compare_digest(cand.otp_code.strip(), clean_code):
+            otp_record = cand
+            break
+
+    now_utc = utc_now()
+    expires_at = otp_record.expires_at if otp_record else None
+    if expires_at is not None and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+    if not otp_record or not expires_at or expires_at < now_utc:
         record_login_failure(clean_email)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -229,7 +362,7 @@ def verify_otp_code(req: VerifyOTPRequest, session: Session = Depends(get_sessio
     session.add(otp_record)
 
     # Find or auto-provision user
-    user = session.exec(select(User).where(User.email == clean_email)).first()
+    user = get_user_by_email(session, clean_email)
     if not user:
         candidate_name = clean_email.split("@")[0].replace(".", " ").title()
         user = User(
@@ -251,6 +384,8 @@ def verify_otp_code(req: VerifyOTPRequest, session: Session = Depends(get_sessio
         )
 
     reset_login_attempts(clean_email)
+    _sync_profile_owner_on_auth(session, clean_email, force_reset=False)
+
     token = create_access_token({"sub": user.email, "is_admin": user.is_admin, "user_id": user.id})
 
     return AuthResponse(
@@ -304,7 +439,7 @@ def google_callback(
         user.gmail_oauth_token = token_data
         session.add(user)
         session.commit()
-        logger.info(f"Stored Google OAuth token for user '{user.email}'")
+        logger.info(f"Stored Google OAuth token for user '{mask_email(user.email)}'")
 
     return RedirectResponse(url=f"{FRONTEND_URL}?google_auth=success")
 

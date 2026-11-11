@@ -20,7 +20,8 @@ import {
   Eye,
   Database,
   ShieldAlert,
-  DollarSign
+  DollarSign,
+  Mail
 } from 'lucide-react';
 import {
   auditJob,
@@ -61,7 +62,8 @@ export const AuditPanel: React.FC = () => {
     filteredOut: number;
   } | null>(null);
 
-  const [jobUrl, setJobUrl] = useState(`${BACKEND_ORIGIN}/mock-portals/jobs_ge_sample.html`);
+  const [jobUrl, setJobUrl] = useState('');
+  const [profileUploaded, setProfileUploaded] = useState<boolean>(false);
   const [jobText, setJobText] = useState('');
   const [selectedVariant, setSelectedVariant] = useState('qa_automation');
   const [cvLanguage, setCvLanguage] = useState<'en' | 'ka'>('en');
@@ -98,37 +100,52 @@ export const AuditPanel: React.FC = () => {
     loadInitialData();
   }, []);
 
-  const refreshProfileData = async () => {
+  const refreshProfileData = async (): Promise<boolean> => {
     try {
       const p: any = await fetchDbProfile();
       if (p) {
+        const uploaded = Boolean(p.profile_uploaded);
+        setProfileUploaded(uploaded);
         setCandidateProfile({
-          full_name: p.full_name || 'Giorgi Shakiashvili',
+          full_name: p.full_name || 'Candidate',
           experience_years: p.experience_years ?? 1.5,
           seniority_level: p.parsed_skills?.seniority_level || 'JUNIOR',
           target_industry: p.parsed_skills?.target_industry || 'qa_tech',
           headline: p.parsed_skills?.headline || 'QA Engineer',
         });
+        return uploaded;
       }
     } catch {}
+    return false;
   };
 
   const loadInitialData = async () => {
-    refreshProfileData();
+    const uploaded = await refreshProfileData();
     try {
-      const [vacs, mdData, dbJobs] = await Promise.all([
-        fetchVacancies(),
-        fetchSkillsMd(),
-        fetchScrapedJobs(),
-      ]);
-      setVacancies(vacs);
-      setScrapedJobs(dbJobs.filter((j) => j.status !== 'FILTERED_OUT'));
-      if (vacs.length > 0) {
-        setJobUrl(vacs[0].mock_url);
-        setJobText(vacs[0].description);
-      }
+      const mdData = await fetchSkillsMd();
       setSkillsMdContent(mdData.content);
       setSkillsFilename(mdData.filename);
+
+      if (!uploaded) {
+        setVacancies([]);
+        setScrapedJobs([]);
+        setExtractedSkillsCount(0);
+        setJobUrl('');
+        setJobText('');
+        return;
+      }
+
+      const [vacs, dbJobs] = await Promise.all([
+        fetchVacancies(),
+        fetchScrapedJobs(),
+      ]);
+      const validJobs = dbJobs.filter((j) => j.status !== 'FILTERED_OUT');
+      setVacancies(vacs);
+      setScrapedJobs(validJobs);
+      if (validJobs.length > 0) {
+        setJobUrl(validJobs[0].url);
+        setJobText(validJobs[0].description_raw);
+      }
       setExtractedSkillsCount(mdData.extracted_skills.length);
     } catch (e) {
       console.error(e);
@@ -139,93 +156,121 @@ export const AuditPanel: React.FC = () => {
     setIsScraping(true);
     setError(null);
     try {
-      const res = await triggerMultiPortalScrape(false);
-      setScrapedJobs(res.jobs.filter((j) => j.status !== 'FILTERED_OUT'));
+      const res = await triggerMultiPortalScrape(true);
+      const validJobs = res.jobs.filter((j) => j.status !== 'FILTERED_OUT');
+      setScrapedJobs(validJobs);
+      const vacs = await fetchVacancies();
+      setVacancies(vacs);
+      if (validJobs.length > 0 && !jobUrl) {
+        setJobUrl(validJobs[0].url);
+        setJobText(validJobs[0].description_raw);
+      }
       setScrapeStats({
         total: res.total_processed,
         staged: res.staged_ready_count,
         filteredOut: res.filtered_out_count,
       });
     } catch (err: any) {
-      setError(err.message || 'Multi-portal scrape failed');
+      setError(err.message || 'Live multi-portal scrape failed');
     } finally {
       setIsScraping(false);
     }
   };
 
   const handleSelectScrapedDbJob = (job: DbJobPosting) => {
-    const mockMap: Record<string, string> = {
-      'dou.ua': `${BACKEND_ORIGIN}/mock-portals/dou_sample.html`,
-      'djinni.co': `${BACKEND_ORIGIN}/mock-portals/djinni_sample.html`,
-      'jobs.ge': `${BACKEND_ORIGIN}/mock-portals/jobs_ge_sample.html`,
-      'hr.ge': `${BACKEND_ORIGIN}/mock-portals/jobs_ge_sample.html`,
-    };
-    setJobUrl(mockMap[job.portal] || job.url);
+    setJobUrl(job.url);
     setJobText(job.description_raw);
     setError(null);
   };
 
   const handleApplyPreset = async (presetId: string) => {
+    setIsScraping(true);
     try {
       setError(null);
       const res = await applySkillsPreset(presetId);
+      setProfileUploaded(true);
       setActivePresetId(presetId);
       setSkillsMdContent(res.content);
       setExtractedSkillsCount(res.extracted_skills.length);
       setSelectedVariant(presetId === 'qa_tech' ? 'qa_automation' : presetId);
 
-      const matchingVac = vacancies.find((v) => v.industry === presetId);
-      if (matchingVac) {
-        setJobUrl(matchingVac.mock_url);
-        setJobText(matchingVac.description);
+      // Run live role-based scrape matching this preset
+      const scrapeRes = await triggerMultiPortalScrape(true);
+      const validJobs = scrapeRes.jobs.filter((j) => j.status !== 'FILTERED_OUT');
+      setScrapedJobs(validJobs);
+      const vacs = await fetchVacancies();
+      setVacancies(vacs);
+      if (validJobs.length > 0) {
+        setJobUrl(validJobs[0].url);
+        setJobText(validJobs[0].description_raw);
       }
+      await refreshProfileData();
 
-      const refreshedJobs = await fetchScrapedJobs();
-      setScrapedJobs(refreshedJobs);
-      refreshProfileData();
-
-      setSkillsStatusMsg(`✅ Switched SQL CandidateProfile to "${presetId}" (${res.extracted_skills.length} skills indexed)!`);
-      setTimeout(() => setSkillsStatusMsg(null), 4500);
+      setSkillsStatusMsg(`✅ Loaded "${presetId}" (${res.extracted_skills.length} skills) & scanned ${validJobs.length} live matching vacancies!`);
+      setTimeout(() => setSkillsStatusMsg(null), 5000);
     } catch (err: any) {
       setError(err.message || 'Failed to load profession template');
+    } finally {
+      setIsScraping(false);
     }
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setIsScraping(true);
+    setError(null);
     try {
       const res = await uploadSkillsMdFile(file);
+      setProfileUploaded(true);
       setSkillsMdContent(res.content);
       setSkillsFilename(res.filename);
       setExtractedSkillsCount(res.extracted_skills.length);
-      const refreshedJobs = await fetchScrapedJobs();
-      setScrapedJobs(refreshedJobs);
-      refreshProfileData();
-      setSkillsStatusMsg(res.message);
-      setTimeout(() => setSkillsStatusMsg(null), 4500);
+      const [refreshedJobs, vacs] = await Promise.all([
+        fetchScrapedJobs(),
+        fetchVacancies(),
+      ]);
+      const validJobs = refreshedJobs.filter((j) => j.status !== 'FILTERED_OUT');
+      setScrapedJobs(validJobs);
+      setVacancies(vacs);
+      if (validJobs.length > 0) {
+        setJobUrl(validJobs[0].url);
+        setJobText(validJobs[0].description_raw);
+      }
+      await refreshProfileData();
+      setSkillsStatusMsg(`✅ ${res.message} Found ${validJobs.length} live verified vacancies.`);
+      setTimeout(() => setSkillsStatusMsg(null), 5000);
     } catch (err: any) {
       setError(err.message || 'Failed to upload .md file');
+    } finally {
+      setIsScraping(false);
     }
   };
 
   const handleSaveSkillsMdText = async () => {
+    setIsScraping(true);
     try {
       const res = await saveSkillsMdText(skillsMdContent);
+      setProfileUploaded(true);
       setExtractedSkillsCount(res.extracted_skills.length);
-      const refreshedJobs = await fetchScrapedJobs();
-      setScrapedJobs(refreshedJobs);
-      refreshProfileData();
-      setSkillsStatusMsg(`✅ Updated CandidateProfile in SQL DB (${res.extracted_skills.length} skills synced)!`);
+      const scrapeRes = await triggerMultiPortalScrape(true);
+      const validJobs = scrapeRes.jobs.filter((j) => j.status !== 'FILTERED_OUT');
+      setScrapedJobs(validJobs);
+      const vacs = await fetchVacancies();
+      setVacancies(vacs);
+      await refreshProfileData();
+      setSkillsStatusMsg(`✅ Synced CandidateProfile (${res.extracted_skills.length} skills) & scanned ${validJobs.length} live vacancies!`);
       setShowSkillsEditor(false);
-      setTimeout(() => setSkillsStatusMsg(null), 4000);
+      setTimeout(() => setSkillsStatusMsg(null), 5000);
     } catch (err: any) {
       setError(err.message || 'Failed to save skills.md');
+    } finally {
+      setIsScraping(false);
     }
   };
 
   const handleSelectVacancy = (vac: PortalVacancyItem) => {
-    setJobUrl(vac.mock_url);
+    setJobUrl(vac.url || vac.mock_url);
     setJobText(vac.description);
     setError(null);
   };
@@ -340,11 +385,14 @@ export const AuditPanel: React.FC = () => {
     return matchesPortal && matchesInd;
   });
 
-  // Only jobs that match the candidate's requirements are shown — FILTERED_OUT jobs are hidden entirely.
-  const visibleJobs = scrapedJobs.filter((j) => j.status !== 'FILTERED_OUT');
+  // Only genuinely suitable jobs (>= 60% match and passing all gates) are displayed.
+  const visibleJobs = scrapedJobs.filter(
+    (j) => j.status !== 'FILTERED_OUT' && (j.suitability_score ?? 0) >= 60
+  );
   const filteredDbJobs = visibleJobs.filter((j) => {
-    if (dbStatusFilter === 'ALL') return true;
-    return j.status === dbStatusFilter;
+    const matchStatus = dbStatusFilter === 'ALL' || j.status === dbStatusFilter;
+    const matchPortal = selectedPortalFilter === 'ALL' || j.portal === selectedPortalFilter;
+    return matchStatus && matchPortal;
   });
 
   return (
@@ -456,7 +504,7 @@ export const AuditPanel: React.FC = () => {
         <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-slate-800/60">
           <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Active Profile Gate:</span>
           <span className="text-xs px-2.5 py-1 rounded-lg bg-sky-950 text-sky-300 border border-sky-800 font-semibold flex items-center gap-1">
-            <span>👤 {candidateProfile?.full_name || 'Giorgi Shakiashvili'}</span>
+            <span>👤 {candidateProfile?.full_name || 'Candidate'}</span>
           </span>
           <span className="text-xs px-2.5 py-1 rounded-lg bg-indigo-950 text-indigo-300 border border-indigo-800 font-semibold flex items-center gap-1">
             <span>Industry: {candidateProfile?.target_industry === 'qa_tech' ? '💻 Software QA & Tech' : candidateProfile?.target_industry || '💻 Software QA'}</span>
@@ -547,14 +595,14 @@ export const AuditPanel: React.FC = () => {
           <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={handleRunMultiPortalScrapers}
-              disabled={isScraping}
+              disabled={isScraping || !profileUploaded}
               className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-md shadow-emerald-600/20 transition-all disabled:opacity-50"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isScraping ? 'animate-spin' : ''}`} />
-              <span>{isScraping ? 'Scraping Portals...' : 'Run Multi-Portal Scrapers'}</span>
+              <span>{isScraping ? 'Scanning Live Portals...' : 'Run Live Role Scrapers'}</span>
             </button>
 
-            {['ALL', 'STAGED', 'DISCOVERED', 'AUDITED'].map((st) => (
+            {['ALL', 'STAGED', 'AUDITED'].map((st) => (
               <button
                 key={st}
                 onClick={() => setDbStatusFilter(st)}
@@ -564,11 +612,30 @@ export const AuditPanel: React.FC = () => {
                     : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
                 }`}
               >
-                {st === 'ALL' ? `Matching Jobs (${visibleJobs.length})` : st}
+                {st === 'ALL' ? `Suitable Matches (${visibleJobs.length})` : st === 'STAGED' ? 'Ready >=75%' : 'Match 60-74%'}
               </button>
             ))}
           </div>
         </div>
+
+        {visibleJobs.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-slate-800/60">
+            <span className="text-[10px] font-bold uppercase text-slate-500 mr-1">Portals:</span>
+            {['ALL', 'jobs.ge', 'hr.ge', 'djinni.co', 'dou.ua'].map((p) => (
+              <button
+                key={p}
+                onClick={() => setSelectedPortalFilter(p)}
+                className={`text-[11px] px-2.5 py-1 rounded-lg font-medium transition-colors ${
+                  selectedPortalFilter === p
+                    ? 'bg-sky-600 text-white'
+                    : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                }`}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+        )}
 
         {scrapeStats && (
           <div className="text-xs bg-emerald-950/30 border border-emerald-800/60 text-emerald-300 px-3.5 py-2 rounded-xl flex items-center justify-between flex-wrap gap-2">
@@ -582,16 +649,29 @@ export const AuditPanel: React.FC = () => {
         )}
 
         {filteredDbJobs.length === 0 && (
-          <div className="text-xs text-slate-400 text-center py-6 border border-dashed border-slate-800 rounded-xl">
-            <div className="space-y-1">
-              <h4 className="text-sm font-bold text-white">Discovery Feed Ready (Zero Dead Seed Data)</h4>
-              <p className="text-xs text-slate-400">
-                Feed is 100% clean. Upload your skills.md or click <strong>Run Multi-Portal Scrapers</strong> to discover jobs.
-              </p>
-              <p className="text-[11px] text-slate-500">
-                Seniority Gate strictly excludes Senior/Lead roles exceeding your {candidateProfile?.experience_years ?? 1.5} yrs experience.
-              </p>
-            </div>
+          <div className="text-xs text-slate-400 text-center py-8 border border-dashed border-slate-700 bg-slate-950/60 rounded-xl space-y-3">
+            {!profileUploaded ? (
+              <>
+                <h4 className="text-sm font-bold text-white">Upload your skills.md file to scan tailored live vacancies</h4>
+                <p className="text-xs text-slate-400 max-w-md mx-auto">
+                  Your discovery feed stays 100% empty until your profile is uploaded. Upload <code className="text-sky-300">skills.md</code> to search live Jobs.ge, HR.ge, DOU.ua & Djinni.co roles matched to your exact stack and 1.5 yrs level.
+                </p>
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold shadow-md transition-colors"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>Upload skills.md Now</span>
+                </button>
+              </>
+            ) : (
+              <div className="space-y-1">
+                <h4 className="text-sm font-bold text-white">No matching live vacancies found in this view</h4>
+                <p className="text-xs text-slate-400">
+                  Click <strong>Run Live Role Scrapers</strong> above to scan active portals with HTTP 200 content verification.
+                </p>
+              </div>
+            )}
           </div>
         )}
 
@@ -657,100 +737,51 @@ export const AuditPanel: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between pt-2 mt-2 border-t border-slate-800/60 text-[10px]">
-                  <span className="text-sky-400 font-semibold">Load into Auditor</span>
-                  <span className="text-slate-500">Lang: {job.language_requirements.join(', ')}</span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* 3. Multi-Industry Curated Portal Feed */}
-      <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl space-y-4">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-          <div>
-            <h3 className="text-sm font-bold text-white flex items-center gap-2">
-              <Globe className="w-4 h-4 text-sky-400" />
-              Multi-Industry Interactive Portal Templates (QA, Hospitality, Customer Care & Hospital)
-            </h3>
-          </div>
-
-          <div className="flex flex-wrap gap-1.5">
-            {industryFilters.map((ind) => (
-              <button
-                key={ind.id}
-                onClick={() => setSelectedIndustryFilter(ind.id)}
-                className={`text-[11px] px-3 py-1 rounded-lg font-semibold transition-colors ${
-                  selectedIndustryFilter === ind.id
-                    ? 'bg-indigo-600 text-white shadow-sm'
-                    : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
-                }`}
-              >
-                {ind.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-slate-800/60">
-          <span className="text-[10px] font-bold uppercase text-slate-500 mr-1">Portals:</span>
-          {portalsList.map((p) => (
-            <button
-              key={p}
-              onClick={() => setSelectedPortalFilter(p)}
-              className={`text-[11px] px-2.5 py-1 rounded-lg font-medium transition-colors ${
-                selectedPortalFilter === p
-                  ? 'bg-sky-600 text-white'
-                  : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
-              }`}
-            >
-              {p}
-            </button>
-          ))}
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
-          {filteredVacancies.map((vac) => {
-            const isSelected = jobText === vac.description;
-            return (
-              <div
-                key={vac.id}
-                onClick={() => handleSelectVacancy(vac)}
-                className={`p-3.5 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
-                  isSelected
-                    ? 'bg-slate-950 border-sky-500 shadow-md shadow-sky-500/15'
-                    : 'bg-slate-950/60 border-slate-800 hover:border-slate-700'
-                }`}
-              >
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between gap-1">
-                    <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-sky-950 text-sky-400 border border-sky-800/60">
-                      {vac.portal}
-                    </span>
-                    <span className="text-[10px] text-emerald-400 font-medium flex items-center gap-0.5">
-                      ★ {vac.company_rating} ({vac.company_reviews_count})
-                    </span>
+                <div className="pt-2 mt-2 border-t border-slate-800/60 space-y-2 text-[10px]">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sky-400 font-semibold">Load into Auditor</span>
+                    <span className="text-slate-500">Lang: {job.language_requirements.join(', ')}</span>
                   </div>
-                  <h4 className="text-xs font-bold text-white line-clamp-2 leading-snug">{vac.title}</h4>
-                  <div className="text-[11px] text-slate-400">
-                    {vac.company} • <span className="text-emerald-300 font-medium">{vac.salary}</span>
-                  </div>
-                </div>
 
-                <div className="flex items-center justify-between pt-2.5 mt-2 border-t border-slate-800/80 text-[11px]">
-                  <span className="text-sky-400 font-semibold">{isSelected ? '✓ Selected' : 'Select Role'}</span>
-                  <a
-                    href={vac.mock_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={(e) => e.stopPropagation()}
-                    className="text-slate-400 hover:text-white flex items-center gap-1"
-                  >
-                    <span>Portal Form</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
+                  <div className="flex items-center gap-1.5 pt-1">
+                    {(job.delivery_channel === 'EMAIL' || Boolean(job.target_email)) ? (
+                      <a
+                        href={`https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(job.target_email || 'hr@company.ge')}&su=${encodeURIComponent(job.email_subject || 'Application: ' + job.title)}&body=${encodeURIComponent('Dear Hiring Team,\n\nI am applying for the ' + job.title + ' role at ' + job.company + '.\n\nPlease find my tailored resume attached.\n\nBest regards,\n' + (candidateProfile?.full_name || 'Candidate'))}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="flex-1 flex items-center justify-center gap-1 py-1 px-2 rounded-lg bg-rose-600/90 hover:bg-rose-500 text-white font-semibold transition-colors"
+                        title="Prefill Gmail Draft with Recipient and Cover Note"
+                      >
+                        <Mail className="w-3 h-3" />
+                        <span>Draft in Gmail</span>
+                      </a>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleSelectScrapedDbJob(job);
+                          setIsStageModalOpen(true);
+                        }}
+                        className="flex-1 flex items-center justify-center gap-1 py-1 px-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold transition-colors"
+                        title="Open Semantic Autofill / HITL Stager"
+                      >
+                        <Play className="w-3 h-3" />
+                        <span>Open & Fill Form</span>
+                      </button>
+                    )}
+                    <a
+                      href={job.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white border border-slate-800 transition-colors"
+                      title="Open Original Job Link"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </div>
                 </div>
               </div>
             );

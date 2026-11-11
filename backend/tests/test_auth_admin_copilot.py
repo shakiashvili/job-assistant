@@ -5,7 +5,7 @@ from sqlmodel import Session, select
 from app.main import app
 from app.db.database import engine, init_db
 from app.db.models import User, ApplicationTracker, SkillActionPlan, InterviewRound
-from app.services.auth_service import hash_password, create_access_token
+from app.services.auth_service import hash_password, create_access_token, get_user_by_email
 
 client = TestClient(app)
 
@@ -60,7 +60,7 @@ def test_admin_rbac_protection():
     # 1. Non-admin user attempts access to /api/admin/metrics -> 403 Forbidden
     user_token = create_access_token({"sub": "regular.user@talentflow.local", "is_admin": False})
     with Session(engine) as session:
-        if not session.exec(select(User).where(User.email == "regular.user@talentflow.local")).first():
+        if not get_user_by_email(session, "regular.user@talentflow.local"):
             session.add(User(
                 email="regular.user@talentflow.local",
                 hashed_password=hash_password("Pass1234!"),
@@ -75,7 +75,7 @@ def test_admin_rbac_protection():
     # 2. Admin user access -> 200 OK
     admin_token = create_access_token({"sub": "chief.admin@talentflow.local", "is_admin": True})
     with Session(engine) as session:
-        admin_user = session.exec(select(User).where(User.email == "chief.admin@talentflow.local")).first()
+        admin_user = get_user_by_email(session, "chief.admin@talentflow.local")
         if not admin_user:
             admin_user = User(
                 email="chief.admin@talentflow.local",

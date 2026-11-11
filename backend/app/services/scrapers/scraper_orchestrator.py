@@ -1,10 +1,12 @@
+import asyncio
 import logging
 from typing import Dict, Any, List, Optional
 from sqlmodel import Session, select
-from ...db.database import engine, init_db
+from ...db.database import engine, init_db, delete_job_posting_cascade
 from ...db.models import CandidateProfile, JobPosting, ApplicationRecord, utc_now
 from ..salary_service import salary_service
 from ..matcher_service import matcher_service
+from ..profile_service import profile_service
 from ..link_validator import parse_vacancy_deadline
 from .jobs_ge_scraper import jobs_ge_scraper
 from .hr_ge_scraper import hr_ge_scraper
@@ -16,12 +18,12 @@ logger = logging.getLogger(__name__)
 
 class ScraperOrchestrator:
     """
-    Coordinates scraping across Jobs.ge, HR.ge, DOU.ua, and Djinni.co:
-    1. Deduplicates against JobPosting by (portal, external_id) and (url).
-    2. Applies Mandatory Remote & Slavic Language Gate for Ukrainian/Regional portals.
-    3. Estimates or extracts salary via SalaryService (salary_is_estimated / salary_estimated_by_ai).
-    4. Evaluates suitability score (0-100%) against CandidateProfile via MatcherService.
-    5. Auto-promotes jobs with suitability_score >= 75% to status="STAGED" and creates an ApplicationRecord.
+    Coordinates live role-based scraping across Jobs.ge, HR.ge, DOU.ua, and Djinni.co:
+    1. Builds role-specific search URLs directly from the uploaded CandidateProfile (skills.md).
+    2. Deduplicates against JobPosting by (portal, external_id) and (url).
+    3. Applies Mandatory Remote & Slavic Language Gate for Ukrainian/Regional portals.
+    4. Enforces Domain Gate & Seniority Gate + Live Link Content Health Check (rejects blank 200 OK pages).
+    5. Estimates or extracts salary via SalaryService & auto-promotes >= 75% matches to STAGED.
     """
 
     SCRAPER_MAP = {
@@ -34,18 +36,45 @@ class ScraperOrchestrator:
     async def run_scrapers(
         self,
         portals: Optional[List[str]] = None,
-        allow_network: bool = False,
+        allow_network: bool = True,
     ) -> Dict[str, Any]:
         init_db()
         target_portals = portals or list(self.SCRAPER_MAP.keys())
 
-        raw_discovered: List[Dict[str, Any]] = []
+        if not allow_network:
+            return self.ingest_scraped_jobs([])
+
+        with Session(engine) as session:
+            profile = session.exec(
+                select(CandidateProfile).order_by(CandidateProfile.updated_at.desc())
+            ).first()
+            parsed_skills = profile.parsed_skills if profile else {}
+            headline = parsed_skills.get("headline", "") if isinstance(parsed_skills, dict) else ""
+            search_cfg = profile_service.get_search_queries_for_profile(parsed_skills, headline=headline)
+
+        tasks = []
         for p in target_portals:
-            scraper = self.SCRAPER_MAP.get(p)
-            if not scraper:
-                continue
-            items = await scraper.scrape(allow_network=allow_network)
-            raw_discovered.extend(items)
+            if p == "jobs.ge":
+                tasks.append(jobs_ge_scraper.scrape(allow_network=True, search_urls=search_cfg.get("jobs_ge_urls")))
+            elif p == "hr.ge":
+                tasks.append(hr_ge_scraper.scrape(allow_network=True, search_url=search_cfg.get("hr_ge_url"), domain_keywords=search_cfg.get("domain_keywords")))
+            elif p == "dou.ua":
+                dou_url = search_cfg.get("dou_url")
+                if dou_url:
+                    tasks.append(dou_scraper.scrape(allow_network=True, search_url=dou_url))
+            elif p == "djinni.co":
+                djinni_url = search_cfg.get("djinni_url")
+                if djinni_url:
+                    tasks.append(djinni_scraper.scrape(allow_network=True, search_url=djinni_url))
+
+        raw_discovered: List[Dict[str, Any]] = []
+        if tasks:
+            batches = await asyncio.gather(*tasks, return_exceptions=True)
+            for b in batches:
+                if isinstance(b, list):
+                    raw_discovered.extend(b)
+                elif isinstance(b, Exception):
+                    logger.warning(f"Portal scraper task error: {b}")
 
         return self.ingest_scraped_jobs(raw_discovered)
 
@@ -98,6 +127,16 @@ class ScraperOrchestrator:
                 filter_reason = (initial_rationale or match_rationale) if final_status == "FILTERED_OUT" else None
                 if final_status == "FILTERED_OUT":
                     filtered_out_count += 1
+                    existing_disq = session.exec(
+                        select(JobPosting).where(
+                            (JobPosting.url == url)
+                            | ((JobPosting.portal == portal) & (JobPosting.external_id == ext_id))
+                        )
+                    ).first()
+                    if existing_disq and existing_disq.status not in ("APPLIED", "REJECTED"):
+                        delete_job_posting_cascade(session, existing_disq)
+                        session.commit()
+                    continue
                 elif final_status == "STAGED":
                     staged_count += 1
 
@@ -115,6 +154,7 @@ class ScraperOrchestrator:
                 if existing:
                     existing.title = title
                     existing.company = company
+                    existing.url = url
                     existing.market = market
                     existing.is_remote = bool(item.get("is_remote", True))
                     existing.channel = item.get("channel", "WEB_FORM")
@@ -208,7 +248,7 @@ class ScraperOrchestrator:
                 "total_processed": len(serialized_jobs),
                 "staged_ready_count": staged_count,
                 "filtered_out_count": filtered_out_count,
-                "jobs": serialized_jobs,
+                "jobs": [j for j in serialized_jobs if j.get("status") != "FILTERED_OUT"],
             }
 
 

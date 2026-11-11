@@ -37,7 +37,7 @@ export async function fetchHealth(): Promise<{ status: string; gemini: { connect
 }
 
 export async function fetchVacancies(): Promise<PortalVacancyItem[]> {
-  const res = await fetch(`${API_BASE}/vacancies`);
+  const res = await fetch(`${API_BASE}/vacancies`, { headers: getAuthHeaders() });
   if (!res.ok) throw new Error('Failed to fetch portal vacancies');
   return res.json();
 }
@@ -81,6 +81,7 @@ export async function applySkillsPreset(presetId: string): Promise<{
 }> {
   const res = await fetch(`${API_BASE}/skills-md/preset/${presetId}`, {
     method: 'POST',
+    headers: getAuthHeaders(),
   });
   if (!res.ok) throw new Error('Failed to apply skills preset');
   return res.json();
@@ -89,7 +90,7 @@ export async function applySkillsPreset(presetId: string): Promise<{
 export async function saveSkillsMdText(content: string): Promise<{ status: string; message: string; extracted_skills: string[]; ground_truth: GroundTruth }> {
   const res = await fetch(`${API_BASE}/skills-md`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify({ content }),
   });
   if (!res.ok) throw new Error('Failed to save skills.md');
@@ -106,8 +107,12 @@ export async function uploadSkillsMdFile(file: File): Promise<{
 }> {
   const formData = new FormData();
   formData.append('file', file);
+  const token = localStorage.getItem('talentflow_token');
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
   const res = await fetch(`${API_BASE}/profile/upload-skills`, {
     method: 'POST',
+    headers,
     body: formData,
   });
   if (!res.ok) throw new Error('Failed to upload .md file');
@@ -125,23 +130,28 @@ export async function uploadSkillsMdFile(file: File): Promise<{
 
 export async function fetchDbProfile(): Promise<{
   id: number;
+  profile_uploaded?: boolean;
   raw_markdown: string;
   parsed_skills: ParsedSkillsTaxonomy;
   updated_at: string;
 }> {
-  const res = await fetch(`${API_BASE}/profile`);
+  const res = await fetch(`${API_BASE}/profile`, {
+    headers: getAuthHeaders(),
+  });
   if (!res.ok) throw new Error('Failed to load CandidateProfile from DB');
   return res.json();
 }
 
 export async function fetchScrapedJobs(statusFilter?: string): Promise<DbJobPosting[]> {
   const qs = statusFilter && statusFilter !== 'ALL' ? `?status=${encodeURIComponent(statusFilter)}` : '';
-  const res = await fetch(`${API_BASE}/jobs${qs}`);
+  const res = await fetch(`${API_BASE}/jobs${qs}`, {
+    headers: getAuthHeaders(),
+  });
   if (!res.ok) return [];
   return res.json();
 }
 
-export async function triggerMultiPortalScrape(allowNetwork = false): Promise<{
+export async function triggerMultiPortalScrape(allowNetwork = true): Promise<{
   total_processed: number;
   staged_ready_count: number;
   filtered_out_count: number;
@@ -149,7 +159,7 @@ export async function triggerMultiPortalScrape(allowNetwork = false): Promise<{
 }> {
   const res = await fetch(`${API_BASE}/jobs/scrape`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify({ allow_network: allowNetwork }),
   });
   if (!res.ok) throw new Error('Scraper run failed');
@@ -290,7 +300,7 @@ export async function registerUser(email: string, password: string, full_name: s
   return data;
 }
 
-export async function sendOtp(email: string): Promise<{ status: string; message: string; demo_code?: string }> {
+export async function sendOtp(email: string): Promise<{ status: string; delivered: boolean; smtp_configured: boolean; message: string }> {
   const res = await fetch(`${API_BASE}/auth/send-otp`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -316,6 +326,28 @@ export async function verifyOtp(email: string, otp_code: string): Promise<AuthRe
   const data: AuthResponse = await res.json();
   localStorage.setItem('talentflow_token', data.access_token);
   return data;
+}
+
+export async function fetchSmtpStatus(): Promise<{ smtp_configured: boolean }> {
+  const res = await fetch(`${API_BASE}/auth/smtp-status`);
+  if (!res.ok) return { smtp_configured: false };
+  return res.json();
+}
+
+export async function configureSmtp(
+  gmail_user: string,
+  gmail_app_password: string
+): Promise<{ status: string; smtp_configured: boolean; sender_masked: string; message: string }> {
+  const res = await fetch(`${API_BASE}/auth/configure-smtp`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ gmail_user, gmail_app_password }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to verify Gmail SMTP credentials' }));
+    throw new Error(err.detail || 'Failed to verify Gmail SMTP credentials');
+  }
+  return res.json();
 }
 
 export async function fetchCurrentUser(): Promise<UserProfile> {

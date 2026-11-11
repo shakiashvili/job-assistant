@@ -35,13 +35,13 @@ export const EmailDispatchModal: React.FC<EmailDispatchModalProps> = ({
   const [recipient, setRecipient] = useState(
     defaultEmail || `hr@${companyName.toLowerCase().replace(/[^a-z0-9]/g, '')}.com`
   );
-  const [subject, setSubject] = useState(`Application: ${jobTitle} - Alex Mercer`);
+  const [subject, setSubject] = useState(`Application: ${jobTitle}`);
   const [body, setBody] = useState(
     `Dear ${companyName} Hiring Team,\n\n` +
       `I am writing to express my strong enthusiasm for the ${jobTitle} position.\n\n` +
       `With extensive hands-on experience in automated test engineering, CI/CD pipeline reliability, and regression acceleration, I am confident in adding immediate value to your engineering team.\n\n` +
       `Please find attached my tailored CV. I look forward to the opportunity to discuss my qualifications.\n\n` +
-      `Best regards,\nAlex Mercer\nalex.mercer.dev@gmail.com`
+      `Best regards,\nCandidate`
   );
   const [mode, setMode] = useState<'draft' | 'send'>('draft');
   const [loading, setLoading] = useState(false);

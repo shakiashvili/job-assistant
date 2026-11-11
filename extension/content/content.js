@@ -160,7 +160,7 @@ class JobPortalAssistant {
     const targetEmail = emailMatch ? emailMatch[0] : null;
     let emailBannerHtml = '';
     if (targetEmail) {
-      const candName = this.groundTruth?.candidate?.full_name || 'Alex Mercer';
+      const candName = this.groundTruth?.candidate?.full_name || 'Candidate';
       const roleTitle = data.job_details?.title || 'QA Automation Engineer';
       const subject = encodeURIComponent(`Application: ${roleTitle} - ${candName}`);
       const body = encodeURIComponent(
@@ -329,8 +329,8 @@ class JobPortalAssistant {
     setVal(this.findSemanticField(["portfolio", "website", "personal site"], "input[name*='portfolio' i]"), links.portfolio || links.github);
 
     // 3. Semantic Summary, Motivational Letter, AI Salary, and Start Date
-    const summaryText = cv.applicant_summary || "Senior QA Automation Engineer with 5+ years building reliable Playwright, Cypress, and Python test suites. Available 1 week after offer.";
-    const douLetter = cv.dou_motivational_letter || cv.motivation_statement || "Hi team! I would love to bring my 5+ years of Playwright & Python automation experience to your engineering team. Available to start 1 week after offer.";
+    const summaryText = cv.applicant_summary || "QA Automation Engineer with 1.5 years of experience building reliable Playwright, Cypress, and Python test suites. Available 1 week after offer.";
+    const douLetter = cv.dou_motivational_letter || cv.motivation_statement || "Hi team! I would love to bring my 1.5+ years of Playwright & Python automation experience to your engineering team. Available to start 1 week after offer.";
     const salaryText = cv.expected_salary || `€${comp.expected_salary_eur || 85000} / yr ($4,500/mo remote)`;
 
     setVal(this.findSemanticField(["applicant summary", "introduce yourself", "additional information", "summary"], "textarea[name*='summary'], textarea[name*='comments']"), summaryText);

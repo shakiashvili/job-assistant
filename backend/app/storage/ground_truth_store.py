@@ -39,15 +39,15 @@ PROFESSION_MD_PRESETS: Dict[str, Dict[str, str]] = {
         "id": "qa_tech",
         "label": "💻 QA Automation & Tech Engineer",
         "industry": "qa_tech",
-        "content": """# Giorgi Shakiashvili — QA Automation & API Testing Engineer
+        "content": """# Sample QA Automation & API Testing Engineer
 
 ## Contact & Personal Info
-- **Full Name:** Giorgi Shakiashvili
-- **Email:** giorgi.shakiashvili.dev@gmail.com
-- **Phone:** +995 599 123456
+- **Full Name:** Sample QA Candidate
+- **Email:** qa.candidate@example.com
+- **Phone:** +000 000 0000
 - **Location:** Tbilisi, Georgia (Remote & Abroad Ready)
-- **LinkedIn:** https://linkedin.com/in/giorgi-shakiashvili
-- **GitHub:** https://github.com/shakiashvili
+- **LinkedIn:** https://linkedin.com/in/example-candidate
+- **GitHub:** https://github.com/example-candidate
 - **Availability / Notice Period:** 1 week after offer
 - **Salary Expectation:** $3,000 - $3,500/mo remote
 
@@ -75,8 +75,8 @@ I build reliable test automation and API test suites that help engineering teams
 
 ## Contact & Personal Info
 - **Full Name:** Nino Kalandadze (ნინო კალანდაძე)
-- **Email:** nino.kalandadze.hospitality@gmail.com
-- **Phone:** +995 599 12 34 56
+- **Email:** hospitality.candidate@example.com
+- **Phone:** +000 000 0000
 - **Location:** Tbilisi, Georgia
 - **LinkedIn:** https://linkedin.com/in/nino-kalandadze
 - **Availability / Notice Period:** 1 week after offer
@@ -110,8 +110,8 @@ Warm, organized, and detail-oriented Front Desk Receptionist and Hospitality Spe
 
 ## Contact & Personal Info
 - **Full Name:** Giorgi Beridze (გიორგი ბერიძე)
-- **Email:** giorgi.beridze.support@gmail.com
-- **Phone:** +995 577 98 76 54
+- **Email:** support.candidate@example.com
+- **Phone:** +000 000 0000
 - **Location:** Tbilisi, Georgia / Remote International
 - **LinkedIn:** https://linkedin.com/in/giorgi-beridze-cs
 - **Availability / Notice Period:** 1 week after offer
@@ -145,8 +145,8 @@ Empathetic and high-performing Customer Service & Client Success Specialist with
 
 ## Contact & Personal Info
 - **Full Name:** Mariam Maisuradze (მარიამ მაისურაძე)
-- **Email:** mariam.maisuradze.med@gmail.com
-- **Phone:** +995 595 44 33 22
+- **Email:** medical.candidate@example.com
+- **Phone:** +000 000 0000
 - **Location:** Tbilisi, Georgia
 - **LinkedIn:** https://linkedin.com/in/mariam-maisuradze-med
 - **Availability / Notice Period:** 1 week after offer
@@ -211,7 +211,7 @@ class GroundTruthStore:
         if not raw_md:
             raw_md = PROFESSION_MD_PRESETS["qa_tech"]["content"]
 
-        return profile_service.upsert_candidate_profile(raw_md)
+        return profile_service.upsert_candidate_profile(raw_md, mark_uploaded=False)
 
     def get_profile_record(self) -> CandidateProfile:
         return self._ensure_seeded()

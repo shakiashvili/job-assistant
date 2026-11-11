@@ -11,6 +11,7 @@ from sqlmodel import Session, select
 from ..config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
 from ..db.database import get_session
 from ..db.models import User
+from .crypto_service import blind_index
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,12 @@ def decode_access_token(token: str) -> Optional[dict]:
         return None
 
 
+def get_user_by_email(session: Session, email: str) -> Optional[User]:
+    """Looks up a user via HMAC-SHA256 blind index on the encrypted email column."""
+    target_hash = blind_index(email)
+    return session.exec(select(User).where(User.email_hash == target_hash)).first()
+
+
 def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_bearer),
     session: Session = Depends(get_session),
@@ -108,7 +115,7 @@ def get_current_user(
     """
     if not credentials:
         # Check if any user exists; if none exist, return a guest/system user
-        guest = session.exec(select(User).where(User.email == "guest@talentflow.local")).first()
+        guest = get_user_by_email(session, "guest@talentflow.local")
         if not guest:
             guest = User(
                 email="guest@talentflow.local",
@@ -139,7 +146,7 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    user = session.exec(select(User).where(User.email == user_email.lower().strip())).first()
+    user = get_user_by_email(session, user_email)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

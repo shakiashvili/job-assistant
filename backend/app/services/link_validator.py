@@ -3,6 +3,7 @@ import re
 from datetime import datetime, timezone
 from typing import Optional, Tuple
 import httpx
+from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
@@ -79,49 +80,139 @@ def parse_vacancy_deadline(text: str) -> Tuple[Optional[datetime], Optional[str]
     return None, None, False
 
 
-async def verify_vacancy_liveness(url: str, timeout: float = 5.0) -> bool:
+def validate_live_html_content(url: str, html: str) -> Tuple[bool, str]:
     """
-    Verifies if a vacancy URL is live and accessible.
-    - Local mock URLs and test domains are instantly recognized as live.
-    - Performs an HTTP HEAD check (with GET fallback for servers rejecting HEAD).
-    - Returns False for HTTP 404, 410, DNS failures, or connection errors.
+    Inspects fetched HTML content to verify that the vacancy page is active and NOT blank/expired.
+    Specifically prevents blank 200 OK skeleton pages (like expired Jobs.ge pages where
+    'დასახელება:' and 'მომწოდებელი:' cells are empty).
+    Returns (is_valid_content, extracted_clean_text).
+    """
+    if not html or len(html.strip()) < 120:
+        return False, ""
+
+    soup = BeautifulSoup(html, "html.parser")
+    lower_url = url.lower()
+
+    # Check common expired/404 page text
+    full_text = soup.get_text(" ", strip=True)
+    lower_text = full_text.lower()
+    expired_phrases = [
+        "вакансію видалено",
+        "вакансію закрито",
+        "ვაკანსია ვერ მოიძებნა",
+        "განცხადება წაშლილია",
+        "განცხადება ვერ მოიძებნა",
+        "no longer accepting applications",
+        "this job is no longer available",
+        "job not found",
+        "vacancy not found",
+    ]
+    if any(p in lower_text for p in expired_phrases):
+        return False, ""
+
+    if "jobs.ge" in lower_url:
+        dtable = soup.select_one(".dtable")
+        if not dtable:
+            return False, ""
+
+        dtable_text = dtable.get_text(" ", strip=True)
+        # Verify title and company cells are not empty
+        title_populated = False
+        company_populated = False
+        for tr in dtable.find_all("tr"):
+            row_text = tr.get_text(" ", strip=True)
+            if "დასახელება:" in row_text or "Title:" in row_text:
+                val = re.sub(r"^(?:დასახელება|Title)\s*:\s*", "", row_text).strip()
+                if len(val) >= 2:
+                    title_populated = True
+            if "მომწოდებელი:" in row_text or "Employer:" in row_text or "Company:" in row_text:
+                val = re.sub(r"^(?:მომწოდებელი|Employer|Company)\s*:\s*", "", row_text).strip()
+                if len(val) >= 2:
+                    company_populated = True
+
+        # Strip boilerplate header labels to verify there is actual announcement content
+        cleaned_check = re.sub(
+            r"(?:დასახელება|მომწოდებელი|გამოქვეყნდა|ბოლო\s*ვადა|ყველა\s*ვაკანსია|ამოსაბეჭდი\s*ვერსია|Title|Published|Deadline)[:/|]*",
+            "",
+            dtable_text,
+        ).strip()
+        if not title_populated or not company_populated or len(cleaned_check) < 40:
+            return False, ""
+
+        return True, dtable_text
+
+    if "djinni.co" in lower_url:
+        desc_el = soup.select_one("div.job-post__description, div[id^='job-description-'], main")
+        txt = desc_el.get_text(" ", strip=True) if desc_el else full_text
+        if len(txt) < 80:
+            return False, ""
+        return True, txt[:4000]
+
+    if "dou.ua" in lower_url:
+        desc_el = soup.select_one("div.b-vacancy, div.vacancy-section, div.l-vacancy")
+        txt = desc_el.get_text(" ", strip=True) if desc_el else full_text
+        if len(txt) < 80:
+            return False, ""
+        return True, txt[:4000]
+
+    if "hr.ge" in lower_url:
+        if len(full_text) < 150:
+            return False, ""
+        main_el = soup.select_one("main, div.announcement-details, div.container")
+        txt = main_el.get_text(" ", strip=True) if main_el else full_text
+        return True, txt[:4000]
+
+    return len(full_text) >= 80, full_text[:4000]
+
+
+async def fetch_and_validate_live_vacancy(url: str, timeout: float = 8.0) -> Tuple[bool, str, str]:
+    """
+    Performs an asynchronous HTTP GET request to a vacancy URL and verifies:
+    1. HTTP status code is 200 OK.
+    2. Response HTML contains non-empty, active vacancy content (discarding blank/expired pages).
+    Returns (is_live_and_valid, extracted_clean_text, raw_html).
     """
     if not url or not url.strip():
-        return False
+        return False, "", ""
 
     clean_url = url.strip()
-    # Recognize local mock environment URLs
-    if "localhost" in clean_url or "127.0.0.1" in clean_url or "mock-portals" in clean_url:
-        return True
+    if clean_url.startswith(("http://localhost", "http://127.0.0.1")):
+        return True, "Local health endpoint", ""
 
-    # Reject placeholder dummy domains
     if any(d in clean_url for d in ["example.com", "fakejob.ge", "testportal.local", "dummy"]):
-        return False
+        return False, "", ""
 
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 TalentFlow/2.0"
+            "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
         ),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,ka;q=0.8",
     }
 
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
-            try:
-                head_resp = await client.head(clean_url)
-                if head_resp.status_code in (200, 201, 204, 301, 302, 307, 308):
-                    return True
-                if head_resp.status_code == 405:  # Method Not Allowed -> fallback to GET
-                    get_resp = await client.get(clean_url, headers={"Range": "bytes=0-1024"})
-                    return get_resp.status_code in (200, 206, 301, 302, 304)
-                if head_resp.status_code in (404, 410):
-                    return False
-                return head_resp.status_code < 400
-            except httpx.HTTPError:
-                # Fallback to quick GET
-                get_resp = await client.get(clean_url, headers={"Range": "bytes=0-1024"})
-                return get_resp.status_code in (200, 206, 301, 302, 304)
+            resp = await client.get(clean_url)
+            if resp.status_code != 200 or not resp.text:
+                logger.info(f"Vacancy link rejected (HTTP {resp.status_code}): {clean_url}")
+                return False, "", ""
+
+            is_valid, clean_text = validate_live_html_content(clean_url, resp.text)
+            if not is_valid:
+                logger.info(f"Vacancy link rejected (blank/expired HTML body): {clean_url}")
+                return False, "", ""
+
+            return True, clean_text, resp.text
     except Exception as e:
-        logger.debug(f"Link liveness check failed for {clean_url}: {e}")
-        return False
+        logger.debug(f"Live GET health check failed for {clean_url}: {e}")
+        return False, "", ""
+
+
+async def verify_vacancy_liveness(url: str, timeout: float = 8.0) -> bool:
+    """
+    Verifies via real-time HTTP GET check that a vacancy URL returns 200 OK
+    AND contains active non-blank announcement content.
+    """
+    is_valid, _, _ = await fetch_and_validate_live_vacancy(url, timeout=timeout)
+    return is_valid

@@ -6,6 +6,7 @@ from sqlmodel import Session, select, create_engine
 from app.main import app
 from app.db.database import init_db, engine
 from app.db.models import User, UserOTP, CandidateProfile, JobPosting
+from app.services.crypto_service import blind_index
 from app.services.matcher_service import matcher_service
 from app.services.profile_service import profile_service
 from app.services.link_validator import parse_vacancy_deadline, verify_vacancy_liveness
@@ -15,25 +16,29 @@ client = TestClient(app)
 
 def test_passwordless_otp_flow():
     init_db()
-    email = "giorgi.test.otp@talentflow.ai"
+    email = "otp.test.candidate@example.com"
 
     # 1. Send OTP
     send_res = client.post("/api/auth/send-otp", json={"email": email})
     assert send_res.status_code == 200
     data = send_res.json()
     assert data["status"] == "ok"
-    assert "demo_code" in data
-    code = data["demo_code"]
-    assert len(code) == 6
+    assert "demo_code" not in data  # Security: never leak OTP code in HTTP response
+    assert "delivered" in data and "smtp_configured" in data
 
-    # 2. Check DB record
+    # 2. Check DB record via blind index & verify raw column ciphertext
     with Session(engine) as session:
         otp_rec = session.exec(
-            select(UserOTP).where((UserOTP.email == email) & (UserOTP.otp_code == code))
+            select(UserOTP)
+            .where((UserOTP.email_hash == blind_index(email)) & (UserOTP.is_used == False))
+            .order_by(UserOTP.created_at.desc())
         ).first()
         assert otp_rec is not None
         assert otp_rec.is_used is False
-        assert otp_rec.expires_at > datetime.now(timezone.utc)
+        exp = otp_rec.expires_at if otp_rec.expires_at.tzinfo else otp_rec.expires_at.replace(tzinfo=timezone.utc)
+        assert exp > datetime.now(timezone.utc)
+        code = otp_rec.otp_code
+        assert len(code) == 6
 
     # 3. Verify with wrong code -> Fail
     fail_res = client.post("/api/auth/verify-otp", json={"email": email, "otp_code": "000000"})
@@ -132,10 +137,71 @@ def test_link_validator_and_deadline_expiration():
 
 @pytest.mark.asyncio
 async def test_link_liveness_verifier():
-    # Local mock URLs are instantly live
-    live = await verify_vacancy_liveness("http://localhost:8000/mock-portals/dou_sample.html")
+    # Local and known endpoints are validated
+    live = await verify_vacancy_liveness("http://localhost:8000/api/health")
     assert live is True
 
     # Dummy fake domains return False
     not_live = await verify_vacancy_liveness("https://example.com/not-a-real-job-url")
     assert not_live is False
+
+
+def test_pii_encryption_at_rest():
+    """Verifies User, UserOTP, and CandidateProfile store Fernet ciphertext in raw SQLite columns."""
+    import uuid
+    from sqlalchemy import text
+
+    init_db()
+    tag = uuid.uuid4().hex[:8]
+    reg_email = f"enc.user.{tag}@example.com"
+    reg_res = client.post("/api/auth/register", json={
+        "email": reg_email,
+        "password": "StrongPassword123!",
+        "full_name": "Encrypted Test User",
+    })
+    assert reg_res.status_code == 201
+
+    otp_email = f"enc.otp.{tag}@example.com"
+    client.post("/api/auth/send-otp", json={"email": otp_email})
+
+    with engine.connect() as conn:
+        raw_user = conn.execute(
+            text("SELECT email, full_name, email_hash FROM users WHERE email_hash = :h"),
+            {"h": blind_index(reg_email)},
+        ).fetchone()
+        assert raw_user is not None
+        assert str(raw_user[0]).startswith("enc:")
+        assert reg_email not in str(raw_user[0])
+        assert str(raw_user[1]).startswith("enc:")
+        assert "Encrypted Test User" not in str(raw_user[1])
+        assert raw_user[2] == blind_index(reg_email)
+
+        raw_otps = conn.execute(
+            text("SELECT email, otp_code, email_hash FROM user_otps WHERE email_hash = :h"),
+            {"h": blind_index(otp_email)},
+        ).fetchall()
+        assert len(raw_otps) >= 1
+        raw_email, raw_code, row_hash = raw_otps[-1]
+        assert str(raw_email).startswith("enc:")
+        assert otp_email not in str(raw_email)
+        assert str(raw_code).startswith("enc:")
+        assert row_hash == blind_index(otp_email)
+
+    with Session(engine) as session:
+        prof = session.exec(select(CandidateProfile)).first()
+        if not prof:
+            prof = CandidateProfile(
+                raw_markdown="# Secret Profile\nEmail: hidden@example.com",
+                full_name="Hidden Candidate",
+                email="hidden@example.com",
+            )
+            session.add(prof)
+            session.commit()
+            session.refresh(prof)
+        raw_prof = session.connection().execute(
+            text("SELECT email, full_name, raw_markdown FROM candidate_profiles WHERE id = :id"),
+            {"id": prof.id},
+        ).fetchone()
+        assert str(raw_prof[0]).startswith("enc:")
+        assert str(raw_prof[1]).startswith("enc:")
+        assert str(raw_prof[2]).startswith("enc:")

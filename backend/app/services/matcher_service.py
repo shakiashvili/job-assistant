@@ -186,14 +186,19 @@ Markdown:
 
         return taxonomy
 
+    SPECIALIZED_PLATFORMS = [
+        "Salesforce", "WordPress", "Shopify", "SAP", "Game Testing",
+        "Gamedev", "Unity", "iGaming", "Swift", "Kotlin", "Ruby", "PHP"
+    ]
+
     def extract_job_requirements(self, title: str, description: str) -> List[str]:
-        """Extracts required technical and domain skills from a job title + description."""
+        """Extracts actual required technical and domain skills from job title + description without fabrication."""
         combined = f"{title}\n{description}".lower()
         required: List[str] = []
 
         for category, items in QA_TAXONOMY_CATALOG.items():
             for skill in items:
-                if skill in ("Selenium WebDriver", "Test Cases"):
+                if skill == "Selenium WebDriver":
                     continue
                 pattern = r"\b" + re.escape(skill.lower()) + r"\b"
                 if skill.lower() in ("c#", "k6"):
@@ -202,18 +207,23 @@ Markdown:
                 elif re.search(pattern, combined) and skill not in required:
                     required.append(skill)
 
+        for spec in self.SPECIALIZED_PLATFORMS:
+            if re.search(r"\b" + re.escape(spec.lower()) + r"\b", combined) and spec not in required:
+                required.append(spec)
+
+        # Recognize Georgian QA terminology accurately
+        if any(w in combined for w in ["ავტომატიზაც", "automation code", "test automation", "qa automation"]):
+            if "QA Automation" not in required:
+                required.append("QA Automation")
+        if any(w in combined for w in ["მანუალ", "manual qa", "manual testing"]):
+            if "Manual Testing" not in required:
+                required.append("Manual Testing")
+
         for ind_skills in MULTI_INDUSTRY_SKILLS.values():
             for skill_kw in ind_skills:
                 canonical = skill_kw.title() if len(skill_kw) > 3 else skill_kw.upper()
                 if skill_kw.lower() in combined and canonical not in required:
                     required.append(canonical)
-
-        if not required:
-            # Default baseline for QA / Software postings if description is brief
-            if any(w in combined for w in ["qa", "test", "sdet", "automation", "quality"]):
-                required = ["Playwright", "Python", "REST API", "Git", "CI/CD"]
-            else:
-                required = ["Communication", "Problem Solving", "English"]
 
         return required
 
@@ -236,9 +246,12 @@ Markdown:
         combined = f"{job_title}\n{job_description}".lower()
         title_lower = job_title.lower()
 
-        # Check job title for senior/lead level
-        senior_lead_titles = ["lead", "principal", "head of", "staff", "director", "architect", "chief", "vp", "manager"]
-        senior_titles = ["senior", "sr.", "sr "]
+        # Check job title for senior/lead level (English & Georgian)
+        senior_lead_titles = [
+            "lead", "principal", "head of", "staff", "director", "architect", "chief", "vp", "manager",
+            "ლიდი", "ხელმძღვანელი", "დირექტორი", "მთავარი", "წამყვანი",
+        ]
+        senior_titles = ["senior", "sr.", "sr ", "უფროსი", "სინიორ"]
 
         # Extract explicit years of experience required by job
         job_req_years: Optional[float] = None
@@ -281,6 +294,54 @@ Markdown:
 
         return (True, "Seniority and experience requirements satisfied.")
 
+    def validate_domain_gate(
+        self,
+        parsed_skills: Dict[str, Any],
+        job_title: str,
+        job_description: str,
+    ) -> Tuple[bool, str]:
+        """
+        Enforces strict target-domain matching from CandidateProfile so generic or off-domain
+        results (e.g., Backend Developer when searching QA, or Medical/Receptionist jobs
+        when the candidate uploaded a QA skills.md) are rejected immediately.
+        """
+        target_industry = str(parsed_skills.get("target_industry") or "qa_tech").lower()
+        title_lower = (job_title or "").lower()
+        combined = f"{job_title}\n{job_description}".lower()
+
+        if target_industry == "qa_tech":
+            qa_title_signals = [
+                "qa", "quality assurance", "quality engineer", "test", "tester",
+                "sdet", "automation", "ტესტ", "ხარისხ",
+            ]
+            if any(sig in title_lower for sig in qa_title_signals):
+                return (True, "Matches QA/Testing domain.")
+            # If title doesn't mention QA/test, reject non-QA engineering/other postings
+            return (
+                False,
+                f"Domain Gate: '{job_title}' does not match candidate's QA/Testing target profile.",
+            )
+
+        if target_industry == "receptionist_hospitality":
+            hosp_signals = ["reception", "front desk", "hospitality", "concierge", "hotel", "guest", "მიმღებ", "რეცეფც", "სასტუმრ", "ადმინისტრატორ"]
+            if any(sig in title_lower or sig in combined[:200] for sig in hosp_signals):
+                return (True, "Matches Hospitality domain.")
+            return (False, f"Domain Gate: '{job_title}' does not match Hospitality profile.")
+
+        if target_industry == "healthcare_hospital":
+            med_signals = ["medical", "hospital", "clinic", "patient", "სამედიცინო", "კლინიკ", "პაციენტ", "რეგისტრატორ"]
+            if any(sig in title_lower or sig in combined[:200] for sig in med_signals):
+                return (True, "Matches Healthcare domain.")
+            return (False, f"Domain Gate: '{job_title}' does not match Healthcare profile.")
+
+        if target_industry == "customer_service":
+            cs_signals = ["support", "customer", "client", "call center", "helpdesk", "მხარდაჭერ", "ოპერატორ", "ქოლ"]
+            if any(sig in title_lower or sig in combined[:200] for sig in cs_signals):
+                return (True, "Matches Customer Support domain.")
+            return (False, f"Domain Gate: '{job_title}' does not match Customer Support profile.")
+
+        return (True, "Domain check passed.")
+
     def evaluate_job(
         self,
         title: str,
@@ -294,7 +355,7 @@ Markdown:
         Returns:
           (suitability_score, new_status, match_rationale, matched_skills, missing_skills)
         - Preserves "FILTERED_OUT" if already filtered out by market/language gate.
-        - Enforces Seniority Gate: disqualifies Senior/Lead roles for Junior/Mid candidates.
+        - Enforces Domain Gate & Seniority Gate: disqualifies off-domain or Senior/Lead roles.
         - Promotes listings with suitability_score >= 75.0 to "STAGED" ("Ready to Apply / Staging").
         """
         if current_status == "FILTERED_OUT":
@@ -302,6 +363,17 @@ Markdown:
                 0.0,
                 "FILTERED_OUT",
                 existing_rationale or "Requires local language",
+                [],
+                [],
+            )
+
+        # Domain relevance validation
+        dom_passed, dom_reason = self.validate_domain_gate(parsed_skills, title, description)
+        if not dom_passed:
+            return (
+                0.0,
+                "FILTERED_OUT",
+                dom_reason,
                 [],
                 [],
             )
@@ -332,38 +404,93 @@ Markdown:
 
         cand_lower = {s.lower() for s in candidate_skills}
         cand_blob = " ".join(candidate_skills).lower()
+        has_automation_stack = bool(parsed_skills.get("qa_automation")) or any(
+            w in cand_blob for w in ["playwright", "selenium", "cypress", "pytest", "automation"]
+        )
+        has_manual_stack = bool(parsed_skills.get("manual_qa")) or any(
+            w in cand_blob for w in ["manual", "test case", "bug report", "exploratory", "postman", "test design"]
+        )
 
         matched: List[str] = []
         missing: List[str] = []
+        missing_specialties: List[str] = []
 
         for req in required_skills:
             rl = req.lower()
-            if rl in cand_lower or rl in cand_blob or any(rl in c or c in rl for c in cand_lower):
+            is_matched = False
+            if rl == "qa automation" and has_automation_stack:
+                is_matched = True
+            elif rl == "manual testing" and has_manual_stack:
+                is_matched = True
+            elif rl in cand_lower or rl in cand_blob or any(rl in c or c in rl for c in cand_lower):
+                is_matched = True
+
+            if is_matched:
                 matched.append(req)
             else:
                 missing.append(req)
+                if req in self.SPECIALIZED_PLATFORMS:
+                    missing_specialties.append(req)
+
+        title_lower = (title or "").lower()
+        desc_lower = (description or "").lower()
+
+        # Check for unpossessed specialized platforms mentioned prominently in title
+        title_specialty_mismatch = any(
+            re.search(r"\b" + re.escape(sp.lower()) + r"\b", title_lower) and sp.lower() not in cand_blob
+            for sp in self.SPECIALIZED_PLATFORMS
+        )
+        if title_specialty_mismatch:
+            return (
+                35.0,
+                "FILTERED_OUT",
+                f"Suitability Gate: Role requires specialized stack ({', '.join(missing_specialties or ['domain specialty'])}) not present in skills.md.",
+                matched,
+                missing,
+            )
 
         if required_skills:
             raw_ratio = len(matched) / len(required_skills)
-            # Base score curve: high match on core stack yields 75-98%
-            score = round(min(98.0, max(35.0, (raw_ratio * 78.0) + 22.0)), 1)
+            # Penalize specialized platform gaps even in description
+            penalty = 20.0 * len(missing_specialties)
+            score = round(min(98.0, max(25.0, (raw_ratio * 78.0) + 22.0 - penalty)), 1)
         else:
-            score = 80.0
+            # Brief external-link listings without inline tech keywords: score by title alignment
+            if any(w in title_lower for w in ["ავტომატიზაცი", "automation", "sdet"]) and has_automation_stack:
+                score = 78.0
+                matched = ["QA Automation"]
+            elif any(w in title_lower for w in ["software qa", "qa engineer", "ტესტერ"]) and "report" not in title_lower and "რეპორტ" not in title_lower:
+                # Training/beginner intern courses don't fit 1.5 yr automation profile unless general QA starter
+                if any(w in desc_lower for w in ["სტაჟირების პროგრამა", "კურსი უკვე გაიარა", "course certificate"]):
+                    score = 52.0
+                else:
+                    score = 65.0
+            else:
+                score = 45.0
 
-        # Promote listings >= 75% to "STAGED" ("Ready to Apply / Staging" queue)
+        MIN_SUITABILITY_SCORE = 60.0
+
         if current_status in ("APPLIED", "REJECTED"):
             new_status = current_status
+        elif score < MIN_SUITABILITY_SCORE:
+            return (
+                score,
+                "FILTERED_OUT",
+                f"Suitability Gate: {score}% match is below {int(MIN_SUITABILITY_SCORE)}% threshold for your skills.md (Missing: {', '.join(missing[:4]) or 'stack alignment'}).",
+                matched,
+                missing,
+            )
         elif score >= 75.0:
             new_status = "STAGED"
         else:
             new_status = "AUDITED"
 
-        matched_str = ", ".join(matched[:8]) if matched else "Core QA fundamentals"
+        matched_str = ", ".join(matched[:8]) if matched else "Role specialty alignment"
         missing_str = ", ".join(missing[:5]) if missing else "None (100% core requirement coverage)"
         queue_note = (
             "Auto-promoted to Ready to Apply / Staging queue (score >= 75%)."
             if new_status == "STAGED"
-            else "Below 75% auto-staging threshold; queued for manual review."
+            else "Suitable match (60-74%): ready for targeted review."
         )
         rationale = (
             f"Suitability {score}% | Matched ({len(matched)}/{len(required_skills)}): {matched_str} | "

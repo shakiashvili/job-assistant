@@ -1,209 +1,62 @@
 import logging
 from typing import List
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from sqlmodel import Session, select
+from ..db.database import engine, init_db
+from ..db.models import CandidateProfile, JobPosting, User
 from ..models.schemas import JobAuditRequest, JobAuditResponse, PortalVacancyItem
 from ..services.audit_service import audit_service
+from ..services.auth_service import get_current_user
+from .jobs import _is_profile_uploaded_for_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["Job Audit & Portal Vacancies"])
 
 
-CURATED_PORTAL_VACANCIES: List[PortalVacancyItem] = [
-    PortalVacancyItem(
-        id="vac-hosp-1",
-        title="Front Desk Receptionist / Guest Relations Officer (მიმღები-რეცეფციონისტი)",
-        company="Rooms Hotel Tbilisi (Adjara Group)",
-        portal="jobs.ge",
-        industry="receptionist_hospitality",
-        location="Tbilisi, Georgia",
-        salary="2,200 – 2,800 GEL / mo + Bonuses",
-        url="https://jobs.ge/ge/?view=jobs&id=549201",
-        mock_url="http://localhost:8000/mock-portals/jobs_ge_sample.html",
-        company_reviews_count=62,
-        company_rating=4.7,
-        requires_motivational_letter=False,
-        description=(
-            "Front Desk Receptionist / Guest Relations Officer at Rooms Hotel Tbilisi (listed on Jobs.ge & HR.ge). "
-            "Responsibilities & Requirements: Guest Check-in / Check-out, Opera PMS, Fidelio, Booking.com & Expedia Extranet, "
-            "Reservation Management, VIP Guest Relations, POS Terminal & Cash Handling, Switchboard & Multiline Phone, "
-            "Conflict Resolution, Georgian (Native) and English (Fluent). სასტუმროს მიმღები რეცეფციონისტი."
-        )
-    ),
-    PortalVacancyItem(
-        id="vac-med-1",
-        title="Hospital Patient Coordinator / Medical Receptionist (სამედიცინო კოორდინატორი)",
-        company="Evex Hospitals / Todua Clinic",
-        portal="hr.ge",
-        industry="healthcare_hospital",
-        location="Tbilisi, Georgia",
-        salary="2,000 – 2,600 GEL / mo",
-        url="https://hr.ge/announcement/401822/hospital-patient-coordinator",
-        mock_url="http://localhost:8000/mock-portals/jobs_ge_sample.html",
-        company_reviews_count=54,
-        company_rating=4.3,
-        requires_motivational_letter=False,
-        description=(
-            "Hospital Patient Coordinator & Medical Receptionist at Evex Hospitals (HR.ge / Jobs.ge). "
-            "Requirements: Patient Registration, EMR / EHR Systems, Appointment Scheduling, Insurance Verification, "
-            "Medical Front Desk, Triage Coordination, HIPAA & Patient Privacy, Medical Billing / Copay, Customer Care, "
-            "Georgian & English communication. კლინიკის პაციენტთა კოორდინატორი / სამედიცინო რეგისტრატორი."
-        )
-    ),
-    PortalVacancyItem(
-        id="vac-cs-1",
-        title="Senior Customer Service & Client Care Specialist (მომხმარებელთა მხარდაჭერა)",
-        company="TBC Bank / Evolution Georgia",
-        portal="jobs.ge",
-        industry="customer_service",
-        location="Tbilisi / Remote Hybrid",
-        salary="$1,400 – $2,100 / mo",
-        url="https://jobs.ge/en/?view=jobs&id=548810",
-        mock_url="http://localhost:8000/mock-portals/jobs_ge_sample.html",
-        company_reviews_count=89,
-        company_rating=4.4,
-        requires_motivational_letter=False,
-        description=(
-            "Senior Customer Service & Omnichannel Support Specialist (Jobs.ge / HeadHunter.ge). "
-            "Requirements: Customer Support, Omnichannel Support (Live Chat, Email, Phone), Zendesk, Intercom, Salesforce CRM, "
-            "De-escalation & Conflict Resolution, SLA Management, CSAT / NPS Optimization, Ticketing Systems, Fluent English & Georgian."
-        )
-    ),
-    PortalVacancyItem(
-        id="vac-dou-1",
-        title="QA Automation Engineer (Playwright / Python)",
-        company="MacPaw",
-        portal="dou.ua",
-        industry="qa_tech",
-        location="Remote (Ukraine / EU / Georgia / Worldwide)",
-        salary="$2,800 – $3,600 / mo",
-        url="https://jobs.dou.ua/companies/macpaw/vacancies/289104/",
-        mock_url="http://localhost:8000/mock-portals/dou_sample.html",
-        company_reviews_count=142,
-        company_rating=4.8,
-        requires_motivational_letter=True,
-        description=(
-            "QA Automation Engineer at MacPaw (DOU.ua). Requirements: 1-2 years experience in Playwright or Cypress, "
-            "Python, TypeScript, PyTest, REST API, Postman, GitHub Actions, Docker, English Upper-Intermediate+. "
-            "Note: DOU.ua requires an additional personalized Motivational Letter."
-        )
-    ),
-    PortalVacancyItem(
-        id="vac-djinni-1",
-        title="QA Engineer / SDET (API & Test Automation)",
-        company="Grammarly",
-        portal="djinni.co",
-        industry="qa_tech",
-        location="Full Remote (Abroad / Worldwide)",
-        salary="$3,200 – $4,200 / mo",
-        url="https://djinni.co/jobs/654321-qa-engineer-playwright/",
-        mock_url="http://localhost:8000/mock-portals/djinni_sample.html",
-        company_reviews_count=215,
-        company_rating=4.6,
-        requires_motivational_letter=False,
-        description=(
-            "QA Engineer / SDET at Grammarly via Djinni.co. Stack: Playwright, TypeScript, Python, "
-            "PyTest, Postman, Docker, GitHub Actions, REST API. 1.5+ years experience. Full remote abroad contract."
-        )
-    ),
-    PortalVacancyItem(
-        id="vac-jobsge-1",
-        title="QA Automation Engineer (Remote / Tbilisi)",
-        company="TBC Digital",
-        portal="jobs.ge",
-        industry="qa_tech",
-        location="Tbilisi, Georgia / Remote",
-        salary="$2,500 – $3,200 / mo",
-        url="https://jobs.ge/en/?view=jobs&id=541092",
-        mock_url="http://localhost:8000/mock-portals/jobs_ge_sample.html",
-        company_reviews_count=89,
-        company_rating=4.4,
-        requires_motivational_letter=False,
-        description=(
-            "QA Automation Engineer at TBC Digital (listed on Jobs.ge, HR.ge, and HeadHunter.ge). "
-            "Requirements: Playwright, Cypress, Python, PyTest, REST API, Postman, SQL, Docker, CI/CD pipelines. "
-            "1-2 years experience. ბოლო ვადა: 25.12.2026."
-        )
-    ),
-    PortalVacancyItem(
-        id="vac-hhge-1",
-        title="International Hospitality & VIP Concierge Coordinator",
-        company="Marriott International Tbilisi",
-        portal="headhunter.ge",
-        industry="receptionist_hospitality",
-        location="Tbilisi, Georgia",
-        salary="2,500 – 3,200 GEL / mo",
-        url="https://headhunter.ge/vacancy/9841990",
-        mock_url="http://localhost:8000/mock-portals/jobs_ge_sample.html",
-        company_reviews_count=420,
-        company_rating=4.5,
-        requires_motivational_letter=False,
-        description=(
-            "International Hospitality & Front Office Receptionist at Marriott Tbilisi (HeadHunter.ge / HR.ge). "
-            "Requirements: Opera PMS, Guest Check-in / Check-out, Reservation Management, Concierge & Guest Services, "
-            "VIP Guest Relations, POS & Billing, English & Georgian fluency."
-        )
-    ),
-    PortalVacancyItem(
-        id="vac-justjoin-1",
-        title="QA Automation Engineer (100% Remote B2B)",
-        company="Allegro",
-        portal="justjoin.it",
-        industry="qa_tech",
-        location="Remote EU / Abroad B2B",
-        salary="€3,500 – €4,500 / mo",
-        url="https://justjoin.it/offers/allegro-qa-automation-engineer",
-        mock_url="http://localhost:8000/mock-portals/justjoin_sample.html",
-        company_reviews_count=180,
-        company_rating=4.4,
-        requires_motivational_letter=False,
-        description=(
-            "QA Automation Engineer at Allegro via JustJoin.it (100% Remote B2B). "
-            "Stack: Playwright, TypeScript, Python, PyTest, Docker, GitHub Actions, Postman. 1.5+ years experience."
-        )
-    ),
-    PortalVacancyItem(
-        id="vac-gh-1",
-        title="QA Automation Engineer",
-        company="CloudScale Technologies",
-        portal="greenhouse",
-        industry="qa_tech",
-        location="Berlin / Remote EU",
-        salary="€52,000 / yr",
-        url="https://boards.greenhouse.io/cloudscale/jobs/7123910",
-        mock_url="http://localhost:8000/mock-portals/greenhouse_sample.html",
-        company_reviews_count=48,
-        company_rating=4.3,
-        requires_motivational_letter=False,
-        description=(
-            "QA Automation Engineer at CloudScale Technologies (Greenhouse). "
-            "1.5+ years experience with Playwright, Cypress, Python, TypeScript, REST API, GitHub Actions, Docker."
-        )
-    ),
-    PortalVacancyItem(
-        id="vac-lever-1",
-        title="Software Development Engineer in Test (SDET)",
-        company="DataSphere Technologies",
-        portal="lever",
-        industry="qa_tech",
-        location="Remote EU / CET",
-        salary="€54,000 / yr",
-        url="https://jobs.lever.co/datasphere/sdet",
-        mock_url="http://localhost:8000/mock-portals/lever_sample.html",
-        company_reviews_count=64,
-        company_rating=4.5,
-        requires_motivational_letter=False,
-        description=(
-            "SDET at DataSphere Technologies (Lever). "
-            "1-2 years experience with Python, TypeScript, Playwright, Cypress, REST APIs, SQL, Docker, CI/CD."
-        )
-    ),
-]
-
-
 @router.get("/vacancies", response_model=List[PortalVacancyItem])
-def list_portal_vacancies():
-    """Returns multi-industry vacancies (QA/Tech, Receptionist & Hospitality, Customer Service, Hospital/Healthcare) across djinni.co, dou.ua, jobs.ge, hr.ge, headhunter.ge, justjoin.it, Greenhouse, and Lever."""
-    return CURATED_PORTAL_VACANCIES
+def list_portal_vacancies(current_user: User = Depends(get_current_user)):
+    """
+    Returns ONLY suitable live verified vacancies (>= 60% match) after the user has uploaded skills.md.
+    Returns an empty list [] until skills.md is uploaded — never serves dead/mocked or unsuitable listings.
+    """
+    init_db()
+    with Session(engine) as session:
+        profile = session.exec(
+            select(CandidateProfile).order_by(CandidateProfile.updated_at.desc())
+        ).first()
+        if not _is_profile_uploaded_for_user(profile, current_user.email):
+            return []
+
+        industry = str((profile.parsed_skills or {}).get("target_industry") or "qa_tech")
+        rows = session.exec(
+            select(JobPosting)
+            .where((JobPosting.status != "FILTERED_OUT") & (JobPosting.suitability_score >= 60.0))
+            .order_by(JobPosting.suitability_score.desc(), JobPosting.scraped_at.desc())
+        ).all()
+
+        items: List[PortalVacancyItem] = []
+        for r in rows:
+            salary_str = "Unstated"
+            if r.salary_min and r.salary_max:
+                salary_str = f"{int(r.salary_min):,} - {int(r.salary_max):,} {r.salary_currency or 'USD'}"
+            items.append(
+                PortalVacancyItem(
+                    id=f"live-{r.portal}-{r.id}",
+                    title=r.title,
+                    company=r.company,
+                    portal=r.portal,
+                    industry=industry,
+                    location=r.market,
+                    salary=salary_str,
+                    url=r.url,
+                    mock_url=r.url,
+                    company_reviews_count=10,
+                    company_rating=4.5,
+                    requires_motivational_letter=(r.portal == "dou.ua"),
+                    description=r.description_raw,
+                )
+            )
+        return items
 
 
 @router.post("/audit-job", response_model=JobAuditResponse)

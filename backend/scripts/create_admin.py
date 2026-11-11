@@ -8,10 +8,10 @@ if hasattr(sys.stdout, "reconfigure"):
 backend_dir = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(backend_dir))
 
-from sqlmodel import Session, select
+from sqlmodel import Session
 from app.db.database import engine, init_db
 from app.db.models import User
-from app.services.auth_service import hash_password
+from app.services.auth_service import hash_password, get_user_by_email
 
 
 def make_admin(email: str = None, password: str = None, full_name: str = "Super Admin"):
@@ -34,7 +34,7 @@ def make_admin(email: str = None, password: str = None, full_name: str = "Super 
         sys.exit(1)
 
     with Session(engine) as session:
-        existing = session.exec(select(User).where(User.email == email.lower())).first()
+        existing = get_user_by_email(session, email)
         if existing:
             existing.is_admin = True
             existing.is_active = True

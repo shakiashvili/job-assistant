@@ -33,7 +33,7 @@ export const StageModal: React.FC<StageModalProps> = ({
   companyValidation,
   tailoredCv
 }) => {
-  const [urlInput, setUrlInput] = useState(jobUrl || `${BACKEND_ORIGIN}/mock-portals/dou_sample.html`);
+  const [urlInput, setUrlInput] = useState(jobUrl || 'https://jobs.dou.ua/companies/macpaw/vacancies/289104/');
   const [applicantSummary, setApplicantSummary] = useState('');
   const [motivationLetter, setMotivationLetter] = useState('');
   const [expectedSalary, setExpectedSalary] = useState('€85,000 / year ($4,500/mo remote)');
@@ -87,12 +87,12 @@ export const StageModal: React.FC<StageModalProps> = ({
   };
 
   const portalPresets = [
-    { label: 'DOU.ua (+Motivational Letter)', url: `${BACKEND_ORIGIN}/mock-portals/dou_sample.html` },
-    { label: 'Djinni.co', url: `${BACKEND_ORIGIN}/mock-portals/djinni_sample.html` },
-    { label: 'Jobs.ge / HR.ge / HH.ge', url: `${BACKEND_ORIGIN}/mock-portals/jobs_ge_sample.html` },
-    { label: 'JustJoin.it (B2B)', url: `${BACKEND_ORIGIN}/mock-portals/justjoin_sample.html` },
-    { label: 'Greenhouse', url: `${BACKEND_ORIGIN}/mock-portals/greenhouse_sample.html` },
-    { label: 'Lever', url: `${BACKEND_ORIGIN}/mock-portals/lever_sample.html` },
+    { label: 'DOU.ua (+Motivational Letter)', url: 'https://jobs.dou.ua/companies/macpaw/vacancies/289104/' },
+    { label: 'Djinni.co', url: 'https://djinni.co/jobs/654321-qa-engineer-playwright/' },
+    { label: 'Jobs.ge / HR.ge / HH.ge', url: 'https://jobs.ge/en/?view=jobs&id=541092' },
+    { label: 'JustJoin.it (B2B)', url: 'https://justjoin.it/offers/allegro-qa-automation-engineer' },
+    { label: 'Greenhouse', url: 'https://boards.greenhouse.io/cloudscale/jobs/7123910' },
+    { label: 'Lever', url: 'https://jobs.lever.co/datasphere/sdet' },
   ];
 
   return (

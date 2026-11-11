@@ -39,10 +39,10 @@ export const CVVariantManager: React.FC = () => {
   > = {
     qa_automation: {
       id: 'qa_automation',
-      title: 'Lead QA Automation Engineer / SDET',
+      title: 'QA Automation Engineer & SDET',
       badge: '💻 Tech & QA',
       summary:
-        'Senior QA Automation Engineer with 5+ years of practical experience building fast, reliable test suites in Playwright, Cypress, and Python. Focused on keeping CI/CD pipelines green and cutting regression cycles from hours to minutes. Available to start 1 week after offer.',
+        'QA Automation Engineer with 1.5 years of practical experience building fast, reliable test suites in Playwright, Cypress, and Python. Focused on keeping CI/CD pipelines green and cutting regression cycles from hours to minutes. Available to start 1 week after offer.',
       keywords: ['Playwright', 'Cypress', 'Python', 'TypeScript', 'CI/CD', 'Docker', 'PyTest', 'API Testing', 'SDET'],
       resume_file: 'resume_qa_automation.pdf',
       idealFor: 'Roles on DOU.ua, Djinni.co, Jobs.ge, JustJoin.it requiring Playwright, Cypress, Python, SDET, and CI/CD.',
@@ -52,7 +52,7 @@ export const CVVariantManager: React.FC = () => {
       title: 'Front Desk Receptionist & Guest Relations (მიმღები-რეცეფციონისტი)',
       badge: '🏨 Hospitality & Hotels',
       summary:
-        'Warm, organized, and detail-oriented Front Desk Receptionist and Hospitality Specialist with 4+ years of experience at 5-star boutique and international hotels. Skilled in Opera PMS, Fidelio, Booking.com/Expedia channel management, VIP guest check-in/check-out, and calm multi-line phone handling in Georgian, English, and Russian.',
+        'Warm, organized, and detail-oriented Front Desk Receptionist and Hospitality Specialist with experience at boutique and international hotels. Skilled in Opera PMS, Fidelio, Booking.com/Expedia channel management, VIP guest check-in/check-out, and calm multi-line phone handling in Georgian and English.',
       keywords: [
         'Opera PMS',
         'Fidelio',
@@ -71,7 +71,7 @@ export const CVVariantManager: React.FC = () => {
       title: 'Customer Service & Client Care Specialist (მომხმარებელთა მხარდაჭერა)',
       badge: '🎧 Customer Care',
       summary:
-        'Empathetic and high-performing Customer Service & Client Success Specialist with 4+ years of experience supporting international customers across live chat, email, and phone. Expert in Zendesk, Intercom, Salesforce CRM, conflict de-escalation, and maintaining 98%+ CSAT scores.',
+        'Empathetic and high-performing Customer Service & Client Success Specialist with proven experience supporting international customers across live chat, email, and phone. Expert in Zendesk, Intercom, Salesforce CRM, conflict de-escalation, and maintaining 98%+ CSAT scores.',
       keywords: [
         'Omnichannel Support',
         'Zendesk',
@@ -90,7 +90,7 @@ export const CVVariantManager: React.FC = () => {
       title: 'Hospital Patient Coordinator & Medical Receptionist (სამედიცინო კოორდინატორი)',
       badge: '🏥 Hospital & Clinic',
       summary:
-        'Compassionate, composed, and highly organized Hospital Patient Coordinator & Medical Receptionist with 5 years of experience in modern multi-profile clinics and hospitals. Proficient in Electronic Medical Records (EMR/EHR), patient registration, insurance claims verification, and doctor appointment scheduling.',
+        'Compassionate, composed, and highly organized Hospital Patient Coordinator & Medical Receptionist with experience in modern multi-profile clinics and hospitals. Proficient in Electronic Medical Records (EMR/EHR), patient registration, insurance claims verification, and doctor appointment scheduling.',
       keywords: [
         'Patient Registration',
         'EMR / EHR Systems',
@@ -105,7 +105,7 @@ export const CVVariantManager: React.FC = () => {
     },
     qa_manual: {
       id: 'qa_manual',
-      title: 'Senior Quality Assurance & Release Specialist',
+      title: 'Quality Assurance & Release Specialist',
       badge: '🔍 Product QA',
       summary:
         'Quality Assurance Specialist focused on exploratory testing, BDD requirements validation, test case design, regression management, and cross-browser quality audits across SaaS and FinTech platforms. Available 1 week after offer.',

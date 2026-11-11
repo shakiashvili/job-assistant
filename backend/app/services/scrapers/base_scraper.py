@@ -100,12 +100,32 @@ def evaluate_remote_and_language_gate(
         w in combined for w in ["remote", "relocate", "relocation", "anywhere", "worldwide", "abroad", "tbilisi", "georgia"]
     )
 
+    loc_lower = (location_text or "").lower()
+    ukraine_restricted = (
+        "(ukraine)" in title.lower()
+        or "ukraine-based role" in combined
+        or "located in ukraine" in combined
+        or "ukraine only" in combined
+        or "only ukraine" in combined
+        or "office in the center of lviv" in combined
+        or "office in lviv" in combined
+        or "office in kyiv" in combined
+        or ("ukraine" in loc_lower and not any(w in loc_lower for w in ["worldwide", "europe", "eu", "global", "abroad", "georgia", "relocat", "other countries"]))
+    )
+
     if portal in ("dou.ua", "djinni.co"):
         if has_slavic_keyword or "Ukrainian" in langs_detected or "Russian" in langs_detected:
             return (
                 is_remote,
                 "FILTERED_OUT",
                 "Mandatory local Slavic language requirement (Requires local language)",
+                langs_detected,
+            )
+        if ukraine_restricted and not ("global remote" in combined or "remote worldwide" in combined):
+            return (
+                False,
+                "FILTERED_OUT",
+                "Location Gate: Restricted to Ukraine-based candidates",
                 langs_detected,
             )
         if not is_remote:

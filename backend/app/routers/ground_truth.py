@@ -51,7 +51,7 @@ def get_skills_md_presets():
             {
                 "id": "qa_tech",
                 "label": "💻 QA Automation & Tech",
-                "role": "Senior QA Automation Engineer",
+                "role": "QA Automation Engineer & SDET",
                 "content": PROFESSION_MD_PRESETS["qa_tech"]["content"],
             },
             {

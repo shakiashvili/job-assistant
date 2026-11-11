@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Bot } from 'lucide-react';
 import { Navbar, NavTab } from './components/Navbar';
 import { AuditPanel } from './components/AuditPanel';
 import { ProfileVault } from './components/ProfileVault';
@@ -11,7 +12,7 @@ import { fetchHealth, fetchCurrentUser, logoutUser } from './services/api';
 import { UserProfile } from './types';
 
 export const App: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<NavTab>('tracker');
+  const [activeTab, setActiveTab] = useState<NavTab>('audit');
   const [backendHealth, setBackendHealth] = useState<{ connected: boolean; model: string; mode: string } | null>(null);
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
@@ -89,6 +90,47 @@ export const App: React.FC = () => {
       setActiveTab('tracker');
     }
   };
+
+  // Zero-Data Gate: Unauthenticated users see ONLY the login / OTP authentication screen.
+  // No vacancies, no application cards, and no profiles can render before authentication.
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-4 relative overflow-hidden">
+        {/* Glow ambient decoration */}
+        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-sky-500/10 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute bottom-1/4 right-1/4 w-80 h-80 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
+
+        {/* Brand Header */}
+        <div className="mb-6 text-center space-y-2 relative z-10">
+          <div className="inline-flex items-center gap-2.5 px-3.5 py-1.5 rounded-2xl bg-slate-900 border border-slate-800 shadow-xl">
+            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-sky-500 via-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-sky-500/25">
+              <Bot className="w-4 h-4 text-white" />
+            </div>
+            <span className="font-extrabold text-base text-white tracking-tight">TalentFlow AI</span>
+            <span className="text-[10px] font-bold uppercase tracking-wider bg-sky-950 text-sky-300 border border-sky-800 px-2 py-0.5 rounded-full">
+              Mobile Pro v3.0
+            </span>
+          </div>
+          <h1 className="text-xl sm:text-2xl font-extrabold text-white">Sign In to Your Career Portal</h1>
+          <p className="text-xs text-slate-400 max-w-sm mx-auto">
+            Autonomous multi-portal job hunter & application stager. Sign in via passwordless email OTP to scan live vacancies and tailored CVs.
+          </p>
+        </div>
+
+        <AuthModal
+          isOpen={true}
+          onClose={() => {}}
+          isGate={true}
+          onAuthSuccess={(user) => {
+            setCurrentUser(user);
+            if (user.is_admin) {
+              setActiveTab('admin');
+            }
+          }}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">

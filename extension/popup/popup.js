@@ -46,7 +46,7 @@ async function checkBackendStatus(apiBaseUrl) {
             const avatarEl = document.querySelector(".candidate-avatar");
             if (avatarEl) {
               const initials = profData.full_name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
-              avatarEl.textContent = initials || "GS";
+              avatarEl.textContent = initials || "CA";
             }
           }
           const headline = (profData.parsed_skills && profData.parsed_skills.headline) || profData.headline;
