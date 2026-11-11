@@ -82,7 +82,20 @@ class SalaryService:
             if low >= 300 and high >= low:
                 return (round(low, 2), round(high, 2), cur)
 
-        # 4. Single value with k or explicit currency: €40k, $4,500 / mo, 5000 GEL
+        # 4. Prefix single cap/floor values: "to $700", "up to $2,500", "from $1500"
+        prefix_single = re.search(
+            r"\b(?:up\s+to|to|from|от|до)\s*([\$€£₾])\s*(\d[\d,]*(?:\.\d+)?)\s*([kK])?\b",
+            norm,
+            re.IGNORECASE,
+        )
+        if prefix_single:
+            sym, val, has_k = prefix_single.groups()
+            cur = {"$": "USD", "€": "EUR", "£": "GBP", "₾": "GEL"}.get(sym, "USD")
+            base = float(val.replace(",", "")) * (1000.0 if has_k else 1.0)
+            if base >= 250:
+                return (round(base, 2), round(base, 2), cur)
+
+        # 5. Single value with k or explicit currency: €40k, $4,500 / mo, $700, 5000 GEL
         single_sym = re.search(
             r"([\$€£₾])\s*(\d[\d,]*(?:\.\d+)?)\s*([kK])\b",
             norm
@@ -91,18 +104,18 @@ class SalaryService:
             sym, val, _ = single_sym.groups()
             cur = {"$": "USD", "€": "EUR", "£": "GBP", "₾": "GEL"}.get(sym, "USD")
             base = float(val.replace(",", "")) * 1000.0
-            if base >= 500:
+            if base >= 250:
                 return (round(base * 0.9, 2), round(base * 1.1, 2), cur)
 
         single_mo = re.search(
-            r"([\$€£₾])\s*(\d{1,2},\d{3}|\d{4,6})\b",
+            r"([\$€£₾])\s*(\d{1,2},\d{3}|\d{3,6})\b",
             norm
         )
         if single_mo:
             sym, val = single_mo.groups()
             cur = {"$": "USD", "€": "EUR", "£": "GBP", "₾": "GEL"}.get(sym, "USD")
             base = float(val.replace(",", ""))
-            if base >= 500:
+            if base >= 250:
                 return (base, base, cur)
 
         single_code = re.search(

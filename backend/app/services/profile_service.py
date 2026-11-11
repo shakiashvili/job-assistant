@@ -271,6 +271,7 @@ Markdown:
                 "dou_url": "https://jobs.dou.ua/vacancies/?category=Support&remote",
                 "justjoin_url": "https://justjoin.it/job-offers/all-locations/support?workplace=remote",
                 "hr_ge_url": "https://www.hr.ge/search-posting?q=support",
+                "headhunter_url": "https://tbilisi.headhunter.ge/search/vacancy?text=Support&area=28",
                 "domain_keywords": [
                     "support", "customer service", "client care", "call center", "helpdesk",
                     "მხარდაჭერა", "ოპერატორი", "ქოლ",
@@ -290,6 +291,7 @@ Markdown:
             "dou_url": "https://jobs.dou.ua/vacancies/?category=QA&remote",
             "justjoin_url": "https://justjoin.it/job-offers/all-locations/testing?workplace=remote",
             "hr_ge_url": "https://www.hr.ge/search-posting?q=QA",
+            "headhunter_url": "https://tbilisi.headhunter.ge/search/vacancy?text=QA&area=28",
             "domain_keywords": [
                 "qa", "quality assurance", "tester", "test engineer", "sdet",
                 "manual qa", "automation", "playwright", "cypress", "selenium", "ტესტ",

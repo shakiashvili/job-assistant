@@ -106,6 +106,10 @@ export const AuditPanel: React.FC = () => {
     pdf_filename: string;
     pdf_url: string;
     gmailUrl: string;
+    gmail_draft_saved?: boolean;
+    gmail_drafts_url?: string | null;
+    attached_files?: string[];
+    draft_error?: string | null;
   } | null>(null);
 
   const handleDraftInGmail = async (job: DbJobPosting) => {
@@ -114,23 +118,26 @@ export const AuditPanel: React.FC = () => {
     try {
       const pkg = await prepareJobEmailPackage(job.id, 'auto');
       const toEmail = pkg.recipient_email || job.target_email || '';
-      const gmailUrl =
+      const composeUrl =
         `https://mail.google.com/mail/?view=cm&fs=1` +
         `&to=${encodeURIComponent(toEmail)}` +
         `&su=${encodeURIComponent(pkg.subject)}` +
         `&body=${encodeURIComponent(pkg.cover_letter)}`;
+      const gmailUrl = pkg.gmail_draft_saved && pkg.gmail_drafts_url ? pkg.gmail_drafts_url : composeUrl;
 
       setPreparedEmailPkg({ ...pkg, gmailUrl });
 
-      // Automatically trigger download of the ready tailored Word (.docx) CV
-      const dlLink = document.createElement('a');
-      dlLink.href = `${BACKEND_ORIGIN}${pkg.docx_url}`;
-      dlLink.download = pkg.docx_filename;
-      document.body.appendChild(dlLink);
-      dlLink.click();
-      document.body.removeChild(dlLink);
+      // Only force local browser download if Gmail IMAP/OAuth draft couldn't attach file automatically
+      if (!pkg.gmail_draft_saved) {
+        const dlLink = document.createElement('a');
+        dlLink.href = `${BACKEND_ORIGIN}${pkg.docx_url}`;
+        dlLink.download = pkg.docx_filename;
+        document.body.appendChild(dlLink);
+        dlLink.click();
+        document.body.removeChild(dlLink);
+      }
 
-      // Open Gmail Compose with full Cover Letter & clean Subject
+      // Open Gmail Drafts (file already attached!) or Compose fallback
       window.open(gmailUrl, '_blank', 'noopener,noreferrer');
     } catch (err: any) {
       setError(err.message || 'Failed to prepare Gmail cover letter and Word CV.');
@@ -204,17 +211,17 @@ export const AuditPanel: React.FC = () => {
     setError(null);
     try {
       const res = await triggerMultiPortalScrape(true);
-      const validJobs = res.jobs.filter((j) => j.status !== 'FILTERED_OUT');
+      const [dbAll, vacs] = await Promise.all([fetchScrapedJobs(), fetchVacancies()]);
+      const validJobs = (dbAll.length > 0 ? dbAll : res.jobs).filter((j) => j.status !== 'FILTERED_OUT');
       setScrapedJobs(validJobs);
-      const vacs = await fetchVacancies();
       setVacancies(vacs);
       if (validJobs.length > 0 && !jobUrl) {
         setJobUrl(validJobs[0].url);
         setJobText(validJobs[0].description_raw);
       }
       setScrapeStats({
-        total: res.total_processed,
-        staged: res.staged_ready_count,
+        total: validJobs.length,
+        staged: validJobs.filter((j) => j.status === 'STAGED').length,
         filteredOut: res.filtered_out_count,
       });
     } catch (err: any) {
@@ -635,7 +642,7 @@ export const AuditPanel: React.FC = () => {
               Automated Portal Scrapers & Intelligent Market Filter (`JobPosting` SQL Table)
             </h3>
             <p className="text-xs text-slate-400">
-              Scrapes <strong>Jobs.ge</strong>, <strong>HR.ge</strong>, <strong>DOU.ua</strong>, <strong>Djinni.co</strong>, and <strong>JustJoin.it</strong>. Only suitable matches are shown, stated salaries are extracted honestly, and `&gt;= 75%` matches are promoted to <strong>STAGED</strong>.
+              Scrapes <strong>Jobs.ge</strong>, <strong>HR.ge</strong>, <strong>HeadHunter.ge</strong>, <strong>DOU.ua</strong>, <strong>Djinni.co</strong>, and <strong>JustJoin.it</strong>. Only suitable matches are shown, stated salaries are extracted honestly, and `&gt;= 75%` matches are promoted to <strong>STAGED</strong>.
             </p>
           </div>
 
@@ -668,7 +675,7 @@ export const AuditPanel: React.FC = () => {
         {visibleJobs.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-slate-800/60">
             <span className="text-[10px] font-bold uppercase text-slate-500 mr-1">Portals:</span>
-            {['ALL', 'jobs.ge', 'hr.ge', 'djinni.co', 'dou.ua', 'justjoin.it'].map((p) => (
+            {['ALL', 'jobs.ge', 'hr.ge', 'headhunter.ge', 'djinni.co', 'dou.ua', 'justjoin.it'].map((p) => (
               <button
                 key={p}
                 onClick={() => setSelectedPortalFilter(p)}
@@ -685,15 +692,20 @@ export const AuditPanel: React.FC = () => {
         )}
 
         {preparedEmailPkg && (
-          <div className="p-4 rounded-xl bg-sky-950/35 border border-sky-700/60 text-xs space-y-2.5">
+          <div className={`p-4 rounded-xl border text-xs space-y-2.5 ${preparedEmailPkg.gmail_draft_saved ? 'bg-emerald-950/35 border-emerald-700/60' : 'bg-sky-950/35 border-sky-700/60'}`}>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
-                <span className="text-[10px] font-bold uppercase text-sky-400 block">
-                  CV downloaded to your files ({preparedEmailPkg.docx_filename}) — please attach it to your Gmail draft before sending!
+                <span className={`text-[10px] font-bold uppercase block ${preparedEmailPkg.gmail_draft_saved ? 'text-emerald-400' : 'text-sky-400'}`}>
+                  {preparedEmailPkg.gmail_draft_saved
+                    ? `Gmail Draft created with ${preparedEmailPkg.docx_filename} ALREADY attached — open Gmail Drafts and click Send!`
+                    : `CV downloaded (${preparedEmailPkg.docx_filename}) — attach it in Gmail Compose (or configure Gmail App Password for auto-attachment)`}
                 </span>
                 <span className="text-white font-semibold">
                   {preparedEmailPkg.title} ({preparedEmailPkg.company}) &mdash; Subject: <code className="text-sky-300">{preparedEmailPkg.subject}</code>
                 </span>
+                {preparedEmailPkg.draft_error && !preparedEmailPkg.gmail_draft_saved && (
+                  <p className="text-[11px] text-amber-300 mt-1">{preparedEmailPkg.draft_error}</p>
+                )}
               </div>
               <div className="flex items-center gap-2 flex-wrap">
                 <a
@@ -720,7 +732,7 @@ export const AuditPanel: React.FC = () => {
                   className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-semibold"
                 >
                   <Mail className="w-3.5 h-3.5" />
-                  <span>Re-open Gmail</span>
+                  <span>{preparedEmailPkg.gmail_draft_saved ? 'Open Gmail Drafts' : 'Open Gmail Compose'}</span>
                 </a>
                 <button
                   type="button"
@@ -737,18 +749,23 @@ export const AuditPanel: React.FC = () => {
           </div>
         )}
 
-        {scrapeStats && (
+        {(visibleJobs.length > 0 || scrapeStats) && (
           <div className="text-xs bg-emerald-950/30 border border-emerald-800/60 text-emerald-300 px-3.5 py-2 rounded-xl flex items-center justify-between flex-wrap gap-2">
             <span>
-              ✅ Found <strong>{Math.max(0, scrapeStats.total)}</strong> suitable jobs matching your requirements
-              {scrapeStats.filteredOut > 0 && (
+              ✅ Found <strong>{visibleJobs.length}</strong> suitable jobs matching your requirements
+              {selectedPortalFilter !== 'ALL' && (
+                <span className="text-sky-300 ml-1.5">
+                  (showing {filteredDbJobs.length} on {selectedPortalFilter})
+                </span>
+              )}
+              {scrapeStats && scrapeStats.filteredOut > 0 && (
                 <span className="text-slate-400 ml-1.5">
                   ({Math.max(0, scrapeStats.filteredOut)} filtered out)
                 </span>
               )}
             </span>
             <span className="text-emerald-400 font-bold">
-              {Math.max(0, scrapeStats.staged)} ready to apply (&gt;= 75% match)
+              {visibleJobs.filter((j) => j.status === 'STAGED').length} ready to apply (&gt;= 75% match)
             </span>
           </div>
         )}
@@ -759,7 +776,7 @@ export const AuditPanel: React.FC = () => {
               <>
                 <h4 className="text-sm font-bold text-white">Upload your skills.md file to scan tailored live vacancies</h4>
                 <p className="text-xs text-slate-400 max-w-md mx-auto">
-                  Your discovery feed stays 100% empty until your profile is uploaded. Upload <code className="text-sky-300">skills.md</code> to search live Jobs.ge, HR.ge, DOU.ua, Djinni.co &amp; JustJoin.it roles matched to your exact stack.
+                  Your discovery feed stays 100% empty until your profile is uploaded. Upload <code className="text-sky-300">skills.md</code> to search live Jobs.ge, HR.ge, HeadHunter.ge, DOU.ua, Djinni.co &amp; JustJoin.it roles matched to your exact stack.
                 </p>
                 <button
                   onClick={() => fileInputRef.current?.click()}
@@ -817,7 +834,9 @@ export const AuditPanel: React.FC = () => {
                     <div className="flex items-center gap-1.5 text-[11px] pt-0.5">
                       <DollarSign className="w-3 h-3 text-emerald-400 flex-shrink-0" />
                       <span className="text-emerald-300 font-semibold">
-                        {job.salary_min.toLocaleString()}–{job.salary_max.toLocaleString()} {job.salary_currency}
+                        {job.salary_min === job.salary_max
+                          ? `${job.salary_max.toLocaleString()} ${job.salary_currency}`
+                          : `${job.salary_min.toLocaleString()}–${job.salary_max.toLocaleString()} ${job.salary_currency}`}
                       </span>
                       <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-900 text-slate-300 border border-slate-700">
                         📄 Stated

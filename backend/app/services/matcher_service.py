@@ -72,6 +72,13 @@ CANONICAL_SKILL_NAMES: Dict[str, str] = {
     "azure": "Azure",
     "linux": "Linux",
     "git": "Git",
+    "ai tools": "AI Tools",
+    "ai-assisted testing": "AI-Assisted Testing",
+    "llm evaluation": "LLM Evaluation",
+    "prompt engineering": "Prompt Engineering",
+    "gemini": "Gemini",
+    "chatgpt": "ChatGPT",
+    "github copilot": "GitHub Copilot",
     "jira": "Jira",
     "xray": "Xray",
     "testrail": "TestRail",
@@ -207,11 +214,20 @@ class MatcherService:
             taxonomy[category] = matched
 
         # Spoken languages
-        for lang in ["English", "Georgian", "German", "Ukrainian", "Russian", "Spanish", "French", "ქართული", "ინგლისური"]:
-            if lang.lower() in lower_text:
-                normalized_lang = "Georgian" if lang == "ქართული" else ("English" if lang == "ინგლისური" else lang)
-                if normalized_lang not in taxonomy["spoken_languages"]:
-                    taxonomy["spoken_languages"].append(normalized_lang)
+        lang_aliases = [
+            ("English", ("english", "ინგლისური")),
+            ("Georgian", ("georgian", "ქართული")),
+            ("German", ("german", "გერმანული", "deutsch")),
+            ("Ukrainian", ("ukrainian", "українська", "украинский", "უკრაინული")),
+            ("Russian", ("russian", "русский", "რუსული")),
+            ("Polish", ("polish", "polski", "польский", "პოლონური")),
+            ("Spanish", ("spanish", "ესპანური")),
+            ("French", ("french", "ფრანგული")),
+        ]
+        for canon_lang, patterns in lang_aliases:
+            if any(p in lower_text for p in patterns):
+                if canon_lang not in taxonomy["spoken_languages"]:
+                    taxonomy["spoken_languages"].append(canon_lang)
         if not taxonomy["spoken_languages"]:
             taxonomy["spoken_languages"] = ["English", "Georgian"]
 

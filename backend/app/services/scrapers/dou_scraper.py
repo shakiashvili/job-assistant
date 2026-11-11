@@ -19,7 +19,11 @@ class DouScraper(BasePortalScraper):
     market = "UA_REMOTE"
     SEARCH_URL = "https://jobs.dou.ua/vacancies/?category=QA&remote"
 
-    def parse_html_listings(self, html: str) -> List[Dict[str, Any]]:
+    def parse_html_listings(
+        self,
+        html: str,
+        candidate_languages: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
         soup = self.make_soup(html)
         results: List[Dict[str, Any]] = []
         seen_ids: set[str] = set()
@@ -50,6 +54,7 @@ class DouScraper(BasePortalScraper):
                 description=description,
                 location_text=location_text,
                 portal=self.portal_name,
+                candidate_languages=candidate_languages,
             )
 
             results.append({
@@ -76,8 +81,12 @@ class DouScraper(BasePortalScraper):
         """Purged: never inject dead static vacancies when offline."""
         return []
 
-    async def _enrich_and_verify_item(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Fetches full DOU vacancy body so English remote listings evaluate accurately."""
+    async def _enrich_and_verify_item(
+        self,
+        item: Dict[str, Any],
+        candidate_languages: Optional[List[str]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Fetches full DOU vacancy body so English/language requirements evaluate accurately."""
         html = await self.fetch_html(item["url"], timeout=8.0)
         if not html:
             return item
@@ -97,6 +106,7 @@ class DouScraper(BasePortalScraper):
             description=body_text,
             location_text=loc_meta,
             portal=self.portal_name,
+            candidate_languages=candidate_languages,
         )
         full_desc = f"{sal_txt} | {body_text}".strip(" |") if sal_txt else body_text
         item["is_remote"] = is_remote
@@ -112,6 +122,7 @@ class DouScraper(BasePortalScraper):
         self,
         allow_network: bool = True,
         search_url: Optional[str] = None,
+        candidate_languages: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         if not allow_network:
             return []
@@ -125,7 +136,7 @@ class DouScraper(BasePortalScraper):
         seen_ids: set[str] = set()
         for html in pages:
             if isinstance(html, str) and html:
-                for item in self.parse_html_listings(html):
+                for item in self.parse_html_listings(html, candidate_languages=candidate_languages):
                     if item["external_id"] not in seen_ids:
                         seen_ids.add(item["external_id"])
                         candidates.append(item)
@@ -134,7 +145,7 @@ class DouScraper(BasePortalScraper):
             return []
 
         enriched = await asyncio.gather(
-            *(self._enrich_and_verify_item(c) for c in candidates[:18]),
+            *(self._enrich_and_verify_item(c, candidate_languages=candidate_languages) for c in candidates[:18]),
             return_exceptions=True,
         )
         return [x for x in enriched if isinstance(x, dict)]

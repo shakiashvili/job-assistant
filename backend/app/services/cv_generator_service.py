@@ -30,6 +30,102 @@ _KA_TO_LATIN = {
 }
 
 
+def normalize_contact_href(raw: str, is_email: bool = False) -> str:
+    """Normalizes LinkedIn, GitHub, Portfolio, or Email into an actionable href/mailto URL."""
+    val = (raw or "").strip()
+    if not val:
+        return ""
+    if is_email or ("@" in val and not val.startswith("http")):
+        return val if val.startswith("mailto:") else f"mailto:{val}"
+    if val.startswith(("http://", "https://")):
+        return val
+    return f"https://{val.lstrip('/')}"
+
+
+def group_skills_into_ats_buckets(skills: List[str], cv_language: str = "en") -> List[tuple[str, List[str]]]:
+    """Categorizes genuine candidate skills into 5 structured ATS scanner buckets without fabrication."""
+    buckets = {
+        "auto": [],
+        "lang": [],
+        "api": [],
+        "infra": [],
+        "mgmt": [],
+    }
+    labels = (
+        {
+            "auto": "ტესტ-ავტომატიზაცია და ფრეიმვორქები",
+            "lang": "პროგრამირება და სკრიპტინგი",
+            "api": "API და Backend ვალიდაცია",
+            "infra": "CI/CD და ინფრასტრუქტურა",
+            "mgmt": "მეთოდოლოგიები და ტესტ-მენეჯმენტი",
+        }
+        if cv_language == "ka"
+        else {
+            "auto": "Test Automation & Frameworks",
+            "lang": "Programming & Scripting",
+            "api": "API & Backend Validation",
+            "infra": "CI/CD, Cloud & Infrastructure",
+            "mgmt": "Methodologies & Test Management",
+        }
+    )
+
+    for raw in skills:
+        s = str(raw or "").strip()
+        if not s:
+            continue
+        low = s.lower()
+        if any(k in low for k in ["playwright", "selenium", "cypress", "pytest", "robot framework", "appium", "testng", "junit", "webdriver", "კაპი", "ავტომატ"]):
+            buckets["auto"].append(s)
+        elif low in ("python", "typescript", "javascript", "sql", "bash", "java", "c#", "go", "html", "css") or any(k in low for k in ["python", "typescript", "javascript", "sql", "bash"]):
+            buckets["lang"].append(s)
+        elif any(k in low for k in ["postman", "rest api", "swagger", "openapi", "graphql", "k6", "jmeter", "http", "json", "xml", "chrome devtools", "api"]):
+            buckets["api"].append(s)
+        elif any(k in low for k in ["github actions", "gitlab ci", "ci/cd", "docker", "linux", "git", "jenkins", "kubernetes", "aws", "cloud"]):
+            buckets["infra"].append(s)
+        else:
+            buckets["mgmt"].append(s)
+
+    return [(labels[key], vals) for key, vals in buckets.items() if vals]
+
+
+def _add_docx_hyperlink(paragraph, display_text: str, url: str) -> None:
+    """Inserts a genuine native clickable OOXML hyperlink into a python-docx paragraph."""
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    from docx.opc.constants import RELATIONSHIP_TYPE
+
+    if not url:
+        r = paragraph.add_run(display_text)
+        r.font.size = __import__("docx.shared", fromlist=["Pt"]).Pt(9.5)
+        return
+
+    part = paragraph.part
+    r_id = part.relate_to(url, RELATIONSHIP_TYPE.HYPERLINK, is_external=True)
+
+    hyperlink = OxmlElement("w:hyperlink")
+    hyperlink.set(qn("r:id"), r_id)
+
+    new_run = OxmlElement("w:r")
+    rPr = OxmlElement("w:rPr")
+    color_el = OxmlElement("w:color")
+    color_el.set(qn("w:val"), "0369A1")
+    rPr.append(color_el)
+    underline_el = OxmlElement("w:u")
+    underline_el.set(qn("w:val"), "single")
+    rPr.append(underline_el)
+    sz_el = OxmlElement("w:sz")
+    sz_el.set(qn("w:val"), "19")  # 9.5pt
+    rPr.append(sz_el)
+    new_run.append(rPr)
+
+    t_el = OxmlElement("w:t")
+    t_el.text = display_text
+    new_run.append(t_el)
+
+    hyperlink.append(new_run)
+    paragraph._p.append(hyperlink)
+
+
 def ascii_filename_slug(text: str, default: str = "Item", max_len: int = 24) -> str:
     """Produces clean Latin-ASCII filename slugs (transliterating Georgian script cleanly)."""
     if not text:
@@ -174,9 +270,34 @@ class CVGeneratorService:
         if parsed_md.get("phone"):
             candidate["phone"] = parsed_md["phone"]
 
+        cand_links = dict(candidate.get("links") or {})
+        if skills_md:
+            gh_m = re.search(r"(https?://(?:www\.)?github\.com/[A-Za-z0-9._-]+/?)", skills_md, re.I)
+            li_m = re.search(r"(https?://(?:www\.)?linkedin\.com/in/[A-Za-z0-9._-]+/?)", skills_md, re.I)
+            if gh_m and not cand_links.get("github"):
+                cand_links["github"] = gh_m.group(1).rstrip("/")
+            if li_m and not cand_links.get("linkedin"):
+                cand_links["linkedin"] = li_m.group(1).rstrip("/")
+        candidate["links"] = cand_links
+
         core_skills = gt.get("skills", {}).get("core", []) or parsed_md.get("skills") or []
-        work_history = parsed_md.get("work_history") or gt.get("work_history", [])
+        raw_work_history = parsed_md.get("work_history") or gt.get("work_history", [])
         education = gt.get("education", [])
+
+        # Enforce 100% single-language work history when Georgian CV is explicitly built
+        if cv_language == "ka" and raw_work_history:
+            from .gemini_service import gemini_service as _gs
+            work_history = []
+            for job in raw_work_history:
+                j_copy = dict(job)
+                clean_b = clean_bullets(j_copy.get("highlights"))
+                j_copy["highlights"] = _gs.translate_bullets_to_georgian(clean_b) if clean_b else []
+                r_txt = str(j_copy.get("role") or "")
+                r_txt = r_txt.replace("Software QA Intern", "Software QA სტაჟიორი").replace("QA Intern", "QA სტაჟიორი")
+                j_copy["role"] = r_txt
+                work_history.append(j_copy)
+        else:
+            work_history = raw_work_history
 
         # Order genuine skills so matched ATS keywords appear first (NO FABRICATION)
         matched_lower = {s.lower() for s in matched_skills}
@@ -324,8 +445,9 @@ class CVGeneratorService:
             else str(loc_dict)
         )
         links = candidate.get("links", {}) if isinstance(candidate.get("links"), dict) else {}
-        linkedin = str(links.get("linkedin", ""))
-        github = str(links.get("github", ""))
+        linkedin = str(links.get("linkedin", "")).strip()
+        github = str(links.get("github", "")).strip()
+        portfolio = str(links.get("portfolio", "")).strip()
 
         p_name = doc.add_paragraph()
         p_name.paragraph_format.space_after = Pt(2)
@@ -344,12 +466,35 @@ class CVGeneratorService:
         r_role.font.size = Pt(11.5)
         r_role.font.color.rgb = accent
 
-        contact_parts = [x for x in [email, phone, loc, linkedin, github] if x]
         p_contact = doc.add_paragraph()
         p_contact.paragraph_format.space_after = Pt(8)
-        r_contact = p_contact.add_run("  |  ".join(contact_parts))
-        r_contact.font.size = Pt(9.5)
-        r_contact.font.color.rgb = subtle
+        contact_items: List[tuple[str, str]] = []
+        if email:
+            contact_items.append((email, normalize_contact_href(email, is_email=True)))
+        if phone:
+            contact_items.append((phone, ""))
+        if loc:
+            contact_items.append((loc, ""))
+        if linkedin and "alex-mercer" not in linkedin.lower():
+            contact_items.append((linkedin, normalize_contact_href(linkedin)))
+        elif linkedin:
+            contact_items.append((linkedin, normalize_contact_href(linkedin)))
+        if github:
+            contact_items.append((github, normalize_contact_href(github)))
+        if portfolio:
+            contact_items.append((portfolio, normalize_contact_href(portfolio)))
+
+        for idx, (label, href) in enumerate(contact_items):
+            if idx > 0:
+                sep = p_contact.add_run("  |  ")
+                sep.font.size = Pt(9.5)
+                sep.font.color.rgb = subtle
+            if href:
+                _add_docx_hyperlink(p_contact, label, href)
+            else:
+                rt = p_contact.add_run(label)
+                rt.font.size = Pt(9.5)
+                rt.font.color.rgb = subtle
 
         def add_section_heading(title_text: str) -> None:
             p_h = doc.add_paragraph()
@@ -361,7 +506,7 @@ class CVGeneratorService:
             run.font.color.rgb = accent
 
         lbl_summary = "პროფესიული მიმოხილვა" if is_ka else ("PROFESSIONAL SUMMARY" if cv_style != "recruiter" else f"EXECUTIVE PROFILE — {target_role.upper()}")
-        lbl_skills = "ძირითადი უნარები" if is_ka else ("TECHNICAL SKILLS MATRIX" if cv_style == "ats" else "CORE COMPETENCIES & STACK")
+        lbl_skills = "ტექნიკური კომპეტენციების მატრიცა" if is_ka else ("TECHNICAL SKILLS MATRIX" if cv_style == "ats" else "CORE COMPETENCIES & STACK")
         lbl_exp = "სამუშაო გამოცდილება" if is_ka else "WORK EXPERIENCE"
         lbl_edu = "განათლება და ენები" if is_ka else "EDUCATION & LANGUAGES"
 
@@ -372,11 +517,21 @@ class CVGeneratorService:
             r.font.size = Pt(10)
 
         add_section_heading(lbl_skills)
-        skills_text = ", ".join(display_skills[:24]) if display_skills else "QA Testing, Test Automation, REST API"
-        p_sk = doc.add_paragraph(skills_text)
-        p_sk.paragraph_format.space_after = Pt(4)
-        for r in p_sk.runs:
-            r.font.size = Pt(10)
+        grouped = group_skills_into_ats_buckets(display_skills[:30], cv_language=cv_language)
+        if grouped:
+            for bucket_title, bucket_items in grouped:
+                p_sk = doc.add_paragraph()
+                p_sk.paragraph_format.space_after = Pt(2)
+                rk = p_sk.add_run(f"{bucket_title}: ")
+                rk.bold = True
+                rk.font.size = Pt(9.5)
+                rv = p_sk.add_run(", ".join(bucket_items))
+                rv.font.size = Pt(9.5)
+        else:
+            p_sk = doc.add_paragraph(", ".join(display_skills[:24]) or "QA Testing, Test Automation, REST API")
+            p_sk.paragraph_format.space_after = Pt(4)
+            for r in p_sk.runs:
+                r.font.size = Pt(10)
 
         if work_history:
             add_section_heading(lbl_exp)
@@ -501,7 +656,8 @@ class CVGeneratorService:
         )
 
         full_name = escape(str(candidate.get("full_name", "Candidate")))
-        email = escape(str(candidate.get("email", "candidate@example.com")))
+        raw_email = str(candidate.get("email", "candidate@example.com")).strip()
+        email = escape(raw_email)
         phone = escape(str(candidate.get("phone", "+000 000 0000")))
         loc_dict = candidate.get("location", {})
         loc = escape(
@@ -509,14 +665,35 @@ class CVGeneratorService:
             if isinstance(loc_dict, dict)
             else str(loc_dict)
         )
-        linkedin = escape(str(candidate.get("links", {}).get("linkedin", "linkedin.com/in/alex-mercer-qa")))
+        links = candidate.get("links", {}) if isinstance(candidate.get("links"), dict) else {}
+        raw_linkedin = str(links.get("linkedin", "")).strip()
+        raw_github = str(links.get("github", "")).strip()
+        raw_portfolio = str(links.get("portfolio", "")).strip()
+
+        pdf_links = [
+            f'<link href="{escape(normalize_contact_href(raw_email, is_email=True))}" color="#0369a1"><u>{email}</u></link>',
+            phone,
+            loc,
+        ]
+        if raw_linkedin:
+            pdf_links.append(
+                f'<link href="{escape(normalize_contact_href(raw_linkedin))}" color="#0369a1"><u>{escape(raw_linkedin)}</u></link>'
+            )
+        if raw_github:
+            pdf_links.append(
+                f'<link href="{escape(normalize_contact_href(raw_github))}" color="#0369a1"><u>{escape(raw_github)}</u></link>'
+            )
+        if raw_portfolio:
+            pdf_links.append(
+                f'<link href="{escape(normalize_contact_href(raw_portfolio))}" color="#0369a1"><u>{escape(raw_portfolio)}</u></link>'
+            )
 
         lbl_summary = (
             f"პროფესიული მიმოხილვა ({escape(target_company)})"
             if is_ka
             else f"PROFESSIONAL SUMMARY — TAILORED FOR {escape(target_company.upper())}"
         )
-        lbl_skills = "ძირითადი უნარები და ტექნიკური მატრიცა" if is_ka else "TECHNICAL SKILLS MATRIX"
+        lbl_skills = "ტექნიკური კომპეტენციების მატრიცა" if is_ka else "TECHNICAL SKILLS MATRIX"
         lbl_exp = "სამუშაო გამოცდილება" if is_ka else "WORK EXPERIENCE"
         lbl_edu = "განათლება და სერტიფიკატები" if is_ka else "EDUCATION & CERTIFICATIONS"
         lbl_start = "მზადყოფნა: შეთავაზებიდან 1 კვირაში" if is_ka else "Availability: 1 week after offer"
@@ -527,23 +704,25 @@ class CVGeneratorService:
         role_display = candidate_headline or str(candidate.get("headline") or "QA Automation Engineer & SDET | Playwright • Python • API • CI/CD")
         story.append(Paragraph(f"<b>{full_name}</b>", header_style))
         story.append(Paragraph(escape(role_display), role_style))
-        story.append(
-            Paragraph(
-                f"{email} | {phone} | {loc} | {linkedin} | {lbl_start}",
-                contact_style,
-            )
-        )
+        pdf_links.append(lbl_start)
+        story.append(Paragraph(" | ".join(x for x in pdf_links if x), contact_style))
         story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#0284c7"), spaceAfter=6))
 
         # 2. Summary
         story.append(Paragraph(f"<b>{lbl_summary}</b>", sec_title_style))
         story.append(Paragraph(escape(human_summary), body_style))
 
-        # 3. Technical Skills Matrix
+        # 3. Technical Skills Matrix (grouped by ATS domains)
         story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#cbd5e1"), spaceBefore=4, spaceAfter=4))
         story.append(Paragraph(f"<b>{lbl_skills}</b>", sec_title_style))
-        skills_text = " • ".join(escape(s) for s in display_skills[:20])
-        story.append(Paragraph(skills_text, body_style))
+        grouped_pdf = group_skills_into_ats_buckets(display_skills[:30], cv_language=cv_language)
+        if grouped_pdf:
+            for b_title, b_items in grouped_pdf:
+                items_esc = ", ".join(escape(x) for x in b_items)
+                story.append(Paragraph(f"<b>{escape(b_title)}:</b> {items_esc}", body_style))
+        else:
+            skills_text = " • ".join(escape(s) for s in display_skills[:20])
+            story.append(Paragraph(skills_text, body_style))
 
         # 4. Work Experience
         story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#cbd5e1"), spaceBefore=4, spaceAfter=4))
@@ -597,18 +776,49 @@ class CVGeneratorService:
             if isinstance(loc_dict, dict)
             else str(loc_dict)
         )
-        linkedin = candidate.get("links", {}).get("linkedin", "linkedin.com/in/candidate")
+        links = candidate.get("links", {}) if isinstance(candidate.get("links"), dict) else {}
+        linkedin = str(links.get("linkedin", "")).strip()
+        github = str(links.get("github", "")).strip()
+        portfolio = str(links.get("portfolio", "")).strip()
+
+        html_contact_parts = [
+            f'<a href="{escape(normalize_contact_href(email, is_email=True))}" style="color:#0369a1;">{escape(email)}</a>',
+            escape(phone),
+            escape(loc),
+        ]
+        if linkedin:
+            html_contact_parts.append(
+                f'<a href="{escape(normalize_contact_href(linkedin))}" target="_blank" style="color:#0369a1;">{escape(linkedin)}</a>'
+            )
+        if github:
+            html_contact_parts.append(
+                f'<a href="{escape(normalize_contact_href(github))}" target="_blank" style="color:#0369a1;">{escape(github)}</a>'
+            )
+        if portfolio:
+            html_contact_parts.append(
+                f'<a href="{escape(normalize_contact_href(portfolio))}" target="_blank" style="color:#0369a1;">{escape(portfolio)}</a>'
+            )
+        html_contact_line = " &nbsp;•&nbsp; ".join(x for x in html_contact_parts if x)
 
         lbl_summary = f"პროფესიული მიმოხილვა ({target_company})" if is_ka else f"PROFESSIONAL SUMMARY (TAILORED FOR {target_company.upper()})"
-        lbl_skills = "ძირითადი უნარები და კომპეტენციები" if is_ka else "TECHNICAL SKILLS MATRIX"
+        lbl_skills = "ტექნიკური კომპეტენციების მატრიცა" if is_ka else "TECHNICAL SKILLS MATRIX"
         lbl_exp = "სამუშაო გამოცდილება" if is_ka else "WORK EXPERIENCE"
         lbl_edu = "განათლება და სერტიფიკატები" if is_ka else "EDUCATION & CERTIFICATIONS"
         lbl_start = "მუშაობის დაწყება: შეთავაზებიდან 1 კვირაში" if is_ka else "Availability: 1 week after offer"
 
-        skills_badges = "".join(
-            f'<span style="display:inline-block; background:#f1f5f9; color:#0f172a; border:1px solid #cbd5e1; padding:4px 10px; border-radius:6px; font-size:11px; font-weight:600; margin:0 6px 6px 0;">{s}</span>'
-            for s in display_skills[:20]
-        )
+        grouped_html = group_skills_into_ats_buckets(display_skills[:30], cv_language=cv_language)
+        if grouped_html:
+            skills_badges = "".join(
+                f'<div style="font-size:11.5px; margin-bottom:4px;"><strong>{escape(b_t)}:</strong> '
+                + ", ".join(escape(s) for s in b_vals)
+                + "</div>"
+                for b_t, b_vals in grouped_html
+            )
+        else:
+            skills_badges = "".join(
+                f'<span style="display:inline-block; background:#f1f5f9; color:#0f172a; border:1px solid #cbd5e1; padding:4px 10px; border-radius:6px; font-size:11px; font-weight:600; margin:0 6px 6px 0;">{s}</span>'
+                for s in display_skills[:20]
+            )
 
         exp_blocks = ""
         for job in work_history[:4]:
@@ -668,7 +878,7 @@ class CVGeneratorService:
       <h1 class="name">{full_name}</h1>
       <div class="role">{escape(candidate_headline or str(candidate.get('headline') or 'QA Automation Engineer & SDET | Playwright • Python • API • CI/CD'))}</div>
       <div class="contact">
-        {email} &nbsp;•&nbsp; {phone} &nbsp;•&nbsp; {loc} &nbsp;•&nbsp; {linkedin} &nbsp;•&nbsp; <strong>{lbl_start}</strong>
+        {html_contact_line} &nbsp;•&nbsp; <strong>{lbl_start}</strong>
       </div>
     </div>
 
@@ -719,10 +929,19 @@ class CVGeneratorService:
         links = candidate.get("links", {}) if isinstance(candidate.get("links"), dict) else {}
         cand_linkedin = str(links.get("linkedin") or "").strip()
 
-        lang = cv_language
-        if lang == "auto":
-            ka_chars = len(re.findall(r"[\u10A0-\u10FF]", f"{job_title}\n{description}"))
-            lang = "ka" if ka_chars >= 25 else "en"
+        ka_chars = len(re.findall(r"[\u10A0-\u10FF]", f"{job_title}\n{description}"))
+        is_tech_role = any(
+            kw in f"{job_title}\n{description[:900]}".lower()
+            for kw in ["qa", "quality assurance", "tester", "test", "sdet", "automation", "developer", "engineer", "software", "ტესტ", "ავტომატიზ", "დეველოპ", "პროგრამ"]
+        )
+        cover_lang = "ka" if ka_chars >= 25 else "en"
+        if cv_language == "auto":
+            # Technical roles always generate crisp English CV (no mixed language bullets);
+            # non-technical Georgian roles use 100% Georgian CV. Cover letter follows job posting language.
+            cv_lang = "en" if is_tech_role else cover_lang
+        else:
+            cv_lang = cv_language
+            cover_lang = cv_language if cv_language in ("en", "ka") else cover_lang
 
         req_skills = matcher_service.extract_job_requirements(job_title, description)
         cand_skills = [str(s) for s in (gt.get("skills", {}).get("core") or [])]
@@ -736,7 +955,7 @@ class CVGeneratorService:
             skills_md=skills_md,
             matched_skills=matched,
             missing_skills=missing,
-            cv_language=lang,
+            cv_language=cv_lang,
             candidate_name=cand_name,
         )
 
@@ -750,18 +969,19 @@ class CVGeneratorService:
             motivation_statement=narratives["motivation_statement"],
             dou_motivational_letter=narratives["dou_motivational_letter"],
             skills_md_override=skills_md,
-            cv_language=lang,
+            cv_language=cv_lang,
             cv_style=cv_style,
         )
 
-        # Clean subject & sanitize company (never address 'საქართველოს მასშტაბით-ის გუნდს')
+        # Clean subject & sanitize company (never address 'საქართველოს მასშტაბით-ის გუნდს' or navigation text)
         real_company = sanitize_company_name(company, target_email=target_email, fallback="")
         if email_subject_template and "qa automation engineer - [name]" not in email_subject_template.lower():
             clean_subject = re.sub(r"\[(?:your\s+)?name\]", cand_name, email_subject_template, flags=re.I).strip()
         else:
-            clean_subject = f"{job_title} — {cand_name}" if lang == "ka" else f"Application for {job_title} — {cand_name}"
+            clean_subject = f"{job_title} — {cand_name}" if cover_lang == "ka" else f"Application for {job_title} — {cand_name}"
 
-        contact_footer = "\n".join(x for x in [cand_name, cand_email, cand_phone, cand_linkedin] if x)
+        # Cover letter sign-off excludes candidate's own email (already in sender header)
+        contact_footer = "\n".join(x for x in [cand_name, cand_phone, cand_linkedin] if x)
         skills_highlight = ", ".join(matched[:6]) if matched else ", ".join(cand_skills[:6])
 
         # Extract authentic prior companies & experience years from ground truth (never invent employers)
@@ -773,13 +993,13 @@ class CVGeneratorService:
         companies_phrase = ", ".join(work_companies[:3])
         exp_years = gt.get("parsed_skills_taxonomy", {}).get("years_of_experience") or 1.5
 
-        if lang == "ka":
+        if cover_lang == "ka":
             salutation = f"მოგესალმებით, {real_company}-ის გუნდს," if real_company else "მოგესალმებით, გუნდს,"
             hook_company = f"{real_company}-ში" if real_company else "თქვენს კომპანიაში"
             proof_para = (
-                f"{companies_phrase}-ში მუშაობისას პრაქტიკულად გამოვიყენე {skills_highlight} — ვქმნიდი ავტომატიზებულ რეგრესიულ ტესტებს, ვამოწმებდი REST API კონტრაქტებსა და მონაცემთა მთლიანობას, რამაც მნიშვნელოვნად შეამცირა გამოშვებების შემოწმების დრო."
+                f"{companies_phrase}-ში მუშაობისას პრაქტიკულად გამოვიყენე {skills_highlight} — შევიმუშავე ავტომატიზებული რეგრესიული ტესტები, ვამოწმებდი REST API კონტრაქტებსა და მონაცემთა მთლიანობას, რამაც მნიშვნელოვნად დააჩქარა გამოშვებების ვალიდაცია."
                 if companies_phrase
-                else f"ჩემს ყოველდღიურ საინჟინრო პრაქტიკაში ({skills_highlight}) ვფოკუსირდები სტაბილურ ავტომატიზაციაზე, API ვალიდაციაზე და ხარისხის უწყვეტ კონტროლზე."
+                else f"ჩემს საინჟინრო პრაქტიკაში ({skills_highlight}) ვფოკუსირდები სტაბილურ ავტომატიზაციაზე, API კონტრაქტების შემოწმებასა და ხარვეზების ადრეულ აღმოჩენაზე."
             )
             cta_company = f"{real_company}-ის" if real_company else "თქვენი პროდუქტის"
             cover_letter = (
@@ -794,16 +1014,16 @@ class CVGeneratorService:
             salutation = f"Dear {real_company} Hiring Team," if real_company else "Dear Hiring Team,"
             target_phrase = f"at {real_company}" if real_company else "with your engineering team"
             proof_para = (
-                f"Across my QA engineering roles at {companies_phrase}, I applied {skills_highlight} to automate regression coverage, validate REST API contracts, and verify database integrity—helping engineering teams ship reliable releases faster."
+                f"Across my QA engineering roles at {companies_phrase}, I applied {skills_highlight} to automate regression suites, validate REST API contracts, and verify backend integrity—cutting manual release verification time while preventing production regressions."
                 if companies_phrase
-                else f"In my hands-on QA work across {skills_highlight}, I focus on pragmatic automated coverage, API verification, and catching critical regressions early before production."
+                else f"In my hands-on QA engineering work spanning {skills_highlight}, I engineer automated regression coverage, validate REST API contracts, and triage critical defects before release."
             )
-            cta_team = f"{real_company}'s" if real_company else "your team's"
+            cta_team = f"{real_company}'s" if real_company else "your engineering team's"
             cover_letter = (
                 f"{salutation}\n\n"
-                f"I am excited to apply for the {job_title} position {target_phrase}. With {exp_years:g} years of practical QA engineering experience spanning {skills_highlight}, I can add value quickly.\n\n"
+                f"I am applying for the {job_title} role {target_phrase}. With {exp_years:g} years of hands-on QA engineering experience in {skills_highlight}, I can contribute from sprint one.\n\n"
                 f"{proof_para}\n\n"
-                f"I would welcome the chance to contribute to {cta_team} test stability and release quality. My tailored resume ({cv_res['docx_filename']}) is attached, and I am available to start 1 week after offer.\n\n"
+                f"I welcome the opportunity to strengthen {cta_team} release confidence and test stability. My tailored CV ({cv_res['docx_filename']}) is attached, and I am available 1 week after offer.\n\n"
                 f"Best regards,\n{contact_footer}"
             )
 
@@ -813,11 +1033,13 @@ class CVGeneratorService:
             "recipient_email": target_email or "",
             "subject": clean_subject,
             "cover_letter": cover_letter,
-            "cv_language": lang,
+            "cv_language": cv_lang,
             "docx_filename": cv_res["docx_filename"],
             "docx_url": cv_res["docx_url"],
             "pdf_filename": cv_res["pdf_filename"],
             "pdf_url": cv_res["pdf_url"],
+            "docx_path": cv_res["docx_path"],
+            "pdf_path": cv_res["pdf_path"],
         }
 
 

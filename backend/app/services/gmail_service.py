@@ -2,11 +2,14 @@ import base64
 import email.mime.application
 import email.mime.multipart
 import email.mime.text
+import imaplib
 import logging
+import re
 import smtplib
 import ssl
+import time
 from pathlib import Path
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 from urllib.parse import urlencode
 
 from ..config import (
@@ -98,31 +101,186 @@ class GmailService:
         subject: str,
         body_text: str,
         pdf_path: Optional[str] = None,
+        attachment_paths: Optional[List[str]] = None,
     ) -> email.mime.multipart.MIMEMultipart:
-        """Constructs an RFC 2822 compliant MIME message with PDF resume attachment."""
+        """Constructs an RFC 2822 compliant MIME message with Word (.docx) / PDF resume attachments."""
         msg = email.mime.multipart.MIMEMultipart()
-        msg["From"] = sender_email
-        msg["To"] = to_email
+        if sender_email:
+            msg["From"] = sender_email
+        if to_email:
+            msg["To"] = to_email
         msg["Subject"] = subject
 
         # Attach text body
         msg.attach(email.mime.text.MIMEText(body_text, "plain", "utf-8"))
 
-        # Attach PDF if available
+        all_files: List[str] = []
         if pdf_path:
-            p = Path(pdf_path)
+            all_files.append(pdf_path)
+        if attachment_paths:
+            for ap in attachment_paths:
+                if ap and ap not in all_files:
+                    all_files.append(ap)
+
+        for fpath in all_files:
+            p = Path(fpath)
             if not p.is_absolute():
                 p = GENERATED_RESUMES_DIR / p.name
             if p.exists():
                 with open(p, "rb") as f:
-                    part = email.mime.application.MIMEApplication(f.read(), _subtype="pdf")
+                    ext = p.suffix.lower()
+                    subtype = "pdf" if ext == ".pdf" else (
+                        "vnd.openxmlformats-officedocument.wordprocessingml.document" if ext == ".docx" else "octet-stream"
+                    )
+                    part = email.mime.application.MIMEApplication(f.read(), _subtype=subtype)
                     part.add_header("Content-Disposition", "attachment", filename=p.name)
                     msg.attach(part)
-                logger.info(f"Attached PDF resume '{p.name}' to outgoing MIME email.")
+                logger.info(f"Attached resume '{p.name}' to outgoing MIME email.")
             else:
-                logger.warning(f"Resume PDF '{pdf_path}' not found on disk; sending email without attachment.")
+                logger.warning(f"Resume attachment '{fpath}' not found on disk; skipping attachment.")
 
         return msg
+
+    def _find_gmail_drafts_mailbox(self, imap_conn: imaplib.IMAP4_SSL) -> str:
+        """Detects the localized Gmail Drafts IMAP mailbox (handles [Gmail]/Drafts, [Google Mail]/Drafts, etc.)."""
+        try:
+            status, boxes = imap_conn.list()
+            if status == "OK" and boxes:
+                for raw in boxes:
+                    line = raw.decode("utf-8", errors="ignore") if isinstance(raw, bytes) else str(raw)
+                    if "\\Drafts" in line:
+                        m = re.search(r'"([^"]+)"\s*$', line)
+                        if m:
+                            return f'"{m.group(1)}"' if " " in m.group(1) else m.group(1)
+                        last_tok = line.strip().split()[-1]
+                        if last_tok:
+                            return last_tok
+        except Exception as e:
+            logger.debug(f"IMAP LIST fallback: {e}")
+        return '"[Gmail]/Drafts"'
+
+    def create_gmail_draft(
+        self,
+        recipient_email: str,
+        subject: str,
+        body_text: str,
+        attachment_paths: Optional[List[str]] = None,
+        user: Optional[User] = None,
+    ) -> Dict[str, Any]:
+        """
+        Creates a real Gmail Draft WITH the tailored .docx/.pdf resume already attached inside Gmail Drafts!
+        1. Uses Gmail API drafts().create if Google OAuth token is connected.
+        2. Uses Gmail IMAP (imap.gmail.com:993) with GMAIL_USER + GMAIL_APP_PASSWORD from backend/.env.
+        Returns {draft_created, attached_files, drafts_url, mode_used, error}.
+        """
+        resolved_files: List[str] = []
+        for fpath in (attachment_paths or []):
+            p = Path(fpath)
+            if not p.is_absolute():
+                p = GENERATED_RESUMES_DIR / p.name
+            if p.exists():
+                resolved_files.append(str(p))
+
+        # Path 1: Connected Google OAuth API
+        if user and user.gmail_oauth_token and not user.gmail_oauth_token.get("simulated") and self.is_configured():
+            try:
+                from google.oauth2.credentials import Credentials
+                from googleapiclient.discovery import build
+
+                td = user.gmail_oauth_token
+                creds = Credentials(
+                    token=td.get("access_token"),
+                    refresh_token=td.get("refresh_token"),
+                    token_uri="https://oauth2.googleapis.com/token",
+                    client_id=GOOGLE_CLIENT_ID,
+                    client_secret=GOOGLE_CLIENT_SECRET,
+                    scopes=GMAIL_SCOPES,
+                )
+                service = build("gmail", "v1", credentials=creds)
+                mime_msg = self.build_mime_message(
+                    sender_email=user.email,
+                    to_email=recipient_email,
+                    subject=subject,
+                    body_text=body_text,
+                    attachment_paths=resolved_files,
+                )
+                raw_b64 = base64.urlsafe_b64encode(mime_msg.as_bytes()).decode("utf-8")
+                draft = service.users().drafts().create(userId="me", body={"message": {"raw": raw_b64}}).execute()
+                return {
+                    "draft_created": True,
+                    "draft_id": draft.get("id"),
+                    "attached_files": [Path(x).name for x in resolved_files],
+                    "drafts_url": "https://mail.google.com/mail/u/0/#drafts",
+                    "mode_used": "gmail_oauth_api",
+                    "error": None,
+                }
+            except Exception as oe:
+                logger.warning(f"OAuth draft creation fell back to IMAP: {oe}")
+
+        # Path 2: Gmail IMAP (uses the same GMAIL_USER + GMAIL_APP_PASSWORD as SMTP)
+        cfg = get_smtp_config()
+        if not cfg.get("configured"):
+            return {
+                "draft_created": False,
+                "draft_id": None,
+                "attached_files": [Path(x).name for x in resolved_files],
+                "drafts_url": None,
+                "mode_used": "browser_compose_fallback",
+                "error": "GMAIL_USER / GMAIL_APP_PASSWORD not configured in backend/.env; opened compose window with CV downloaded.",
+            }
+
+        sender_addr = cfg["user"]
+        mime_msg = self.build_mime_message(
+            sender_email=sender_addr,
+            to_email=recipient_email,
+            subject=subject,
+            body_text=body_text,
+            attachment_paths=resolved_files,
+        )
+        try:
+            ctx = ssl.create_default_context()
+            with imaplib.IMAP4_SSL("imap.gmail.com", 993, ssl_context=ctx, timeout=14) as imap_conn:
+                imap_conn.login(cfg["user"], cfg["password"])
+                drafts_box = self._find_gmail_drafts_mailbox(imap_conn)
+                res_status, res_data = imap_conn.append(
+                    drafts_box,
+                    "\\Draft",
+                    imaplib.Time2Internaldate(time.time()),
+                    mime_msg.as_bytes(),
+                )
+                if res_status != "OK":
+                    raise RuntimeError(f"IMAP APPEND returned {res_status}: {res_data}")
+            logger.info(f"Created real Gmail Draft via IMAP with attachments {[Path(x).name for x in resolved_files]} for {mask_email(sender_addr)}.")
+            return {
+                "draft_created": True,
+                "draft_id": "imap-draft",
+                "attached_files": [Path(x).name for x in resolved_files],
+                "drafts_url": "https://mail.google.com/mail/u/0/#drafts",
+                "mode_used": "gmail_imap_drafts",
+                "error": None,
+            }
+        except imaplib.IMAP4.error as ie:
+            err = f"Gmail IMAP rejected credentials or IMAP is disabled in Gmail settings: {ie}"
+            logger.warning(err)
+            return {
+                "draft_created": False,
+                "draft_id": None,
+                "attached_files": [Path(x).name for x in resolved_files],
+                "drafts_url": None,
+                "mode_used": "browser_compose_fallback",
+                "error": err,
+            }
+        except Exception as e:
+            err = f"Gmail IMAP draft creation error: {e}"
+            logger.warning(err)
+            return {
+                "draft_created": False,
+                "draft_id": None,
+                "attached_files": [Path(x).name for x in resolved_files],
+                "drafts_url": None,
+                "mode_used": "browser_compose_fallback",
+                "error": err,
+            }
 
     def dispatch_email(
         self,

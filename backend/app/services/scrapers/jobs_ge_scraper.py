@@ -125,19 +125,25 @@ class JobsGeScraper(BasePortalScraper):
         )
 
         channel, target_email, email_subj = parse_contact_method_and_email(clean_text, raw_html)
-        # Extract authentic company name from detail page client anchor or 'მომწოდებელი:' row
+        # Extract authentic company name: prefer 'მომწოდებელი:' label FIRST, then non-navigation client links, then list-row company
         det_company = ""
-        if raw_html:
-            soup_det = self.make_soup(raw_html)
-            client_a = soup_det.select_one("td.dtable a[href*='view=client'], .dtable a[href*='view=client'], a[href*='client=']")
-            if client_a and client_a.get_text(" ", strip=True):
-                det_company = client_a.get_text(" ", strip=True)
-        if not det_company:
-            comp_m = re.search(r"მომწოდებელი:\s*([^\n<]{2,60}?)(?:\s+გამოქვეყნდა|\s*$)", clean_text)
-            if comp_m:
-                det_company = comp_m.group(1).strip()
+        comp_m = re.search(
+            r"მომწოდებელი:\s*([^\n<]{2,70}?)(?:\s+(?:გამოქვეყნდა|ბოლო\s+ვადა)|[\r\n]|$)",
+            clean_text,
+        )
+        if comp_m:
+            det_company = sanitize_company_name(comp_m.group(1).strip(), target_email=target_email, fallback="")
 
-        resolved_comp = sanitize_company_name(det_company or item.get("company"), target_email=target_email, fallback="კომპანია (Jobs.ge)")
+        if not det_company and raw_html:
+            soup_det = self.make_soup(raw_html)
+            for client_a in soup_det.select("td.dtable a[href*='view=client'], .dtable a[href*='view=client'], a[href*='client=']"):
+                cand = sanitize_company_name(client_a.get_text(" ", strip=True), target_email=target_email, fallback="")
+                if cand:
+                    det_company = cand
+                    break
+
+        table_company = sanitize_company_name(item.get("company"), target_email=target_email, fallback="")
+        resolved_comp = det_company or table_company or sanitize_company_name(None, target_email=target_email, fallback="კომპანია (Jobs.ge)")
         item["company"] = resolved_comp
 
         item["channel"] = channel

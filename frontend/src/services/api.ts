@@ -251,6 +251,12 @@ export async function prepareJobEmailPackage(
   docx_url: string;
   pdf_filename: string;
   pdf_url: string;
+  gmail_draft_saved?: boolean;
+  gmail_draft_id?: string | null;
+  gmail_drafts_url?: string | null;
+  attached_files?: string[];
+  draft_mode_used?: string;
+  draft_error?: string | null;
 }> {
   const res = await fetch(`${API_BASE}/jobs/${jobId}/prepare-email-package?cv_language=${encodeURIComponent(cvLanguage)}`, {
     method: 'POST',

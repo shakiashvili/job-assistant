@@ -10,6 +10,12 @@ logger = logging.getLogger(__name__)
 _COMPANY_LOCATION_BLACKLIST = {
     "საქართველოს მასშტაბით",
     "მთელი საქართველო",
+    "ამ ორგანიზაციის ყველა განცხადება",
+    "ყველა ვაკანსია",
+    "ამოსაბეჭდი ვერსია",
+    "all announcements of this organization",
+    "printable version",
+    "all vacancies",
     "თბილისი",
     "ბათუმი",
     "ქუთაისი",
@@ -119,17 +125,21 @@ def evaluate_remote_and_language_gate(
     description: str,
     location_text: str = "Remote",
     portal: str = "dou.ua",
+    candidate_languages: Optional[List[str]] = None,
 ) -> Tuple[bool, str, str, List[str]]:
     """
-    Evaluates a scraped vacancy against the Mandatory Remote & Local-Language Gate:
+    Evaluates a scraped vacancy against the Remote & Spoken-Language Gate:
     Returns:
       (is_remote, status, filter_out_reason, detected_languages)
-    - For dou.ua / djinni.co / justjoin.it:
-      1. Vacancies must allow remote work / relocation.
-      2. Checks title + actual job description (excluding portal UI city metadata) for
-         mandatory Ukrainian, Russian, or Polish fluency requirements.
-      3. Only accepts positions where English is the working language.
+    - Supports dynamic unlocking via `candidate_languages` from `skills.md`:
+      If the vacancy requires Ukrainian, Russian, or Polish, allow it when the candidate
+      explicitly lists that language in `skills.md`; otherwise filter it out.
     """
+    cand_norm = {str(c).lower().strip() for c in (candidate_languages or ["English", "Georgian"])}
+    knows_ukrainian = any(k in cand_norm for k in ("ukrainian", "uk", "ua", "українська", "უკრაინული"))
+    knows_russian = any(k in cand_norm for k in ("russian", "ru", "русский", "რუსული"))
+    knows_polish = any(k in cand_norm for k in ("polish", "pl", "polski", "польский", "პოლონური"))
+
     body_only = f"{title}\n{description}".lower()
     combined = f"{title}\n{description}\n{location_text}".lower()
     langs_detected: List[str] = []
@@ -140,17 +150,26 @@ def evaluate_remote_and_language_gate(
     has_slavic_keyword = any(re.search(pat, body_only, re.IGNORECASE) for pat in SLAVIC_LANGUAGE_REQUIREMENT_PATTERNS)
     has_polish_keyword = any(re.search(pat, body_only, re.IGNORECASE) for pat in POLISH_LANGUAGE_REQUIREMENT_PATTERNS)
 
-    # Measure Cyrillic density on actual job title + body (NOT portal Ukrainian city metadata lists)
+    # Measure Cyrillic & Polish density on actual job title + body (NOT portal UI city chrome)
     cyrillic_chars = len(re.findall(r"[а-яА-ЯіїєґІЇЄҐ]", f"{title}\n{description}"))
     polish_diacritics = len(re.findall(r"[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]", f"{title}\n{description}"))
 
+    has_uk_markers = bool(
+        re.search(r"[іїєґІЇЄҐ]", description)
+        or any(w in body_only for w in ["україн", "ukrainian", "вільно", "досвід", "вимоги", "тестуван"])
+    )
+    has_ru_markers = bool(
+        re.search(r"[ыэъёЫЭЪЁ]", f"{title}\n{description}")
+        or any(w in body_only for w in ["русск", "russian", "разговорн", "опыт", "знание", "требования", "тестировани"])
+    )
+
     if cyrillic_chars > 35 or has_slavic_keyword:
-        if any(w in body_only for w in ["україн", "ukrainian", "вільно"]) or re.search(r"[іїєґІЇЄҐ]", description):
+        if has_uk_markers:
             langs_detected.append("Ukrainian")
-        if any(w in body_only for w in ["русск", "russian", "разговорн"]):
+        if has_ru_markers or (portal == "headhunter.ge" and not has_uk_markers and cyrillic_chars > 35):
             langs_detected.append("Russian")
         if "Ukrainian" not in langs_detected and "Russian" not in langs_detected:
-            langs_detected.append("Ukrainian")
+            langs_detected.append("Russian" if portal == "headhunter.ge" else "Ukrainian")
 
     if portal == "justjoin.it" and (has_polish_keyword or polish_diacritics >= 12):
         langs_detected.append("Polish")
@@ -159,10 +178,10 @@ def evaluate_remote_and_language_gate(
         langs_detected.append("English")
 
     is_office_only = any(
-        w in combined for w in ["office only", "on-site only", "onsite only", "тільки офіс", "only office", "stacjonarnie"]
+        w in combined for w in ["office only", "on-site only", "onsite only", "тільки офіс", "только офис", "only office", "stacjonarnie"]
     )
     is_remote = not is_office_only and any(
-        w in combined for w in ["remote", "віддалено", "zdalnie", "relocate", "relocation", "anywhere", "worldwide", "abroad", "tbilisi", "georgia"]
+        w in combined for w in ["remote", "віддалено", "удален", "удалён", "zdalnie", "relocate", "relocation", "anywhere", "worldwide", "abroad", "tbilisi", "georgia"]
     )
 
     loc_lower = (location_text or "").lower()
@@ -178,36 +197,40 @@ def evaluate_remote_and_language_gate(
         or ("ukraine" in loc_lower and not any(w in loc_lower for w in ["worldwide", "europe", "eu", "global", "abroad", "georgia", "relocat", "other countries", "віддалено"]))
     )
 
-    if portal in ("dou.ua", "djinni.co", "justjoin.it"):
-        if has_slavic_keyword or "Ukrainian" in langs_detected or "Russian" in langs_detected:
+    if portal in ("dou.ua", "djinni.co", "justjoin.it", "headhunter.ge"):
+        requires_uk = "Ukrainian" in langs_detected
+        requires_ru = "Russian" in langs_detected
+        requires_pl = "Polish" in langs_detected and ("english" not in body_only or polish_diacritics >= 15)
+
+        if requires_uk and not knows_ukrainian and not (requires_ru and knows_russian):
             return (
                 is_remote,
                 "FILTERED_OUT",
-                "Mandatory local Slavic language requirement (Requires local language)",
+                "Mandatory Ukrainian language requirement (Requires local language — add Ukrainian in skills.md to unlock)",
                 langs_detected,
             )
-        if "Polish" in langs_detected and "english" not in body_only:
+        if requires_ru and not knows_russian and not (requires_uk and knows_ukrainian):
             return (
                 is_remote,
                 "FILTERED_OUT",
-                "Mandatory Polish language requirement (Requires local language)",
+                "Mandatory Russian language requirement (Requires local language — add Russian in skills.md to unlock)",
                 langs_detected,
             )
-        if "Polish" in langs_detected and polish_diacritics >= 15:
+        if requires_pl and not knows_polish:
             return (
                 is_remote,
                 "FILTERED_OUT",
-                "Job description written in Polish (Requires local language)",
+                "Mandatory Polish language requirement (Requires local language — add Polish in skills.md to unlock)",
                 langs_detected,
             )
-        if ukraine_restricted and not ("global remote" in combined or "remote worldwide" in combined):
+        if portal != "headhunter.ge" and ukraine_restricted and not ("global remote" in combined or "remote worldwide" in combined):
             return (
                 False,
                 "FILTERED_OUT",
                 "Location Gate: Restricted to Ukraine-based candidates",
                 langs_detected,
             )
-        if not is_remote:
+        if portal in ("dou.ua", "djinni.co", "justjoin.it") and not is_remote:
             return (
                 False,
                 "FILTERED_OUT",
@@ -233,7 +256,7 @@ class BasePortalScraper:
         "Accept-Language": "en-US,en;q=0.9,ka;q=0.8",
     }
 
-    async def fetch_html(self, url: str, timeout: float = 6.0) -> Optional[str]:
+    async def fetch_html(self, url: str, timeout: float = 10.0) -> Optional[str]:
         """Fetches HTML from a URL with polite concurrency rate limiting and retry logic."""
         for attempt in range(1, self.max_retries + 1):
             try:

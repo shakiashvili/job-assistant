@@ -255,3 +255,164 @@ def test_action_plan_generation_includes_docs_and_tutorials():
     first_ms = plans[0]["milestones"][0]
     assert first_ms.get("resource_url", "").startswith("http")
     assert first_ms.get("tutorial_url", "").startswith("http")
+
+
+def test_jobsge_nav_link_company_blocked_djinni_clean_title_and_salary_to_700():
+    """Ensures 'ამ ორგანიზაციის ყველა განცხადება' never overwrites company names and Djinni 'to $700' parses cleanly."""
+    from app.services.scrapers.base_scraper import sanitize_company_name
+
+    assert sanitize_company_name("ამ ორგანიზაციის ყველა განცხადება", target_email="hr@a1qa.com") == "a1qa".capitalize() or sanitize_company_name("ამ ორგანიზაციის ყველა განცხადება", fallback="K") == "K"
+    assert sanitize_company_name("ამ ორგანიზაციის ყველა განცხადება", fallback="Fallback") == "Fallback"
+
+    dirty_dj_html = """
+    <div class="job-item">
+      <a class="job_item__header-link" href="/jobs/749999-trainee-manual-qa/">
+        <h2 class="job-item__position">Trainee/Junior Manual QA Engineer</h2>
+        <span class="mr-2">SoftPlus Ukraine</span>
+        <span>Responds Quickly</span>
+        <span>to $700</span>
+      </a>
+      <a href="/jobs/company-softplus-123/">SoftPlus Ukraine</a>
+      <div class="fw-medium">Full Remote</div>
+    </div>
+    """
+    parsed = djinni_scraper.parse_html_listings(dirty_dj_html)
+    assert len(parsed) == 1
+    assert parsed[0]["title"] == "Trainee/Junior Manual QA Engineer"
+    assert "Responds Quickly" not in parsed[0]["title"]
+    assert "$700" not in parsed[0]["title"]
+    assert "SoftPlus" in parsed[0]["company"]
+
+    sal = salary_service.extract_vacancy_salary(parsed[0]["title"], parsed[0]["description_raw"])
+    assert sal["min_salary"] == 700.0
+    assert sal["max_salary"] == 700.0
+    assert sal["currency"] == "USD"
+
+
+def test_language_skill_gate_unlocks_ua_ru_pl_and_headhunter_parser():
+    """Verifies UA/RU/PL jobs pass ONLY when candidate's skills.md includes that language, plus HeadHunter.ge parser."""
+    from app.services.scrapers.headhunter_scraper import headhunter_scraper
+
+    # Ukrainian job: blocked without Ukrainian, allowed when Ukrainian in skills.md
+    _, st_no_uk, _, _ = evaluate_remote_and_language_gate(
+        title="Manual QA Engineer",
+        description="Віддалена робота. Вимоги: досвід тестування API, Postman, вільно володієте українською.",
+        location_text="Київ, віддалено",
+        portal="dou.ua",
+        candidate_languages=["English", "Georgian"],
+    )
+    assert st_no_uk == "FILTERED_OUT"
+
+    _, st_with_uk, _, _ = evaluate_remote_and_language_gate(
+        title="Manual QA Engineer",
+        description="Віддалена робота. Вимоги: досвід тестування API, Postman, вільно володієте українською.",
+        location_text="Київ, віддалено",
+        portal="dou.ua",
+        candidate_languages=["English", "Georgian", "Ukrainian"],
+    )
+    assert st_with_uk == "DISCOVERED"
+
+    # Russian HeadHunter.ge job: blocked without Russian, allowed with Russian
+    _, st_no_ru, _, _ = evaluate_remote_and_language_gate(
+        title="QA Engineer",
+        description="Требования: опыт тестирования веб-приложений и REST API от 1 года, знание SQL и Postman.",
+        location_text="Тбилиси",
+        portal="headhunter.ge",
+        candidate_languages=["English", "Georgian"],
+    )
+    assert st_no_ru == "FILTERED_OUT"
+
+    _, st_with_ru, _, _ = evaluate_remote_and_language_gate(
+        title="QA Engineer",
+        description="Требования: опыт тестирования веб-приложений и REST API от 1 года, знание SQL и Postman.",
+        location_text="Тбилиси",
+        portal="headhunter.ge",
+        candidate_languages=["English", "Georgian", "Russian"],
+    )
+    assert st_with_ru == "DISCOVERED"
+
+    # Polish JustJoin job: allowed when Polish in skills.md
+    _, st_with_pl, _, _ = evaluate_remote_and_language_gate(
+        title="Tester manualny",
+        description="Model pracy: remote. Poszukujemy doświadczonego Testera Manualnego. Długofalowa współpraca.",
+        location_text="Warsaw, Remote",
+        portal="justjoin.it",
+        candidate_languages=["English", "Polish"],
+    )
+    assert st_with_pl == "DISCOVERED"
+
+    # HeadHunter.ge card parser
+    hh_html = """
+    <div data-qa="vacancy-serp__vacancy">
+      <a data-qa="serp-item__title" href="https://tbilisi.headhunter.ge/vacancy/123456789?from=serp">Software QA Engineer</a>
+      <a data-qa="vacancy-serp__vacancy-employer" href="/employer/555">Itransition Software Georgia LLC</a>
+      <span data-qa="vacancy-serp__vacancy-address">Тбилиси</span>
+    </div>
+    """
+    hh_parsed = headhunter_scraper.parse_html_listings(hh_html)
+    assert len(hh_parsed) == 1
+    assert hh_parsed[0]["portal"] == "headhunter.ge"
+    assert hh_parsed[0]["external_id"] == "hh-123456789"
+    assert hh_parsed[0]["company"] == "Itransition Software Georgia LLC"
+
+
+def test_clickable_docx_hyperlinks_english_tech_cv_no_email_footer_and_mime_attachment():
+    """Verifies tech role auto-language -> EN CV, clickable GitHub/LinkedIn OOXML links in .docx, no email in CL footer, and MIME .docx attach."""
+    import zipfile
+    from app.services.cv_generator_service import cv_generator_service
+    from app.services.gmail_service import gmail_service
+
+    init_db()
+    client.post("/api/profile/upload-skills", data={
+        "content": (
+            "# Giorgi Test — QA Automation Engineer\n"
+            "Email: candidate@example.com | Phone: +995 555 112233\n"
+            "GitHub: https://github.com/testqa | LinkedIn: https://linkedin.com/in/testqa\n\n"
+            "## Core Skills\n"
+            "- Playwright, Python, PyTest, TestRail, REST API, Docker\n\n"
+            "## Work Experience\n"
+            "### Software QA Intern | Exactpro Systems\n"
+            "*September 2023 – January 2024*\n"
+            "- Validated financial calculation rules against benchmark specifications.\n"
+        ),
+        "run_live_scrape": "false",
+    })
+
+    # auto language on Georgian QA tech listing -> crisp English CV + Georgian cover letter + no candidate email in footer
+    pkg = cv_generator_service.prepare_email_application_package(
+        job_title="Manual QA სტაჟიორი",
+        company="GenofIT",
+        description="ვეძებთ მანუალ QA სტაჟიორს. მოთხოვნები: Manual Testing, Test Cases, Jira.",
+        portal="jobs.ge",
+        target_email="hr@genofit.tech",
+        cv_language="auto",
+        cv_style="tailored",
+    )
+    assert pkg["cv_language"] == "en"
+    assert "candidate@example.com" not in pkg["cover_letter"]
+    assert "მოგესალმებით, GenofIT-ის გუნდს" in pkg["cover_letter"]
+
+    # Check Word .docx contains clickable OOXML hyperlink targets
+    with zipfile.ZipFile(pkg["docx_path"], "r") as zf:
+        rels_xml = zf.read("word/_rels/document.xml.rels").decode("utf-8", errors="ignore")
+        doc_xml = zf.read("word/document.xml").decode("utf-8", errors="ignore")
+    assert "github.com/testqa" in rels_xml
+    assert "linkedin.com/in/testqa" in rels_xml
+    assert "<w:hyperlink" in doc_xml
+
+    # Check MIME builder attaches .docx cleanly for Gmail Drafts
+    mime_msg = gmail_service.build_mime_message(
+        sender_email="sender@example.com",
+        to_email="hr@genofit.tech",
+        subject=pkg["subject"],
+        body_text=pkg["cover_letter"],
+        attachment_paths=[pkg["docx_path"]],
+    )
+    filenames = [part.get_filename() for part in mime_msg.walk() if part.get_filename()]
+    assert pkg["docx_filename"] in filenames
+
+    # AI QA roadmap must NOT falsely skip 'AI' just because candidate has 'TestRail'
+    ai_res = client.post("/api/profile/generate-action-plan")
+    assert ai_res.status_code == 200
+    plan_titles = [p["skill_name"] for p in ai_res.json()]
+    assert any("AI" in t for t in plan_titles)

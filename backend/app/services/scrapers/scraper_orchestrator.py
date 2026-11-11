@@ -14,16 +14,17 @@ from .hr_ge_scraper import hr_ge_scraper
 from .dou_scraper import dou_scraper
 from .djinni_scraper import djinni_scraper
 from .justjoin_scraper import justjoin_scraper
+from .headhunter_scraper import headhunter_scraper
 
 logger = logging.getLogger(__name__)
 
 
 class ScraperOrchestrator:
     """
-    Coordinates live role-based scraping across Jobs.ge, HR.ge, DOU.ua, Djinni.co, and JustJoin.it:
+    Coordinates live role-based scraping across Jobs.ge, HR.ge, HeadHunter.ge, DOU.ua, Djinni.co, and JustJoin.it:
     1. Builds role-specific search URLs directly from the uploaded CandidateProfile (skills.md).
     2. Deduplicates against JobPosting by (portal, external_id) and (url).
-    3. Applies Mandatory Remote & Slavic/Local-Language Gates on international portals.
+    3. Dynamically unlocks Ukrainian, Russian, or Polish roles when listed in skills.md languages.
     4. Enforces Domain Gate, Seniority Gate, & Live Link Content Health Check.
     5. Extracts ONLY explicitly stated salaries without fabricating missing pay figures.
     """
@@ -31,6 +32,7 @@ class ScraperOrchestrator:
     SCRAPER_MAP = {
         "jobs.ge": jobs_ge_scraper,
         "hr.ge": hr_ge_scraper,
+        "headhunter.ge": headhunter_scraper,
         "dou.ua": dou_scraper,
         "djinni.co": djinni_scraper,
         "justjoin.it": justjoin_scraper,
@@ -53,6 +55,7 @@ class ScraperOrchestrator:
             ).first()
             parsed_skills = profile.parsed_skills if profile else {}
             headline = parsed_skills.get("headline", "") if isinstance(parsed_skills, dict) else ""
+            cand_langs = parsed_skills.get("spoken_languages", ["English", "Georgian"]) if isinstance(parsed_skills, dict) else ["English", "Georgian"]
             search_cfg = profile_service.get_search_queries_for_profile(parsed_skills, headline=headline)
 
         tasks = []
@@ -61,18 +64,27 @@ class ScraperOrchestrator:
                 tasks.append(jobs_ge_scraper.scrape(allow_network=True, search_urls=search_cfg.get("jobs_ge_urls")))
             elif p == "hr.ge":
                 tasks.append(hr_ge_scraper.scrape(allow_network=True, search_url=search_cfg.get("hr_ge_url"), domain_keywords=search_cfg.get("domain_keywords")))
+            elif p == "headhunter.ge":
+                hh_url = search_cfg.get("headhunter_url")
+                if hh_url:
+                    tasks.append(headhunter_scraper.scrape(
+                        allow_network=True,
+                        search_url=hh_url,
+                        domain_keywords=search_cfg.get("domain_keywords"),
+                        candidate_languages=cand_langs,
+                    ))
             elif p == "dou.ua":
                 dou_url = search_cfg.get("dou_url")
                 if dou_url:
-                    tasks.append(dou_scraper.scrape(allow_network=True, search_url=dou_url))
+                    tasks.append(dou_scraper.scrape(allow_network=True, search_url=dou_url, candidate_languages=cand_langs))
             elif p == "djinni.co":
                 djinni_url = search_cfg.get("djinni_url")
                 if djinni_url:
-                    tasks.append(djinni_scraper.scrape(allow_network=True, search_url=djinni_url))
+                    tasks.append(djinni_scraper.scrape(allow_network=True, search_url=djinni_url, candidate_languages=cand_langs))
             elif p == "justjoin.it":
                 justjoin_url = search_cfg.get("justjoin_url")
                 if justjoin_url:
-                    tasks.append(justjoin_scraper.scrape(allow_network=True, search_url=justjoin_url))
+                    tasks.append(justjoin_scraper.scrape(allow_network=True, search_url=justjoin_url, candidate_languages=cand_langs))
 
         raw_discovered: List[Dict[str, Any]] = []
         if tasks:

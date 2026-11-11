@@ -83,8 +83,12 @@ class JustJoinScraper(BasePortalScraper):
     def _fallback_curated_listings(self) -> List[Dict[str, Any]]:
         return []
 
-    async def _enrich_and_verify_item(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Fetches full offer page, validates remote/English requirements, and rejects Polish-only descriptions."""
+    async def _enrich_and_verify_item(
+        self,
+        item: Dict[str, Any],
+        candidate_languages: Optional[List[str]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Fetches full offer page, validates remote/language requirements (unlocking Polish if in skills.md)."""
         html = await self.fetch_html(item["url"], timeout=8.0)
         if not html:
             return None
@@ -118,6 +122,7 @@ class JustJoinScraper(BasePortalScraper):
             description=body_text,
             location_text="Remote EU / B2B",
             portal=self.portal_name,
+            candidate_languages=candidate_languages,
         )
         item["is_remote"] = is_remote
         item["status"] = status
@@ -132,6 +137,7 @@ class JustJoinScraper(BasePortalScraper):
         self,
         allow_network: bool = True,
         search_url: Optional[str] = None,
+        candidate_languages: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         if not allow_network:
             return []
@@ -155,7 +161,7 @@ class JustJoinScraper(BasePortalScraper):
             return []
 
         enriched = await asyncio.gather(
-            *(self._enrich_and_verify_item(c) for c in candidates[:20]),
+            *(self._enrich_and_verify_item(c, candidate_languages=candidate_languages) for c in candidates[:20]),
             return_exceptions=True,
         )
         return [x for x in enriched if isinstance(x, dict)]

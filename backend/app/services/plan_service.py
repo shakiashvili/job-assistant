@@ -15,6 +15,21 @@ logger = logging.getLogger(__name__)
 # Curated rich 7-day action plans keyed by trainable QA/SDET skill
 CURATED_SKILL_ROADMAPS: List[Dict[str, Any]] = [
     {
+        "match_keys": ["ai qa", "ai tools", "ai-assisted", "generative ai", "llm", "gemini", "chatgpt", "copilot", "prompt engineering", "mcp"],
+        "skill_name": "AI-Assisted QA & LLM Test Engineering",
+        "category": "AUTOMATION",
+        "days_to_learn": 7,
+        "milestones": [
+            {"day": 1, "task": "Explore AI-assisted Playwright test generation and locator self-healing workflows using Playwright Codegen + MCP", "completed": False, "resource_url": "https://playwright.dev/docs/codegen", "tutorial_url": "https://github.com/microsoft/playwright-mcp"},
+            {"day": 2, "task": "Master structured Prompt Engineering to derive edge-case test matrices, boundary inputs, and API negative suites from OpenAPI specs", "completed": False, "resource_url": "https://ai.google.dev/gemini-api/docs/prompting-strategies", "tutorial_url": "https://ai.google.dev/gemini-api/docs/structured-output"},
+            {"day": 3, "task": "Evaluate LLM outputs systematically using deterministic assertions, JSON schema checks, and Promptfoo eval suites", "completed": False, "resource_url": "https://www.promptfoo.dev/docs/getting-started/", "tutorial_url": "https://www.promptfoo.dev/docs/guides/evaluate-llm-rag/"},
+            {"day": 4, "task": "Detect hallucinations, prompt-injection vulnerabilities, and context regressions in AI chatbots with automated PyTest harnesses", "completed": False, "resource_url": "https://owasp.org/www-project-top-10-for-large-language-model-applications/", "tutorial_url": "https://docs.pytest.org/en/stable/"},
+            {"day": 5, "task": "Integrate Gemini / LLM API contract checks into CI pipelines with strict latency & token budget thresholds", "completed": False, "resource_url": "https://ai.google.dev/gemini-api/docs", "tutorial_url": "https://docs.github.com/en/actions"},
+            {"day": 6, "task": "Audit accessibility and visual regressions automatically combining Playwright traces with AI failure triage summaries", "completed": False, "resource_url": "https://playwright.dev/docs/accessibility-testing", "tutorial_url": "https://playwright.dev/docs/trace-viewer"},
+            {"day": 7, "task": "Publish a portfolio repo demonstrating automated LLM/RAG evaluation + AI-accelerated E2E test suite", "completed": False, "resource_url": "https://www.promptfoo.dev/docs/configuration/guide/", "tutorial_url": "https://playwright.dev/docs/test-reporters"},
+        ],
+    },
+    {
         "match_keys": ["k6", "performance", "load testing"],
         "skill_name": "k6 Performance & Load Testing",
         "category": "AUTOMATION",
@@ -198,13 +213,19 @@ class PlanService:
             if len(selected_templates) >= 3:
                 break
 
-        # Fill remaining slots with genuinely unpossessed high-impact QA roadmaps
+        # Fill remaining slots with genuinely unpossessed high-impact QA roadmaps (prioritizing AI QA & DevOps gaps)
         for tmpl in CURATED_SKILL_ROADMAPS:
             if len(selected_templates) >= 3:
                 break
             if tmpl["skill_name"] in used_names:
                 continue
-            already_has = any(any(mk in ex for ex in existing_lower) for mk in tmpl["match_keys"])
+            already_has = any(
+                any(
+                    (mk == ex) or bool(__import__("re").search(r"\b" + __import__("re").escape(mk) + r"\b", ex))
+                    for ex in existing_lower
+                )
+                for mk in tmpl["match_keys"]
+            )
             if not already_has:
                 selected_templates.append(tmpl)
                 used_names.add(tmpl["skill_name"])

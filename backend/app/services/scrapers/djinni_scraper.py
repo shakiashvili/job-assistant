@@ -19,7 +19,11 @@ class DjinniScraper(BasePortalScraper):
     market = "GLOBAL_REMOTE"
     SEARCH_URL = "https://djinni.co/jobs/?primary_keyword=QA&employment=remote"
 
-    def parse_html_listings(self, html: str) -> List[Dict[str, Any]]:
+    def parse_html_listings(
+        self,
+        html: str,
+        candidate_languages: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
         soup = self.make_soup(html)
         results: List[Dict[str, Any]] = []
         seen_ids: set[str] = set()
@@ -36,11 +40,48 @@ class DjinniScraper(BasePortalScraper):
             if "/jobs/" not in href or "primary_keyword=" in href:
                 continue
 
-            # Extract clean job title from the anchor text (NOT h2 wrapper which includes company/$ badges)
-            title = title_link.get_text(" ", strip=True)
-            title = re.sub(r"\s+\$+\s*$", "", title).strip()
-            if not title or len(title) < 3:
+            comp_el = item.select_one("a[href*='/jobs/company-'], span.font-weight-500, a.mr-2")
+            company = comp_el.get_text(" ", strip=True) if comp_el else "Djinni Global Employer"
+
+            # Extract ONLY clean role title without concatenated company, fire emojis, "Responds Quickly", or "to $700"
+            inner_pos = title_link.select_one("h2.job-item__position, .job-item__position, .h3")
+            if inner_pos:
+                title = inner_pos.get_text(" ", strip=True)
+            else:
+                direct_txt = "".join(
+                    t for t in title_link.find_all(string=True, recursive=False)
+                ).strip()
+                title = direct_txt or title_link.get_text(" ", strip=True)
+
+            # Strip accidental badge/salary/company suffixes if Djinni card nested them into header-link
+            title = re.sub(r"🔥+", "", title)
+            title = re.sub(r"\bResponds Quickly\b.*$", "", title, flags=re.IGNORECASE)
+            title = re.sub(
+                r"\s+(?:up\s+to|to|from)\s+[\$€£]\s*\d[\d,]*(?:\s*[–\-]\s*[\$€£]?\s*\d[\d,]*)?.*$",
+                "",
+                title,
+                flags=re.IGNORECASE,
+            )
+            title = re.sub(r"\s+\$+\s*$", "", title)
+            if company and company != "Djinni Global Employer" and len(company) > 2:
+                comp_idx = title.find(f" {company}")
+                if comp_idx > 4:
+                    title = title[:comp_idx]
+            title = re.sub(r"\s+", " ", title).strip()
+            if not title or len(title) < 3 or re.fullmatch(r"[\$€£\s]+", title):
                 continue
+
+            # Extract explicit card salary badge ("to $700", "$1500 - $2500") while ignoring bare "$"
+            sal_parts: List[str] = []
+            for badge in item.select("span, div.col-auto, strong, a.job_item__header-link"):
+                bt = badge.get_text(" ", strip=True)
+                for m in re.finditer(
+                    r"(?:(?:up\s+to|to|from)\s+)?[\$€£]\s*\d{3,}(?:\s*[–\-]\s*[\$€£]?\s*\d{3,})?",
+                    bt,
+                    flags=re.IGNORECASE,
+                ):
+                    sal_parts.append(m.group(0).strip())
+            card_salary = " | ".join(dict.fromkeys(sal_parts))
 
             url = href if href.startswith("http") else f"https://djinni.co{href}"
 
@@ -50,9 +91,6 @@ class DjinniScraper(BasePortalScraper):
                 continue
             seen_ids.add(ext_id)
 
-            comp_el = item.select_one("a[href*='/jobs/company-'], span.font-weight-500, a.mr-2")
-            company = comp_el.get_text(" ", strip=True) if comp_el else "Djinni Global Employer"
-
             meta_el = item.select_one("div.fw-medium")
             meta_text = meta_el.get_text(" ", strip=True) if meta_el else "Full Remote"
 
@@ -60,13 +98,15 @@ class DjinniScraper(BasePortalScraper):
                 "span.js-original-text, span.js-truncated-text, .job-list-item__description"
             )
             desc_body = desc_el.get_text(" ", strip=True) if desc_el else title
-            description = f"{meta_text} | {desc_body}" if meta_text else desc_body
+            description_parts = [p for p in [card_salary, meta_text, desc_body] if p]
+            description = " | ".join(description_parts)
 
             is_remote, status, filter_reason, langs = evaluate_remote_and_language_gate(
                 title=title,
                 description=desc_body,
                 location_text=meta_text,
                 portal=self.portal_name,
+                candidate_languages=candidate_languages,
             )
 
             results.append({
@@ -93,7 +133,11 @@ class DjinniScraper(BasePortalScraper):
         """Purged: never return fake static listings when offline."""
         return []
 
-    async def _enrich_and_verify_item(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def _enrich_and_verify_item(
+        self,
+        item: Dict[str, Any],
+        candidate_languages: Optional[List[str]] = None,
+    ) -> Optional[Dict[str, Any]]:
         """Fetches the live Djinni detail page for deep skill/language/salary/location inspection."""
         html = await self.fetch_html(item["url"], timeout=8.0)
         if not html:
@@ -107,6 +151,10 @@ class DjinniScraper(BasePortalScraper):
 
         sal_el = soup.select_one("span.public-salary-item")
         sal_txt = sal_el.get_text(" ", strip=True) if sal_el else ""
+        # Preserve any card salary extracted from list view (e.g. "to $700")
+        prev_head = (item.get("description_raw") or "").split("|")[0].strip()
+        if not sal_txt and re.search(r"[\$€£]\s*\d{3,}", prev_head):
+            sal_txt = prev_head
         loc_meta = item.get("location_meta") or "Full Remote"
         full_desc = f"{loc_meta} | {sal_txt} | {full_body}".strip(" |")
 
@@ -115,6 +163,7 @@ class DjinniScraper(BasePortalScraper):
             description=full_body,
             location_text=loc_meta,
             portal=self.portal_name,
+            candidate_languages=candidate_languages,
         )
         item["is_remote"] = is_remote
         item["status"] = status
@@ -129,6 +178,7 @@ class DjinniScraper(BasePortalScraper):
         self,
         allow_network: bool = True,
         search_url: Optional[str] = None,
+        candidate_languages: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         if not allow_network:
             return []
@@ -144,7 +194,7 @@ class DjinniScraper(BasePortalScraper):
         seen_ids: set[str] = set()
         for html in pages:
             if isinstance(html, str) and html:
-                for item in self.parse_html_listings(html):
+                for item in self.parse_html_listings(html, candidate_languages=candidate_languages):
                     if item["external_id"] not in seen_ids:
                         seen_ids.add(item["external_id"])
                         candidates.append(item)
@@ -158,7 +208,7 @@ class DjinniScraper(BasePortalScraper):
 
         if non_filtered:
             enriched = await asyncio.gather(
-                *(self._enrich_and_verify_item(c) for c in non_filtered),
+                *(self._enrich_and_verify_item(c, candidate_languages=candidate_languages) for c in non_filtered),
                 return_exceptions=True,
             )
             verified_non_filtered = [x for x in enriched if isinstance(x, dict)]

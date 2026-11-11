@@ -171,6 +171,7 @@ async def list_scraped_jobs(
         stmt = select(JobPosting).order_by(JobPosting.suitability_score.desc(), JobPosting.scraped_at.desc())
         rows = session.exec(stmt).all()
         from ..services.scrapers.base_scraper import sanitize_company_name
+        import re as _re
         filtered = []
         for r in rows:
             if not include_filtered and r.status == "FILTERED_OUT":
@@ -185,6 +186,22 @@ async def list_scraped_jobs(
                 continue
             dumped = r.model_dump(mode="json")
             dumped["company"] = sanitize_company_name(dumped.get("company"), target_email=dumped.get("target_email"), fallback="კომპანია")
+            if dumped.get("portal") == "djinni.co" and dumped.get("title"):
+                raw_t = str(dumped["title"])
+                clean_t = _re.sub(r"🔥+", "", raw_t)
+                clean_t = _re.sub(r"\bResponds Quickly\b.*$", "", clean_t, flags=_re.I)
+                clean_t = _re.sub(r"\s+(?:up\s+to|to|from)\s+[\$€£]\s*\d[\d,]*.*$", "", clean_t, flags=_re.I)
+                if dumped.get("company") and len(dumped["company"]) > 2:
+                    ci = clean_t.find(f" {dumped['company']}")
+                    if ci > 4:
+                        clean_t = clean_t[:ci]
+                dumped["title"] = _re.sub(r"\s+", " ", clean_t).strip() or raw_t
+                if dumped.get("salary_min") is None:
+                    sal_ex = salary_service.extract_explicit_salary(f"{raw_t}\n{dumped.get('description_raw', '')}")
+                    if sal_ex:
+                        dumped["salary_min"], dumped["salary_max"], dumped["salary_currency"] = sal_ex
+                        dumped["salary_is_estimated"] = False
+                        dumped["salary_estimated_by_ai"] = False
             filtered.append(dumped)
         return filtered
 
@@ -204,13 +221,16 @@ def estimate_job_salary(req: SalaryEstimateRequest):
 def prepare_job_email_package(
     job_id: int,
     cv_language: str = Query("auto"),
+    create_draft: bool = Query(True),
     current_user: User = Depends(get_current_user),
 ):
     """
-    Prepares a complete tailored Word (.docx) CV + Cover Letter + clean Subject line
-    for drafting an application email to a vacancy (e.g. from Jobs.ge / HR.ge).
+    Prepares a complete tailored Word (.docx) CV + Cover Letter + clean Subject line,
+    and saves a real Gmail Draft WITH the tailored .docx CV attached via OAuth or Gmail IMAP
+    whenever credentials are configured.
     """
     from ..services.cv_generator_service import cv_generator_service
+    from ..services.gmail_service import gmail_service
 
     init_db()
     with Session(engine) as session:
@@ -218,7 +238,7 @@ def prepare_job_email_package(
         if not job:
             raise HTTPException(status_code=404, detail="Vacancy not found")
 
-        return cv_generator_service.prepare_email_application_package(
+        pkg = cv_generator_service.prepare_email_application_package(
             job_title=job.title,
             company=job.company,
             description=job.description_raw,
@@ -228,3 +248,28 @@ def prepare_job_email_package(
             cv_language=cv_language,
             cv_style="tailored",
         )
+
+        draft_res = {
+            "draft_created": False,
+            "draft_id": None,
+            "attached_files": [pkg["docx_filename"]],
+            "drafts_url": None,
+            "mode_used": "skipped",
+            "error": None,
+        }
+        if create_draft:
+            draft_res = gmail_service.create_gmail_draft(
+                recipient_email=pkg["recipient_email"],
+                subject=pkg["subject"],
+                body_text=pkg["cover_letter"],
+                attachment_paths=[pkg.get("docx_path") or pkg["docx_filename"]],
+                user=current_user,
+            )
+
+        pkg["gmail_draft_saved"] = bool(draft_res.get("draft_created"))
+        pkg["gmail_draft_id"] = draft_res.get("draft_id")
+        pkg["gmail_drafts_url"] = draft_res.get("drafts_url")
+        pkg["attached_files"] = draft_res.get("attached_files", [pkg["docx_filename"]])
+        pkg["draft_mode_used"] = draft_res.get("mode_used")
+        pkg["draft_error"] = draft_res.get("error")
+        return pkg
