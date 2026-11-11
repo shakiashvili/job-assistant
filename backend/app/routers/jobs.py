@@ -170,6 +170,7 @@ async def list_scraped_jobs(
 
         stmt = select(JobPosting).order_by(JobPosting.suitability_score.desc(), JobPosting.scraped_at.desc())
         rows = session.exec(stmt).all()
+        from ..services.scrapers.base_scraper import sanitize_company_name
         filtered = []
         for r in rows:
             if not include_filtered and r.status == "FILTERED_OUT":
@@ -182,7 +183,9 @@ async def list_scraped_jobs(
                 continue
             if min_score is not None and r.suitability_score < min_score:
                 continue
-            filtered.append(r.model_dump(mode="json"))
+            dumped = r.model_dump(mode="json")
+            dumped["company"] = sanitize_company_name(dumped.get("company"), target_email=dumped.get("target_email"), fallback="კომპანია")
+            filtered.append(dumped)
         return filtered
 
 

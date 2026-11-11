@@ -44,7 +44,9 @@ export const CVVariantManager: React.FC = () => {
   } | null>(null);
   const [copiedLetter, setCopiedLetter] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
+  const [downloadBanner, setDownloadBanner] = useState<string | null>(null);
   const uploadRef = useRef<HTMLInputElement | null>(null);
+  const outputRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     loadInitial();
@@ -95,6 +97,7 @@ export const CVVariantManager: React.FC = () => {
   const handleGenerate = async (edition: 'ats' | 'recruiter' | 'tailored') => {
     setGeneratingKey(edition);
     setStatusError(null);
+    setDownloadBanner(null);
     try {
       const selectedJob = jobsList.find((j) => String(j.id) === selectedJobId);
       const res = await generateCvEdition({
@@ -115,6 +118,19 @@ export const CVVariantManager: React.FC = () => {
         pdf_filename: res.pdf_filename,
         pdf_url: res.pdf_url,
       });
+
+      // Immediately download ready Word (.docx) file and notify user
+      const dlLink = document.createElement('a');
+      dlLink.href = `${BACKEND_ORIGIN}${res.docx_url}`;
+      dlLink.download = res.docx_filename;
+      document.body.appendChild(dlLink);
+      dlLink.click();
+      document.body.removeChild(dlLink);
+
+      setDownloadBanner(`Downloaded ${res.docx_filename}! Both Word (.docx) and PDF links are ready below.`);
+      setTimeout(() => {
+        outputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 100);
     } catch (err: any) {
       setStatusError(err.message || 'Could not generate CV edition. Make sure skills.md is uploaded.');
     } finally {
@@ -172,6 +188,28 @@ export const CVVariantManager: React.FC = () => {
       {statusError && (
         <div className="p-3 bg-rose-950/40 border border-rose-800 rounded-xl text-xs text-rose-300">
           {statusError}
+        </div>
+      )}
+
+      {downloadBanner && generatedOutput && (
+        <div className="p-4 bg-emerald-950/40 border border-emerald-700/60 rounded-xl text-xs text-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <span>{downloadBanner}</span>
+          <div className="flex items-center gap-2">
+            <a
+              href={`${BACKEND_ORIGIN}${generatedOutput.docx_url}`}
+              download={generatedOutput.docx_filename}
+              className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold"
+            >
+              Download Word (.docx)
+            </a>
+            <a
+              href={`${BACKEND_ORIGIN}${generatedOutput.pdf_url}`}
+              download={generatedOutput.pdf_filename}
+              className="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold"
+            >
+              Download PDF
+            </a>
+          </div>
         </div>
       )}
 
@@ -354,7 +392,7 @@ export const CVVariantManager: React.FC = () => {
 
       {/* 3. Output Download & Cover Letter Preview Card */}
       {generatedOutput && (
-        <div className="bg-slate-900 border border-sky-700/60 p-6 rounded-2xl space-y-4 shadow-xl">
+        <div ref={outputRef} className="bg-slate-900 border border-sky-700/60 p-6 rounded-2xl space-y-4 shadow-xl">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <span className="text-[10px] font-bold uppercase tracking-wider text-sky-400">

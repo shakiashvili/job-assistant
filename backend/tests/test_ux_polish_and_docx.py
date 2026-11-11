@@ -187,3 +187,71 @@ def test_prepare_gmail_package_with_word_docx_cover_letter_and_my_cvs():
             if db_job:
                 session.delete(db_job)
                 session.commit()
+
+
+def test_jobsge_location_never_parsed_as_company_and_clean_highlights():
+    """Ensures 'საქართველოს მასშტაბით' is never treated as company name and '---' never yields '--' bullet."""
+    from app.services.scrapers.jobs_ge_scraper import jobs_ge_scraper
+    from app.services.scrapers.base_scraper import sanitize_company_name
+    from app.storage.ground_truth_store import ground_truth_store
+    from app.services.cv_generator_service import cv_generator_service
+
+    # 1. Jobs.ge row without view=client link & last column location
+    html_row = """
+    <table id="job_list_table">
+      <tr>
+        <td><a href="/ge/?view=jobs&id=763944">Manual QA სტაჟიორი</a></td>
+        <td>02 ნოემბერი</td>
+        <td>საქართველოს მასშტაბით</td>
+      </tr>
+    </table>
+    """
+    parsed = jobs_ge_scraper.parse_html_listings(html_row)
+    assert len(parsed) == 1
+    assert parsed[0]["company"] != "საქართველოს მასშტაბით"
+    assert sanitize_company_name("საქართველოს მასშტაბით", target_email="info@genofit.tech") == "Genofit"
+
+    # 2. Markdown horizontal divider --- never yields '--' highlight bullet
+    md = """# Candidate — QA Engineer
+## Work Experience
+### Software QA Intern | Exactpro Systems
+*Sep 2023 – Jan 2024*
+- Validated trading calculations and API responses.
+---
+## Skills
+- Playwright, Python, PyTest
+"""
+    parsed_profile = ground_truth_store.parse_profile_from_md(md)
+    highlights = parsed_profile["work_history"][0]["highlights"]
+    assert "--" not in highlights
+    assert len(highlights) == 1
+
+    # 3. Clean ASCII filenames, no intern title downgrade, & sanitized cover letter even with location string
+    pkg = cv_generator_service.prepare_email_application_package(
+        job_title="Manual QA სტაჟიორი",
+        company="საქართველოს მასშტაბით",
+        description="QA Bridge ტესტირების სტაჟირება. Manual Testing, Test Cases.",
+        portal="jobs.ge",
+        cv_language="ka",
+        cv_style="ats",
+    )
+    assert "საქართველოს მასშტაბით" not in pkg["cover_letter"]
+    assert pkg["docx_filename"].isascii()
+    assert pkg["pdf_filename"].isascii()
+    assert "QA_Engineer_ATS" in pkg["docx_filename"]
+
+
+def test_action_plan_generation_includes_docs_and_tutorials():
+    """Verifies AI Skill Gap Roadmap generation creates plans with official docs + practical tutorial links."""
+    init_db()
+    client.post("/api/profile/upload-skills", data={
+        "content": "# Candidate\n## Skills\n- Playwright, Python, PyTest\n",
+        "run_live_scrape": "false",
+    })
+    res = client.post("/api/profile/generate-action-plan")
+    assert res.status_code == 200
+    plans = res.json()
+    assert len(plans) >= 1
+    first_ms = plans[0]["milestones"][0]
+    assert first_ms.get("resource_url", "").startswith("http")
+    assert first_ms.get("tutorial_url", "").startswith("http")

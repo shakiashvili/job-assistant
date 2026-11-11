@@ -541,9 +541,11 @@ export const ProfileVault: React.FC = () => {
                     )}
                   </div>
                   <ul className="list-disc list-inside text-xs text-slate-400 space-y-1 pt-1">
-                    {(job.highlights || []).map((h, i) => (
-                      <li key={i}>{h}</li>
-                    ))}
+                    {(job.highlights || [])
+                      .filter((h) => h && h.trim() && !/^[-*_•–—.\s]+$/.test(h.trim()))
+                      .map((h, i) => (
+                        <li key={i}>{h}</li>
+                      ))}
                   </ul>
                 </div>
               ))}

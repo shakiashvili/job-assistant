@@ -2,7 +2,7 @@ import asyncio
 import logging
 import re
 from typing import Dict, Any, List, Optional
-from .base_scraper import BasePortalScraper, parse_contact_method_and_email
+from .base_scraper import BasePortalScraper, parse_contact_method_and_email, sanitize_company_name
 from ..link_validator import fetch_and_validate_live_vacancy
 
 logger = logging.getLogger(__name__)
@@ -46,11 +46,13 @@ class JobsGeScraper(BasePortalScraper):
 
             for a in links:
                 href = a["href"]
-                # Ignore client profile links, images, and non-vacancy links
+                # Extract company strictly from Jobs.ge client profile links (NEVER location columns)
                 if "view=client" in href or "client=" in href:
-                    txt = a.get_text(strip=True)
+                    txt = a.get_text(" ", strip=True)
                     if txt and not company_text:
-                        company_text = txt
+                        cand = sanitize_company_name(txt, fallback="")
+                        if cand:
+                            company_text = cand
                     continue
 
                 if "view=jobs" in href and "id=" in href:
@@ -73,15 +75,10 @@ class JobsGeScraper(BasePortalScraper):
             canonical_url = f"https://jobs.ge/ge/?view=jobs&id={job_id}"
             ext_id = f"jobsge-{job_id}"
 
-            if not company_text:
-                tds = [td.get_text(strip=True) for td in row.find_all("td") if td.get_text(strip=True)]
-                if len(tds) >= 2:
-                    company_text = tds[1] if tds[0] == title else tds[-1]
-            company = company_text or "Georgian Employer"
-
-            # Preliminary placeholder description; live scraper overwrites with full detail page text
-            prelim_desc = f"{title} at {company} (Jobs.ge)"
+            # Preliminary placeholder description; live detail page overwrites both text & company
+            prelim_desc = f"{title} at {company_text or 'Employer'} (Jobs.ge)"
             channel, target_email, email_subj = parse_contact_method_and_email(prelim_desc, str(row))
+            company = sanitize_company_name(company_text, target_email=target_email, fallback="კომპანია (Jobs.ge)")
 
             results.append({
                 "portal": self.portal_name,
@@ -128,10 +125,20 @@ class JobsGeScraper(BasePortalScraper):
         )
 
         channel, target_email, email_subj = parse_contact_method_and_email(clean_text, raw_html)
-        # Extract authentic company name from detail page 'მომწოდებელი:' if table fell back
-        comp_m = re.search(r"მომწოდებელი:\s*([^\n<]{2,60}?)(?:\s+გამოქვეყნდა|\s*$)", clean_text)
-        if comp_m and item.get("company") in ("Georgian Employer", "Company", ""):
-            item["company"] = comp_m.group(1).strip()
+        # Extract authentic company name from detail page client anchor or 'მომწოდებელი:' row
+        det_company = ""
+        if raw_html:
+            soup_det = self.make_soup(raw_html)
+            client_a = soup_det.select_one("td.dtable a[href*='view=client'], .dtable a[href*='view=client'], a[href*='client=']")
+            if client_a and client_a.get_text(" ", strip=True):
+                det_company = client_a.get_text(" ", strip=True)
+        if not det_company:
+            comp_m = re.search(r"მომწოდებელი:\s*([^\n<]{2,60}?)(?:\s+გამოქვეყნდა|\s*$)", clean_text)
+            if comp_m:
+                det_company = comp_m.group(1).strip()
+
+        resolved_comp = sanitize_company_name(det_company or item.get("company"), target_email=target_email, fallback="კომპანია (Jobs.ge)")
+        item["company"] = resolved_comp
 
         item["channel"] = channel
         item["delivery_channel"] = channel

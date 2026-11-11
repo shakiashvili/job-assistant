@@ -38,7 +38,7 @@ class AnswerService:
             matched_skills=parsed_profile.get("skills", [])[:6] or data.get("skills", {}).get("core", [])[:6],
             missing_skills=[],
             cv_language=lang,
-            candidate_name=parsed_profile.get("full_name", candidate.get("full_name", "Alex Mercer")),
+            candidate_name=parsed_profile.get("full_name", candidate.get("full_name", "Candidate")),
         )
 
         formatted_answers: List[ScreeningAnswer] = []
@@ -55,7 +55,7 @@ class AnswerService:
         return GenerateAnswersResponse(
             answers=formatted_answers,
             variant_used=request.variant or "qa_automation",
-            candidate_name=parsed_profile.get("full_name", candidate.get("full_name", "Alex Mercer")),
+            candidate_name=parsed_profile.get("full_name", candidate.get("full_name", "Candidate")),
             applicant_summary=narratives["human_tone_summary"],
             motivation_letter=narratives["motivation_statement"],
             dou_motivational_letter=narratives["dou_motivational_letter"],

@@ -322,6 +322,7 @@ export interface Milestone {
   task: string;
   completed: boolean;
   resource_url?: string;
+  tutorial_url?: string;
 }
 
 export interface SkillActionPlan {

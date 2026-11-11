@@ -226,18 +226,32 @@ export const ActionPlanView: React.FC = () => {
                           {m.task}
                         </span>
                       </div>
-                      {m.resource_url && (
-                        <a
-                          href={m.resource_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          className="inline-flex items-center gap-1 text-[10px] text-sky-400 hover:text-sky-300 hover:underline mt-1"
-                        >
-                          <span>Official Guide / Docs</span>
-                          <ExternalLink className="w-2.5 h-2.5" />
-                        </a>
-                      )}
+                      <div className="flex flex-wrap items-center gap-3 mt-1">
+                        {m.resource_url && (
+                          <a
+                            href={m.resource_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex items-center gap-1 text-[10px] text-sky-400 hover:text-sky-300 hover:underline"
+                          >
+                            <span>Official Docs</span>
+                            <ExternalLink className="w-2.5 h-2.5" />
+                          </a>
+                        )}
+                        {m.tutorial_url && (
+                          <a
+                            href={m.tutorial_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex items-center gap-1 text-[10px] text-emerald-400 hover:text-emerald-300 hover:underline"
+                          >
+                            <span>Practical Guide</span>
+                            <ExternalLink className="w-2.5 h-2.5" />
+                          </a>
+                        )}
+                      </div>
                     </div>
                   </div>
                 ))}

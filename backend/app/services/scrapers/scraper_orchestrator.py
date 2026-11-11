@@ -8,6 +8,7 @@ from ..salary_service import salary_service
 from ..matcher_service import matcher_service
 from ..profile_service import profile_service
 from ..link_validator import parse_vacancy_deadline
+from .base_scraper import sanitize_company_name
 from .jobs_ge_scraper import jobs_ge_scraper
 from .hr_ge_scraper import hr_ge_scraper
 from .dou_scraper import dou_scraper
@@ -101,7 +102,11 @@ class ScraperOrchestrator:
                 ext_id = item.get("external_id", "")
                 url = item.get("url", "")
                 title = item.get("title", "QA Engineer")
-                company = item.get("company", "Company")
+                company = sanitize_company_name(
+                    item.get("company"),
+                    target_email=item.get("target_email"),
+                    fallback="Hiring Company",
+                )
                 desc = item.get("description_raw", "")
                 market = item.get("market", "GLOBAL_REMOTE")
                 initial_status = item.get("status", "DISCOVERED")

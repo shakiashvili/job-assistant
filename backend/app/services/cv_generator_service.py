@@ -18,8 +18,52 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
 from ..config import GENERATED_RESUMES_DIR, FONTS_DIR
 from ..storage.ground_truth_store import ground_truth_store
 from ..services.gemini_service import GEORGIAN_SKILL_TRANSLATIONS
+from ..services.scrapers.base_scraper import sanitize_company_name
 
 logger = logging.getLogger(__name__)
+
+_KA_TO_LATIN = {
+    "ა": "a", "ბ": "b", "გ": "g", "დ": "d", "ე": "e", "ვ": "v", "ზ": "z", "თ": "t", "ი": "i",
+    "კ": "k", "ლ": "l", "მ": "m", "ნ": "n", "ო": "o", "პ": "p", "ჟ": "zh", "რ": "r", "ს": "s",
+    "ტ": "t", "უ": "u", "ფ": "p", "ქ": "k", "ღ": "gh", "ყ": "q", "შ": "sh", "ჩ": "ch", "ც": "ts",
+    "ძ": "dz", "წ": "ts", "ჭ": "ch", "ხ": "kh", "ჯ": "j", "ჰ": "h",
+}
+
+
+def ascii_filename_slug(text: str, default: str = "Item", max_len: int = 24) -> str:
+    """Produces clean Latin-ASCII filename slugs (transliterating Georgian script cleanly)."""
+    if not text:
+        return default
+    out = []
+    for ch in text.strip():
+        out.append(_KA_TO_LATIN.get(ch, ch))
+    joined = "".join(out)
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", joined).strip("_")
+    return (slug[:max_len].strip("_")) or default
+
+
+def clean_bullets(highlights: Optional[List[Any]]) -> List[str]:
+    """Filters out blank bullets and Markdown divider artifacts such as '--' or '---'."""
+    if not highlights:
+        return []
+    result = []
+    for h in highlights:
+        s = str(h or "").strip()
+        if s and not re.fullmatch(r"[-*_•–—.\s]+", s):
+            result.append(s)
+    return result
+
+
+def resolve_candidate_headline(candidate: Dict[str, Any], skills: List[str], parsed_skills: Dict[str, Any]) -> str:
+    """Returns candidate's true professional seniority/headline (never degraded to an intern vacancy title)."""
+    industry = str((parsed_skills or {}).get("target_industry") or "qa_tech").lower()
+    raw_hl = str(candidate.get("headline") or "").strip()
+    skills_blob = " ".join(skills).lower()
+    if industry == "qa_tech" or any(k in skills_blob for k in ["playwright", "pytest", "selenium", "cypress"]):
+        return "QA Automation Engineer & SDET | Playwright • Python • API • CI/CD"
+    if raw_hl and not any(w in raw_hl.lower() for w in ["intern", "trainee", "სტაჟიორ"]):
+        return raw_hl
+    return raw_hl or "QA Automation Engineer & SDET"
 
 RESUME_STRATEGIST_SYSTEM_PROMPT = """You are an elite technical CV strategist specializing in QA Automation and SDET careers.
 Your goal is to tailor the candidate's existing experience to the provided vacancy description for maximum ATS keyword alignment and recruiter impact.
@@ -146,11 +190,23 @@ class CVGeneratorService:
         else:
             display_skills = prioritized_skills
 
-        lang_suffix = "KA" if cv_language == "ka" else "EN"
-        safe_company = safe_unicode_slug(company, default="Company", max_len=22)
-        safe_role = safe_unicode_slug(job_title, default="Role", max_len=26)
-        uid = uuid.uuid4().hex[:6]
-        base_name = f"CV_{safe_company}_{safe_role}_{uid}_{lang_suffix}"
+        ps = gt.get("parsed_skills_taxonomy") or {}
+        candidate_headline = resolve_candidate_headline(candidate, core_skills, ps)
+        safe_company = sanitize_company_name(company, fallback="")
+        cand_slug = ascii_filename_slug(candidate.get("full_name", "Candidate"), default="Candidate", max_len=28)
+
+        lang_suffix = "_KA" if cv_language == "ka" else ""
+        role_tag = "QA_Engineer" if (ps.get("target_industry", "qa_tech") == "qa_tech") else ascii_filename_slug(candidate_headline.split("|")[0], default="Specialist", max_len=20)
+
+        if cv_style in ("ats", "recruiter"):
+            base_name = f"{cand_slug}_{role_tag}_{cv_style.upper()}{lang_suffix}"
+        elif safe_company and safe_company.lower() not in ("ats edition", "recruiter edition", "target company", "hiring company"):
+            comp_slug = ascii_filename_slug(safe_company, default="Role", max_len=20)
+            tag_short = "QA" if ps.get("target_industry", "qa_tech") == "qa_tech" else role_tag
+            base_name = f"{cand_slug}_{comp_slug}_{tag_short}{lang_suffix}"
+        else:
+            base_name = f"{cand_slug}_{role_tag}{lang_suffix}"
+
         pdf_filename = f"{base_name}.pdf"
         docx_filename = f"{base_name}.docx"
         html_filename = f"{base_name}.html"
@@ -158,22 +214,17 @@ class CVGeneratorService:
         docx_path = GENERATED_RESUMES_DIR / docx_filename
         html_path = GENERATED_RESUMES_DIR / html_filename
 
-        # Also write the canonical non-versioned link so legacy lookups still succeed
-        canonical_base = f"CV_{safe_company}_{safe_role}_{lang_suffix}"
-        canonical_pdf = GENERATED_RESUMES_DIR / f"{canonical_base}.pdf"
-        canonical_docx = GENERATED_RESUMES_DIR / f"{canonical_base}.docx"
-        canonical_html = GENERATED_RESUMES_DIR / f"{canonical_base}.html"
-
         tailored_highlights = []
         for job in work_history:
-            for h in job.get("highlights", [])[:2]:
+            for h in clean_bullets(job.get("highlights"))[:2]:
                 tailored_highlights.append(f"{job.get('role')} @ {job.get('company')}: {h}")
 
         # 1. Build Single-Column ATS HTML Preview
         html_content = self._build_cv_html(
             candidate=candidate,
+            candidate_headline=candidate_headline,
             target_role=job_title,
-            target_company=company,
+            target_company=safe_company or company,
             human_summary=human_summary,
             display_skills=display_skills,
             work_history=work_history,
@@ -186,8 +237,9 @@ class CVGeneratorService:
         self._build_reportlab_single_column_pdf(
             filepath=pdf_path,
             candidate=candidate,
+            candidate_headline=candidate_headline,
             target_role=job_title,
-            target_company=company,
+            target_company=safe_company or company,
             human_summary=human_summary,
             display_skills=display_skills,
             work_history=work_history,
@@ -199,8 +251,9 @@ class CVGeneratorService:
         self._build_docx_cv(
             filepath=docx_path,
             candidate=candidate,
+            candidate_headline=candidate_headline,
             target_role=job_title,
-            target_company=company,
+            target_company=safe_company or company,
             human_summary=human_summary,
             display_skills=display_skills,
             work_history=work_history,
@@ -208,14 +261,6 @@ class CVGeneratorService:
             cv_language=cv_language,
             cv_style=cv_style,
         )
-
-        try:
-            canonical_html.write_text(html_content, encoding="utf-8")
-            import shutil
-            shutil.copy2(pdf_path, canonical_pdf)
-            shutil.copy2(docx_path, canonical_docx)
-        except Exception as e:
-            logger.debug(f"Canonical resume copy note: {e}")
 
         start_date_str = "1 კვირა შეთავაზებიდან (1 week after offer)" if cv_language == "ka" else "1 week after offer"
 
@@ -229,7 +274,7 @@ class CVGeneratorService:
             "docx_path": str(docx_path),
             "cv_language": cv_language,
             "candidate_name": candidate.get("full_name", "Candidate"),
-            "target_role": job_title,
+            "target_role": candidate_headline,
             "human_tone_summary": human_summary,
             "applicant_summary": human_summary,
             "motivation_statement": motivation_statement,
@@ -252,6 +297,7 @@ class CVGeneratorService:
         education: List[Dict[str, Any]],
         cv_language: str = "en",
         cv_style: str = "tailored",
+        candidate_headline: Optional[str] = None,
     ) -> None:
         """Builds a clean, editable Microsoft Word (.docx) CV in ATS, Recruiter, or Job-Tailored edition."""
         from docx import Document
@@ -288,7 +334,9 @@ class CVGeneratorService:
         r_name.font.size = Pt(18)
         r_name.font.color.rgb = RGBColor(0x0F, 0x17, 0x2A)
 
-        role_heading = target_role if cv_style != "ats" else f"{target_role} | ATS Edition"
+        role_heading = candidate_headline or str(candidate.get("headline") or "QA Automation Engineer & SDET | Playwright • Python • API • CI/CD")
+        if cv_style == "ats":
+            role_heading = f"{role_heading} (ATS Edition)"
         p_role = doc.add_paragraph()
         p_role.paragraph_format.space_after = Pt(3)
         r_role = p_role.add_run(role_heading)
@@ -344,7 +392,7 @@ class CVGeneratorService:
                     rd = p_j.add_run(f"   ({dates})")
                     rd.font.size = Pt(9.5)
                     rd.font.color.rgb = subtle
-                for b in job.get("highlights", [])[:5]:
+                for b in clean_bullets(job.get("highlights"))[:5]:
                     p_b = doc.add_paragraph(style="List Bullet")
                     p_b.paragraph_format.space_after = Pt(2)
                     rb = p_b.add_run(str(b))
@@ -379,6 +427,7 @@ class CVGeneratorService:
         work_history: List[Dict[str, Any]],
         education: List[Dict[str, Any]],
         cv_language: str = "en",
+        candidate_headline: Optional[str] = None,
     ) -> None:
         """
         Generates a clean, ATS-compliant single-column PDF resume using ReportLab:
@@ -474,9 +523,10 @@ class CVGeneratorService:
 
         story = []
 
-        # 1. Header
+        # 1. Header (ALWAYS showcase true candidate persona headline, never degrade to intern title)
+        role_display = candidate_headline or str(candidate.get("headline") or "QA Automation Engineer & SDET | Playwright • Python • API • CI/CD")
         story.append(Paragraph(f"<b>{full_name}</b>", header_style))
-        story.append(Paragraph(escape(target_role), role_style))
+        story.append(Paragraph(escape(role_display), role_style))
         story.append(
             Paragraph(
                 f"{email} | {phone} | {loc} | {linkedin} | {lbl_start}",
@@ -503,7 +553,7 @@ class CVGeneratorService:
             r_comp = escape(str(job.get("company", "")))
             r_dates = escape(f"{job.get('start_date', '')} - {job.get('end_date', '')}".strip(" -"))
             story.append(Paragraph(f"<b>{r_title}</b> | {r_comp} ({r_dates})", body_style))
-            for b in job.get("highlights", [])[:4]:
+            for b in clean_bullets(job.get("highlights"))[:4]:
                 story.append(Paragraph(f"• {escape(str(b))}", bullet_style))
             story.append(Spacer(1, 3))
 
@@ -535,6 +585,7 @@ class CVGeneratorService:
         work_history: List[Dict[str, Any]],
         education: List[Dict[str, Any]],
         cv_language: str = "en",
+        candidate_headline: Optional[str] = None,
     ) -> str:
         is_ka = cv_language == "ka"
         full_name = candidate.get("full_name", "Candidate")
@@ -561,7 +612,7 @@ class CVGeneratorService:
 
         exp_blocks = ""
         for job in work_history[:4]:
-            bullets = "".join(f"<li style='margin-bottom:4px;'>{b}</li>" for b in job.get("highlights", [])[:4])
+            bullets = "".join(f"<li style='margin-bottom:4px;'>{escape(str(b))}</li>" for b in clean_bullets(job.get("highlights"))[:4])
             dates = f"{job.get('start_date', '')} – {job.get('end_date', '')}".strip(" –")
             exp_blocks += f"""
             <div style="margin-bottom:14px;">
@@ -615,7 +666,7 @@ class CVGeneratorService:
   <div class="cv-container">
     <div class="header">
       <h1 class="name">{full_name}</h1>
-      <div class="role">{target_role}</div>
+      <div class="role">{escape(candidate_headline or str(candidate.get('headline') or 'QA Automation Engineer & SDET | Playwright • Python • API • CI/CD'))}</div>
       <div class="contact">
         {email} &nbsp;•&nbsp; {phone} &nbsp;•&nbsp; {loc} &nbsp;•&nbsp; {linkedin} &nbsp;•&nbsp; <strong>{lbl_start}</strong>
       </div>
@@ -703,7 +754,8 @@ class CVGeneratorService:
             cv_style=cv_style,
         )
 
-        # Clean subject: never leave '[Name]' or hardcoded wrong roles
+        # Clean subject & sanitize company (never address 'საქართველოს მასშტაბით-ის გუნდს')
+        real_company = sanitize_company_name(company, target_email=target_email, fallback="")
         if email_subject_template and "qa automation engineer - [name]" not in email_subject_template.lower():
             clean_subject = re.sub(r"\[(?:your\s+)?name\]", cand_name, email_subject_template, flags=re.I).strip()
         else:
@@ -712,28 +764,51 @@ class CVGeneratorService:
         contact_footer = "\n".join(x for x in [cand_name, cand_email, cand_phone, cand_linkedin] if x)
         skills_highlight = ", ".join(matched[:6]) if matched else ", ".join(cand_skills[:6])
 
+        # Extract authentic prior companies & experience years from ground truth (never invent employers)
+        work_companies = []
+        for w in (gt.get("work_history") or []):
+            comp_raw = sanitize_company_name(w.get("company"), fallback="")
+            if comp_raw and comp_raw not in work_companies:
+                work_companies.append(comp_raw)
+        companies_phrase = ", ".join(work_companies[:3])
+        exp_years = gt.get("parsed_skills_taxonomy", {}).get("years_of_experience") or 1.5
+
         if lang == "ka":
+            salutation = f"მოგესალმებით, {real_company}-ის გუნდს," if real_company else "მოგესალმებით, გუნდს,"
+            hook_company = f"{real_company}-ში" if real_company else "თქვენს კომპანიაში"
+            proof_para = (
+                f"{companies_phrase}-ში მუშაობისას პრაქტიკულად გამოვიყენე {skills_highlight} — ვქმნიდი ავტომატიზებულ რეგრესიულ ტესტებს, ვამოწმებდი REST API კონტრაქტებსა და მონაცემთა მთლიანობას, რამაც მნიშვნელოვნად შეამცირა გამოშვებების შემოწმების დრო."
+                if companies_phrase
+                else f"ჩემს ყოველდღიურ საინჟინრო პრაქტიკაში ({skills_highlight}) ვფოკუსირდები სტაბილურ ავტომატიზაციაზე, API ვალიდაციაზე და ხარისხის უწყვეტ კონტროლზე."
+            )
+            cta_company = f"{real_company}-ის" if real_company else "თქვენი პროდუქტის"
             cover_letter = (
-                f"მოგესალმებით {company}-ის გუნდს,\n\n"
-                f"გწერთ თქვენს მიერ გამოქვეყნებულ „{job_title}“ პოზიციასთან დაკავშირებით. "
-                f"პროფესიული ინტერესითა და პრაქტიკული გამოცდილებით ვფლობ ისეთ უნარებს, როგორიცაა {skills_highlight}, "
-                f"და მზად ვარ მაქსიმალურად ჩავერთო {company}-ის პროექტებში.\n\n"
-                f"{narratives['motivation_statement']}\n\n"
-                f"თანდართული სახით გიგზავნით ჩემს რეზიუმეს (Word / PDF: {cv_res['docx_filename']}).\n\n"
+                f"{salutation}\n\n"
+                f"დიდი ინტერესით გიგზავნით განაცხადს „{job_title}“ პოზიციაზე {hook_company}. "
+                f"მაქვს {exp_years:g} წლიანი პრაქტიკული გამოცდილება QA ავტომატიზაციასა და API/Manual ტესტირებაში ({skills_highlight}).\n\n"
+                f"{proof_para}\n\n"
+                f"მოხარული ვიქნები შევუერთდე {cta_company} გუნდს და წვლილი შევიტანო ტესტირების პროცესის სტაბილურობაში. მუშაობის დაწყება შემიძლია შეთავაზებიდან 1 კვირაში. თანდართულია ჩემი რეზიუმე ({cv_res['docx_filename']}).\n\n"
                 f"პატივისცემით,\n{contact_footer}"
             )
         else:
+            salutation = f"Dear {real_company} Hiring Team," if real_company else "Dear Hiring Team,"
+            target_phrase = f"at {real_company}" if real_company else "with your engineering team"
+            proof_para = (
+                f"Across my QA engineering roles at {companies_phrase}, I applied {skills_highlight} to automate regression coverage, validate REST API contracts, and verify database integrity—helping engineering teams ship reliable releases faster."
+                if companies_phrase
+                else f"In my hands-on QA work across {skills_highlight}, I focus on pragmatic automated coverage, API verification, and catching critical regressions early before production."
+            )
+            cta_team = f"{real_company}'s" if real_company else "your team's"
             cover_letter = (
-                f"Dear {company} Hiring Team,\n\n"
-                f"I am writing to apply for the {job_title} position at {company}. "
-                f"With hands-on experience across {skills_highlight}, I can contribute immediately to product quality and reliable test execution.\n\n"
-                f"{narratives['motivation_statement']}\n\n"
-                f"Please find my tailored CV ({cv_res['docx_filename']}) attached. I am available to start 1 week after offer.\n\n"
+                f"{salutation}\n\n"
+                f"I am excited to apply for the {job_title} position {target_phrase}. With {exp_years:g} years of practical QA engineering experience spanning {skills_highlight}, I can add value quickly.\n\n"
+                f"{proof_para}\n\n"
+                f"I would welcome the chance to contribute to {cta_team} test stability and release quality. My tailored resume ({cv_res['docx_filename']}) is attached, and I am available to start 1 week after offer.\n\n"
                 f"Best regards,\n{contact_footer}"
             )
 
         return {
-            "company": company,
+            "company": real_company or company,
             "title": job_title,
             "recipient_email": target_email or "",
             "subject": clean_subject,

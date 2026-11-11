@@ -48,7 +48,7 @@ def generate_action_plans(
     Analyzes candidate skills against market vacancies, identifies top 3 high-impact missing skills,
     and generates 7-day interactive step-by-step learning roadmaps.
     """
-    plans = plan_service.generate_plans_for_user(user=current_user, session=session)
+    plans = plan_service.generate_plans_for_user(user=current_user, session=session, force_refresh=True)
     return [plan_to_out(p) for p in plans]
 
 
@@ -63,7 +63,7 @@ def list_action_plans(
     ).all()
     if not plans:
         # Auto-generate starter plans if none exist yet
-        plans = plan_service.generate_plans_for_user(user=current_user, session=session)
+        plans = plan_service.generate_plans_for_user(user=current_user, session=session, force_refresh=True)
     return [plan_to_out(p) for p in plans]
 
 

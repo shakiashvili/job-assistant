@@ -173,7 +173,9 @@ export async function fetchGeneratedResumes(): Promise<Array<{ filename: string;
 }
 
 export async function fetchMyCvs(): Promise<Array<{ filename: string; url: string; ext: string; size_kb: number }>> {
-  const res = await fetch(`${API_BASE}/resumes/my-cvs`);
+  const res = await fetch(`${API_BASE}/resumes/my-cvs`, {
+    headers: getAuthHeaders(),
+  });
   if (!res.ok) return [];
   return res.json();
 }
@@ -181,8 +183,12 @@ export async function fetchMyCvs(): Promise<Array<{ filename: string; url: strin
 export async function uploadPersonalCv(file: File): Promise<{ status: string; filename: string; url: string; ext: string; size_kb: number }> {
   const formData = new FormData();
   formData.append('file', file);
+  const token = localStorage.getItem('talentflow_token');
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
   const res = await fetch(`${API_BASE}/resumes/my-cvs/upload`, {
     method: 'POST',
+    headers,
     body: formData,
   });
   if (!res.ok) {
@@ -195,6 +201,7 @@ export async function uploadPersonalCv(file: File): Promise<{ status: string; fi
 export async function deletePersonalCv(filename: string): Promise<void> {
   const res = await fetch(`${API_BASE}/resumes/my-cvs/${encodeURIComponent(filename)}`, {
     method: 'DELETE',
+    headers: getAuthHeaders(),
   });
   if (!res.ok) throw new Error('Failed to delete CV');
 }
@@ -220,10 +227,13 @@ export async function generateCvEdition(params: {
 }> {
   const res = await fetch(`${API_BASE}/resumes/generate-edition`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify(params),
   });
-  if (!res.ok) throw new Error('Failed to generate CV edition');
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to generate CV edition' }));
+    throw new Error(err.detail || 'Failed to generate CV edition');
+  }
   return res.json();
 }
 

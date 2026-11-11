@@ -7,6 +7,52 @@ from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
+_COMPANY_LOCATION_BLACKLIST = {
+    "საქართველოს მასშტაბით",
+    "მთელი საქართველო",
+    "თბილისი",
+    "ბათუმი",
+    "ქუთაისი",
+    "რუსთავი",
+    "გორი",
+    "ზუგდიდი",
+    "თელავი",
+    "დისტანციურად",
+    "დისტანციური",
+    "tbilisi",
+    "batumi",
+    "kutaisi",
+    "georgia",
+    "remote",
+    "worldwide",
+    "georgian employer",
+    "hr.ge verified employer",
+    "employer",
+    "employer (hr.ge)",
+    "company",
+}
+
+
+def sanitize_company_name(
+    raw_company: Optional[str],
+    target_email: Optional[str] = None,
+    fallback: str = "Hiring Company",
+) -> str:
+    """Rejects location strings (e.g. 'საქართველოს მასშტაბით') mistakenly scraped as employer names."""
+    cleaned = re.sub(r"\s+", " ", (raw_company or "")).strip(" -|•·,")
+    lower = cleaned.lower()
+    is_date_only = bool(re.match(r"^\d{1,2}\s+[ა-ჰa-z]+$", lower))
+    if cleaned and lower not in _COMPANY_LOCATION_BLACKLIST and not is_date_only and len(cleaned) >= 2:
+        return cleaned
+
+    if target_email and "@" in target_email:
+        domain_root = target_email.split("@", 1)[1].split(".")[0].strip()
+        if domain_root.lower() not in ("gmail", "yahoo", "mail", "outlook", "hotmail", "icloud", "proton", "hr", "jobs"):
+            return domain_root.upper() if len(domain_root) <= 3 else domain_root.capitalize()
+
+    return fallback
+
+
 # Mandatory Strict Language Gate Keywords (Ukrainian / Russian requirement indicators)
 SLAVIC_LANGUAGE_REQUIREMENT_PATTERNS = [
     r"вільно",

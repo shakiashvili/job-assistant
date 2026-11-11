@@ -635,7 +635,7 @@ export const AuditPanel: React.FC = () => {
               Automated Portal Scrapers & Intelligent Market Filter (`JobPosting` SQL Table)
             </h3>
             <p className="text-xs text-slate-400">
-              Scrapes <strong>Jobs.ge</strong>, <strong>HR.ge</strong>, <strong>DOU.ua</strong>, and <strong>Djinni.co</strong>. Only jobs matching your requirements are shown, salaries are estimated via AI, and `&gt;= 75%` matches are promoted to <strong>STAGED</strong>.
+              Scrapes <strong>Jobs.ge</strong>, <strong>HR.ge</strong>, <strong>DOU.ua</strong>, <strong>Djinni.co</strong>, and <strong>JustJoin.it</strong>. Only suitable matches are shown, stated salaries are extracted honestly, and `&gt;= 75%` matches are promoted to <strong>STAGED</strong>.
             </p>
           </div>
 
@@ -689,7 +689,7 @@ export const AuditPanel: React.FC = () => {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
                 <span className="text-[10px] font-bold uppercase text-sky-400 block">
-                  Gmail Draft + Tailored Word CV Ready
+                  CV downloaded to your files ({preparedEmailPkg.docx_filename}) — please attach it to your Gmail draft before sending!
                 </span>
                 <span className="text-white font-semibold">
                   {preparedEmailPkg.title} ({preparedEmailPkg.company}) &mdash; Subject: <code className="text-sky-300">{preparedEmailPkg.subject}</code>
@@ -740,10 +740,15 @@ export const AuditPanel: React.FC = () => {
         {scrapeStats && (
           <div className="text-xs bg-emerald-950/30 border border-emerald-800/60 text-emerald-300 px-3.5 py-2 rounded-xl flex items-center justify-between flex-wrap gap-2">
             <span>
-              ✅ Found <strong>{scrapeStats.total - scrapeStats.filteredOut}</strong> jobs matching your requirements
+              ✅ Found <strong>{Math.max(0, scrapeStats.total)}</strong> suitable jobs matching your requirements
+              {scrapeStats.filteredOut > 0 && (
+                <span className="text-slate-400 ml-1.5">
+                  ({Math.max(0, scrapeStats.filteredOut)} filtered out)
+                </span>
+              )}
             </span>
             <span className="text-emerald-400 font-bold">
-              {scrapeStats.staged} ready to apply (&gt;= 75% match)
+              {Math.max(0, scrapeStats.staged)} ready to apply (&gt;= 75% match)
             </span>
           </div>
         )}

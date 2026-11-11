@@ -322,7 +322,18 @@ class GroundTruthStore:
         wh = data.get("work_history")
         if not isinstance(wh, list) or not wh:
             wh = parsed_md.get("work_history") or []
-        data["work_history"] = wh
+        cleaned_wh = []
+        for job in wh:
+            if not isinstance(job, dict):
+                continue
+            jcopy = dict(job)
+            jcopy["highlights"] = [
+                str(b).strip()
+                for b in (job.get("highlights") or [])
+                if b and str(b).strip() and not re.fullmatch(r"[-*_•–—.\s]+", str(b).strip())
+            ]
+            cleaned_wh.append(jcopy)
+        data["work_history"] = cleaned_wh
 
         edu = data.get("education")
         if not isinstance(edu, list):
@@ -453,6 +464,9 @@ class GroundTruthStore:
                     current_job = None
                 continue
             if in_exp:
+                # Never treat Markdown horizontal separators (---, ***, ___) as bullet items!
+                if re.fullmatch(r"[-*_=\s]{2,}", s):
+                    continue
                 if s.startswith("### "):
                     if current_job:
                         work_history.append(current_job)
@@ -490,7 +504,7 @@ class GroundTruthStore:
                 elif current_job and s.startswith(("-", "*")):
                     bullet = re.sub(r"^[-*]\s*", "", s).strip()
                     bullet = re.sub(r"[*_`]+", "", bullet).strip()
-                    if bullet:
+                    if bullet and not re.fullmatch(r"[-*_•–—.\s]+", bullet):
                         current_job["highlights"].append(bullet)
         if current_job:
             work_history.append(current_job)

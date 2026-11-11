@@ -2,7 +2,7 @@ import asyncio
 import logging
 import re
 from typing import Dict, Any, List, Optional
-from .base_scraper import BasePortalScraper, parse_contact_method_and_email
+from .base_scraper import BasePortalScraper, parse_contact_method_and_email, sanitize_company_name
 from ..link_validator import fetch_and_validate_live_vacancy
 
 logger = logging.getLogger(__name__)
@@ -59,8 +59,9 @@ class HrGeScraper(BasePortalScraper):
                     if x.get_text(" ", strip=True) and x.get_text(" ", strip=True) != title
                 ]
                 for ct in cand_texts:
-                    if 2 <= len(ct) <= 45 and not re.search(r"^\d+\s+[ა-ჰ]+|ვიპ|vip|თბილისი|ბათუმი", ct, re.I):
-                        company = ct
+                    clean_ct = sanitize_company_name(ct, fallback="")
+                    if clean_ct and 2 <= len(clean_ct) <= 45 and not re.search(r"ვიპ|vip", clean_ct, re.I):
+                        company = clean_ct
                         break
 
             full_url = href if href.startswith("http") else f"https://www.hr.ge/{href.lstrip('/')}"
@@ -72,16 +73,13 @@ class HrGeScraper(BasePortalScraper):
 
             prelim_desc = f"{title} at {company or 'Employer'} (HR.ge)"
             channel, target_email, email_subj = parse_contact_method_and_email(prelim_desc, str(item))
-            if not company and target_email and "@" in target_email:
-                domain_root = target_email.split("@", 1)[1].split(".")[0]
-                if domain_root not in ("gmail", "yahoo", "mail", "outlook", "hotmail", "hr"):
-                    company = domain_root.capitalize()
+            company = sanitize_company_name(company, target_email=target_email, fallback="კომპანია (HR.ge)")
 
             results.append({
                 "portal": self.portal_name,
                 "external_id": ext_id,
                 "title": title,
-                "company": company or "Employer (HR.ge)",
+                "company": company,
                 "url": full_url,
                 "market": self.market,
                 "is_remote": False,
@@ -112,15 +110,14 @@ class HrGeScraper(BasePortalScraper):
             w in lower_desc for w in ["remote", "დისტანციურ", "სახლიდან", "hybrid"]
         )
         channel, target_email, email_subj = parse_contact_method_and_email(clean_text, raw_html)
-        if item.get("company") in ("Employer (HR.ge)", "HR.ge Verified Employer", "", None):
-            soup_det = self.make_soup(raw_html)
-            comp_det = soup_det.select_one("a[href*='/company/'], .company-name, .employer-name, [itemprop='hiringOrganization']")
-            if comp_det and comp_det.get_text(strip=True):
-                item["company"] = comp_det.get_text(" ", strip=True)
-            elif target_email and "@" in target_email:
-                dom = target_email.split("@", 1)[1].split(".")[0]
-                if dom not in ("gmail", "yahoo", "mail", "outlook", "hotmail", "hr"):
-                    item["company"] = dom.capitalize()
+        soup_det = self.make_soup(raw_html)
+        comp_det = soup_det.select_one("a[href*='/company/'], .company-name, .employer-name, [itemprop='hiringOrganization']")
+        det_comp_txt = comp_det.get_text(" ", strip=True) if comp_det else ""
+        item["company"] = sanitize_company_name(
+            det_comp_txt or item.get("company"),
+            target_email=target_email,
+            fallback="კომპანია (HR.ge)",
+        )
 
         item["channel"] = channel
         item["delivery_channel"] = channel
