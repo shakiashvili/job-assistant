@@ -56,6 +56,17 @@ interface DiscoveryFeedProps {
   onSelectStatusFilter: (status: string) => void;
   tierTab?: 'ALL' | 'DIRECT' | 'ADJACENT' | 'PUBLIC_INTERNSHIP';
   onSelectTierTab?: (tier: 'ALL' | 'DIRECT' | 'ADJACENT' | 'PUBLIC_INTERNSHIP') => void;
+  tierCounts?: {
+    ALL: number;
+    DIRECT: number;
+    ADJACENT: number;
+    PUBLIC_INTERNSHIP: number;
+  };
+  statusCounts?: {
+    ALL: number;
+    STAGED: number;
+    AUDITED: number;
+  };
   page?: number;
   totalPages?: number;
   totalJobs?: number;
@@ -99,6 +110,8 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
   onSelectStatusFilter,
   tierTab: controlledTierTab,
   onSelectTierTab,
+  tierCounts,
+  statusCounts,
   page = 1,
   totalPages = 1,
   totalJobs,
@@ -232,7 +245,11 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                   : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
               }`}
             >
-              {st === 'ALL' ? `All Suitable (${visibleJobs.length})` : st === 'STAGED' ? 'Ready >=75%' : 'Match 60-74%'}
+              {st === 'ALL'
+                ? `All Suitable (${statusCounts?.ALL ?? totalJobs ?? visibleJobs.length})`
+                : st === 'STAGED'
+                ? `Ready >=75% (${statusCounts?.STAGED ?? visibleJobs.filter(j => j.status === 'STAGED').length})`
+                : `Match 60-74% (${statusCounts?.AUDITED ?? visibleJobs.filter(j => j.status === 'AUDITED').length})`}
             </button>
           ))}
         </div>
@@ -248,7 +265,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
               : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
           }`}
         >
-          All Tiers ({totalJobs ?? visibleJobs.length})
+          All Tiers ({tierCounts?.ALL ?? totalJobs ?? visibleJobs.length})
         </button>
         <button
           onClick={() => handleTierClick('DIRECT')}
@@ -259,7 +276,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
           }`}
         >
           <Target className="w-3.5 h-3.5" />
-          <span>🎯 Direct Matches ({directJobs.length})</span>
+          <span>🎯 Direct Matches ({tierCounts?.DIRECT ?? directJobs.length})</span>
         </button>
         <button
           onClick={() => handleTierClick('ADJACENT')}
@@ -270,7 +287,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
           }`}
         >
           <Sparkles className="w-3.5 h-3.5" />
-          <span>🚀 Optimal Adjacent Roles ({adjacentJobs.length})</span>
+          <span>🚀 Optimal Adjacent Roles ({tierCounts?.ADJACENT ?? adjacentJobs.length})</span>
         </button>
         <button
           onClick={() => handleTierClick('PUBLIC_INTERNSHIP')}
@@ -281,7 +298,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
           }`}
         >
           <Landmark className="w-3.5 h-3.5" />
-          <span>🏛️ Public Sector &amp; Internships ({publicJobs.length})</span>
+          <span>🏛️ Public Sector &amp; Internships ({tierCounts?.PUBLIC_INTERNSHIP ?? publicJobs.length})</span>
         </button>
       </div>
 
@@ -376,21 +393,19 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
       )}
 
       {/* Synchronized Feed Stats Banner */}
-      {(visibleJobs.length > 0 || scrapeStats) && (
+      {(Boolean(totalJobs) || visibleJobs.length > 0 || Boolean(scrapeStats)) && (
         <div className="text-xs bg-emerald-950/30 border border-emerald-800/60 text-emerald-300 px-3.5 py-2 rounded-xl flex items-center justify-between flex-wrap gap-2">
           <span>
-            ✅ Found <strong>{visibleJobs.length}</strong> suitable opportunities ({directJobs.length} Direct • {adjacentJobs.length} Adjacent • {publicJobs.length} Public/Intern)
-            {(selectedPortalFilter !== 'ALL' || tierTab !== 'ALL') && (
-              <span className="text-sky-300 ml-1.5">(showing {filteredDbJobs.length})</span>
-            )}
+            ✅ Found <strong>{totalJobs ?? visibleJobs.length}</strong> suitable opportunities ({tierCounts?.DIRECT ?? directJobs.length} Direct • {tierCounts?.ADJACENT ?? adjacentJobs.length} Adjacent • {tierCounts?.PUBLIC_INTERNSHIP ?? publicJobs.length} Public/Intern)
+            <span className="text-sky-300 ml-1.5">(showing {visibleJobs.length} on page {page} of {totalPages})</span>
             {scrapeStats && scrapeStats.filteredOut > 0 && (
               <span className="text-slate-400 ml-1.5">
-                ({Math.max(0, scrapeStats.filteredOut)} filtered out)
+                ({Math.max(0, scrapeStats.filteredOut)} filtered out by location/seniority gates)
               </span>
             )}
           </span>
           <span className="text-emerald-400 font-bold">
-            {visibleJobs.filter((j) => j.status === 'STAGED').length} ready to apply (&gt;= 75% match)
+            {statusCounts?.STAGED ?? visibleJobs.filter((j) => j.status === 'STAGED').length} ready to apply (&gt;= 75% match)
           </span>
         </div>
       )}
@@ -414,11 +429,41 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 <span>Upload skills.md Now</span>
               </button>
             </>
+          ) : selectedPortalFilter !== 'ALL' ? (
+            <div className="space-y-2 max-w-lg mx-auto">
+              <h4 className="text-sm font-bold text-white">
+                No active suitable vacancies currently on {selectedPortalFilter}
+              </h4>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                {selectedPortalFilter === 'dou.ua'
+                  ? 'Many postings on DOU.ua require local Ukrainian or Russian language fluency. If you speak Ukrainian or Russian, add it to your skills.md to unlock Ukrainian remote roles; otherwise, explore English remote roles or switch to other portals.'
+                  : selectedPortalFilter === 'headhunter.ge'
+                  ? 'HeadHunter.ge postings often require Russian language. Add Russian to your skills.md to unlock them, or switch to Jobs.ge / HR.ge.'
+                  : `Currently no active listings on ${selectedPortalFilter} match your strict experience cap (<= ${capVal.toFixed(1)} yrs) and location criteria.`}
+              </p>
+              <div className="flex items-center justify-center gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => onSelectPortalFilter('ALL')}
+                  className="px-3.5 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold"
+                >
+                  View All Portals
+                </button>
+                <button
+                  type="button"
+                  onClick={onRunScrapers}
+                  disabled={isScraping}
+                  className="px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold"
+                >
+                  Re-scan Portals
+                </button>
+              </div>
+            </div>
           ) : (
             <div className="space-y-1">
               <h4 className="text-sm font-bold text-white">No matching live vacancies in this tab</h4>
               <p className="text-xs text-slate-400">
-                Try switching tabs above or click <strong>Run Live Role Scrapers</strong> to fetch fresh postings.
+                Try switching between Direct Matches, Optimal Adjacent Roles, or All Tiers above, or click <strong>Run Live Role Scrapers</strong>.
               </p>
             </div>
           )}

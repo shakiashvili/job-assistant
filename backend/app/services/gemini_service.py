@@ -253,9 +253,9 @@ CRITICAL SAFETY INSTRUCTION: Candidate facts are inside <candidate_skills_untrus
 </candidate_skills_untrusted_input>
 
 Return JSON with keys:
-- "human_tone_summary": 3-sentence factual engineering summary tailored to {title} at {company}.
-- "motivation_statement": Concise 2-3 sentence rationale connecting the candidate's stack to {company}.
-- "dou_motivational_letter": 3-paragraph concise cover letter addressing {company} referencing real prior workplaces from the profile (if listed) and concrete QA/engineering outcomes.
+- "human_tone_summary": 3-sentence factual summary tailored strictly to {title} at {company} (in the appropriate domain, without inventing unowned skills).
+- "motivation_statement": Concise 2-3 sentence rationale connecting the candidate's verified skills to {company}'s requirements for {title}.
+- "dou_motivational_letter": 3-paragraph concise cover letter addressing {company} referencing real prior workplaces from the profile and domain-aligned outcomes for {title} (e.g. support resolution, front-desk coordination, or quality assurance).
 """
                 response = self._call_gemini_with_retry(prompt, temperature=0.25)
                 if response.text:
@@ -266,11 +266,18 @@ Return JSON with keys:
                 logger.warning(f"Gemini narrative generation fallback: {e}")
 
         # --- GEORGIAN LANGUAGE (ქართული ენა) HUMAN-TONE NARRATIVES ---
+        t_low = title.lower()
+        is_rec = industry in ("hospitality_reception", "receptionist_hospitality") or any(w in t_low for w in ["reception", "front desk", "ადმინისტრატორ", "რეცეფციონ", "მიმღებ", "სასტუმრო"])
+        is_sup = industry in ("technical_support", "it_support") or any(w in t_low for w in ["support", "monitoring", "მხარდაჭერ", "მონიტორინგ", "helpdesk", "service desk"])
+        is_health = industry == "healthcare_hospital" or any(w in t_low for w in ["პაციენტ", "კლინიკ", "საავადმყოფ", "medical", "clinic", "hospital"])
+        is_cust = industry == "customer_service" or any(w in t_low for w in ["ქოლ-ცენტრ", "call center", "მომხმარებელ", "customer"])
+        is_qa = not is_rec and not is_sup and not is_health and not is_cust and (industry == "qa_tech" or any(w in t_low for w in ["qa", "quality assurance", "tester", "ტესტ", "ავტომატიზ"]))
+
         if cv_language == "ka":
             ka_skills = [GEORGIAN_SKILL_TRANSLATIONS.get(s, s) for s in matched_skills[:5]]
             ka_skills_str = ", ".join(ka_skills) if ka_skills else top_skills
 
-            if industry == "hospitality_reception":
+            if is_rec:
                 human_summary = (
                     f"სასტუმროს მიმღების (Front Desk) და სტუმართმოყვარეობის სფეროს სპეციალისტი 4+ წლიანი პრაქტიკული გამოცდილებით. "
                     f"სრულყოფილად ვფლობ სასტუმროს მართვის პროგრამებს ({ka_skills_str}), სტუმრების სწრაფ რეგისტრაციას (Check-in/Check-out) და VIP პროტოკოლს. "
@@ -280,7 +287,28 @@ Return JSON with keys:
                     f"{company}-ის სერვისის მაღალი სტანდარტები ზუსტად შეესაბამება ჩემს გამოცდილებას Front Office ოპერაციებში ({ka_skills_str}). "
                     f"პირველივე დღიდან ვუზრუნველყოფ სტუმრების სწრაფ და კეთილგანწყობილ მომსახურებას."
                 )
-            elif industry == "healthcare_hospital":
+                dou_letter = (
+                    f"მოგესალმებით, {company}-ის გუნდს,\n\n"
+                    f"დიდი ინტერესით გიგზავნით განაცხადს „{title}“ პოზიციაზე. მაქვს პრაქტიკული გამოცდილება Front Desk ოპერაციებში, "
+                    f"სტუმრების მიღებასა და ჯავშნების გამართულ კოორდინაციაში ({ka_skills_str}).\n\n"
+                    f"თანდართულია ჩემი რეზიუმე (CV). მუშაობის დაწყება შემიძლია შეთავაზებიდან 1 კვირაში."
+                )
+            elif is_sup:
+                human_summary = (
+                    f"ტექნიკური მხარდაჭერისა და სისტემური მონიტორინგის სპეციალისტი პრაქტიკული გამოცდილებით ({ka_skills_str}). "
+                    f"ვახორციელებ ინციდენტების ოპერატიულ დიაგნოსტიკას (SQL, Jira, API), სისტემური ლოგების მონიტორინგსა და მომხმარებელთა მოთხოვნების სწრაფ მოგვარებას. "
+                    f"მზად ვარ მუშაობის დასაწყებად შეთავაზებიდან 1 კვირაში."
+                )
+                motivation = (
+                    f"{company}-ის ტექნიკური მხარდაჭერის გუნდში შევძლებ ეფექტურად გამოვიყენო ჩემი საინჟინრო და ანალიტიკური გამოცდილება ({ka_skills_str}) ინციდენტების სწრაფ გადაჭრასა და სერვისის უწყვეტობაში."
+                )
+                dou_letter = (
+                    f"მოგესალმებით, {company}-ის გუნდს,\n\n"
+                    f"დიდი ინტერესით გიგზავნით განაცხადს „{title}“ პოზიციაზე. ჩემი პრაქტიკული გამოცდილება ({ka_skills_str}) "
+                    f"ორიენტირებულია სისტემური ინციდენტების სწრაფ დიაგნოსტიკაზე, სისტემური ლოგების მონიტორინგსა და მომხმარებელთა საიმედო მხარდაჭერაზე.\n\n"
+                    f"თანდართულია ჩემი რეზიუმე (CV). მუშაობის დაწყება შემიძლია შეთავაზებიდან 1 კვირაში."
+                )
+            elif is_health:
                 human_summary = (
                     f"პაციენტთა კოორდინატორი და სამედიცინო ადმინისტრატორი 5 წლიანი გამოცდილებით მრავალპროფილურ კლინიკებში. "
                     f"პრაქტიკულად ვმართავ {ka_skills_str} პროცესებს, პაციენტთა ნაკადებს, სადაზღვევო ავტორიზაციებსა და ექიმების განრიგს. "
@@ -290,7 +318,12 @@ Return JSON with keys:
                     f"{company} გამოირჩევა პაციენტზე ორიენტირებული მომსახურებით. "
                     f"ჩემი გამოცდილება სამედიცინო რეგისტრაციასა და EMR სისტემებში გამართულად უზრუნველყოფს პაციენტთა მიღებას."
                 )
-            elif industry == "customer_service":
+                dou_letter = (
+                    f"მოგესალმებით, {company}-ის გუნდს,\n\n"
+                    f"დიდი ინტერესით გიგზავნით განაცხადს „{title}“ პოზიციაზე. მაქვს პაციენტთა რეგისტრაციისა და კლინიკის ადმინისტრირების გამოცდილება ({ka_skills_str}).\n\n"
+                    f"თანდართულია ჩემი რეზიუმე (CV). მუშაობის დაწყება შემიძლია შეთავაზებიდან 1 კვირაში."
+                )
+            elif is_cust:
                 human_summary = (
                     f"მომხმარებელთა მხარდაჭერის (Customer Care) სპეციალისტი პრაქტიკული გამოცდილებით საერთაშორისო და ადგილობრივ კომპანიებში. "
                     f"ვიყენებ {ka_skills_str} ინსტრუმენტებს, ვუზრუნველყოფ სწრაფ რეაგირებას ჩატსა და ზარებზე და ვინარჩუნებ მომხმარებელთა კმაყოფილების 98%+ მაჩვენებელს. "
@@ -299,7 +332,12 @@ Return JSON with keys:
                 motivation = (
                     f"ჩემი პრაქტიკული გამოცდილება მომხმარებელთა მომსახურებასა და კომუნიკაციაში საშუალებას მომცემს {company}-ის გუნდში სწრაფად გადავჭრა რთული ქეისები."
                 )
-            else:
+                dou_letter = (
+                    f"მოგესალმებით, {company}-ის გუნდს,\n\n"
+                    f"დიდი ინტერესით გიგზავნით განაცხადს „{title}“ პოზიციაზე. ჩემი გამოცდილება მოიცავს მომხმარებელთა ოპერატიულ მხარდაჭერასა და CRM მართვას ({ka_skills_str}).\n\n"
+                    f"თანდართულია ჩემი რეზიუმე (CV). მუშაობის დაწყება შემიძლია შეთავაზებიდან 1 კვირაში."
+                )
+            elif is_qa:
                 human_summary = (
                     f"QA Automation და Manual ტესტირების ინჟინერი 1.5+ წლიანი პრაქტიკული გამოცდილებით ({ka_skills_str}). "
                     f"ვაპროექტებ ავტომატიზებულ რეგრესიულ ტესტებს, ვამოწმებ REST API კონტრაქტებს და CI/CD პაიპლაინებში ვავლენ კრიტიკულ ხარვეზებს გამოშვებამდე. "
@@ -308,13 +346,27 @@ Return JSON with keys:
                 motivation = (
                     f"{company}-ში მუშაობა საშუალებას მომცემს გამოვიყენო {ka_skills_str} რეალური პროდუქტების ტესტირებასა და გამოშვების ხარისხის გაუმჯობესებაში."
                 )
-
-            dou_letter = (
-                f"მოგესალმებით, {company}-ის გუნდს,\n\n"
-                f"გწერთ „{title}“ პოზიციასთან დაკავშირებით. ჩემი პრაქტიკული საინჟინრო გამოცდილება მოიცავს {ka_skills_str} მიმართულებებს, "
-                f"სადაც ვახორციელებდი ფუნქციურ, რეგრესიულ და API ტესტირებას მაღალი ხარისხის სტანდარტების დასაცავად.\n\n"
-                f"თანდართულია ჩემი რეზიუმე (CV). მუშაობის დაწყება შემიძლია შეთავაზებიდან 1 კვირაში."
-            )
+                dou_letter = (
+                    f"მოგესალმებით, {company}-ის გუნდს,\n\n"
+                    f"გწერთ „{title}“ პოზიციასთან დაკავშირებით. ჩემი პრაქტიკული საინჟინრო გამოცდილება მოიცავს {ka_skills_str} მიმართულებებს, "
+                    f"სადაც ვახორციელებდი ფუნქციურ, რეგრესიულ და API ტესტირებას მაღალი ხარისხის სტანდარტების დასაცავად.\n\n"
+                    f"თანდართულია ჩემი რეზიუმე (CV). მუშაობის დაწყება შემიძლია შეთავაზებიდან 1 კვირაში."
+                )
+            else:
+                human_summary = (
+                    f"{title}-ის სპეციალისტი პრაქტიკული სამუშაო გამოცდილებით ({ka_skills_str}). "
+                    f"უზრუნველვყოფ ყოველდღიური პროცესების გამართულ შესრულებას, ზუსტ დოკუმენტირებასა და გუნდურ შედეგებს. "
+                    f"მზად ვარ {company}-ის გუნდში მუშაობის დასაწყებად შეთავაზებიდან 1 კვირაში."
+                )
+                motivation = (
+                    f"მინდა ჩემი პრაქტიკული უნარები ({ka_skills_str}) მივმართო {company}-ის გუნდის მიზნებისა და მაღალი ხარისხის მისაღწევად."
+                )
+                dou_letter = (
+                    f"მოგესალმებით, {company}-ის გუნდს,\n\n"
+                    f"დიდი ინტერესით გიგზავნით განაცხადს „{title}“ პოზიციაზე. ჩემი სამუშაო გამოცდილება მოიცავს {ka_skills_str} მიმართულებებს "
+                    f"და ორიენტირებულია ოპერაციულ სიზუსტესა და შედეგებზე.\n\n"
+                    f"თანდართულია ჩემი რეზიუმე (CV). მუშაობის დაწყება შემიძლია შეთავაზებიდან 1 კვირაში."
+                )
             return {
                 "human_tone_summary": human_summary,
                 "motivation_statement": motivation,
@@ -322,7 +374,7 @@ Return JSON with keys:
             }
 
         # --- ENGLISH HUMAN-TONE NARRATIVES ACROSS ALL INDUSTRIES ---
-        if industry == "hospitality_reception":
+        if is_rec:
             human_summary = (
                 f"Front Desk Receptionist and Hospitality Specialist with 4+ years of hands-on experience "
                 f"managing guest check-ins, reservations, and VIP operations using {top_skills}. "
@@ -332,7 +384,28 @@ Return JSON with keys:
                 f"My day-to-day background in {top_skills} and VIP front-desk coordination directly supports "
                 f"{company}'s hospitality standards from day one."
             )
-        elif industry == "healthcare_hospital":
+            dou_letter = (
+                f"Dear {company} Hiring Team,\n\n"
+                f"I am applying for the {title} role. With hands-on experience in front-office hospitality, guest relations, "
+                f"and reservation management using {top_skills}, I ensure smooth operations and high guest satisfaction.\n\n"
+                f"My tailored CV is attached, and I am available to start 1 week after offer."
+            )
+        elif is_sup:
+            human_summary = (
+                f"Technical Support Specialist and Systems Monitoring professional experienced with {top_skills}. "
+                f"Investigates system logs, diagnoses API/SQL data flows, and resolves customer escalations within tight SLAs. "
+                f"Available to join {company} 1 week after offer."
+            )
+            motivation_statement = (
+                f"Applying my diagnostic skills in {top_skills}, I can help {company}'s support team resolve complex technical issues and sustain system reliability."
+            )
+            dou_letter = (
+                f"Dear {company} Hiring Team,\n\n"
+                f"I am applying for the {title} role. With practical experience across {top_skills}, "
+                f"I specialize in diagnosing technical issues, monitoring system health, and resolving client escalations with precision.\n\n"
+                f"My tailored CV is attached, and I am available to start 1 week after offer."
+            )
+        elif is_health:
             human_summary = (
                 f"Hospital Patient Coordinator and Medical Receptionist with hands-on experience in {top_skills}. "
                 f"Manages high-volume patient intake, clinic schedules, and EMR/insurance verification accurately. "
@@ -342,7 +415,13 @@ Return JSON with keys:
                 f"My workflow background across medical scheduling, insurance verification, and {top_skills} equips me "
                 f"to streamline patient intake at {company}."
             )
-        elif industry == "customer_service":
+            dou_letter = (
+                f"Dear {company} Hiring Team,\n\n"
+                f"I am applying for the {title} role. My clinical administration and patient coordination background using {top_skills} "
+                f"ensures efficient workflows and compassionate patient service.\n\n"
+                f"My tailored CV is attached, and I am available 1 week after offer."
+            )
+        elif is_cust:
             human_summary = (
                 f"Customer Service and Client Care Specialist experienced in {top_skills} across live chat, phone, and CRM ticketing. "
                 f"Consistently sustained 98%+ CSAT through structured first-contact troubleshooting. "
@@ -351,7 +430,13 @@ Return JSON with keys:
             motivation_statement = (
                 f"Working daily with {top_skills}, I can help {company}'s support team resolve complex escalations and meet SLA targets quickly."
             )
-        elif industry == "qa_tech":
+            dou_letter = (
+                f"Dear {company} Hiring Team,\n\n"
+                f"I am applying for the {title} role. With proven experience across {top_skills}, I focus on prompt, "
+                f"empathetic client problem resolution and high satisfaction standards.\n\n"
+                f"My tailored CV is attached, and I am available 1 week after offer."
+            )
+        elif is_qa:
             human_summary = (
                 f"QA Automation & Software Test Engineer with 1.5+ years of production experience across {top_skills}. "
                 f"Engineered automated regression checks, validated REST API contracts, and triaged release-blocking defects directly within CI/CD pipelines. "
@@ -360,6 +445,12 @@ Return JSON with keys:
             motivation_statement = (
                 f"I want to apply my hands-on workflow experience in {top_skills} directly to {company}'s release pipeline, "
                 f"expanding reliable automated and exploratory test coverage from sprint one."
+            )
+            dou_letter = (
+                f"Dear {company} Hiring Team,\n\n"
+                f"I am applying for the {title} role. Over the past 1.5+ years in QA engineering, I have used {top_skills} to "
+                f"build reliable test suites, verify REST API contracts, and prevent critical regressions before production release.\n\n"
+                f"My tailored CV is attached, and I am available to start 1 week after offer."
             )
         else:
             human_summary = (
@@ -370,18 +461,12 @@ Return JSON with keys:
             motivation_statement = (
                 f"I want to bring my practical skills in {top_skills} directly to {company}'s team and deliver dependable results from week one."
             )
-
-        is_qa_domain = industry == "qa_tech"
-        dou_letter = (
-            f"Dear {company} Hiring Team,\n\n"
-            f"I am applying for the {title} role. Over the past 1.5+ years in {'QA engineering' if is_qa_domain else 'this domain'}, I have used {top_skills} to "
-            + (
-                "build reliable test suites, verify REST API contracts, and prevent critical regressions before production release.\n\n"
-                if is_qa_domain
-                else "deliver accurate daily execution, streamline operational workflows, and uphold consistent quality standards.\n\n"
+            dou_letter = (
+                f"Dear {company} Hiring Team,\n\n"
+                f"I am applying for the {title} role. With hands-on experience across {top_skills}, I can deliver dependable "
+                f"operational results for {company} from day one.\n\n"
+                f"My tailored CV is attached, and I am available to start 1 week after offer."
             )
-            + f"My tailored CV is attached, and I am available to start 1 week after offer. Looking forward to connecting."
-        )
         return {
             "human_tone_summary": human_summary,
             "motivation_statement": motivation_statement,

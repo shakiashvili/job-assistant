@@ -25,6 +25,7 @@
     "*://hr.gov.ge/*",
     "*://*.headhunter.ge/*",
     "*://justjoin.it/*",
+    "*://mail.google.com/*",
     "http://localhost:8000/*",
     "http://127.0.0.1:8000/*",
     "http://localhost:5173/*"

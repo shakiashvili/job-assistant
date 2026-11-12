@@ -166,7 +166,7 @@ def validate_live_html_content(url: str, html: str) -> Tuple[bool, str]:
     return len(full_text) >= 80, full_text[:4000]
 
 
-async def fetch_and_validate_live_vacancy(url: str, timeout: float = 8.0) -> Tuple[bool, str, str]:
+async def fetch_and_validate_live_vacancy(url: str, timeout: float = 4.0) -> Tuple[bool, str, str]:
     """
     Performs an asynchronous HTTP GET request to a vacancy URL and verifies:
     1. HTTP status code is 200 OK.

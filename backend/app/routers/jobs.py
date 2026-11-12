@@ -175,19 +175,44 @@ async def list_scraped_jobs(
             select(CandidateProfile).order_by(CandidateProfile.updated_at.desc())
         ).first()
         if not _is_profile_uploaded_for_user(profile, current_user.email):
-            return {"items": [], "total": 0, "page": page, "limit": limit, "total_pages": 1}
+            return {
+                "items": [],
+                "total": 0,
+                "page": page,
+                "limit": limit,
+                "total_pages": 1,
+                "tier_counts": {"ALL": 0, "DIRECT": 0, "ADJACENT": 0, "PUBLIC_INTERNSHIP": 0},
+                "status_counts": {"ALL": 0, "STAGED": 0, "AUDITED": 0},
+            }
 
-        conditions = []
+        # Base conditions for suitable opportunities
+        base_conds = []
         if not include_filtered:
-            conditions.append(JobPosting.status != "FILTERED_OUT")
+            base_conds.append(JobPosting.status != "FILTERED_OUT")
         if portal and portal.upper() != "ALL":
-            conditions.append(JobPosting.portal == portal)
+            base_conds.append(JobPosting.portal == portal)
         if market and market.upper() != "ALL":
-            conditions.append(JobPosting.market == market)
+            base_conds.append(JobPosting.market == market)
+        if min_score is not None and min_score > 0:
+            base_conds.append(JobPosting.suitability_score >= min_score)
+
+        # Global tier and status counts across the database
+        tier_counts = {
+            "ALL": int(session.exec(select(func.count()).select_from(JobPosting).where(*base_conds)).one() or 0),
+            "DIRECT": int(session.exec(select(func.count()).select_from(JobPosting).where(*base_conds, JobPosting.match_tier == "DIRECT")).one() or 0),
+            "ADJACENT": int(session.exec(select(func.count()).select_from(JobPosting).where(*base_conds, JobPosting.match_tier == "ADJACENT")).one() or 0),
+            "PUBLIC_INTERNSHIP": int(session.exec(select(func.count()).select_from(JobPosting).where(*base_conds, (JobPosting.match_tier == "PUBLIC_INTERNSHIP") | (JobPosting.portal == "hr.gov.ge"))).one() or 0),
+        }
+
+        status_counts = {
+            "ALL": tier_counts["ALL"],
+            "STAGED": int(session.exec(select(func.count()).select_from(JobPosting).where(*base_conds, JobPosting.status == "STAGED")).one() or 0),
+            "AUDITED": int(session.exec(select(func.count()).select_from(JobPosting).where(*base_conds, JobPosting.status == "AUDITED")).one() or 0),
+        }
+
+        conditions = list(base_conds)
         if status and status.upper() != "ALL":
             conditions.append(JobPosting.status == status)
-        if min_score is not None and min_score > 0:
-            conditions.append(JobPosting.suitability_score >= min_score)
         if tier and tier.upper() != "ALL":
             t_low = tier.strip().lower()
             if t_low == "direct":
@@ -243,6 +268,8 @@ async def list_scraped_jobs(
             "page": page,
             "limit": limit,
             "total_pages": total_pages,
+            "tier_counts": tier_counts,
+            "status_counts": status_counts,
         }
 
 

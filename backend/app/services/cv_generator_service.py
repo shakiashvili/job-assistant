@@ -988,14 +988,64 @@ class CVGeneratorService:
 
         # Clean subject & sanitize company (never address location strings or portal chrome)
         real_company = sanitize_company_name(company, target_email=target_email, fallback="")
-        if email_subject_template and "qa automation engineer - [name]" not in email_subject_template.lower():
-            clean_subject = re.sub(r"\[(?:your\s+)?name\]", cand_name, email_subject_template, flags=re.I).strip()
+
+        # Dynamic target domain identification: never leak QA terms into Support/Receptionist/Healthcare/Finance
+        target_role_lower = f"{job_title} {description[:500]}".lower()
+        if any(w in target_role_lower for w in ["მხარდაჭერ", "მონიტორინგ", "support", "monitoring", "helpdesk", "service desk", "it support"]):
+            effective_domain = "technical_support"
+        elif any(w in target_role_lower for w in ["რეცეფციონ", "რეგისტრატორ", "მიმღებ", "reception", "front desk", "hospitality", "hotel", "სასტუმრო"]):
+            effective_domain = "receptionist_hospitality"
+        elif any(w in target_role_lower for w in ["პაციენტ", "კლინიკ", "საავადმყოფ", "სამედიცინო", "patient", "clinic", "hospital", "medical"]):
+            effective_domain = "healthcare_hospital"
+        elif any(w in target_role_lower for w in ["მომხმარებელ", "ქოლ-ცენტრ", "operator", "customer", "call center", "client service"]):
+            effective_domain = "customer_service"
+        elif any(w in target_role_lower for w in ["ლოჯისტიკ", "საწყობ", "მარაგ", "ტვირთ", "logistics", "supply chain", "procurement", "warehouse"]):
+            effective_domain = "logistics_supply_chain"
+        elif any(w in target_role_lower for w in ["ბუღალტერ", "ფინანს", "აუდიტ", "accountant", "finance", "accounting", "auditor"]):
+            effective_domain = "finance_accounting"
+        elif any(w in target_role_lower for w in ["მარკეტინგ", "marketing", "smm", "content"]):
+            effective_domain = "marketing_growth"
+        elif any(w in target_role_lower for w in ["გაყიდვ", "sales", "account executive", "business development"]):
+            effective_domain = "sales_bd"
+        elif any(w in target_role_lower for w in ["qa", "quality assurance", "tester", "ტესტ", "ავტომატიზ", "test engineer"]):
+            effective_domain = "qa_tech"
         else:
+            effective_domain = target_industry if target_industry != "hospitality_reception" else "receptionist_hospitality"
+
+        clean_subject = ""
+        if email_subject_template:
+            clean_subject = re.sub(r"\[(?:your\s+)?(?:name|სახელი(?:\s*გვარი)?|full\s*name)\]", cand_name, email_subject_template, flags=re.I).strip()
+            clean_subject = clean_subject.replace("[Name]", cand_name).replace("[name]", cand_name)
+            if effective_domain != "qa_tech" and "qa" in clean_subject.lower() and "qa" not in job_title.lower():
+                clean_subject = f"{job_title} — {cand_name}"
+            if "qa automation engineer" in clean_subject.lower() and "automation" not in job_title.lower():
+                clean_subject = f"{job_title} — {cand_name}"
+        if not clean_subject:
             clean_subject = f"{job_title} — {cand_name}" if cover_lang == "ka" else f"Application for {job_title} — {cand_name}"
 
         # Clean sign-off: excludes email & excludes placeholder phones/dashes
         contact_footer = "\n".join(x for x in [cand_name, cand_phone, cand_linkedin] if x and x != "-")
-        skills_highlight = ", ".join(matched[:6]) if matched else ", ".join(cand_skills[:6])
+
+        # Domain-aware skills highlight: never inject test runners or automation tools into hospitality/admin cover letters
+        is_non_tech_domain = effective_domain in (
+            "receptionist_hospitality", "healthcare_hospital", "customer_service", "logistics_supply_chain"
+        )
+        if is_non_tech_domain:
+            tech_noise = {"playwright", "selenium", "cypress", "appium", "pytest", "junit", "postman", "jmeter", "webdriver", "qa", "automation", "regression", "api testing", "test cases"}
+            clean_cand_skills = [s for s in cand_skills if not any(t in s.lower() for t in tech_noise)]
+            clean_matched = [r for r in matched if not any(t in r.lower() for t in tech_noise)]
+            if clean_matched:
+                skills_highlight = ", ".join(clean_matched[:5])
+            elif clean_cand_skills:
+                skills_highlight = ", ".join(clean_cand_skills[:5])
+            else:
+                skills_highlight = (
+                    "სტუმართმოყვარეობა, ორგანიზებულობა, კომუნიკაცია"
+                    if cover_lang == "ka"
+                    else "multilingual communication, organization, customer care"
+                )
+        else:
+            skills_highlight = ", ".join(matched[:6]) if matched else ", ".join(cand_skills[:6])
 
         # Extract authentic prior companies & experience years from ground truth (never invent employers)
         work_companies = []
@@ -1008,6 +1058,11 @@ class CVGeneratorService:
 
         # Domain-specific focus descriptions (NEVER leak QA terms into Hospitality/Logistics/Finance/Healthcare emails!)
         domain_focus_ka = {
+            "technical_support": (
+                "ტექნიკური მხარდაჭერის, მონიტორინგისა და სისტემური ინციდენტების მართვის მიმართულებით",
+                "ინციდენტების ოპერატიულ დიაგნოსტიკას (SQL, Jira, API), სისტემური ლოგების მონიტორინგსა და მომხმარებელთა მოთხოვნების სწრაფ მოგვარებას",
+                "სისტემების სტაბილურ მუშაობასა და მაღალი ხარისხის ტექნიკური მხარდაჭერის უზრუნველყოფაში",
+            ),
             "receptionist_hospitality": ("სტუმარმასპინძლობის, Front Desk ოპერაციებისა და სტუმრების მომსახურების სფეროში", "სტუმრების მაღალი სტანდარტით მიღებას, ჯავშნების გამართულ კოორდინაციას და მშვიდ, პროფესიონალურ კომუნიკაციას", "სერვისის ხარისხისა და სტუმრების კმაყოფილების ზრდაში"),
             "healthcare_hospital": ("პაციენტთა კოორდინაციის, სამედიცინო რეგისტრაციისა და კლინიკის ადმინისტრირების მიმართულებით", "პაციენტების სწრაფ და ყურადღებიან მიღებას, სადაზღვევო პროცესებისა და ექიმების განრიგის ზუსტ მართვას", "კლინიკის ადმინისტრაციული პროცესების გამართულობაში"),
             "customer_service": ("მომხმარებელთა მომსახურების, მხარდაჭერისა და კლიენტებთან კომუნიკაციის მიმართულებით", "მომხმარებელთა მომართვების სწრაფ გადაჭრას, CRM სისტემების ეფექტურ მართვასა და მაღალი CSAT სტანდარტის შენარჩუნებას", "მომხმარებელთა გამოცდილების გაუმჯობესებაში"),
@@ -1018,6 +1073,11 @@ class CVGeneratorService:
             "qa_tech": ("QA ავტომატიზაციასა და API/Manual ტესტირებაში", "ავტომატიზებული რეგრესიული ტესტების შექმნას, REST API კონტრაქტების შემოწმებასა და ხარვეზების ადრეულ აღმოჩენას", "ტესტირებისა და პროდუქტის ხარისხის სტაბილურობაში"),
         }
         domain_focus_en = {
+            "technical_support": (
+                "technical support, systems monitoring, and incident triage",
+                "diagnosing system logs, validating API/SQL data flows, and resolving client escalations within SLA",
+                "support responsiveness, system reliability, and customer satisfaction",
+            ),
             "receptionist_hospitality": ("front office operations and guest relations", "delivering seamless check-ins, accurate reservation coordination, and warm multilingual hospitality", "guest satisfaction and smooth front-desk operations"),
             "healthcare_hospital": ("patient coordination and clinical administration", "managing patient intake, appointment scheduling, and insurance authorizations with accuracy and care", "patient service quality and smooth clinic workflows"),
             "customer_service": ("customer support and client operations", "resolving escalations cleanly across chat, phone, and CRM channels while sustaining high CSAT", "support responsiveness and client retention"),
@@ -1029,9 +1089,7 @@ class CVGeneratorService:
         }
 
         # Map domain focus safely (fallback for any custom domain without mentioning QA!)
-        ind_key = target_industry
-        if ind_key == "hospitality_reception":
-            ind_key = "receptionist_hospitality"
+        ind_key = effective_domain
 
         ka_tuple = domain_focus_ka.get(
             ind_key,

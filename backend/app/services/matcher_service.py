@@ -389,24 +389,46 @@ Markdown:
         senior_titles = ["senior", "sr.", "sr ", "უფროსი", "სინიორ"]
         tech_manager_titles = ["qa manager", "engineering manager", "test manager", "it manager"]
 
-        # Extract max required years (handling ranges like "1-2 years" -> 2.0, "2-3 years" -> 3.0, "5+ years" -> 5.0)
-        job_req_years: Optional[float] = None
-        range_m = re.search(
-            r"(\d+(?:\.\d+)?)\s*[–\-]\s*(\d+(?:\.\d+)?)\s*(?:years?|yrs?|წელი|წლიანი)",
-            combined,
-        )
-        if range_m:
+        # Extract all experience requirement signals (ranges e.g. "2-3 years", "3-5 years", "3+ years", "მინიმუმ 3 წელი", "від 3 років")
+        found_years: List[float] = []
+
+        # 1. Range format (e.g. "2-3 years", "3-5 წელი", "2–4 роки")
+        for rm in re.finditer(r"(\d+(?:\.\d+)?)\s*[–\-]\s*(\d+(?:\.\d+)?)\s*(?:years?|yrs?|წ(?:ელი|ლიანი)?|років|лет)", combined):
             try:
-                job_req_years = float(range_m.group(2))
+                found_years.append(float(rm.group(2)))
             except Exception:
                 pass
-        if job_req_years is None:
-            yr_m = re.search(r"(\d+(?:\.\d+)?)\s*\+?\s*(?:years?|yrs?|წელი|წლიანი)(?:\s+of)?\s*(?:experience|გამოცდილება)?", combined)
-            if yr_m:
-                try:
-                    job_req_years = float(yr_m.group(1))
-                except Exception:
-                    pass
+
+        # 2. Minimum / at least format (e.g. "მინიმუმ 3 წელი", "at least 3 years", "სულ მცირე 3 წელი", "досвід від 3 років")
+        for mm in re.finditer(r"(?:მინიმუმ|სულ\s+მცირე|არანაკლებ|at least|minimum of|minimum|min\.?|від|от)\s*[:\-–]?\s*(\d+(?:\.\d+)?)\s*\+?\s*(?:years?|yrs?|წ(?:ელი|ლიანი)?|рок(?:ів)?|лет|года)?", combined):
+            try:
+                found_years.append(float(mm.group(1)))
+            except Exception:
+                pass
+
+        # 3. Direct years of experience (e.g. "3+ years of experience", "3 წლიანი გამოცდილება")
+        for ym in re.finditer(r"(\d+(?:\.\d+)?)\s*\+?\s*(?:years?|yrs?|წ(?:ელი|ლიანი)?|роკ(?:ів)?|лет|года)(?:\s+of)?\s*(?:experience|გამოცდილება|досвід|опыт)?", combined):
+            try:
+                found_years.append(float(ym.group(1)))
+            except Exception:
+                pass
+
+        # 4. Keyed requirements (e.g. "Experience: 3 years", "გამოცდილება: 3 წელი")
+        for em in re.finditer(r"(?:experience|გამოცდილება|досвід|опыт)\s*[:\-–]\s*(\d+(?:\.\d+)?)", combined):
+            try:
+                found_years.append(float(em.group(1)))
+            except Exception:
+                pass
+
+        # Filter out calendar years (2020+) and extreme values, keeping legitimate professional experience requirements
+        valid_exp = [y for y in found_years if 0.5 <= y <= 15.0]
+        job_req_years = max(valid_exp) if valid_exp else None
+
+        # Direct regex guard for 3+ years (with negative lookbehind to avoid matching decimals like 1.5 yrs as 5 yrs)
+        has_3_plus_guard = bool(
+            re.search(r"(?<![\d.])(?:[3-9]|\d{2,})(?:\.\d+)?\+?\s*(?:years?|yrs?|წ(?:ელი|ლიანი)?|років|лет)\b", combined)
+            or re.search(r"(?:მინიმუმ|სულ\s+მცირე|არანაკლებ|at least|minimum of|від|от)\s*[:\-–]?\s*(?<![\d.])(?:[3-9]|\d{2,})(?:\.\d+)?", combined)
+        )
 
         cap = max_allowed_years if max_allowed_years is not None else (
             min(candidate_years + 0.5, 2.0) if candidate_years <= 2.0 else round(candidate_years + 1.0, 1)
@@ -424,6 +446,11 @@ Markdown:
                         False,
                         f"Disqualified by Seniority Gate: Role requires {s.title()}, exceeding candidate cap ({cap:.1f} yrs max).",
                     )
+            if cap <= 2.0 and has_3_plus_guard:
+                return (
+                    False,
+                    f"Disqualified by Experience Gate: Role requires 3+ years experience (strictly capped at {cap:.1f} yrs).",
+                )
             if job_req_years is not None and job_req_years > cap:
                 return (
                     False,

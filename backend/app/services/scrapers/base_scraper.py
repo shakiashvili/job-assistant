@@ -35,8 +35,24 @@ _COMPANY_LOCATION_BLACKLIST = {
     "hr.ge verified employer",
     "employer",
     "employer (hr.ge)",
+    "employer (jobs.ge)",
     "company",
+    "კომპანია (jobs.ge)",
+    "კომპანია (hr.ge)",
 }
+
+_COMPANY_SUBSTRING_BLACKLIST = [
+    "ამ ორგანიზაციის ყველა განცხადება",
+    "ყველა განცხადება",
+    "ყველა ვაკანსია",
+    "ამოსაბეჭდი ვერსია",
+    "საქართველოს მასშტაბით",
+    "all announcements of this",
+    "all vacancies",
+    "printable version",
+    "hr.ge verified employer",
+    "verified employer",
+]
 
 
 def sanitize_company_name(
@@ -44,16 +60,18 @@ def sanitize_company_name(
     target_email: Optional[str] = None,
     fallback: str = "Hiring Company",
 ) -> str:
-    """Rejects location strings (e.g. 'საქართველოს მასშტაბით') mistakenly scraped as employer names."""
+    """Rejects location strings (e.g. 'საქართველოს მასშტაბით') and portal chrome mistakenly scraped as employer names."""
     cleaned = re.sub(r"\s+", " ", (raw_company or "")).strip(" -|•·,")
     lower = cleaned.lower()
     is_date_only = bool(re.match(r"^\d{1,2}\s+[ა-ჰa-z]+$", lower))
-    if cleaned and lower not in _COMPANY_LOCATION_BLACKLIST and not is_date_only and len(cleaned) >= 2:
+    has_blacklisted_sub = any(b in lower for b in _COMPANY_SUBSTRING_BLACKLIST)
+
+    if cleaned and lower not in _COMPANY_LOCATION_BLACKLIST and not has_blacklisted_sub and not is_date_only and len(cleaned) >= 2:
         return cleaned
 
     if target_email and "@" in target_email:
         domain_root = target_email.split("@", 1)[1].split(".")[0].strip()
-        if domain_root.lower() not in ("gmail", "yahoo", "mail", "outlook", "hotmail", "icloud", "proton", "hr", "jobs"):
+        if domain_root.lower() not in ("gmail", "yahoo", "mail", "outlook", "hotmail", "icloud", "proton", "hr", "jobs", "example"):
             return domain_root.upper() if len(domain_root) <= 3 else domain_root.capitalize()
 
     return fallback
@@ -197,6 +215,40 @@ def evaluate_remote_and_language_gate(
         or ("ukraine" in loc_lower and not any(w in loc_lower for w in ["worldwide", "europe", "eu", "global", "abroad", "georgia", "relocat", "other countries", "віддалено"]))
     )
 
+    is_georgia_location = any(w in loc_lower for w in ["georgia", "tbilisi", "batumi", "kutaisi", "თბილისი", "საქართველო"])
+    is_worldwide_remote = any(
+        w in combined for w in [
+            "worldwide", "work from anywhere", "anywhere in the world",
+            "global remote", "remote worldwide", "remote - emea", "remote (europe)",
+            "remote (eu)", "b2b contractor", "contractor worldwide", "remote (georgia)"
+        ]
+    )
+
+    # Disqualify US-only vacancies or vacancies requiring US work authorization / residency
+    has_us_legal_restriction = any(
+        w in combined for w in [
+            "must be legally authorized to work in the united states",
+            "us citizen", "green card", "u.s. citizen", "w2 only", "no c2c",
+            "must reside in the united states", "us only", "usa only",
+            "authorized to work in the us", "work authorization in the united states",
+            "no visa sponsorship"
+        ]
+    )
+    is_us_location = any(
+        re.search(rf"\b{state}\b", loc_lower) for state in [
+            "united states", "usa", "u.s.", "san francisco", "new york", "austin", "chicago",
+            "seattle", "los angeles", "california", "texas", "washington", "boston", "ny", "ca", "tx", "wa"
+        ]
+    )
+
+    if (portal == "linkedin.com" or "linkedin" in portal) and (has_us_legal_restriction or (is_us_location and not is_georgia_location and not is_worldwide_remote)):
+        return (
+            False,
+            "FILTERED_OUT",
+            "Location Gate: US-based position (requires US residency / work authorization; not open to remote from Georgia)",
+            langs_detected,
+        )
+
     if portal in ("dou.ua", "djinni.co", "justjoin.it", "headhunter.ge"):
         requires_uk = "Ukrainian" in langs_detected
         requires_ru = "Russian" in langs_detected
@@ -244,7 +296,7 @@ def evaluate_remote_and_language_gate(
 class BasePortalScraper:
     portal_name: str = "custom"
     market: str = "GLOBAL_REMOTE"
-    rate_limit_delay_sec: float = 0.25
+    rate_limit_delay_sec: float = 0.05
     max_retries: int = 2
 
     DEFAULT_HEADERS = {
@@ -256,7 +308,7 @@ class BasePortalScraper:
         "Accept-Language": "en-US,en;q=0.9,ka;q=0.8",
     }
 
-    async def fetch_html(self, url: str, timeout: float = 10.0) -> Optional[str]:
+    async def fetch_html(self, url: str, timeout: float = 4.5) -> Optional[str]:
         """Fetches HTML from a URL with polite concurrency rate limiting and retry logic."""
         for attempt in range(1, self.max_retries + 1):
             try:

@@ -31,13 +31,14 @@ def build_linkedin_search_urls(
     # f_E=1%2C2%2C3 => Internship (1), Entry level (2), Associate (3)
     exp_filter = "1%2C2" if cap_exp <= 1.0 else "1%2C2%2C3"
     urls = [
-        f"https://www.linkedin.com/jobs/search/?keywords={quote_plus(kw_primary)}&f_E={exp_filter}&f_WT=2",
         f"https://www.linkedin.com/jobs/search/?keywords={quote_plus(kw_primary)}&location=Georgia&f_E={exp_filter}",
+        f"https://www.linkedin.com/jobs/search/?keywords={quote_plus(kw_primary)}&location=Worldwide&f_WT=2&f_E={exp_filter}",
+        f"https://www.linkedin.com/jobs/search/?keywords={quote_plus(kw_primary)}&location=Tbilisi&f_E={exp_filter}",
     ]
     if skills:
         alt_kw = f"{words[0]} {skills[0]}" if words else skills[0]
         urls.append(
-            f"https://www.linkedin.com/jobs/search/?keywords={quote_plus(alt_kw)}&f_E={exp_filter}&f_WT=2"
+            f"https://www.linkedin.com/jobs/search/?keywords={quote_plus(alt_kw)}&location=Worldwide&f_WT=2&f_E={exp_filter}"
         )
     return list(dict.fromkeys(urls))
 

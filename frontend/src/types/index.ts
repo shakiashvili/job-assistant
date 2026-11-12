@@ -171,6 +171,17 @@ export interface PaginatedJobsResponse {
   page: number;
   limit: number;
   total_pages: number;
+  tier_counts?: {
+    ALL: number;
+    DIRECT: number;
+    ADJACENT: number;
+    PUBLIC_INTERNSHIP: number;
+  };
+  status_counts?: {
+    ALL: number;
+    STAGED: number;
+    AUDITED: number;
+  };
 }
 
 export interface GapItem {

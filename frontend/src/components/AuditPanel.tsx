@@ -183,6 +183,19 @@ export const AuditPanel: React.FC = () => {
     return false;
   };
 
+  const [tierCounts, setTierCounts] = useState<{
+    ALL: number;
+    DIRECT: number;
+    ADJACENT: number;
+    PUBLIC_INTERNSHIP: number;
+  }>({ ALL: 0, DIRECT: 0, ADJACENT: 0, PUBLIC_INTERNSHIP: 0 });
+
+  const [statusCounts, setStatusCounts] = useState<{
+    ALL: number;
+    STAGED: number;
+    AUDITED: number;
+  }>({ ALL: 0, STAGED: 0, AUDITED: 0 });
+
   const loadPagedJobs = async (
     nextPage = page,
     nextPortal = selectedPortalFilter,
@@ -201,6 +214,8 @@ export const AuditPanel: React.FC = () => {
     setPage(res.page || 1);
     setTotalPages(res.total_pages || 1);
     setTotalJobs(res.total || 0);
+    if (res.tier_counts) setTierCounts(res.tier_counts);
+    if (res.status_counts) setStatusCounts(res.status_counts);
     return res;
   };
 
@@ -629,6 +644,8 @@ export const AuditPanel: React.FC = () => {
           setTierTab(t);
           loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, t);
         }}
+        tierCounts={tierCounts}
+        statusCounts={statusCounts}
         page={page}
         totalPages={totalPages}
         totalJobs={totalJobs}

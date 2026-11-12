@@ -53,6 +53,12 @@ class JobsGeScraper(BasePortalScraper):
                         cand = sanitize_company_name(txt, fallback="")
                         if cand:
                             company_text = cand
+                    if not company_text:
+                        c_match = re.search(r"client=([a-zA-Z0-9_\-]+)", href)
+                        if c_match:
+                            c_slug = c_match.group(1).replace("-", " ").replace("_", " ").strip()
+                            if c_slug.lower() not in ("all", "jobs", "ge"):
+                                company_text = c_slug.upper() if len(c_slug) <= 4 else c_slug.title()
                     continue
 
                 if "view=jobs" in href and "id=" in href:
@@ -134,16 +140,22 @@ class JobsGeScraper(BasePortalScraper):
         if comp_m:
             det_company = sanitize_company_name(comp_m.group(1).strip(), target_email=target_email, fallback="")
 
-        if not det_company and raw_html:
+        client_slug_comp = ""
+        if raw_html:
             soup_det = self.make_soup(raw_html)
             for client_a in soup_det.select("td.dtable a[href*='view=client'], .dtable a[href*='view=client'], a[href*='client=']"):
                 cand = sanitize_company_name(client_a.get_text(" ", strip=True), target_email=target_email, fallback="")
                 if cand:
                     det_company = cand
                     break
+            c_slug_m = re.search(r"client=([a-zA-Z0-9_\-]+)", raw_html)
+            if c_slug_m:
+                c_s = c_slug_m.group(1).replace("-", " ").replace("_", " ").strip()
+                if c_s.lower() not in ("all", "jobs", "ge"):
+                    client_slug_comp = c_s.upper() if len(c_s) <= 4 else c_s.title()
 
         table_company = sanitize_company_name(item.get("company"), target_email=target_email, fallback="")
-        resolved_comp = det_company or table_company or sanitize_company_name(None, target_email=target_email, fallback="კომპანია (Jobs.ge)")
+        resolved_comp = det_company or table_company or client_slug_comp or sanitize_company_name(None, target_email=target_email, fallback="კომპანია (Jobs.ge)")
         item["company"] = resolved_comp
 
         item["channel"] = channel
