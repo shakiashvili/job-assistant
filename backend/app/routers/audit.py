@@ -3,8 +3,14 @@ from typing import List
 from fastapi import APIRouter, HTTPException, Depends
 from sqlmodel import Session, select
 from ..db.database import engine, init_db
-from ..db.models import CandidateProfile, JobPosting, User
-from ..models.schemas import JobAuditRequest, JobAuditResponse, PortalVacancyItem
+from ..db.models import (
+    CandidateProfile,
+    JobPosting,
+    User,
+    JobAuditRequest,
+    JobAuditResponse,
+    PortalVacancyItem,
+)
 from ..services.audit_service import audit_service
 from ..services.auth_service import get_current_user
 from .jobs import _is_profile_uploaded_for_user

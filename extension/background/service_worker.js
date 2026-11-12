@@ -1,5 +1,24 @@
 const DEFAULT_API_BASE = "http://127.0.0.1:8000";
 
+// Configure Chrome Side Panel to dock beside web pages (LinkedIn Easy Apply, Workday, etc.)
+if (chrome.sidePanel && typeof chrome.sidePanel.setPanelBehavior === "function") {
+  chrome.sidePanel
+    .setPanelBehavior({ openPanelOnActionClick: true })
+    .catch((error) => console.debug("sidePanel.setPanelBehavior note:", error));
+}
+
+if (chrome.action && chrome.action.onClicked) {
+  chrome.action.onClicked.addListener(async (tab) => {
+    if (tab && tab.id && chrome.sidePanel && typeof chrome.sidePanel.open === "function") {
+      try {
+        await chrome.sidePanel.open({ tabId: tab.id });
+      } catch (err) {
+        console.debug("sidePanel.open note:", err);
+      }
+    }
+  });
+}
+
 async function getConfig() {
   const data = await chrome.storage.local.get([
     "apiBaseUrl",

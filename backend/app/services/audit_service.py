@@ -10,7 +10,7 @@ from ..services.company_validator import company_validator
 from ..services.cv_generator_service import cv_generator_service
 from ..services.salary_service import salary_service
 from ..services.scrapers.base_scraper import evaluate_remote_and_language_gate
-from ..models.schemas import (
+from ..db.models import (
     JobAuditResponse, JobDetails, ScoreBreakdown, Blocker, GapItem, TailoredCVResult
 )
 

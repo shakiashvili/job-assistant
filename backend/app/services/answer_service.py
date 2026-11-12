@@ -2,12 +2,14 @@ import logging
 from typing import Any, Dict, List, Optional
 from sqlmodel import Session, select
 from ..db.database import engine, init_db
-from ..db.models import CandidateProfile
+from ..db.models import (
+    CandidateProfile,
+    GenerateAnswersRequest,
+    GenerateAnswersResponse,
+    ScreeningAnswer,
+)
 from ..db.profile_repository import ground_truth_store
 from ..services.gemini_service import gemini_service
-from ..models.schemas import (
-    GenerateAnswersRequest, GenerateAnswersResponse, ScreeningAnswer
-)
 
 logger = logging.getLogger(__name__)
 

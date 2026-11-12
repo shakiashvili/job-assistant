@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .config import MOCK_PORTALS_DIR, GEMINI_MODEL, DATABASE_URL
-from .database import init_db
+from .db.database import init_db
 from .services.gemini_service import gemini_service
 from .routers.audit import router as audit_router
 from .routers.answers import router as answers_router

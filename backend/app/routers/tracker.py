@@ -5,8 +5,16 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
 from ..db.database import get_session, engine
-from ..db.models import User, ApplicationTracker, ApplicationRecord, JobPosting, InterviewRound
-from ..models.schemas import ApplicationItem, ApplicationCreate, ApplicationUpdate
+from ..db.models import (
+    User,
+    ApplicationTracker,
+    ApplicationRecord,
+    JobPosting,
+    InterviewRound,
+    ApplicationItem,
+    ApplicationCreate,
+    ApplicationUpdate,
+)
 from ..services.auth_service import get_current_user
 from ..services.gmail_service import gmail_service
 from ..services.interview_service import interview_service

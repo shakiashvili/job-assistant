@@ -1,7 +1,6 @@
 import logging
 from fastapi import APIRouter, Depends, HTTPException
-from ..db.models import User
-from ..models.schemas import GenerateAnswersRequest, GenerateAnswersResponse
+from ..db.models import User, GenerateAnswersRequest, GenerateAnswersResponse
 from ..services.answer_service import answer_service
 from ..services.auth_service import get_current_user
 

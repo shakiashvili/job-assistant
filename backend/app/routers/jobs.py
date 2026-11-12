@@ -3,8 +3,8 @@ from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query, Depends
 from pydantic import BaseModel
 from sqlmodel import Session, select
-from ..database import engine, init_db, delete_job_posting_cascade
-from ..models.db_models import CandidateProfile, JobPosting, User
+from ..db.database import engine, init_db, delete_job_posting_cascade
+from ..db.models import CandidateProfile, JobPosting, User
 from ..db.profile_repository import ground_truth_store
 from ..services.auth_service import get_current_user
 from ..services.scrapers.scraper_orchestrator import scraper_orchestrator

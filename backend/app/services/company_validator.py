@@ -1,5 +1,5 @@
 from typing import Dict, Any
-from ..models.schemas import CompanyValidation
+from ..db.models import CompanyValidation
 
 
 KNOWN_COMPANIES_DB: Dict[str, Dict[str, Any]] = {

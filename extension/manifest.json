@@ -37,8 +37,7 @@
     "service_worker": "background/service_worker.js"
   },
   "action": {
-    "default_popup": "popup/popup.html",
-    "default_title": "TalentFlow AI Job Copilot"
+    "default_title": "TalentFlow AI Job Copilot (Side Panel)"
   },
   "side_panel": {
     "default_path": "popup/popup.html"

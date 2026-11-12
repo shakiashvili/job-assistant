@@ -3,8 +3,14 @@ import uuid
 from typing import List, Optional
 from sqlmodel import Session, select
 from .database import engine, init_db
-from .models import JobPosting, ApplicationRecord, utc_now
-from ..models.schemas import ApplicationItem, ApplicationCreate, ApplicationUpdate
+from .models import (
+    JobPosting,
+    ApplicationRecord,
+    utc_now,
+    ApplicationItem,
+    ApplicationCreate,
+    ApplicationUpdate,
+)
 
 logger = logging.getLogger(__name__)
 

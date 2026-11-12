@@ -5,12 +5,11 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from ..db.profile_repository import ground_truth_store, PROFESSION_MD_PRESETS
-from ..db.models import User
+from ..db.models import User, JobPosting
 from ..services.auth_service import get_current_user
 from ..services.answer_service import load_live_candidate_profile
 from ..config import RESUMES_DIR, GENERATED_RESUMES_DIR
-from ..database import engine, delete_job_posting_cascade
-from ..models.db_models import JobPosting
+from ..db.database import engine, delete_job_posting_cascade
 from sqlmodel import Session, select
 
 logger = logging.getLogger(__name__)

@@ -1,6 +1,6 @@
 import logging
 from fastapi import APIRouter, HTTPException
-from ..models.schemas import StageApplicationRequest, StageApplicationResponse
+from ..db.models import StageApplicationRequest, StageApplicationResponse
 from ..services.playwright_service import playwright_service
 
 logger = logging.getLogger(__name__)

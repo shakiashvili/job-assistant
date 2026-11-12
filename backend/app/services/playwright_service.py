@@ -21,7 +21,7 @@ from ..services.company_validator import company_validator
 from ..services.cv_generator_service import cv_generator_service
 from ..services.gemini_service import gemini_service
 from ..services.salary_service import salary_service
-from ..models.schemas import StageApplicationResponse
+from ..db.models import StageApplicationResponse
 
 logger = logging.getLogger(__name__)
 

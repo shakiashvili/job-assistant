@@ -1,7 +1,7 @@
 import logging
 from typing import Generator
 from sqlmodel import SQLModel, Session, create_engine, select
-from sqlalchemy import event, inspect
+from sqlalchemy import event
 from ..config import DATABASE_URL
 from .models import (
     User,
@@ -30,56 +30,31 @@ if is_sqlite:
         cursor.close()
 
 
+_MIGRATION_RUN_DONE = False
+
+
 def init_db() -> None:
     """
-    Initializes relational tables in SQLite (with WAL mode) or PostgreSQL.
-    Automatically upgrades schema if older prototype tables exist without new columns.
+    Initializes and migrates relational database schema using Alembic as the single source of truth.
+    Runs `alembic upgrade head` to ensure all migrations are applied cleanly without
+    conflicting with SQLModel.metadata.create_all or manual ALTER TABLE statements.
     """
+    global _MIGRATION_RUN_DONE
+    if _MIGRATION_RUN_DONE:
+        return
     try:
-        inspector = inspect(engine)
-        needs_upgrade = False
-        if inspector.has_table("job_postings"):
-            cols = {c["name"] for c in inspector.get_columns("job_postings")}
-            if "channel" not in cols or "filter_out_reason" not in cols or "salary_is_estimated" not in cols or "delivery_channel" not in cols or "deadline_text" not in cols or "is_link_live" not in cols:
-                needs_upgrade = True
-            elif not {"match_tier", "adjacent_role_tag", "skill_overlap_pct", "user_id"}.issubset(cols):
-                # Safe non-destructive column addition so existing users & data remain intact
-                with engine.begin() as conn:
-                    if "user_id" not in cols:
-                        conn.exec_driver_sql("ALTER TABLE job_postings ADD COLUMN user_id INTEGER REFERENCES users(id)")
-                        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_job_postings_user_id ON job_postings (user_id)")
-                    if "match_tier" not in cols:
-                        conn.exec_driver_sql("ALTER TABLE job_postings ADD COLUMN match_tier VARCHAR DEFAULT 'DIRECT'")
-                    if "adjacent_role_tag" not in cols:
-                        conn.exec_driver_sql("ALTER TABLE job_postings ADD COLUMN adjacent_role_tag VARCHAR")
-                    if "skill_overlap_pct" not in cols:
-                        conn.exec_driver_sql("ALTER TABLE job_postings ADD COLUMN skill_overlap_pct INTEGER")
-        if inspector.has_table("application_records"):
-            app_cols = {c["name"] for c in inspector.get_columns("application_records")}
-            if "vacancy_id" not in app_cols or "submitted_salary" not in app_cols:
-                needs_upgrade = True
-        if inspector.has_table("users"):
-            user_cols = {c["name"] for c in inspector.get_columns("users")}
-            if "email_hash" not in user_cols:
-                needs_upgrade = True
-        if inspector.has_table("user_otps"):
-            otp_cols = {c["name"] for c in inspector.get_columns("user_otps")}
-            if "email_hash" not in otp_cols:
-                needs_upgrade = True
+        from pathlib import Path
+        from alembic import command
+        from alembic.config import Config
 
-        if needs_upgrade:
-            logger.info("Upgrading database schema to encrypted relational schema...")
-            SQLModel.metadata.drop_all(engine)
-            if is_sqlite:
-                try:
-                    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-                        conn.exec_driver_sql("VACUUM")
-                except Exception as ve:
-                    logger.debug(f"SQLite vacuum skipped: {ve}")
+        base_dir = Path(__file__).resolve().parents[2]
+        alembic_ini = base_dir / "alembic.ini"
+        if alembic_ini.exists():
+            cfg = Config(str(alembic_ini))
+            command.upgrade(cfg, "head")
+            _MIGRATION_RUN_DONE = True
     except Exception as e:
-        logger.debug(f"Schema inspection note: {e}")
-
-    SQLModel.metadata.create_all(engine)
+        logger.debug(f"Alembic auto-upgrade note: {e}")
 
 
 def get_session() -> Generator[Session, None, None]:
