@@ -131,6 +131,9 @@ export interface DbJobPosting {
   salary_estimated_by_ai: boolean;
   suitability_score: number;
   match_rationale: string;
+  match_tier?: 'DIRECT' | 'ADJACENT' | 'PUBLIC_INTERNSHIP' | string;
+  adjacent_role_tag?: string | null;
+  skill_overlap_pct?: number | null;
   status: 'DISCOVERED' | 'FILTERED_OUT' | 'AUDITED' | 'STAGED' | 'APPLIED' | 'REJECTED' | string;
   deadline_text?: string | null;
   is_link_live?: boolean;

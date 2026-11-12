@@ -6,9 +6,24 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from ..storage.ground_truth_store import ground_truth_store, PROFESSION_MD_PRESETS
 from ..config import RESUMES_DIR, GENERATED_RESUMES_DIR
+from ..database import engine, delete_job_posting_cascade
+from ..models.db_models import JobPosting
+from sqlmodel import Session, select
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["Ground Truth, Skills.md & Resumes"])
+
+
+def _purge_stale_unapplied_jobs() -> None:
+    """Clears unapplied vacancies whenever the user switches profession preset or uploads new skills.md."""
+    try:
+        with Session(engine) as session:
+            for job in session.exec(select(JobPosting)).all():
+                if job.status != "APPLIED":
+                    delete_job_posting_cascade(session, job)
+            session.commit()
+    except Exception as e:
+        logger.debug(f"Purge unapplied jobs skipped: {e}")
 USER_CV_DIR = RESUMES_DIR / "user_uploads"
 USER_CV_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -89,10 +104,27 @@ def get_skills_md_presets():
 
 @router.post("/skills-md/preset/{preset_id}")
 def apply_skills_md_preset(preset_id: str):
-    """Loads a multi-industry .md preset into candidate_skills.md and syncs ground_truth.json."""
+    """Loads a multi-industry .md preset while preserving non-example candidate identity and purging stale jobs."""
     try:
+        prev_gt = ground_truth_store.get_data()
+        prev_cand = dict(prev_gt.get("candidate") or {})
+        has_real_identity = (
+            prev_cand.get("email")
+            and not str(prev_cand.get("email")).endswith("@example.com")
+            and "candidate" not in str(prev_cand.get("email")).lower()
+        )
+
         md_content = ground_truth_store.get_preset_md(preset_id)
         updated_gt = ground_truth_store.save_skills_md(md_content)
+        if has_real_identity:
+            cand = dict(updated_gt.get("candidate") or {})
+            for key in ("full_name", "first_name", "last_name", "email", "phone", "links"):
+                if prev_cand.get(key):
+                    cand[key] = prev_cand[key]
+            updated_gt["candidate"] = cand
+            updated_gt = ground_truth_store.update_data(updated_gt)
+
+        _purge_stale_unapplied_jobs()
         extracted = ground_truth_store.extract_skills_from_md(md_content)
         return {
             "status": "success",
@@ -109,9 +141,10 @@ def apply_skills_md_preset(preset_id: str):
 
 @router.post("/skills-md")
 def save_skills_md_text(payload: SkillsMdPayload):
-    """Updates candidate_skills.md from raw markdown text and synchronizes ground_truth.json."""
+    """Updates candidate_skills.md from raw markdown text, synchronizes ground_truth, and purges stale jobs."""
     try:
         updated_gt = ground_truth_store.save_skills_md(payload.content)
+        _purge_stale_unapplied_jobs()
         extracted = ground_truth_store.extract_skills_from_md(payload.content)
         return {
             "status": "success",
@@ -126,11 +159,12 @@ def save_skills_md_text(payload: SkillsMdPayload):
 
 @router.post("/skills-md/upload")
 async def upload_skills_md_file(file: UploadFile = File(...)):
-    """Accepts an uploaded .md skills file, saves it, and syncs skills into ground_truth.json."""
+    """Accepts an uploaded .md skills file, saves it, syncs skills, and purges stale jobs."""
     try:
         raw_bytes = await file.read()
         md_text = raw_bytes.decode("utf-8", errors="replace")
         updated_gt = ground_truth_store.save_skills_md(md_text)
+        _purge_stale_unapplied_jobs()
         extracted = ground_truth_store.extract_skills_from_md(md_text)
         return {
             "status": "success",

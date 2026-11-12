@@ -41,12 +41,32 @@ def safe_parse_json(text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-# Multi-industry skill dictionary (English + Georgian keywords)
+# Multi-industry skill dictionary (Domain-Agnostic: Tech, Logistics, Finance, Marketing, Sales, HR, Legal/Public, Support, Hospitality, Healthcare)
 MULTI_INDUSTRY_SKILLS = {
     "qa_tech": [
         "playwright", "cypress", "selenium", "python", "typescript", "javascript",
         "pytest", "jest", "postman", "rest api", "graphql", "docker", "ci/cd",
         "github actions", "gitlab ci", "sql", "aws", "kubernetes", "k6", "jira", "xray", "bdd"
+    ],
+    "software_data": [
+        "fastapi", "django", "flask", "react", "node.js", "postgresql", "mysql", "mongodb",
+        "redis", "linux", "git", "power bi", "tableau", "looker", "pandas", "excel", "etl", "data quality"
+    ],
+    "logistics_supply_chain": [
+        "logistics", "supply chain", "procurement", "warehouse", "wms", "erp", "sap",
+        "incoterms", "customs", "freight", "dispatch", "inventory", "fleet", "1c", "import", "export", "forwarding"
+    ],
+    "finance_accounting": [
+        "accounting", "financial analysis", "bookkeeping", "ifrs", "oris", "1c accounting", "excel",
+        "financial modeling", "audit", "tax", "rs.ge", "budgeting", "accounts payable", "accounts receivable", "reconciliation"
+    ],
+    "marketing_sales": [
+        "digital marketing", "seo", "sem", "google ads", "meta ads", "google analytics", "ga4",
+        "smm", "copywriting", "content marketing", "hubspot", "crm", "b2b sales", "lead generation", "figma", "canva"
+    ],
+    "hr_legal_public": [
+        "recruiting", "talent acquisition", "human resources", "hris", "onboarding", "public administration",
+        "legal research", "compliance", "contract drafting", "procurement law", "project management", "agile", "scrum", "notion"
     ],
     "hospitality_reception": [
         "front desk", "receptionist", "opera pms", "fidelio", "guest relations",
@@ -56,7 +76,7 @@ MULTI_INDUSTRY_SKILLS = {
     "customer_service": [
         "customer service", "customer support", "client care", "zendesk", "intercom",
         "salesforce", "crm", "live chat", "inbound", "outbound", "conflict resolution",
-        "de-escalation", "csat", "sla", "ticketing", "email support", "call center", "kyc"
+        "de-escalation", "csat", "sla", "ticketing", "email support", "call center", "kyc", "technical support"
     ],
     "healthcare_hospital": [
         "patient coordinator", "medical receptionist", "hospital", "clinic", "emr", "ehr",

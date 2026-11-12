@@ -42,6 +42,15 @@ def init_db() -> None:
             cols = {c["name"] for c in inspector.get_columns("job_postings")}
             if "channel" not in cols or "filter_out_reason" not in cols or "salary_is_estimated" not in cols or "delivery_channel" not in cols or "deadline_text" not in cols or "is_link_live" not in cols:
                 needs_upgrade = True
+            elif not {"match_tier", "adjacent_role_tag", "skill_overlap_pct"}.issubset(cols):
+                # Safe non-destructive column addition so existing users & data remain intact
+                with engine.begin() as conn:
+                    if "match_tier" not in cols:
+                        conn.exec_driver_sql("ALTER TABLE job_postings ADD COLUMN match_tier VARCHAR DEFAULT 'DIRECT'")
+                    if "adjacent_role_tag" not in cols:
+                        conn.exec_driver_sql("ALTER TABLE job_postings ADD COLUMN adjacent_role_tag VARCHAR")
+                    if "skill_overlap_pct" not in cols:
+                        conn.exec_driver_sql("ALTER TABLE job_postings ADD COLUMN skill_overlap_pct INTEGER")
         if inspector.has_table("application_records"):
             app_cols = {c["name"] for c in inspector.get_columns("application_records")}
             if "vacancy_id" not in app_cols or "submitted_salary" not in app_cols:

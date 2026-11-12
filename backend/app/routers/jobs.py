@@ -173,6 +173,7 @@ async def list_scraped_jobs(
         from ..services.scrapers.base_scraper import sanitize_company_name
         import re as _re
         filtered = []
+        seen_title_company: set[tuple[str, str]] = set()
         for r in rows:
             if not include_filtered and r.status == "FILTERED_OUT":
                 continue
@@ -202,6 +203,13 @@ async def list_scraped_jobs(
                         dumped["salary_min"], dumped["salary_max"], dumped["salary_currency"] = sal_ex
                         dumped["salary_is_estimated"] = False
                         dumped["salary_estimated_by_ai"] = False
+            tc_key = (
+                _re.sub(r"\s+", " ", str(dumped.get("title") or "").lower().strip()),
+                _re.sub(r"\s+", " ", str(dumped.get("company") or "").lower().strip()),
+            )
+            if tc_key in seen_title_company:
+                continue
+            seen_title_company.add(tc_key)
             filtered.append(dumped)
         return filtered
 

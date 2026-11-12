@@ -27,16 +27,109 @@ class ExtractedSkillsTaxonomy(BaseModel):
 
 class ParsedCandidateProfileSchema(BaseModel):
     full_name: str = "Candidate"
-    headline: str = "QA Engineer"
+    headline: str = "Specialist"
+    primary_role: str = "QA Engineer"
+    detected_industry: str = "IT & Software QA"
+    adjacent_roles: List[str] = Field(default_factory=list)
+    verified_skills: List[str] = Field(default_factory=list)
     email: str = "candidate@example.com"
     phone: str = "+000 000 0000"
     location: str = "Tbilisi, Georgia (Remote / Abroad)"
     github_url: str = "https://github.com/example-candidate"
     linkedin_url: str = "https://linkedin.com/in/example-candidate"
     experience_years: float = 1.5
+    max_allowed_years: float = 2.0
     seniority_level: str = "JUNIOR"
     target_industry: str = "qa_tech"
     parsed_skills: ExtractedSkillsTaxonomy = Field(default_factory=ExtractedSkillsTaxonomy)
+
+
+_DOMAIN_PROFILE_CATALOG: List[Dict[str, Any]] = [
+    {
+        "target_industry": "logistics_supply_chain",
+        "detected_industry": "Supply Chain & Logistics",
+        "primary_role": "Logistics & Supply Chain Coordinator",
+        "adjacent_roles": ["Procurement Specialist", "Dispatch & Freight Operations", "Inventory & Warehouse Analyst", "Operations Coordinator"],
+        "signals": ["logistics", "supply chain", "procurement", "warehouse", "freight", "dispatch", "customs", "incoterms", "ლოჯისტიკ", "შესყიდვ", "მომარაგებ"],
+    },
+    {
+        "target_industry": "finance_accounting",
+        "detected_industry": "Finance & Accounting",
+        "primary_role": "Junior Financial Analyst & Accountant",
+        "adjacent_roles": ["Audit Associate", "Billing & Reconciliation Specialist", "Operations & Reporting Analyst", "Treasury Coordinator"],
+        "signals": ["accounting", "accountant", "financial analyst", "bookkeeping", "ifrs", "1c accounting", "oris", "ბუღალტ", "ფინანს", "აუდიტ"],
+    },
+    {
+        "target_industry": "data_analytics",
+        "detected_industry": "Data & Business Analytics",
+        "primary_role": "Data & BI Analyst",
+        "adjacent_roles": ["Data Quality Engineer", "Operations Reporting Specialist", "Junior SQL Developer", "QA & Data Validation Analyst"],
+        "signals": ["data analyst", "power bi", "tableau", "looker", "etl", "data quality", "bi developer", "ანალიტიკოს"],
+    },
+    {
+        "target_industry": "marketing_growth",
+        "detected_industry": "Marketing & Digital Growth",
+        "primary_role": "Digital Marketing Specialist",
+        "adjacent_roles": ["SMM & Content Coordinator", "Performance Marketing Associate", "E-Commerce Coordinator", "Brand & PR Assistant"],
+        "signals": ["digital marketing", "seo", "smm", "meta ads", "google ads", "copywriter", "content manager", "მარკეტინგ"],
+    },
+    {
+        "target_industry": "sales_bd",
+        "detected_industry": "Sales & Business Development",
+        "primary_role": "B2B Sales & Account Specialist",
+        "adjacent_roles": ["Client Onboarding Specialist", "Customer Success Associate", "CRM & Lead Operations Specialist", "Business Support Coordinator"],
+        "signals": ["sales manager", "business development", "b2b sales", "account executive", "lead generation", "გაყიდვ"],
+    },
+    {
+        "target_industry": "hr_recruiting",
+        "detected_industry": "HR & Talent Acquisition",
+        "primary_role": "HR & Talent Acquisition Specialist",
+        "adjacent_roles": ["People Operations Coordinator", "Office & Admin Coordinator", "Onboarding Specialist", "Training Coordinator"],
+        "signals": ["recruiter", "human resources", "talent acquisition", "hr generalist", "hris", "ადამიანური რესურს", "რეკრუტ"],
+    },
+    {
+        "target_industry": "public_admin_legal",
+        "detected_industry": "Public Administration & Legal",
+        "primary_role": "Junior Legal & Public Policy Specialist",
+        "adjacent_roles": ["Compliance & Audit Coordinator", "Public Procurement Officer", "Administrative Department Specialist", "Contract Assistant"],
+        "signals": ["public administration", "lawyer", "legal counsel", "compliance", "procurement law", "იურისტ", "საჯარო მმართველ"],
+    },
+    {
+        "target_industry": "receptionist_hospitality",
+        "detected_industry": "Hospitality & Front Office",
+        "primary_role": "Front Desk Receptionist & Hospitality Specialist",
+        "adjacent_roles": ["Guest Relations Coordinator", "Hotel Reservations Agent", "Office Administrator", "Customer Service Specialist"],
+        "signals": ["receptionist", "hotel", "opera pms", "fidelio", "hospitality", "guest relations", "მიმღები"],
+    },
+    {
+        "target_industry": "healthcare_hospital",
+        "detected_industry": "Healthcare & Medical Admin",
+        "primary_role": "Hospital Patient Coordinator & Medical Receptionist",
+        "adjacent_roles": ["Clinic Administrator", "Medical Insurance Coordinator", "Front Desk Coordinator", "Patient Support Specialist"],
+        "signals": ["patient coordinator", "medical receptionist", "hospital", "clinic", "ehr", "emr", "სამედიცინო"],
+    },
+    {
+        "target_industry": "customer_service",
+        "detected_industry": "Customer Support & Client Success",
+        "primary_role": "Customer Service & Client Care Specialist",
+        "adjacent_roles": ["Technical Support Specialist L1/L2", "Client Onboarding Coordinator", "Manual QA / Support Specialist", "Operations Assistant"],
+        "signals": ["customer service", "client care", "zendesk", "intercom", "omnichannel support", "მომხმარებელთა მხარდაჭერა"],
+    },
+    {
+        "target_industry": "software_engineering",
+        "detected_industry": "Software Engineering & Backend",
+        "primary_role": "Junior Software / Python Engineer",
+        "adjacent_roles": ["QA Automation Engineer (SDET)", "Technical Support Engineer L2/L3", "Data & ETL Engineer", "DevOps / Junior Cloud Engineer"],
+        "signals": ["backend developer", "frontend developer", "full stack", "fastapi", "django", "react developer", "პროგრამისტი", "დეველოპერი"],
+    },
+    {
+        "target_industry": "qa_tech",
+        "detected_industry": "IT & Software QA",
+        "primary_role": "QA Automation & Software Test Engineer",
+        "adjacent_roles": ["Technical Support Engineer L2/L3", "Data Quality Analyst", "Junior Python / Automation Developer", "IT Operations Specialist"],
+        "signals": ["qa", "quality assurance", "tester", "playwright", "selenium", "cypress", "pytest", "sdet", "ტესტ"],
+    },
+]
 
 
 class ProfileService:
@@ -93,27 +186,56 @@ class ProfileService:
                         full_name = cand_first
                     break
 
-        # 2. Industry & Headline extraction
-        if any(w in lower_text for w in ["receptionist", "hotel", "opera pms", "fidelio", "hospitality", "guest relations", "მიმღები"]):
-            target_industry = "receptionist_hospitality"
-            headline = "Front Desk Receptionist & Hospitality Specialist"
-        elif any(w in lower_text for w in ["patient coordinator", "medical receptionist", "hospital", "clinic", "ehr", "emr", "სამედიცინო"]):
-            target_industry = "healthcare_hospital"
-            headline = "Hospital Patient Coordinator & Medical Receptionist"
-        elif any(w in lower_text for w in ["customer service", "client care", "zendesk", "intercom", "omnichannel support", "მომხმარებელთა მხარდაჭერა"]):
-            target_industry = "customer_service"
-            headline = "Customer Service & Client Care Specialist"
-        else:
-            target_industry = "qa_tech"
+        # 2. Universal Domain-Agnostic Industry, Primary Role & Adjacent Role Detection
+        target_industry = "general_professional"
+        detected_industry = "General Business & Operations"
+        primary_role = "Operations & Administrative Specialist"
+        adjacent_roles = ["Project Coordinator", "Operations Analyst", "Customer Support Specialist", "Administrative Assistant"]
+
+        for dom in _DOMAIN_PROFILE_CATALOG:
+            if any(sig in lower_text for sig in dom["signals"]):
+                target_industry = dom["target_industry"]
+                detected_industry = dom["detected_industry"]
+                primary_role = dom["primary_role"]
+                adjacent_roles = list(dom["adjacent_roles"])
+                break
+
+        # Refine QA vs General headline and extract explicit Target Role / Headline if authored in skills.md
+        if target_industry == "qa_tech":
             if any(w in lower_text for w in ["portfolio project", "entry-level", "starter", "junior", "1.5"]):
                 headline = "QA Engineer (Test Design & API Quality)"
+                primary_role = headline
             else:
-                headline = "QA Automation Engineer"
+                headline = primary_role
+            # Dynamically adapt QA adjacent roles based on candidate's verified skills
+            all_sk_l = " ".join(taxonomy_dict.get("all_skills") or []).lower()
+            dyn_adj = []
+            if any(k in all_sk_l for k in ["sql", "postgres", "postman", "api"]):
+                dyn_adj.append("Technical Support Engineer L2/L3")
+                dyn_adj.append("Data Quality Analyst")
+            if any(k in all_sk_l for k in ["python", "typescript", "javascript", "playwright"]):
+                dyn_adj.append("Junior Automation / Python Developer")
+            if any(k in all_sk_l for k in ["linux", "docker", "git", "ci"]):
+                dyn_adj.append("IT Operations Specialist")
+            if dyn_adj:
+                adjacent_roles = list(dict.fromkeys(dyn_adj + adjacent_roles))[:4]
+        else:
+            headline = primary_role
 
-        # Check explicit headline in markdown
-        headline_m = re.search(r"(?:Headline|Target Role|პოზიცია|როლი)\**\s*:\**\s*([^\n]+)", text, re.I)
+        # Check explicit headline / role in markdown or `# Full Name — Role Title` header
+        headline_m = re.search(r"(?:Headline|Target Role|Primary Role|პოზიცია|როლი)\**\s*:\**\s*([^\n]+)", text, re.I)
         if headline_m:
             headline = headline_m.group(1).strip()
+            primary_role = headline
+        else:
+            for line in text.splitlines():
+                s = line.strip()
+                if s.startswith("# "):
+                    parts = re.split(r"\s+[—–-]\s+", s[2:].strip(), maxsplit=1)
+                    if len(parts) == 2 and len(parts[1].strip()) > 2:
+                        primary_role = parts[1].strip()
+                        headline = primary_role
+                    break
 
         email_m = re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", text)
         if email_m:
@@ -142,18 +264,24 @@ class ProfileService:
                 achievements.append(re.sub(r"^[-*]\s*", "", s))
 
         exp_years = float(taxonomy_dict.get("years_of_experience") or 1.5)
-        seniority_level = taxonomy_dict.get("seniority_level") or ("JUNIOR" if exp_years <= 2.5 else "MID")
+        max_allowed_years = min(exp_years + 0.5, 2.0) if exp_years <= 2.0 else round(exp_years + 0.5, 1)
+        seniority_level = taxonomy_dict.get("seniority_level") or ("JUNIOR" if exp_years <= 2.0 else "MID")
+        verified_skills = list(taxonomy_dict.get("all_skills") or [])
 
         # Live Gemini 2.5 Flash structured extraction with Pydantic schema if key is configured
         if self.client:
             try:
                 from google.genai import types
-                prompt = f"""Extract the candidate profile and technical/domain taxonomy from the following markdown.
+                prompt = f"""Extract the candidate profile and universal domain-agnostic taxonomy from the following markdown.
 CRITICAL INSTRUCTIONS:
-- Candidate full_name: Look for Author, Name, or candidate bio. Do NOT use document or project titles (such as "KLIPY Sticker Search API") as the candidate's name.
-- Experience years: Ground accurately. If the document describes a starter portfolio project, entry-level, or 1.5 years experience, reflect that (e.g. 1.5 years). Never hallucinate 5+ years or Senior level unless explicitly stated.
-- Seniority level: Must be "JUNIOR", "MID", "SENIOR", or "LEAD".
-- Target industry: One of "qa_tech", "receptionist_hospitality", "customer_service", "healthcare_hospital".
+- Works for ANY profession (IT/QA, Logistics, Supply Chain, Finance, Accounting, Marketing, Sales, HR, Legal, Public Admin, Hospitality, Healthcare, Engineering).
+- `detected_industry`: Human-readable industry (e.g. "Supply Chain & Logistics", "Finance & Accounting", "IT & Software QA").
+- `primary_role`: Candidate's exact primary target role.
+- `adjacent_roles`: Top 3-4 optimal adjacent/transferable roles where their skills transfer seamlessly (e.g., QA with SQL/Python -> ["Technical Support Engineer L2/L3", "Data Quality Analyst", "Junior Automation Dev"]).
+- `verified_skills`: All concrete tools, software, methodologies, and domain skills.
+- `experience_years`: Exact numeric years from profile (never inflate to Senior/5+ unless stated).
+- `max_allowed_years`: Strictly min(experience_years + 0.5, 2.0) when experience_years <= 2.0.
+- `seniority_level`: Must be "JUNIOR", "MID", "SENIOR", or "LEAD".
 
 Markdown:
 {text[:4500]}
@@ -169,11 +297,14 @@ Markdown:
                 )
                 if resp and resp.text:
                     gem_parsed = ParsedCandidateProfileSchema.model_validate_json(resp.text)
-                    # Merge deterministic taxonomy items so nothing is missed
+                    gem_parsed.max_allowed_years = min(float(gem_parsed.experience_years) + 0.5, 2.0)
                     for k in ["qa_automation", "manual_qa", "languages", "api_and_performance", "cicd_and_devops", "all_skills"]:
                         existing_list = getattr(gem_parsed.parsed_skills, k)
                         merged = list(dict.fromkeys(existing_list + taxonomy_dict.get(k, [])))
                         setattr(gem_parsed.parsed_skills, k, merged)
+                    gem_parsed.verified_skills = list(dict.fromkeys(gem_parsed.verified_skills + gem_parsed.parsed_skills.all_skills))
+                    if not gem_parsed.adjacent_roles:
+                        gem_parsed.adjacent_roles = adjacent_roles
                     return gem_parsed
             except Exception as e:
                 logger.warning(f"Gemini structured schema extraction fallback: {e}")
@@ -181,12 +312,17 @@ Markdown:
         return ParsedCandidateProfileSchema(
             full_name=full_name,
             headline=headline,
+            primary_role=primary_role,
+            detected_industry=detected_industry,
+            adjacent_roles=adjacent_roles,
+            verified_skills=verified_skills,
             email=email,
             phone=phone,
             location=location,
             github_url=github_url,
             linkedin_url=linkedin_url,
             experience_years=exp_years,
+            max_allowed_years=max_allowed_years,
             seniority_level=seniority_level,
             target_industry=target_industry,
             parsed_skills=ExtractedSkillsTaxonomy(
@@ -209,94 +345,10 @@ Markdown:
         headline: str = "",
     ) -> Dict[str, Any]:
         """
-        Determines portal-specific role search parameters directly from CandidateProfile
-        so scrapers dynamically search by the candidate's target role (e.g., QA / Software Tester).
+        Delegates dynamic domain-agnostic query generation to scrapers/query_builder.py.
         """
-        skills = parsed_skills or {}
-        target_industry = str(skills.get("target_industry") or "qa_tech").lower()
-        hl = str(headline or skills.get("headline") or "").lower()
-        has_qa_skills = bool(skills.get("qa_automation") or skills.get("manual_qa")) or any(
-            w in hl for w in ["qa", "test", "sdet", "quality"]
-        )
-
-        if target_industry == "receptionist_hospitality" or any(
-            w in hl for w in ["receptionist", "hospitality", "hotel", "front desk"]
-        ):
-            return {
-                "target_role": "Receptionist",
-                "search_terms": ["Receptionist", "Hospitality", "მიმღები", "ადმინისტრატორი"],
-                "jobs_ge_urls": [
-                    "https://jobs.ge/ge/?page=1&q=Receptionist",
-                    "https://jobs.ge/ge/?page=1&q=%E1%83%9B%E1%83%98%E1%83%9B%E1%83%A6%E1%83%94%E1%83%91%E1%83%98",
-                ],
-                "djinni_url": None,
-                "dou_url": None,
-                "hr_ge_url": "https://www.hr.ge/search-posting?q=receptionist",
-                "domain_keywords": [
-                    "receptionist", "front desk", "hospitality", "concierge", "hotel", "guest",
-                    "მიმღები", "რეცეფციონისტი", "სასტუმრო", "ადმინისტრატორი",
-                ],
-            }
-
-        if target_industry == "healthcare_hospital" or any(
-            w in hl for w in ["medical", "hospital", "clinic", "patient coordinator"]
-        ):
-            return {
-                "target_role": "Medical Coordinator",
-                "search_terms": ["Medical", "Clinic", "სამედიცინო"],
-                "jobs_ge_urls": [
-                    "https://jobs.ge/ge/?page=1&q=%E1%83%A1%E1%83%90%E1%83%9B%E1%83%94%E1%83%93%E1%83%98%E1%83%AA%E1%83%98%E1%83%9C%E1%83%9D",
-                    "https://jobs.ge/ge/?page=1&q=Medical",
-                ],
-                "djinni_url": None,
-                "dou_url": None,
-                "hr_ge_url": "https://www.hr.ge/search-posting?q=medical",
-                "domain_keywords": [
-                    "medical", "hospital", "clinic", "patient", "coordinator",
-                    "სამედიცინო", "კლინიკა", "პაციენტ", "რეგისტრატორი",
-                ],
-            }
-
-        if target_industry == "customer_service" or any(
-            w in hl for w in ["customer service", "support specialist", "client care", "call center"]
-        ):
-            return {
-                "target_role": "Customer Support",
-                "search_terms": ["Support", "Customer Service", "მხარდაჭერა"],
-                "jobs_ge_urls": [
-                    "https://jobs.ge/ge/?page=1&q=Support",
-                    "https://jobs.ge/ge/?page=1&q=Customer",
-                ],
-                "djinni_url": "https://djinni.co/jobs/?primary_keyword=Support&employment=remote",
-                "dou_url": "https://jobs.dou.ua/vacancies/?category=Support&remote",
-                "justjoin_url": "https://justjoin.it/job-offers/all-locations/support?workplace=remote",
-                "hr_ge_url": "https://www.hr.ge/search-posting?q=support",
-                "headhunter_url": "https://tbilisi.headhunter.ge/search/vacancy?text=Support&area=28",
-                "domain_keywords": [
-                    "support", "customer service", "client care", "call center", "helpdesk",
-                    "მხარდაჭერა", "ოპერატორი", "ქოლ",
-                ],
-            }
-
-        # Default: QA / Software Testing profile
-        role_label = "QA" if has_qa_skills else "QA"
-        return {
-            "target_role": role_label,
-            "search_terms": ["QA", "Tester", "Software Tester"],
-            "jobs_ge_urls": [
-                "https://jobs.ge/ge/?page=1&q=QA&cid=6",
-                "https://jobs.ge/ge/?page=1&q=Tester&cid=6",
-            ],
-            "djinni_url": "https://djinni.co/jobs/?primary_keyword=QA&employment=remote",
-            "dou_url": "https://jobs.dou.ua/vacancies/?category=QA&remote",
-            "justjoin_url": "https://justjoin.it/job-offers/all-locations/testing?workplace=remote",
-            "hr_ge_url": "https://www.hr.ge/search-posting?q=QA",
-            "headhunter_url": "https://tbilisi.headhunter.ge/search/vacancy?text=QA&area=28",
-            "domain_keywords": [
-                "qa", "quality assurance", "tester", "test engineer", "sdet",
-                "manual qa", "automation", "playwright", "cypress", "selenium", "ტესტ",
-            ],
-        }
+        from .scrapers.query_builder import build_search_queries
+        return build_search_queries(parsed_skills, headline=headline)
 
     def upsert_candidate_profile(self, raw_markdown: str, mark_uploaded: bool = True) -> CandidateProfile:
         """
@@ -308,8 +360,13 @@ Markdown:
         extracted = self.extract_structured_profile(raw_markdown)
         skills_payload: Dict[str, Any] = extracted.parsed_skills.model_dump()
         skills_payload["years_of_experience"] = extracted.experience_years
+        skills_payload["max_allowed_years"] = extracted.max_allowed_years
         skills_payload["seniority_level"] = extracted.seniority_level
         skills_payload["target_industry"] = extracted.target_industry
+        skills_payload["detected_industry"] = extracted.detected_industry
+        skills_payload["primary_role"] = extracted.primary_role
+        skills_payload["adjacent_roles"] = extracted.adjacent_roles
+        skills_payload["verified_skills"] = extracted.verified_skills or skills_payload.get("all_skills", [])
         skills_payload["headline"] = extracted.headline
         search_cfg = self.get_search_queries_for_profile(skills_payload, headline=extracted.headline)
         skills_payload["target_role"] = search_cfg["target_role"]

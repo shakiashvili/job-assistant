@@ -135,6 +135,9 @@ class JobPosting(SQLModel, table=True):
     salary_estimated_by_ai: bool = Field(default=False)
     suitability_score: float = Field(default=0.0, index=True)
     match_score: float = Field(default=0.0)
+    match_tier: str = Field(default="DIRECT", index=True)  # "DIRECT", "ADJACENT", "PUBLIC_INTERNSHIP"
+    adjacent_role_tag: Optional[str] = Field(default=None)
+    skill_overlap_pct: Optional[int] = Field(default=None)
     match_breakdown: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
     status: str = Field(default="DISCOVERED", index=True)  # "DISCOVERED", "FILTERED_OUT", "READY", "AUDITED", "STAGED", "APPLIED", "REJECTED"
     filter_out_reason: Optional[str] = Field(default=None)

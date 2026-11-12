@@ -1,7 +1,7 @@
 import json
 import logging
 import re
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Optional, Tuple
 from ..config import GEMINI_API_KEY, GEMINI_MODEL
 from .gemini_service import MULTI_INDUSTRY_SKILLS
 
@@ -354,9 +354,12 @@ Markdown:
 
         for ind_skills in MULTI_INDUSTRY_SKILLS.values():
             for skill_kw in ind_skills:
-                canonical = skill_kw.title() if len(skill_kw) > 3 else skill_kw.upper()
-                if skill_kw.lower() in combined and canonical not in required:
-                    required.append(canonical)
+                low_kw = skill_kw.lower()
+                canonical = CANONICAL_SKILL_NAMES.get(low_kw, skill_kw.title() if len(skill_kw) > 3 else skill_kw.upper())
+                pat = r"\b" + re.escape(low_kw) + r"\b" if low_kw not in ("c#", "k6") else re.escape(low_kw)
+                if (low_kw in combined if low_kw in ("c#", "k6") else re.search(pat, combined)):
+                    if all(r.lower() != canonical.lower() for r in required):
+                        required.append(canonical)
 
         return required
 
@@ -366,55 +369,71 @@ Markdown:
         candidate_seniority: str,
         job_title: str,
         job_description: str,
+        max_allowed_years: Optional[float] = None,
     ) -> Tuple[bool, str]:
         """
-        Enforces strict seniority and experience boundaries:
-        - If candidate has <= 2.5 years of experience (Junior to early Mid):
-          * Immediately disqualifies "Senior", "Lead", "Principal", "Head of", "Staff", "Director", "Architect", "Sr."
-          * Disqualifies jobs requiring > (candidate_years + 1.0) years of experience.
-        - If candidate has <= 5.0 years:
-          * Disqualifies "Principal", "Staff", "Head of", "Director", "Chief".
-        Returns (is_allowed, reason).
+        Strict 2.0-Year Experience Guard:
+        - When candidate_years <= 2.0: max_allowed_years = min(candidate_years + 0.5, 2.0) (HARD CAP at 2.0 years).
+        - Disqualifies Senior, Lead, Principal, Head of, Staff, Director, Architect, Chief, Middle+, Mid+, უფროსი, მთავარი, წამყვანი.
+        - Disqualifies jobs requiring > max_allowed_years (including upper range e.g. '2-3 years').
+        - Allows Intern, Trainee, Junior, and Junior-Mid (0 to 2.0 years).
         """
         combined = f"{job_title}\n{job_description}".lower()
-        title_lower = job_title.lower()
+        title_lower = (job_title or "").lower()
 
-        # Check job title for senior/lead level (English & Georgian)
-        senior_lead_titles = [
-            "lead", "principal", "head of", "staff", "director", "architect", "chief", "vp", "manager",
+        exec_titles = [
+            "lead", "principal", "head of", "staff", "director", "architect", "chief", "vp",
+            "middle+", "mid+", "mid/senior", "middle/senior",
             "ლიდი", "ხელმძღვანელი", "დირექტორი", "მთავარი", "წამყვანი",
         ]
         senior_titles = ["senior", "sr.", "sr ", "უფროსი", "სინიორ"]
+        tech_manager_titles = ["qa manager", "engineering manager", "test manager", "it manager"]
 
-        # Extract explicit years of experience required by job
+        # Extract max required years (handling ranges like "1-2 years" -> 2.0, "2-3 years" -> 3.0, "5+ years" -> 5.0)
         job_req_years: Optional[float] = None
-        yr_m = re.search(r"(\d+(?:\.\d+)?)\s*\+?\s*(?:years?|yrs?|წელი|წლიანი)(?:\s+of)?\s*(?:experience|გამოცდილება)?", combined)
-        if yr_m:
+        range_m = re.search(
+            r"(\d+(?:\.\d+)?)\s*[–\-]\s*(\d+(?:\.\d+)?)\s*(?:years?|yrs?|წელი|წლიანი)",
+            combined,
+        )
+        if range_m:
             try:
-                job_req_years = float(yr_m.group(1))
+                job_req_years = float(range_m.group(2))
             except Exception:
                 pass
+        if job_req_years is None:
+            yr_m = re.search(r"(\d+(?:\.\d+)?)\s*\+?\s*(?:years?|yrs?|წელი|წლიანი)(?:\s+of)?\s*(?:experience|გამოცდილება)?", combined)
+            if yr_m:
+                try:
+                    job_req_years = float(yr_m.group(1))
+                except Exception:
+                    pass
 
-        # Gate 1: Candidate is Junior or early Mid (<= 2.5 years)
+        cap = max_allowed_years if max_allowed_years is not None else (
+            min(candidate_years + 0.5, 2.0) if candidate_years <= 2.0 else round(candidate_years + 1.0, 1)
+        )
+
+        # Gate 1: Strict <= 2.0-2.5 yrs Junior/Junior-Mid Guard
         if candidate_years <= 2.5:
-            for s in senior_lead_titles + senior_titles:
-                pattern = r"\b" + re.escape(s) + r"\b"
-                if re.search(pattern, title_lower):
+            for s in exec_titles + senior_titles + tech_manager_titles:
+                if s in ("middle+", "mid+", "sr."):
+                    matched_s = s in title_lower
+                else:
+                    matched_s = bool(re.search(r"\b" + re.escape(s) + r"\b", title_lower))
+                if matched_s:
                     return (
                         False,
-                        f"Disqualified by Seniority Gate: Role requires {s.title()}, but candidate is Junior-Mid ({candidate_years:.1f} yrs exp).",
+                        f"Disqualified by Seniority Gate: Role requires {s.title()}, exceeding candidate cap ({cap:.1f} yrs max).",
                     )
-            if job_req_years is not None and job_req_years > (candidate_years + 1.0):
+            if job_req_years is not None and job_req_years > cap:
                 return (
                     False,
-                    f"Disqualified by Experience Gate: Role requires {job_req_years:g}+ years exp, exceeding candidate's {candidate_years:.1f} yrs.",
+                    f"Disqualified by Experience Gate: Role requires {job_req_years:g} yrs exp (strictly capped at {cap:.1f} yrs).",
                 )
 
-        # Gate 2: Candidate is Mid level (2.5 to 5.0 years)
+        # Gate 2: Mid level (2.5 to 5.0 years)
         elif candidate_years <= 5.0:
-            for s in senior_lead_titles:
-                pattern = r"\b" + re.escape(s) + r"\b"
-                if re.search(pattern, title_lower):
+            for s in exec_titles:
+                if s in title_lower:
                     return (
                         False,
                         f"Disqualified by Seniority Gate: Role requires executive/lead {s.title()}, but candidate is Mid-level ({candidate_years:.1f} yrs exp).",
@@ -432,108 +451,160 @@ Markdown:
         parsed_skills: Dict[str, Any],
         job_title: str,
         job_description: str,
+        portal: str = "custom",
     ) -> Tuple[bool, str]:
+        """Backwards-compatible wrapper around universal domain-agnostic alignment classifier."""
+        tier, reason = self.classify_domain_alignment(parsed_skills, job_title, job_description, portal=portal)
+        return (tier != "NONE", reason)
+
+    def classify_domain_alignment(
+        self,
+        parsed_skills: Dict[str, Any],
+        job_title: str,
+        job_description: str,
+        portal: str = "custom",
+        candidate_skills: Optional[List[str]] = None,
+        required_skills: Optional[List[str]] = None,
+    ) -> Tuple[str, str]:
         """
-        Enforces strict target-domain matching from CandidateProfile so generic or off-domain
-        results (e.g., Backend Developer when searching QA, or Medical/Receptionist jobs
-        when the candidate uploaded a QA skills.md) are rejected immediately.
+        Universal Domain-Agnostic Alignment Classifier:
+        Returns (tier_hint, aligned_role_or_reason) where tier_hint is:
+        - "DIRECT" -> directly matches candidate's primary role/industry
+        - "ADJACENT" -> transferable skills overlap with an optimal adjacent role (e.g., QA SQL/Postman -> Technical Support)
+        - "PUBLIC_INTERNSHIP" -> vacancy.hr.gov.ge public administration / entry internship
+        - "NONE" -> off-domain mismatch
         """
-        target_industry = str(parsed_skills.get("target_industry") or "qa_tech").lower()
         title_lower = (job_title or "").lower()
         combined = f"{job_title}\n{job_description}".lower()
+        target_industry = str(parsed_skills.get("target_industry") or "qa_tech").lower()
+        search_q = parsed_skills.get("search_queries") or {}
+        primary_role = str(parsed_skills.get("primary_role") or parsed_skills.get("headline") or "").lower()
+        adjacent_roles = [str(r) for r in (parsed_skills.get("adjacent_roles") or []) if r]
 
-        if target_industry == "qa_tech":
-            qa_title_signals = [
-                "qa", "quality assurance", "quality engineer", "test", "tester",
-                "sdet", "automation", "ტესტ", "ხარისხ",
-            ]
-            if any(sig in title_lower for sig in qa_title_signals):
-                return (True, "Matches QA/Testing domain.")
-            # If title doesn't mention QA/test, reject non-QA engineering/other postings
-            return (
-                False,
-                f"Domain Gate: '{job_title}' does not match candidate's QA/Testing target profile.",
-            )
+        # 1. Public Sector & Internship Portal (hr.gov.ge)
+        if portal == "hr.gov.ge":
+            return ("PUBLIC_INTERNSHIP", "Public Sector & Entry/Internship Role (HR.gov.ge)")
 
-        if target_industry == "receptionist_hospitality":
-            hosp_signals = ["reception", "front desk", "hospitality", "concierge", "hotel", "guest", "მიმღებ", "რეცეფც", "სასტუმრ", "ადმინისტრატორ"]
-            if any(sig in title_lower or sig in combined[:200] for sig in hosp_signals):
-                return (True, "Matches Hospitality domain.")
-            return (False, f"Domain Gate: '{job_title}' does not match Hospitality profile.")
+        # Build direct domain signals from search_queries + primary_role tokens + catalog
+        direct_signals = [str(s).lower() for s in (search_q.get("domain_keywords") or []) if len(str(s)) >= 2]
+        if target_industry == "qa_tech" and not direct_signals:
+            direct_signals = ["qa", "quality assurance", "quality engineer", "test", "tester", "sdet", "automation", "ტესტ", "ხარისხ"]
+        elif target_industry == "receptionist_hospitality" and not direct_signals:
+            direct_signals = ["reception", "front desk", "hospitality", "concierge", "hotel", "guest", "მიმღებ", "რეცეფც", "სასტუმრ", "ადმინისტრატორ"]
+        elif target_industry == "healthcare_hospital" and not direct_signals:
+            direct_signals = ["medical", "hospital", "clinic", "patient", "სამედიცინო", "კლინიკ", "პაციენტ", "რეგისტრატორ"]
+        elif target_industry == "customer_service" and not direct_signals:
+            direct_signals = ["support", "customer", "client", "call center", "helpdesk", "მხარდაჭერ", "ოპერატორ", "ქოლ"]
+        for tok in re.split(r"[\s/&|,-]+", primary_role):
+            if len(tok) >= 4 and tok not in ("engineer", "specialist", "coordinator", "junior", "associate", "senior") and tok not in direct_signals:
+                direct_signals.append(tok)
 
-        if target_industry == "healthcare_hospital":
-            med_signals = ["medical", "hospital", "clinic", "patient", "სამედიცინო", "კლინიკ", "პაციენტ", "რეგისტრატორ"]
-            if any(sig in title_lower or sig in combined[:200] for sig in med_signals):
-                return (True, "Matches Healthcare domain.")
-            return (False, f"Domain Gate: '{job_title}' does not match Healthcare profile.")
+        if any(sig in title_lower for sig in direct_signals) or (
+            target_industry in ("receptionist_hospitality", "healthcare_hospital", "customer_service", "logistics_supply_chain", "finance_accounting")
+            and any(sig in combined[:240] for sig in direct_signals)
+        ):
+            return ("DIRECT", parsed_skills.get("primary_role") or "Direct Role Match")
 
-        if target_industry == "customer_service":
-            cs_signals = ["support", "customer", "client", "call center", "helpdesk", "მხარდაჭერ", "ოპერატორ", "ქოლ"]
-            if any(sig in title_lower or sig in combined[:200] for sig in cs_signals):
-                return (True, "Matches Customer Support domain.")
-            return (False, f"Domain Gate: '{job_title}' does not match Customer Support profile.")
+        # 2. Adjacent Role / Transferable Skill Alignment
+        adj_signals = [str(s).lower() for s in (search_q.get("adjacent_keywords") or []) if len(str(s)) >= 3]
+        matched_adj_role = adjacent_roles[0] if adjacent_roles else "Transferable Adjacent Role"
 
-        return (True, "Domain check passed.")
+        # Match explicit adjacent role titles first
+        for adj_r in adjacent_roles:
+            role_words = [w.lower() for w in re.split(r"[\s/&(),.-]+", adj_r) if len(w) >= 4 and w.lower() not in ("junior", "associate", "specialist", "engineer", "l2/l3", "l1/l2")]
+            if any(w in title_lower for w in role_words):
+                return ("ADJACENT", adj_r)
 
-    def evaluate_job(
+        # Match transferable candidate skills against job requirements (>= 2 core skills or >= 50% overlap)
+        c_list = [str(s).lower() for s in (candidate_skills or parsed_skills.get("verified_skills") or parsed_skills.get("all_skills") or [])]
+        r_list = [str(s).lower() for s in (required_skills or [])]
+        overlap_count = sum(1 for r in r_list if any(r in c or c in r for c in c_list))
+        has_adj_sig = any(sig in title_lower or sig in combined[:300] for sig in adj_signals)
+
+        # Require either explicit adjacent-role keywords or strong >= 2 transferable skills overlap
+        if overlap_count >= 2 or (has_adj_sig and overlap_count >= 1) or (
+            has_adj_sig and target_industry in ("logistics_supply_chain", "finance_accounting", "marketing_growth", "sales_bd", "hr_recruiting", "public_admin_legal", "general_professional")
+        ):
+            return ("ADJACENT", matched_adj_role)
+
+        return ("NONE", f"Domain Gate: '{job_title}' does not align with candidate's primary profile or transferable skills.")
+
+    def evaluate_job_tiered(
         self,
         title: str,
         description: str,
         parsed_skills: Dict[str, Any],
         current_status: str = "DISCOVERED",
         existing_rationale: str = "",
-    ) -> Tuple[float, str, str, List[str], List[str]]:
+        portal: str = "custom",
+    ) -> Dict[str, Any]:
         """
-        Evaluates a job posting against CandidateProfile.parsed_skills.
-        Returns:
-          (suitability_score, new_status, match_rationale, matched_skills, missing_skills)
-        - Preserves "FILTERED_OUT" if already filtered out by market/language gate.
-        - Enforces Domain Gate & Seniority Gate: disqualifies off-domain or Senior/Lead roles.
-        - Promotes listings with suitability_score >= 75.0 to "STAGED" ("Ready to Apply / Staging").
+        Universal Multi-Tier Optimal Matching Algorithm:
+        - Enforces Strict 2.0-Year Experience Guard.
+        - Categorizes matches into Tier 1 DIRECT (>= 80%), Tier 2 ADJACENT (65-79% / transferable skills),
+          and Tier 3 PUBLIC_INTERNSHIP (hr.gov.ge).
         """
         if current_status == "FILTERED_OUT":
-            return (
-                0.0,
-                "FILTERED_OUT",
-                existing_rationale or "Requires local language",
-                [],
-                [],
-            )
+            return {
+                "suitability_score": 0.0,
+                "status": "FILTERED_OUT",
+                "match_rationale": existing_rationale or "Requires local language",
+                "matched_skills": [],
+                "missing_skills": [],
+                "match_tier": "DIRECT",
+                "adjacent_role_tag": None,
+                "skill_overlap_pct": None,
+            }
 
-        # Domain relevance validation
-        dom_passed, dom_reason = self.validate_domain_gate(parsed_skills, title, description)
-        if not dom_passed:
-            return (
-                0.0,
-                "FILTERED_OUT",
-                dom_reason,
-                [],
-                [],
-            )
-
-        # Seniority validation
         candidate_years = float(parsed_skills.get("years_of_experience") or 1.5)
+        max_allowed = parsed_skills.get("max_allowed_years")
         candidate_seniority = str(parsed_skills.get("seniority_level") or "JUNIOR")
-        sen_passed, sen_reason = self.validate_seniority_gate(candidate_years, candidate_seniority, title, description)
+
+        sen_passed, sen_reason = self.validate_seniority_gate(
+            candidate_years, candidate_seniority, title, description, max_allowed_years=max_allowed
+        )
         if not sen_passed:
-            return (
-                0.0,
-                "FILTERED_OUT",
-                sen_reason,
-                [],
-                [],
-            )
+            return {
+                "suitability_score": 0.0,
+                "status": "FILTERED_OUT",
+                "match_rationale": sen_reason,
+                "matched_skills": [],
+                "missing_skills": [],
+                "match_tier": "DIRECT",
+                "adjacent_role_tag": None,
+                "skill_overlap_pct": None,
+            }
 
         required_skills = self.extract_job_requirements(title, description)
 
-        # Build candidate skill set from parsed_skills
+        # Build candidate skill set dynamically from verified_skills + all taxonomy buckets
         candidate_skills: List[str] = []
-        for k in ["all_skills", "qa_automation", "manual_qa", "languages", "api_and_performance", "cicd_and_devops", "tools", "frameworks"]:
+        for k in [
+            "verified_skills", "all_skills", "qa_automation", "manual_qa",
+            "languages", "api_and_performance", "cicd_and_devops", "tools", "frameworks",
+        ]:
             vals = parsed_skills.get(k, [])
             if isinstance(vals, list):
                 for v in vals:
-                    if str(v) not in candidate_skills:
+                    if str(v) and str(v) not in candidate_skills:
                         candidate_skills.append(str(v))
+
+        # Domain / Tier alignment check
+        tier_hint, tier_label = self.classify_domain_alignment(
+            parsed_skills, title, description, portal=portal,
+            candidate_skills=candidate_skills, required_skills=required_skills,
+        )
+        if tier_hint == "NONE":
+            return {
+                "suitability_score": 0.0,
+                "status": "FILTERED_OUT",
+                "match_rationale": tier_label,
+                "matched_skills": [],
+                "missing_skills": [],
+                "match_tier": "DIRECT",
+                "adjacent_role_tag": None,
+                "skill_overlap_pct": None,
+            }
 
         cand_lower = {s.lower() for s in candidate_skills}
         cand_blob = " ".join(candidate_skills).lower()
@@ -574,63 +645,125 @@ Markdown:
             for sp in self.SPECIALIZED_PLATFORMS
         )
         if title_specialty_mismatch:
-            return (
-                35.0,
-                "FILTERED_OUT",
-                f"Suitability Gate: Role requires specialized stack ({', '.join(missing_specialties or ['domain specialty'])}) not present in skills.md.",
-                matched,
-                missing,
-            )
+            return {
+                "suitability_score": 35.0,
+                "status": "FILTERED_OUT",
+                "match_rationale": f"Suitability Gate: Role requires specialized stack ({', '.join(missing_specialties or ['domain specialty'])}) not present in skills.md.",
+                "matched_skills": matched,
+                "missing_skills": missing,
+                "match_tier": "DIRECT",
+                "adjacent_role_tag": None,
+                "skill_overlap_pct": None,
+            }
 
         if required_skills:
             raw_ratio = len(matched) / len(required_skills)
-            # Penalize specialized platform gaps even in description
             penalty = 20.0 * len(missing_specialties)
-            score = round(min(98.0, max(25.0, (raw_ratio * 78.0) + 22.0 - penalty)), 1)
+            if tier_hint == "ADJACENT":
+                score = round(min(84.0, max(65.0, (raw_ratio * 35.0) + 52.0 - penalty)), 1)
+            else:
+                score = round(min(98.0, max(25.0, (raw_ratio * 78.0) + 22.0 - penalty)), 1)
         else:
-            # Brief external-link listings without inline tech keywords: score by title alignment
-            if any(w in title_lower for w in ["ავტომატიზაცი", "automation", "sdet"]) and has_automation_stack:
-                score = 78.0
+            if tier_hint == "PUBLIC_INTERNSHIP":
+                is_entry = any(w in title_lower for w in ["სტაჟიორ", "დამწყებ", "ასისტენტ", "intern", "trainee", "junior", "სპეციალისტ"])
+                score = 76.0 if is_entry else 64.0
+            elif tier_hint == "ADJACENT":
+                score = 72.0
+            elif any(w in title_lower for w in ["ავტომატიზაცი", "automation", "sdet"]) and has_automation_stack:
+                score = 84.0
                 matched = ["QA Automation"]
             elif any(w in title_lower for w in ["software qa", "qa engineer", "ტესტერ"]) and "report" not in title_lower and "რეპორტ" not in title_lower:
-                # Training/beginner intern courses don't fit 1.5 yr automation profile unless general QA starter
-                if any(w in desc_lower for w in ["სტაჟირების პროგრამა", "კურსი უკვე გაიარა", "course certificate"]):
-                    score = 52.0
-                else:
-                    score = 65.0
+                score = 68.0 if any(w in desc_lower for w in ["სტაჟირების პროგრამა", "კურსი უკვე გაიარა"]) else 80.0
             else:
-                score = 45.0
+                score = 82.0 if tier_hint == "DIRECT" else 55.0
 
         MIN_SUITABILITY_SCORE = 60.0
+        overlap_pct = int(round((len(matched) / len(required_skills)) * 100)) if required_skills else int(round(score))
+        overlap_pct = max(65, min(98, overlap_pct)) if tier_hint == "ADJACENT" else overlap_pct
+
+        # Determine final Match Tier cleanly
+        if tier_hint == "PUBLIC_INTERNSHIP":
+            final_tier = "PUBLIC_INTERNSHIP"
+        elif tier_hint == "ADJACENT" or (tier_hint == "DIRECT" and 60.0 <= score < 80.0):
+            final_tier = "ADJACENT" if (tier_hint == "ADJACENT" or score < 75.0) else "DIRECT"
+        else:
+            final_tier = "DIRECT"
+
+        adjacent_tag = f"Adjacent Opportunity: {overlap_pct}% Skill Overlap ({tier_label})" if final_tier == "ADJACENT" else None
 
         if current_status in ("APPLIED", "REJECTED"):
             new_status = current_status
         elif score < MIN_SUITABILITY_SCORE:
-            return (
-                score,
-                "FILTERED_OUT",
-                f"Suitability Gate: {score}% match is below {int(MIN_SUITABILITY_SCORE)}% threshold for your skills.md (Missing: {', '.join(missing[:4]) or 'stack alignment'}).",
-                matched,
-                missing,
-            )
+            return {
+                "suitability_score": score,
+                "status": "FILTERED_OUT",
+                "match_rationale": f"Suitability Gate: {score}% match is below {int(MIN_SUITABILITY_SCORE)}% threshold (Missing: {', '.join(missing[:4]) or 'stack alignment'}).",
+                "matched_skills": matched,
+                "missing_skills": missing,
+                "match_tier": final_tier,
+                "adjacent_role_tag": None,
+                "skill_overlap_pct": None,
+            }
         elif score >= 75.0:
             new_status = "STAGED"
         else:
             new_status = "AUDITED"
 
-        matched_str = ", ".join(matched[:8]) if matched else "Role specialty alignment"
-        missing_str = ", ".join(missing[:5]) if missing else "None (100% core requirement coverage)"
-        queue_note = (
-            "Auto-promoted to Ready to Apply / Staging queue (score >= 75%)."
-            if new_status == "STAGED"
-            else "Suitable match (60-74%): ready for targeted review."
-        )
-        rationale = (
-            f"Suitability {score}% | Matched ({len(matched)}/{len(required_skills)}): {matched_str} | "
-            f"Missing: {missing_str}. {queue_note}"
-        )
+        matched_str = ", ".join(matched[:6]) if matched else "Transferable competencies"
+        missing_str = ", ".join(missing[:4]) if missing else "None (100% core requirement coverage)"
+        if final_tier == "ADJACENT":
+            rationale = (
+                f"Your {matched_str} skills cover {overlap_pct}% of this {tier_label} role. | "
+                f"Match: {score}% | Missing: {missing_str}"
+            )
+        elif final_tier == "PUBLIC_INTERNSHIP":
+            rationale = (
+                f"Public Sector & Entry/Internship Opportunity ({score}% fit) | "
+                f"Matched: {matched_str}"
+            )
+        else:
+            queue_note = "Direct Role Match — auto-promoted to STAGED." if new_status == "STAGED" else "Direct Role Match (60-74%)."
+            rationale = (
+                f"Suitability {score}% | Matched ({len(matched)}/{len(required_skills)}): {matched_str} | "
+                f"Missing: {missing_str}. {queue_note}"
+            )
 
-        return (score, new_status, rationale, matched, missing)
+        return {
+            "suitability_score": score,
+            "status": new_status,
+            "match_rationale": rationale,
+            "matched_skills": matched,
+            "missing_skills": missing,
+            "match_tier": final_tier,
+            "adjacent_role_tag": adjacent_tag,
+            "skill_overlap_pct": overlap_pct if final_tier == "ADJACENT" else None,
+        }
+
+    def evaluate_job(
+        self,
+        title: str,
+        description: str,
+        parsed_skills: Dict[str, Any],
+        current_status: str = "DISCOVERED",
+        existing_rationale: str = "",
+        portal: str = "custom",
+    ) -> Tuple[float, str, str, List[str], List[str]]:
+        """Backwards-compatible 5-tuple wrapper over evaluate_job_tiered."""
+        res = self.evaluate_job_tiered(
+            title=title,
+            description=description,
+            parsed_skills=parsed_skills,
+            current_status=current_status,
+            existing_rationale=existing_rationale,
+            portal=portal,
+        )
+        return (
+            res["suitability_score"],
+            res["status"],
+            res["match_rationale"],
+            res["matched_skills"],
+            res["missing_skills"],
+        )
 
 
 matcher_service = MatcherService()

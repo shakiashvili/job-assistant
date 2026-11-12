@@ -35,7 +35,12 @@ def list_portal_vacancies(current_user: User = Depends(get_current_user)):
         ).all()
 
         items: List[PortalVacancyItem] = []
+        seen_tc: set[tuple[str, str]] = set()
         for r in rows:
+            tc = (r.title.lower().strip(), r.company.lower().strip())
+            if tc in seen_tc:
+                continue
+            seen_tc.add(tc)
             salary_str = "Unstated"
             if r.salary_min and r.salary_max:
                 salary_str = f"{int(r.salary_min):,} - {int(r.salary_max):,} {r.salary_currency or 'USD'}"

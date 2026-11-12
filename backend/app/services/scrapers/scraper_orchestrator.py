@@ -11,6 +11,7 @@ from ..link_validator import parse_vacancy_deadline
 from .base_scraper import sanitize_company_name
 from .jobs_ge_scraper import jobs_ge_scraper
 from .hr_ge_scraper import hr_ge_scraper
+from .hr_gov_scraper import hr_gov_scraper
 from .dou_scraper import dou_scraper
 from .djinni_scraper import djinni_scraper
 from .justjoin_scraper import justjoin_scraper
@@ -21,17 +22,17 @@ logger = logging.getLogger(__name__)
 
 class ScraperOrchestrator:
     """
-    Coordinates live role-based scraping across Jobs.ge, HR.ge, HeadHunter.ge, DOU.ua, Djinni.co, and JustJoin.it:
-    1. Builds role-specific search URLs directly from the uploaded CandidateProfile (skills.md).
-    2. Deduplicates against JobPosting by (portal, external_id) and (url).
-    3. Dynamically unlocks Ukrainian, Russian, or Polish roles when listed in skills.md languages.
-    4. Enforces Domain Gate, Seniority Gate, & Live Link Content Health Check.
-    5. Extracts ONLY explicitly stated salaries without fabricating missing pay figures.
+    Universal Domain-Agnostic Multi-Portal Scraper Orchestrator:
+    1. Builds primary, adjacent, public-sector internship, and remote queries dynamically from CandidateProfile.
+    2. Scrapes Jobs.ge, HR.ge, HeadHunter.ge, HR.gov.ge, DOU.ua, Djinni.co, and JustJoin.it.
+    3. Deduplicates across (portal, external_id), (url), and (title, company).
+    4. Evaluates jobs across 3 actionable tiers (DIRECT, ADJACENT, PUBLIC_INTERNSHIP) under a strict 2.0-yr cap.
     """
 
     SCRAPER_MAP = {
         "jobs.ge": jobs_ge_scraper,
         "hr.ge": hr_ge_scraper,
+        "hr.gov.ge": hr_gov_scraper,
         "headhunter.ge": headhunter_scraper,
         "dou.ua": dou_scraper,
         "djinni.co": djinni_scraper,
@@ -58,19 +59,33 @@ class ScraperOrchestrator:
             cand_langs = parsed_skills.get("spoken_languages", ["English", "Georgian"]) if isinstance(parsed_skills, dict) else ["English", "Georgian"]
             search_cfg = profile_service.get_search_queries_for_profile(parsed_skills, headline=headline)
 
+        combined_kw = list(dict.fromkeys(
+            (search_cfg.get("domain_keywords") or []) + (search_cfg.get("adjacent_keywords") or [])
+        ))
+
         tasks = []
         for p in target_portals:
             if p == "jobs.ge":
                 tasks.append(jobs_ge_scraper.scrape(allow_network=True, search_urls=search_cfg.get("jobs_ge_urls")))
             elif p == "hr.ge":
-                tasks.append(hr_ge_scraper.scrape(allow_network=True, search_url=search_cfg.get("hr_ge_url"), domain_keywords=search_cfg.get("domain_keywords")))
+                tasks.append(hr_ge_scraper.scrape(
+                    allow_network=True,
+                    search_urls=search_cfg.get("hr_ge_urls"),
+                    domain_keywords=combined_kw,
+                ))
+            elif p == "hr.gov.ge":
+                tasks.append(hr_gov_scraper.scrape(
+                    allow_network=True,
+                    queries=search_cfg.get("hr_gov_queries"),
+                    domain_keywords=combined_kw,
+                ))
             elif p == "headhunter.ge":
-                hh_url = search_cfg.get("headhunter_url")
-                if hh_url:
+                hh_urls = search_cfg.get("headhunter_urls") or ([search_cfg.get("headhunter_url")] if search_cfg.get("headhunter_url") else [])
+                if hh_urls:
                     tasks.append(headhunter_scraper.scrape(
                         allow_network=True,
-                        search_url=hh_url,
-                        domain_keywords=search_cfg.get("domain_keywords"),
+                        search_urls=hh_urls,
+                        domain_keywords=combined_kw,
                         candidate_languages=cand_langs,
                     ))
             elif p == "dou.ua":
@@ -78,7 +93,7 @@ class ScraperOrchestrator:
                 if dou_url:
                     tasks.append(dou_scraper.scrape(allow_network=True, search_url=dou_url, candidate_languages=cand_langs))
             elif p == "djinni.co":
-                djinni_url = search_cfg.get("djinni_url")
+                djinni_url = search_cfg.get("djinni_exp_url") or search_cfg.get("djinni_url")
                 if djinni_url:
                     tasks.append(djinni_scraper.scrape(allow_network=True, search_url=djinni_url, candidate_languages=cand_langs))
             elif p == "justjoin.it":
@@ -136,14 +151,21 @@ class ScraperOrchestrator:
                     initial_status = "FILTERED_OUT"
                     initial_rationale = f"Vacancy expired on {dl_str}"
 
-                # 3. Suitability & Match Evaluation (with strict Seniority Gate)
-                score, final_status, match_rationale, _, _ = matcher_service.evaluate_job(
+                # 3. Multi-Tier Optimal Match Evaluation (DIRECT, ADJACENT, PUBLIC_INTERNSHIP + Strict 2.0-Yr Guard)
+                tier_res = matcher_service.evaluate_job_tiered(
                     title=title,
                     description=desc,
                     parsed_skills=parsed_skills,
                     current_status=initial_status,
                     existing_rationale=initial_rationale,
+                    portal=portal,
                 )
+                score = tier_res["suitability_score"]
+                final_status = tier_res["status"]
+                match_rationale = tier_res["match_rationale"]
+                match_tier = tier_res.get("match_tier") or item.get("match_tier") or "DIRECT"
+                adj_tag = tier_res.get("adjacent_role_tag")
+                overlap_pct = tier_res.get("skill_overlap_pct")
 
                 filter_reason = (initial_rationale or match_rationale) if final_status == "FILTERED_OUT" else None
                 if final_status == "FILTERED_OUT":
@@ -193,9 +215,12 @@ class ScraperOrchestrator:
                     existing.salary_estimated_by_ai = is_est
                     existing.suitability_score = score
                     existing.match_score = score
+                    existing.match_tier = match_tier
+                    existing.adjacent_role_tag = adj_tag
+                    existing.skill_overlap_pct = overlap_pct
                     existing.filter_out_reason = filter_reason
                     existing.match_rationale = match_rationale
-                    existing.deadline_text = dl_str
+                    existing.deadline_text = dl_str or item.get("deadline_text")
                     if existing.status not in ("APPLIED", "REJECTED"):
                         existing.status = final_status
                     existing.scraped_at = utc_now()
@@ -227,10 +252,13 @@ class ScraperOrchestrator:
                         salary_estimated_by_ai=is_est,
                         suitability_score=score,
                         match_score=score,
+                        match_tier=match_tier,
+                        adjacent_role_tag=adj_tag,
+                        skill_overlap_pct=overlap_pct,
                         status=final_status,
                         filter_out_reason=filter_reason,
                         match_rationale=match_rationale,
-                        deadline_text=dl_str,
+                        deadline_text=dl_str or item.get("deadline_text"),
                         scraped_at=utc_now(),
                     )
                     session.add(job_record)

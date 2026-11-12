@@ -416,3 +416,143 @@ def test_clickable_docx_hyperlinks_english_tech_cv_no_email_footer_and_mime_atta
     assert ai_res.status_code == 200
     plan_titles = [p["skill_name"] for p in ai_res.json()]
     assert any("AI" in t for t in plan_titles)
+
+
+def test_universal_domain_agnostic_ingestion_query_builder_hr_gov_and_multi_tier():
+    """Tests Logistics/QA domain-agnostic ingestion, dynamic queries, hr.gov.ge parser, 2.0-yr cap, and Direct/Adjacent tiers."""
+    from app.services.profile_service import profile_service
+    from app.services.scrapers.query_builder import build_search_queries
+    from app.services.scrapers.hr_gov_scraper import hr_gov_scraper
+
+    # 1. Non-IT Logistics skills.md adapts cleanly without QA bias
+    logistics_md = """# Nika Kapanadze — Supply Chain & Logistics Coordinator
+## Contact & Personal Info
+- **Email:** logistics.test@example.com
+- **Experience:** 1.5 years in freight coordination and procurement.
+## Core Skills
+- Logistics, Supply Chain, Procurement, Incoterms, Customs Clearance, Excel, 1C, ERP
+"""
+    log_prof = profile_service.extract_structured_profile(logistics_md)
+    assert "Logistics" in log_prof.detected_industry
+    assert "Logistics" in log_prof.primary_role or "Supply Chain" in log_prof.primary_role
+    assert log_prof.max_allowed_years <= 2.0
+    assert len(log_prof.adjacent_roles) >= 2
+    assert any("Procurement" in r for r in log_prof.adjacent_roles)
+
+    # Dynamic queries for Logistics must NOT lock Jobs.ge to IT cid=6
+    log_queries = build_search_queries({
+        "target_industry": log_prof.target_industry,
+        "detected_industry": log_prof.detected_industry,
+        "primary_role": log_prof.primary_role,
+        "adjacent_roles": log_prof.adjacent_roles,
+        "verified_skills": log_prof.verified_skills,
+        "years_of_experience": log_prof.experience_years,
+    })
+    assert len(log_queries["jobs_ge_urls"]) >= 2
+    assert all("cid=6" not in u for u in log_queries["jobs_ge_urls"])
+    assert "სტაჟიორი" in log_queries["internship_queries"]
+
+    # 2. Strict 2.0-year guard + Direct vs Adjacent tier evaluation for QA candidate
+    qa_parsed = {
+        "target_industry": "qa_tech",
+        "primary_role": "QA Automation Engineer",
+        "adjacent_roles": ["Technical Support Engineer L2/L3", "Data Quality Analyst"],
+        "verified_skills": ["Playwright", "Python", "PyTest", "Postman", "REST API", "SQL", "Linux"],
+        "all_skills": ["Playwright", "Python", "PyTest", "Postman", "REST API", "SQL", "Linux"],
+        "years_of_experience": 1.5,
+        "max_allowed_years": 2.0,
+        "seniority_level": "JUNIOR",
+        "search_queries": build_search_queries({
+            "target_industry": "qa_tech",
+            "primary_role": "QA Automation Engineer",
+            "adjacent_roles": ["Technical Support Engineer L2/L3", "Data Quality Analyst"],
+            "verified_skills": ["Playwright", "Python", "PyTest", "Postman", "REST API", "SQL", "Linux"],
+            "years_of_experience": 1.5,
+        }),
+    }
+
+    # Reject Middle+ or 2-3 years exp under strict 2.0 cap
+    res_mid_plus = matcher_service.evaluate_job_tiered(
+        title="Middle+ QA Automation Engineer",
+        description="Requires Playwright and Python.",
+        parsed_skills=qa_parsed,
+    )
+    assert res_mid_plus["status"] == "FILTERED_OUT"
+
+    res_3yr = matcher_service.evaluate_job_tiered(
+        title="QA Engineer",
+        description="Requires 2-3 years of experience in manual and API testing.",
+        parsed_skills=qa_parsed,
+    )
+    assert res_3yr["status"] == "FILTERED_OUT"
+
+    # Tier 1 DIRECT match
+    res_direct = matcher_service.evaluate_job_tiered(
+        title="Junior QA Automation Engineer (Playwright / Python)",
+        description="1-2 years experience. Requirements: Playwright, Python, PyTest, REST API.",
+        parsed_skills=qa_parsed,
+        portal="djinni.co",
+    )
+    assert res_direct["status"] == "STAGED"
+    assert res_direct["match_tier"] == "DIRECT"
+    assert res_direct["suitability_score"] >= 80.0
+
+    # Tier 2 ADJACENT transferable match (QA skills SQL + Postman + Linux -> Technical Support L2/L3)
+    res_adj = matcher_service.evaluate_job_tiered(
+        title="Technical Support Engineer L2",
+        description="Troubleshooting customer API integrations using Postman, SQL, REST API, and Linux logs. 1 year experience.",
+        parsed_skills=qa_parsed,
+        portal="jobs.ge",
+    )
+    assert res_adj["status"] != "FILTERED_OUT"
+    assert res_adj["match_tier"] == "ADJACENT"
+    assert res_adj["adjacent_role_tag"] and "Skill Overlap" in res_adj["adjacent_role_tag"]
+    assert res_adj["skill_overlap_pct"] and res_adj["skill_overlap_pct"] >= 65
+
+    # 3. HR.gov.ge parser + Tier 3 PUBLIC_INTERNSHIP classification
+    hr_gov_html = """
+    <table>
+      <tr>
+        <td><img src="/src/images/other32.png"/></td>
+        <td><a href="/JobProvider/UserOrgVaks/Details/103915?active=1">სტრატეგიული კოორდინაციისა და ანალიტიკის სამსახურის სტაჟიორი</a></td>
+        <td><a href="/JobProvider/UserOrgVaks/Details/103915?active=1">სსიპ - დაცული ტერიტორიების სააგენტო</a></td>
+        <td>15.11.2026</td>
+      </tr>
+    </table>
+    """
+    hr_gov_items = hr_gov_scraper.parse_html_listings(hr_gov_html)
+    assert len(hr_gov_items) == 1
+    assert hr_gov_items[0]["portal"] == "hr.gov.ge"
+    assert hr_gov_items[0]["company"] == "სსიპ - დაცული ტერიტორიების სააგენტო"
+    assert hr_gov_items[0]["deadline_text"] == "15.11.2026"
+
+    res_pub = matcher_service.evaluate_job_tiered(
+        title=hr_gov_items[0]["title"],
+        description="სტაჟირება ანალიტიკის მიმართულებით. SQL, Excel, მონაცემთა დამუშავება.",
+        parsed_skills=qa_parsed,
+        portal="hr.gov.ge",
+    )
+    assert res_pub["status"] != "FILTERED_OUT"
+    assert res_pub["match_tier"] == "PUBLIC_INTERNSHIP"
+
+    # 4. Preset switching purges stale JobPosting rows cleanly (fixes Screenshot 3)
+    with Session(engine) as s:
+        s.add(JobPosting(
+            portal="jobs.ge",
+            external_id="stale-qa-switch-test",
+            title="Stale QA Role",
+            company="OldCorp",
+            url="https://jobs.ge/ge/?view=jobs&id=9999991",
+            status="STAGED",
+            suitability_score=90.0,
+        ))
+        s.commit()
+
+    sw_res = client.post("/api/skills-md/preset/receptionist_hospitality")
+    assert sw_res.status_code == 200
+    from sqlmodel import select
+    with Session(engine) as s:
+        leftover = s.exec(select(JobPosting).where(JobPosting.external_id == "stale-qa-switch-test")).all()
+        assert len(leftover) == 0
+    # Restore QA preset after switch check
+    client.post("/api/skills-md/preset/qa_tech")

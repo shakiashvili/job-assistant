@@ -58,7 +58,14 @@ export const CVVariantManager: React.FC = () => {
       fetchScrapedJobs().catch(() => []),
     ]);
     setMyCvs(cvs);
-    setJobsList(jobs);
+    const seen = new Set<string>();
+    const deduped = jobs.filter((j) => {
+      const key = `${j.title.toLowerCase().trim()}||${j.company.toLowerCase().trim()}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    setJobsList(deduped);
   };
 
   const handleUploadFile = async (file: File) => {
