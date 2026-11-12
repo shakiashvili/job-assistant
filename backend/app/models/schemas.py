@@ -23,6 +23,7 @@ class JobDetails(BaseModel):
     salary_max: Optional[float] = Field(None, description="Extracted or AI-estimated max salary")
     salary_currency: Optional[str] = Field(None, description="Salary currency: USD, EUR, GEL, GBP")
     salary_estimated_by_ai: bool = Field(False, description="True if predicted by AI, False if extracted from posting")
+    extraction_failed: bool = Field(False, description="True if company or title could not be reliably extracted")
     summary: str = Field("", description="Executive summary of the job description")
 
 

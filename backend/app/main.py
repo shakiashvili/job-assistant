@@ -16,6 +16,7 @@ from .routers.jobs import router as jobs_router
 from .routers.auth import router as auth_router
 from .routers.admin import router as admin_router
 from .routers.plans import router as plans_router
+from .routers.extension import router as extension_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -84,6 +85,7 @@ app.include_router(answers_router)
 app.include_router(stage_router)
 app.include_router(ground_truth_router)
 app.include_router(tracker_router)
+app.include_router(extension_router)
 
 @app.get("/")
 def root():

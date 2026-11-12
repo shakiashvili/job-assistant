@@ -1,97 +1,133 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>AI Job Assistant</title>
-  <link rel="stylesheet" href="popup.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TalentFlow AI Job Copilot</title>
+  <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
   <div class="popup-container">
-    <header class="header">
+    <div class="header">
       <div class="logo-area">
-        <div class="logo-icon">🤖</div>
+        <span class="logo-icon">🛡️</span>
         <div>
-          <h1>AI Job Assistant</h1>
-          <span class="subtext">Human-in-the-Loop Co-pilot</span>
+          <h1>TalentFlow Copilot</h1>
+          <span class="subtext">Universal Form & ATS Assistant</span>
         </div>
       </div>
-      <div class="connection-badge" id="backend-status">
+      <div id="conn-badge" class="connection-badge">
         <span class="dot"></span>
-        <span id="backend-text">Connecting...</span>
-      </div>
-    </header>
-
-    <div class="candidate-card">
-      <div class="candidate-avatar">CA</div>
-      <div class="candidate-info">
-        <div class="name" id="cand-name">Candidate Profile</div>
-        <div class="title" id="cand-title">Upload skills.md to configure</div>
-        <div class="meta">Remote &amp; Georgia • Active Session</div>
+        <span id="conn-text">Offline</span>
       </div>
     </div>
 
-    <div class="section-box" id="tab-status-box">
-      <div class="box-label">Active Tab Context</div>
-      <div class="tab-info">
-        <span class="portal-pill" id="portal-pill">Detecting...</span>
-        <span class="tab-title-text" id="tab-title">Reading current page...</span>
+    <div id="status-banner" class="status-banner hidden"></div>
+
+    <!-- Authentication Card (Shown when signed out) -->
+    <div id="auth-section" class="panel-card">
+      <span class="section-label">Sign In to Sync Live Profile & CVs</span>
+      <input type="email" id="login-email" class="input-field" placeholder="Account Email" autocomplete="email" />
+      <input type="password" id="login-password" class="input-field" placeholder="Password" autocomplete="current-password" />
+      <div class="actions">
+        <button id="btn-login" class="btn btn-primary">🔐 Sign In</button>
+      </div>
+      <div style="margin-top: 8px; display: flex; justify-content: space-between; align-items: center;">
+        <button id="btn-toggle-token" class="btn-link" type="button">Use JWT Token</button>
+        <button id="btn-toggle-api" class="btn-link" type="button">Backend URL</button>
+      </div>
+      <div id="token-box" class="hidden" style="margin-top: 8px;">
+        <input type="text" id="manual-jwt" class="input-field" placeholder="Paste Bearer JWT token" />
+        <button id="btn-save-token" class="btn btn-secondary" style="width:100%;">Save Token</button>
+      </div>
+      <div id="api-box" class="hidden" style="margin-top: 8px;">
+        <input type="text" id="api-base-url" class="input-field" value="http://127.0.0.1:8000" />
+        <button id="btn-save-api" class="btn btn-secondary" style="width:100%;">Update API URL</button>
       </div>
     </div>
 
-    <!-- Match score preview -->
-    <div class="section-box" id="match-box">
-      <div class="box-header">
-        <span class="box-label">Gemini 2.5 Job Match</span>
-        <span class="score-percent" id="score-val">--%</span>
+    <!-- Authenticated Copilot View -->
+    <div id="copilot-section" class="hidden">
+      <div class="panel-card">
+        <div class="candidate-header">
+          <div class="candidate-left">
+            <div id="cand-avatar" class="candidate-avatar">TF</div>
+            <div>
+              <div id="cand-name" class="candidate-name">Loading profile...</div>
+              <div id="cand-role" class="candidate-role">Syncing role...</div>
+            </div>
+          </div>
+          <button id="btn-logout" class="btn-link" type="button" title="Sign out">Sign Out</button>
+        </div>
+        <div id="cand-skills" class="skills-row"></div>
       </div>
-      <div class="progress-bar-bg">
-        <div class="progress-bar-fill" id="score-bar" style="width: 0%;"></div>
+
+      <!-- Extracted Page Context -->
+      <div class="panel-card">
+        <div class="job-meta-row">
+          <span id="portal-badge" class="portal-pill">DETECTING...</span>
+          <span id="match-badge" class="match-pill hidden">--% FIT</span>
+        </div>
+
+        <div id="extraction-warn" class="warning-banner hidden">
+          Could not auto-detect Role or Company cleanly from DOM. Please confirm below before generating your CV:
+        </div>
+        <div id="seniority-warn" class="warning-banner hidden"></div>
+        <div id="captcha-warn" class="warning-banner hidden"></div>
+
+        <label class="section-label" for="job-title-input">Job Title</label>
+        <input type="text" id="job-title-input" class="input-field" placeholder="e.g. Junior QA Engineer" />
+
+        <label class="section-label" for="company-input">Company Name</label>
+        <input type="text" id="company-input" class="input-field" placeholder="e.g. Employer Name" />
+
+        <div class="row-split" style="margin-bottom: 6px;">
+          <div style="flex:1;">
+            <label class="section-label" for="lang-select">Output Language</label>
+            <select id="lang-select" class="input-field" style="margin-bottom:0;">
+              <option value="">Auto-Detect (Page)</option>
+              <option value="en">English (EN)</option>
+              <option value="ka">Georgian (ქართული)</option>
+            </select>
+          </div>
+          <div style="flex:1; text-align:right;">
+            <span class="section-label">Salary / Estimate</span>
+            <div id="salary-text" style="font-size:11px; font-weight:700; color:#e2e8f0; padding-top:5px;">Not analyzed yet</div>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button id="btn-prepare-fill" class="btn btn-primary">⚡ Analyze, Build CV & Auto-Fill</button>
+          <button id="btn-fill-step" class="btn btn-secondary">🪜 Fill Current Modal Step</button>
+          <button id="btn-mark-applied" class="btn btn-success hidden">✅ Mark as Applied & Save to Tracker</button>
+        </div>
       </div>
-      <div class="breakdown-pills" id="breakdown-pills">
-        <span class="pill">Skills: --</span>
-        <span class="pill">Visa: --</span>
-        <span class="pill">Exp: --</span>
+
+      <!-- Results Card -->
+      <div id="results-card" class="panel-card hidden">
+        <span class="section-label">Company & Role Brief</span>
+        <div id="company-intel-text" style="font-size:11px; color:#e2e8f0; line-height:1.4;"></div>
+        <ul id="talking-points-list" class="intel-list"></ul>
+
+        <div id="cv-download-bar" class="cv-download-bar hidden">
+          <span id="cv-filename-label" style="color:#cbd5e1;">Tailored Resume</span>
+          <a id="cv-download-link" href="#" target="_blank" rel="noopener noreferrer">Download PDF ↗</a>
+        </div>
+
+        <div style="margin-top:8px;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <span class="section-label" style="margin-bottom:2px;">Tailored Cover Letter</span>
+            <button id="btn-copy-letter" class="btn-link" type="button">Copy</button>
+          </div>
+          <div id="cover-letter-preview" style="font-size:11px; color:#cbd5e1; max-height:95px; overflow-y:auto; background:#0f172a; padding:7px; border-radius:6px; white-space:pre-wrap;"></div>
+        </div>
       </div>
-      <div id="blockers-preview" class="blockers-list"></div>
     </div>
 
-    <!-- Variant selector -->
-    <div class="section-box">
-      <label class="box-label" for="popup-variant">Active CV Variant</label>
-      <select id="popup-variant" class="variant-select">
-        <option value="qa_automation">QA Automation (Playwright / Python / CI)</option>
-        <option value="qa_manual">QA Manual (Exploratory / Quality Governance)</option>
-        <option value="tech_support">Tech Support (Tier 3 / API & SQL Debug)</option>
-      </select>
+    <div class="footer">
+      Human-in-the-Loop Copilot · Never auto-submits or bypasses CAPTCHAs
     </div>
-
-    <!-- Configurable Backend API Base URL (chrome.storage.sync) -->
-    <div class="section-box">
-      <label class="box-label" for="api-base-url-input">Backend API URL</label>
-      <div style="display:flex; gap:6px; margin-top:4px;">
-        <input id="api-base-url-input" type="text" value="http://localhost:8000" style="flex:1; background:#0f172a; border:1px solid #334155; color:#e2e8f0; border-radius:6px; padding:5px 8px; font-size:11px;" />
-        <button id="btn-save-api-url" class="btn btn-secondary" style="padding:5px 10px; font-size:11px;">Save</button>
-      </div>
-    </div>
-
-    <!-- Action Buttons -->
-    <div class="actions">
-      <button class="btn btn-primary" id="btn-popup-autofill">
-        <span>⚡</span> Autofill & Stage Form
-      </button>
-      <button class="btn btn-secondary" id="btn-popup-audit">
-        <span>🔍</span> Audit Page with Gemini
-      </button>
-      <button class="btn btn-accent" id="btn-open-dashboard">
-        <span>🌐</span> Open Web Dashboard
-      </button>
-    </div>
-
-    <footer class="footer">
-      <span>FastAPI :8000 • Gemini 2.5 Flash</span>
-    </footer>
   </div>
-
   <script src="popup.js"></script>
 </body>
 </html>

@@ -16,6 +16,7 @@ from .dou_scraper import dou_scraper
 from .djinni_scraper import djinni_scraper
 from .justjoin_scraper import justjoin_scraper
 from .headhunter_scraper import headhunter_scraper
+from .linkedin_scraper import linkedin_scraper
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ class ScraperOrchestrator:
     """
     Universal Domain-Agnostic Multi-Portal Scraper Orchestrator:
     1. Builds primary, adjacent, public-sector internship, and remote queries dynamically from CandidateProfile.
-    2. Scrapes Jobs.ge, HR.ge, HeadHunter.ge, HR.gov.ge, DOU.ua, Djinni.co, and JustJoin.it.
+    2. Scrapes Jobs.ge, HR.ge, HeadHunter.ge, HR.gov.ge, DOU.ua, Djinni.co, JustJoin.it, and LinkedIn.
     3. Deduplicates across (portal, external_id), (url), and (title, company).
     4. Evaluates jobs across 3 actionable tiers (DIRECT, ADJACENT, PUBLIC_INTERNSHIP) under a strict 2.0-yr cap.
     """
@@ -37,6 +38,7 @@ class ScraperOrchestrator:
         "dou.ua": dou_scraper,
         "djinni.co": djinni_scraper,
         "justjoin.it": justjoin_scraper,
+        "linkedin.com": linkedin_scraper,
     }
 
     async def run_scrapers(
@@ -100,6 +102,14 @@ class ScraperOrchestrator:
                 justjoin_url = search_cfg.get("justjoin_url")
                 if justjoin_url:
                     tasks.append(justjoin_scraper.scrape(allow_network=True, search_url=justjoin_url, candidate_languages=cand_langs))
+            elif p == "linkedin.com":
+                li_urls = search_cfg.get("linkedin_urls") or []
+                tasks.append(linkedin_scraper.scrape(
+                    allow_network=True,
+                    search_urls=li_urls,
+                    domain_keywords=combined_kw,
+                    candidate_languages=cand_langs,
+                ))
 
         raw_discovered: List[Dict[str, Any]] = []
         if tasks:

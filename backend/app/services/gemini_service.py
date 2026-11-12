@@ -351,7 +351,7 @@ Return JSON with keys:
             motivation_statement = (
                 f"Working daily with {top_skills}, I can help {company}'s support team resolve complex escalations and meet SLA targets quickly."
             )
-        else:
+        elif industry == "qa_tech":
             human_summary = (
                 f"QA Automation & Software Test Engineer with 1.5+ years of production experience across {top_skills}. "
                 f"Engineered automated regression checks, validated REST API contracts, and triaged release-blocking defects directly within CI/CD pipelines. "
@@ -361,12 +361,26 @@ Return JSON with keys:
                 f"I want to apply my hands-on workflow experience in {top_skills} directly to {company}'s release pipeline, "
                 f"expanding reliable automated and exploratory test coverage from sprint one."
             )
+        else:
+            human_summary = (
+                f"Focused {title} specialist with verified hands-on experience in {top_skills}. "
+                f"Maintains reliable execution, clear documentation, and measurable results across day-to-day workflows. "
+                f"Ready to contribute immediately at {company}; available 1 week after offer."
+            )
+            motivation_statement = (
+                f"I want to bring my practical skills in {top_skills} directly to {company}'s team and deliver dependable results from week one."
+            )
 
+        is_qa_domain = industry == "qa_tech"
         dou_letter = (
             f"Dear {company} Hiring Team,\n\n"
-            f"I am applying for the {title} role. Over the past 1.5+ years in QA engineering, I have used {top_skills} to build reliable test suites, "
-            f"verify REST API contracts, and prevent critical regressions before production release.\n\n"
-            f"My tailored CV is attached, and I am available to start 1 week after offer. Looking forward to connecting."
+            f"I am applying for the {title} role. Over the past 1.5+ years in {'QA engineering' if is_qa_domain else 'this domain'}, I have used {top_skills} to "
+            + (
+                "build reliable test suites, verify REST API contracts, and prevent critical regressions before production release.\n\n"
+                if is_qa_domain
+                else "deliver accurate daily execution, streamline operational workflows, and uphold consistent quality standards.\n\n"
+            )
+            + f"My tailored CV is attached, and I am available to start 1 week after offer. Looking forward to connecting."
         )
         return {
             "human_tone_summary": human_summary,
@@ -436,16 +450,104 @@ Return JSON with keys:
         candidate_data: Dict[str, Any],
         job_details: Dict[str, Any],
         variant: str = "qa_automation",
-        cv_language: str = "en"
+        cv_language: str = "en",
+        candidate_profile: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
-        return self._fallback_generate_answers(questions, candidate_data, job_details, variant, cv_language)
+        """
+        Produces form/screening answers grounded strictly in the authenticated user's
+        live CandidateProfile + ground_truth store. Uses Gemini when available, with a
+        dynamic domain-agnostic heuristic fallback.
+        """
+        fallback = self._fallback_generate_answers(
+            questions,
+            candidate_data,
+            job_details,
+            variant,
+            cv_language,
+            candidate_profile=candidate_profile,
+        )
+        if not self.is_available or not questions:
+            return fallback
+
+        try:
+            cand = candidate_data.get("candidate", {})
+            prof = candidate_profile or {}
+            verified_skills = prof.get("verified_skills") or prof.get("all_skills") or cand.get("skills", [])
+            exp_years = prof.get("years_of_experience") or candidate_data.get("experience_years") or 1.5
+            primary_role = prof.get("primary_role") or cand.get("headline") or "Specialist"
+            industry = prof.get("detected_industry") or prof.get("target_industry") or "general"
+            skills_md = sanitize_untrusted_input(str(candidate_data.get("skills_md_raw") or ""), 4500)
+            q_payload = json.dumps(
+                [
+                    {
+                        "index": idx,
+                        "question": q.get("question", "") if isinstance(q, dict) else str(q),
+                        "field_type": q.get("field_type", "text") if isinstance(q, dict) else "text",
+                        "options": (q.get("options") or [])[:15] if isinstance(q, dict) else [],
+                    }
+                    for idx, q in enumerate(questions)
+                ],
+                ensure_ascii=False,
+            )
+
+            prompt = f"""You are a precise Job Application Form Copilot. Answer each form question using ONLY verified candidate facts below.
+Rules:
+1. Language: {"Georgian" if cv_language == "ka" else "English"} (unless options force English Yes/No).
+2. For numeric fields (field_type == "number"), return ONLY a plain number string (e.g. "2" or "1.5"), using candidate's real years_of_experience={exp_years} (return "0" if candidate clearly lacks the requested skill).
+3. For select/radio fields with options, pick the closest matching exact string from `options`.
+4. Notice period / earliest start default: "1 week after offer" (or "1 კვირა შეთავაზებიდან (1 week after offer)" if Georgian).
+5. Target role: {sanitize_untrusted_input(str(job_details.get("title", "")), 150)} at {sanitize_untrusted_input(str(job_details.get("company", "")), 150)}.
+
+Candidate Profile:
+- Full Name: {cand.get("full_name", "Candidate")}
+- Primary Role: {primary_role} (Industry: {industry})
+- Verified Experience Years: {exp_years}
+- Verified Skills: {", ".join([str(s) for s in verified_skills[:20]])}
+
+<candidate_skills_untrusted_input>
+{skills_md}
+</candidate_skills_untrusted_input>
+
+Questions JSON:
+{q_payload}
+
+Return STRICT JSON: {{"answers": [{{"index": 0, "answer": "..."}}]}}"""
+
+            resp = self._call_gemini_with_retry(prompt, temperature=0.15)
+            parsed = safe_parse_json(resp.text) if resp and resp.text else None
+            if parsed and isinstance(parsed.get("answers"), list):
+                by_idx = {
+                    int(item["index"]): str(item["answer"]).strip()
+                    for item in parsed["answers"]
+                    if isinstance(item, dict) and "index" in item and item.get("answer") is not None
+                }
+                for idx, fb_item in enumerate(fallback):
+                    # Keep deterministic contact/salary/start-date compliance when critical
+                    q_l = str(fb_item.get("question", "")).lower()
+                    if any(k in q_l for k in ("salary", "compensation", "notice", "start date", "earliest start", "email", "phone", "first name", "last name", "linkedin", "github")):
+                        continue
+                    gem_ans = by_idx.get(idx)
+                    if gem_ans:
+                        fb_item["answer"] = gem_ans
+                        fb_item["source_ground_truth_field"] = "gemini_candidate_profile"
+                        fb_item["confidence"] = 0.94
+        except Exception as e:
+            logger.warning(f"Gemini grounded answer generation fallback: {e}")
+
+        return fallback
 
     def _fallback_extract_job_details(self, text: str, portal: str = "generic", industry: str = "qa_tech") -> Dict[str, Any]:
+        extraction_failed = False
         lower = text.lower()
 
-        # Title heuristic across all industries
+        # Title heuristic across all industries (avoid mistaking prose sentences for titles)
         first_line = text.strip().split("\n")[0].strip()
-        if len(first_line) < 80 and len(first_line) > 3:
+        first_low = first_line.lower()
+        looks_like_prose = any(
+            p in first_low
+            for p in ("role description", "without headers", "we are looking", "we are seeking", "some generic", "applying for")
+        )
+        if 3 < len(first_line) < 75 and len(first_line.split()) <= 8 and not looks_like_prose:
             title = first_line.split(" at ")[0].split(" — ")[0].strip()
         elif industry == "hospitality_reception":
             title = "Front Desk Receptionist & Guest Relations Specialist"
@@ -454,7 +556,8 @@ Return JSON with keys:
         elif industry == "customer_service":
             title = "Customer Service & Support Specialist"
         else:
-            title = "Senior QA Automation Engineer"
+            title = "Unknown Title"
+            extraction_failed = True
 
         # Company heuristic
         company = "Organization"
@@ -467,13 +570,8 @@ Return JSON with keys:
             if match:
                 company = match.group(1).strip()
         else:
-            defaults = {
-                "hospitality_reception": "Rooms Hotel & Adjara Group",
-                "healthcare_hospital": "Evex Hospitals",
-                "customer_service": "TBC Client Care Hub",
-                "qa_tech": "CloudScale Technologies"
-            }
-            company = defaults.get(industry, "CloudScale Technologies")
+            company = "Unknown Company"
+            extraction_failed = True
 
         # Experience
         years = 2 if industry != "qa_tech" else 3
@@ -528,6 +626,7 @@ Return JSON with keys:
             "location": "Tbilisi, Georgia / Remote",
             "remote_policy": "On-site / Hybrid" if industry in ["hospitality_reception", "healthcare_hospital"] else "Remote / Hybrid",
             "salary_range": "Salary not specified",
+            "extraction_failed": extraction_failed,
             "summary": f"{title} position at {company} ({portal})."
         }
 
@@ -537,11 +636,21 @@ Return JSON with keys:
         candidate_data: Dict[str, Any],
         job_details: Dict[str, Any],
         variant: str,
-        cv_language: str = "en"
+        cv_language: str = "en",
+        candidate_profile: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         cand = candidate_data.get("candidate", {})
         comp = cand.get("compensation", {})
+        links = cand.get("links", {})
         faq_bank = candidate_data.get("faq_bank", [])
+        prof = candidate_profile or {}
+        verified_skills = prof.get("verified_skills") or prof.get("all_skills") or candidate_data.get("skills", {}).get("core", []) or []
+        exp_years = float(prof.get("years_of_experience") or candidate_data.get("experience_years") or 1.5)
+        primary_role = str(prof.get("primary_role") or cand.get("headline") or "Specialist")
+        full_name = str(cand.get("full_name") or "Candidate").strip()
+        name_parts = [p for p in full_name.split() if not p.startswith("(")]
+        first_name = name_parts[0] if name_parts else full_name
+        last_name = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
         company = job_details.get("company", "your team")
         is_ka = cv_language == "ka"
         results = []
@@ -550,10 +659,40 @@ Return JSON with keys:
             q_text = q_obj.get("question", "") if isinstance(q_obj, dict) else str(q_obj)
             q_lower = q_text.lower()
             field_type = q_obj.get("field_type", "text") if isinstance(q_obj, dict) else "text"
+            options = q_obj.get("options") or [] if isinstance(q_obj, dict) else []
             ans = ""
             matched_faq = False
 
-            if any(k in q_lower for k in ["notice", "start date", "availability", "when can you start", "earliest start", "დაწყება"]):
+            if any(k in q_lower for k in ["first name", "given name", "fname"]) and "last" not in q_lower:
+                ans = first_name
+                matched_faq = True
+            elif any(k in q_lower for k in ["last name", "family name", "surname", "lname"]):
+                ans = last_name or first_name
+                matched_faq = True
+            elif q_lower.strip() in ("name", "full name", "your name", "candidate name"):
+                ans = " ".join(name_parts) or full_name
+                matched_faq = True
+            elif "email" in q_lower and cand.get("email"):
+                ans = str(cand["email"])
+                matched_faq = True
+            elif any(k in q_lower for k in ["phone", "mobile", "telephone"]) and cand.get("phone"):
+                ans = str(cand["phone"])
+                matched_faq = True
+            elif "linkedin" in q_lower and links.get("linkedin"):
+                ans = str(links["linkedin"])
+                matched_faq = True
+            elif "github" in q_lower and links.get("github"):
+                ans = str(links["github"])
+                matched_faq = True
+            elif any(k in q_lower for k in ["years of experience", "how many years", "years experience"]) or field_type == "number":
+                yrs_int = str(int(exp_years)) if exp_years == int(exp_years) else f"{exp_years:g}"
+                ans = yrs_int if field_type == "number" else f"{yrs_int} years"
+                matched_faq = True
+            elif "location" in q_lower or "city" in q_lower:
+                ans = str(cand.get("location") or "Tbilisi, Georgia (Remote Eligible)")
+                matched_faq = True
+
+            if not ans and any(k in q_lower for k in ["notice", "start date", "availability", "when can you start", "earliest start", "დაწყებ", "ხელმისაწვდომ"]):
                 ans = "1 კვირა შეთავაზებიდან (1 week after offer)" if is_ka else "1 week after offer"
                 matched_faq = True
             elif any(k in q_lower for k in ["salary", "compensation", "rate", "remuneration", "ანაზღაურება", "ხელფასი"]):
@@ -606,6 +745,93 @@ Return JSON with keys:
             })
 
         return results
+
+    def research_company_intel(
+        self,
+        company: str,
+        job_title: str = "",
+        description: str = "",
+        cv_language: str = "en",
+    ) -> Dict[str, Any]:
+        """
+        Generates concise company overview, likely focus areas, and tailored interview talking points.
+        Uses Gemini 2.5 Flash if configured, otherwise returns an honest, domain-aware heuristic summary.
+        """
+        clean_comp = (company or "").strip()
+        is_unknown = not clean_comp or clean_comp.lower() in ("unknown", "unknown company", "hiring company", "n/a")
+        if is_unknown:
+            return {
+                "summary": "Employer name could not be extracted from the active page DOM. Confirm company name before submitting.",
+                "talking_points": [
+                    "Highlight verified core skills and hands-on problem solving from your profile.",
+                    "Clarify team workflows, tooling, and onboarding expectations during the screening call.",
+                ],
+                "ai_generated": False,
+            }
+
+        if self.is_available:
+            try:
+                from google.genai import types
+                safe_comp = sanitize_untrusted_input(clean_comp, 200)
+                safe_title = sanitize_untrusted_input(job_title, 200)
+                safe_desc = sanitize_untrusted_input(description, 2500)
+                prompt = f"""Analyze this target company and role for a job applicant preparing an application.
+Return strictly a JSON object with:
+- "summary": 2-3 concise sentences summarizing what {safe_comp} does (based on general knowledge and the job posting text) and what this {safe_title} role focuses on. If uncertain about the company, clearly base the summary strictly on the posting text without inventing facts.
+- "talking_points": list of 3 concise tailored talking points the candidate can use.
+
+Target Language: {"Georgian" if cv_language == "ka" else "English"}
+
+<job_posting_untrusted_input>
+Role: {safe_title}
+Company: {safe_comp}
+Description:
+{safe_desc}
+</job_posting_untrusted_input>
+"""
+                response = self.client.models.generate_content(
+                    model=self.model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        temperature=0.2,
+                    ),
+                )
+                parsed = safe_parse_json(response.text)
+                if parsed and parsed.get("summary"):
+                    tp = parsed.get("talking_points")
+                    return {
+                        "summary": str(parsed["summary"]),
+                        "talking_points": [str(x) for x in tp][:4] if isinstance(tp, list) else [],
+                        "ai_generated": True,
+                    }
+            except Exception as e:
+                logger.warning(f"Gemini company research fallback for {clean_comp}: {e}")
+
+        desc_lower = (description or "").lower()
+        focus_areas: List[str] = []
+        for kw, label in [
+            ("api", "API reliability & integration quality"),
+            ("playwright", "automated E2E browser testing"),
+            ("cypress", "modern web UI test automation"),
+            ("python", "Python scripting & backend tooling"),
+            ("sql", "SQL data validation & reporting"),
+            ("logistics", "supply chain & logistics coordination"),
+            ("finance", "financial operations & reconciliation"),
+            ("customer", "client communication & SLA execution"),
+        ]:
+            if kw in desc_lower and label not in focus_areas:
+                focus_areas.append(label)
+        focus_txt = ", ".join(focus_areas[:3]) if focus_areas else "reliable day-to-day execution and measurable delivery"
+        return {
+            "summary": f"{clean_comp} is hiring for {job_title or 'this position'}, emphasizing {focus_txt}.",
+            "talking_points": [
+                f"Connect your verified experience directly to {clean_comp}'s need for {focus_txt}.",
+                "Share concrete outcomes using only verified skills and metrics from your ground-truth profile.",
+                "Confirm immediate availability (1 week after offer) and smooth remote/local collaboration.",
+            ],
+            "ai_generated": False,
+        }
 
 
 gemini_service = GeminiService()
