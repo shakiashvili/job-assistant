@@ -550,6 +550,23 @@ def test_universal_domain_agnostic_ingestion_query_builder_hr_gov_and_multi_tier
 
     sw_res = client.post("/api/skills-md/preset/receptionist_hospitality")
     assert sw_res.status_code == 200
+    # Receptionist email package must NEVER leak QA wording, placeholder +000 phones, or raw .docx filenames into Cover Letter
+    from app.services.cv_generator_service import cv_generator_service
+    rec_pkg = cv_generator_service.prepare_email_application_package(
+        job_title="რეცეფციონისტი/ადმინისტრატორი",
+        company="მზიური გარდენსი",
+        description="ვეძებთ რეცეფციონისტს სასტუმროში. Front Desk, Check-in, Hospitality, Opera PMS.",
+        portal="jobs.ge",
+        target_email="hr@hotel.example",
+        cv_language="auto",
+    )
+    assert "QA" not in rec_pkg["cover_letter"]
+    assert "REST API" not in rec_pkg["cover_letter"]
+    assert "+000" not in rec_pkg["cover_letter"]
+    assert ".docx" not in rec_pkg["cover_letter"]
+    assert "nino_kalandadze_nino_kalanda" not in rec_pkg["docx_filename"].lower()
+    assert rec_pkg["docx_filename"] == "Nino_Kalandadze_mziuri_gardensi_CV_KA.docx" or "Nino_Kalandadze" in rec_pkg["docx_filename"]
+
     from sqlmodel import select
     with Session(engine) as s:
         leftover = s.exec(select(JobPosting).where(JobPosting.external_id == "stale-qa-switch-test")).all()

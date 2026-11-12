@@ -314,19 +314,19 @@ class CVGeneratorService:
         ps = gt.get("parsed_skills_taxonomy") or {}
         candidate_headline = resolve_candidate_headline(candidate, core_skills, ps)
         safe_company = sanitize_company_name(company, fallback="")
-        cand_slug = ascii_filename_slug(candidate.get("full_name", "Candidate"), default="Candidate", max_len=28)
+        clean_full_for_slug = re.sub(r"\([^)]*\)", "", str(candidate.get("full_name", "Candidate"))).strip()
+        cand_slug = ascii_filename_slug(clean_full_for_slug or str(candidate.get("full_name", "Candidate")), default="Candidate", max_len=24)
 
         lang_suffix = "_KA" if cv_language == "ka" else ""
-        role_tag = "QA_Engineer" if (ps.get("target_industry", "qa_tech") == "qa_tech") else ascii_filename_slug(candidate_headline.split("|")[0], default="Specialist", max_len=20)
+        role_tag = "QA_Engineer" if (ps.get("target_industry", "qa_tech") == "qa_tech") else ascii_filename_slug(candidate_headline.split("|")[0], default="Specialist", max_len=18)
 
         if cv_style in ("ats", "recruiter"):
             base_name = f"{cand_slug}_{role_tag}_{cv_style.upper()}{lang_suffix}"
         elif safe_company and safe_company.lower() not in ("ats edition", "recruiter edition", "target company", "hiring company"):
             comp_slug = ascii_filename_slug(safe_company, default="Role", max_len=20)
-            tag_short = "QA" if ps.get("target_industry", "qa_tech") == "qa_tech" else role_tag
-            base_name = f"{cand_slug}_{comp_slug}_{tag_short}{lang_suffix}"
+            base_name = f"{cand_slug}_{comp_slug}_CV{lang_suffix}"
         else:
-            base_name = f"{cand_slug}_{role_tag}{lang_suffix}"
+            base_name = f"{cand_slug}_{role_tag}_CV{lang_suffix}"
 
         pdf_filename = f"{base_name}.pdf"
         docx_filename = f"{base_name}.docx"
@@ -922,17 +922,23 @@ class CVGeneratorService:
 
         gt = ground_truth_store.get_data()
         candidate = dict(gt.get("candidate", {}))
+        ps = gt.get("parsed_skills_taxonomy") or {}
         skills_md = gt.get("skills_md_raw") or ""
         cand_name = str(candidate.get("full_name") or "Candidate").strip()
-        cand_email = str(candidate.get("email") or "").strip()
-        cand_phone = str(candidate.get("phone") or "").strip()
+        raw_phone = str(candidate.get("phone") or "").strip(" -\t\r\n")
+        # Never inject placeholder '+000 000 0000' or '-' into outgoing emails
+        cand_phone = "" if (not raw_phone or re.fullmatch(r"[+\s0()-]+", raw_phone) or "000 000" in raw_phone) else raw_phone
         links = candidate.get("links", {}) if isinstance(candidate.get("links"), dict) else {}
-        cand_linkedin = str(links.get("linkedin") or "").strip()
+        cand_linkedin = str(links.get("linkedin") or "").strip(" -\t\r\n")
+
+        target_industry = str(ps.get("target_industry") or "qa_tech").lower()
+        detected_industry = str(ps.get("detected_industry") or ps.get("primary_role") or target_industry)
+        is_tech_profile = target_industry in ("qa_tech", "software_engineering", "data_analytics")
 
         ka_chars = len(re.findall(r"[\u10A0-\u10FF]", f"{job_title}\n{description}"))
-        is_tech_role = any(
+        is_tech_role = is_tech_profile and any(
             kw in f"{job_title}\n{description[:900]}".lower()
-            for kw in ["qa", "quality assurance", "tester", "test", "sdet", "automation", "developer", "engineer", "software", "ტესტ", "ავტომატიზ", "დეველოპ", "პროგრამ"]
+            for kw in ["qa", "quality assurance", "tester", "test", "sdet", "automation", "developer", "engineer", "software", "analyst", "ტესტ", "ავტომატიზ", "დეველოპ", "პროგრამ"]
         )
         cover_lang = "ka" if ka_chars >= 25 else "en"
         if cv_language == "auto":
@@ -951,7 +957,13 @@ class CVGeneratorService:
         missing = [r for r in req_skills if r not in matched]
 
         narratives = gemini_service.craft_human_tone_narratives(
-            job_details={"title": job_title, "company": company, "portal": portal, "required_skills": req_skills},
+            job_details={
+                "title": job_title,
+                "company": company,
+                "portal": portal,
+                "industry": target_industry,
+                "required_skills": req_skills,
+            },
             skills_md=skills_md,
             matched_skills=matched,
             missing_skills=missing,
@@ -973,15 +985,15 @@ class CVGeneratorService:
             cv_style=cv_style,
         )
 
-        # Clean subject & sanitize company (never address 'საქართველოს მასშტაბით-ის გუნდს' or navigation text)
+        # Clean subject & sanitize company (never address location strings or portal chrome)
         real_company = sanitize_company_name(company, target_email=target_email, fallback="")
         if email_subject_template and "qa automation engineer - [name]" not in email_subject_template.lower():
             clean_subject = re.sub(r"\[(?:your\s+)?name\]", cand_name, email_subject_template, flags=re.I).strip()
         else:
             clean_subject = f"{job_title} — {cand_name}" if cover_lang == "ka" else f"Application for {job_title} — {cand_name}"
 
-        # Cover letter sign-off excludes candidate's own email (already in sender header)
-        contact_footer = "\n".join(x for x in [cand_name, cand_phone, cand_linkedin] if x)
+        # Clean sign-off: excludes email & excludes placeholder phones/dashes
+        contact_footer = "\n".join(x for x in [cand_name, cand_phone, cand_linkedin] if x and x != "-")
         skills_highlight = ", ".join(matched[:6]) if matched else ", ".join(cand_skills[:6])
 
         # Extract authentic prior companies & experience years from ground truth (never invent employers)
@@ -991,39 +1003,85 @@ class CVGeneratorService:
             if comp_raw and comp_raw not in work_companies:
                 work_companies.append(comp_raw)
         companies_phrase = ", ".join(work_companies[:3])
-        exp_years = gt.get("parsed_skills_taxonomy", {}).get("years_of_experience") or 1.5
+        exp_years = ps.get("years_of_experience") or 1.5
+
+        # Domain-specific focus descriptions (NEVER leak QA terms into Hospitality/Logistics/Finance/Healthcare emails!)
+        domain_focus_ka = {
+            "receptionist_hospitality": ("სტუმარმასპინძლობის, Front Desk ოპერაციებისა და სტუმრების მომსახურების სფეროში", "სტუმრების მაღალი სტანდარტით მიღებას, ჯავშნების გამართულ კოორდინაციას და მშვიდ, პროფესიონალურ კომუნიკაციას", "სერვისის ხარისხისა და სტუმრების კმაყოფილების ზრდაში"),
+            "healthcare_hospital": ("პაციენტთა კოორდინაციის, სამედიცინო რეგისტრაციისა და კლინიკის ადმინისტრირების მიმართულებით", "პაციენტების სწრაფ და ყურადღებიან მიღებას, სადაზღვევო პროცესებისა და ექიმების განრიგის ზუსტ მართვას", "კლინიკის ადმინისტრაციული პროცესების გამართულობაში"),
+            "customer_service": ("მომხმარებელთა მომსახურების, მხარდაჭერისა და კლიენტებთან კომუნიკაციის მიმართულებით", "მომხმარებელთა მომართვების სწრაფ გადაჭრას, CRM სისტემების ეფექტურ მართვასა და მაღალი CSAT სტანდარტის შენარჩუნებას", "მომხმარებელთა გამოცდილების გაუმჯობესებაში"),
+            "logistics_supply_chain": ("ლოჯისტიკის, მიწოდების ჯაჭვისა და შესყიდვების კოორდინაციის მიმართულებით", "ტვირთების გადაზიდვის კოორდინაციას, მარაგებისა და დოკუმენტაციის კონტროლს და მომწოდებლებთან ოპერატიულ მუშაობას", "ლოჯისტიკური ოპერაციების სისწრაფესა და სიზუსტეში"),
+            "finance_accounting": ("ფინანსების, ბუღალტრული აღრიცხვისა და ანალიტიკის მიმართულებით", "ფინანსური ოპერაციების აღრიცხვას, რეპორტინგის მომზადებასა და მონაცემების ზუსტ კონტროლს", "ფინანსური პროცესების სიზუსტესა და გამართულობაში"),
+            "marketing_growth": ("მარკეტინგის, ციფრული კამპანიებისა და ბრენდის კომუნიკაციის მიმართულებით", "ციფრული კამპანიების დაგეგმვას, კონტენტის მართვასა და შედეგების ანალიტიკას", "მარკეტინგული მიზნებისა და ზრდის მიღწევაში"),
+            "sales_bd": ("გაყიდვების, კლიენტების მოზიდვისა და ბიზნესის განვითარების მიმართულებით", "პარტნიორებთან ურთიერთობების მართვას, მოლაპარაკებების წარმოებასა და გაყიდვების გეგმების შესრულებას", "გაყიდვებისა და კლიენტთა ბაზის გაფართოებაში"),
+            "qa_tech": ("QA ავტომატიზაციასა და API/Manual ტესტირებაში", "ავტომატიზებული რეგრესიული ტესტების შექმნას, REST API კონტრაქტების შემოწმებასა და ხარვეზების ადრეულ აღმოჩენას", "ტესტირებისა და პროდუქტის ხარისხის სტაბილურობაში"),
+        }
+        domain_focus_en = {
+            "receptionist_hospitality": ("front office operations and guest relations", "delivering seamless check-ins, accurate reservation coordination, and warm multilingual hospitality", "guest satisfaction and smooth front-desk operations"),
+            "healthcare_hospital": ("patient coordination and clinical administration", "managing patient intake, appointment scheduling, and insurance authorizations with accuracy and care", "patient service quality and smooth clinic workflows"),
+            "customer_service": ("customer support and client operations", "resolving escalations cleanly across chat, phone, and CRM channels while sustaining high CSAT", "support responsiveness and client retention"),
+            "logistics_supply_chain": ("logistics, procurement, and supply chain operations", "coordinating shipments, supplier schedules, inventory tracking, and customs documentation cleanly", "supply chain efficiency and on-time delivery"),
+            "finance_accounting": ("finance, accounting, and analytical reporting", "maintaining accurate financial reconciliations, reporting workflows, and compliance controls", "financial accuracy and operational clarity"),
+            "marketing_growth": ("digital marketing and campaign growth", "planning acquisition campaigns, managing content workflows, and tracking conversion analytics", "brand reach and measurable growth"),
+            "sales_bd": ("B2B sales and account management", "building client pipelines, managing onboarding, and hitting revenue targets through consultative outreach", "client acquisition and revenue execution"),
+            "qa_tech": ("QA automation and manual/API test engineering", "automating regression coverage, validating REST API contracts, and catching critical defects before release", "release confidence and test stability"),
+        }
+
+        # Map domain focus safely (fallback for any custom domain without mentioning QA!)
+        ind_key = target_industry
+        if ind_key == "hospitality_reception":
+            ind_key = "receptionist_hospitality"
+
+        ka_tuple = domain_focus_ka.get(
+            ind_key,
+            (
+                f"{detected_industry}-ის მიმართულებით",
+                f"ყოველდღიური სამუშაო პროცესების გამართულ შესრულებასა და მაღალი ხარისხის შედეგების მიღწევას ({skills_highlight})",
+                "თქვენი გუნდის ოპერაციულ ეფექტიანობასა და წარმატებაში",
+            ),
+        )
+        en_tuple = domain_focus_en.get(
+            ind_key,
+            (
+                f"{detected_industry}",
+                f"executing day-to-day workflows reliably and delivering measurable outcomes using {skills_highlight}",
+                "your team's operational quality and goals",
+            ),
+        )
 
         if cover_lang == "ka":
+            ka_area, ka_action, ka_goal = ka_tuple
             salutation = f"მოგესალმებით, {real_company}-ის გუნდს," if real_company else "მოგესალმებით, გუნდს,"
             hook_company = f"{real_company}-ში" if real_company else "თქვენს კომპანიაში"
             proof_para = (
-                f"{companies_phrase}-ში მუშაობისას პრაქტიკულად გამოვიყენე {skills_highlight} — შევიმუშავე ავტომატიზებული რეგრესიული ტესტები, ვამოწმებდი REST API კონტრაქტებსა და მონაცემთა მთლიანობას, რამაც მნიშვნელოვნად დააჩქარა გამოშვებების ვალიდაცია."
+                f"{companies_phrase}-ში მუშაობისას პრაქტიკულად გამოვიყენე {skills_highlight} — ვუზრუნველყოფდი {ka_action}."
                 if companies_phrase
-                else f"ჩემს საინჟინრო პრაქტიკაში ({skills_highlight}) ვფოკუსირდები სტაბილურ ავტომატიზაციაზე, API კონტრაქტების შემოწმებასა და ხარვეზების ადრეულ აღმოჩენაზე."
+                else f"ჩემს ყოველდღიურ პრაქტიკაში ({skills_highlight}) ფოკუსირებული ვარ {ka_action}-ზე."
             )
-            cta_company = f"{real_company}-ის" if real_company else "თქვენი პროდუქტის"
+            cta_company = f"{real_company}-ის" if real_company else "თქვენი გუნდის"
             cover_letter = (
                 f"{salutation}\n\n"
                 f"დიდი ინტერესით გიგზავნით განაცხადს „{job_title}“ პოზიციაზე {hook_company}. "
-                f"მაქვს {exp_years:g} წლიანი პრაქტიკული გამოცდილება QA ავტომატიზაციასა და API/Manual ტესტირებაში ({skills_highlight}).\n\n"
+                f"მაქვს {exp_years:g} წლიანი პრაქტიკული გამოცდილება {ka_area} ({skills_highlight}).\n\n"
                 f"{proof_para}\n\n"
-                f"მოხარული ვიქნები შევუერთდე {cta_company} გუნდს და წვლილი შევიტანო ტესტირების პროცესის სტაბილურობაში. მუშაობის დაწყება შემიძლია შეთავაზებიდან 1 კვირაში. თანდართულია ჩემი რეზიუმე ({cv_res['docx_filename']}).\n\n"
+                f"მოხარული ვიქნები შევუერთდე {cta_company} გუნდს და წვლილი შევიტანო {ka_goal}. მუშაობის დაწყება შემიძლია შეთავაზებიდან 1 კვირაში. თანდართულია ჩემი რეზიუმე (CV).\n\n"
                 f"პატივისცემით,\n{contact_footer}"
             )
         else:
+            en_area, en_action, en_goal = en_tuple
             salutation = f"Dear {real_company} Hiring Team," if real_company else "Dear Hiring Team,"
-            target_phrase = f"at {real_company}" if real_company else "with your engineering team"
+            target_phrase = f"at {real_company}" if real_company else "with your team"
             proof_para = (
-                f"Across my QA engineering roles at {companies_phrase}, I applied {skills_highlight} to automate regression suites, validate REST API contracts, and verify backend integrity—cutting manual release verification time while preventing production regressions."
+                f"Across my previous roles at {companies_phrase}, I applied {skills_highlight}—focusing on {en_action}."
                 if companies_phrase
-                else f"In my hands-on QA engineering work spanning {skills_highlight}, I engineer automated regression coverage, validate REST API contracts, and triage critical defects before release."
+                else f"In my hands-on work spanning {skills_highlight}, I focus on {en_action}."
             )
-            cta_team = f"{real_company}'s" if real_company else "your engineering team's"
+            cta_team = f"{real_company}'s" if real_company else "your team's"
             cover_letter = (
                 f"{salutation}\n\n"
-                f"I am applying for the {job_title} role {target_phrase}. With {exp_years:g} years of hands-on QA engineering experience in {skills_highlight}, I can contribute from sprint one.\n\n"
+                f"I am applying for the {job_title} role {target_phrase}. With {exp_years:g} years of hands-on experience in {en_area} ({skills_highlight}), I can add value from day one.\n\n"
                 f"{proof_para}\n\n"
-                f"I welcome the opportunity to strengthen {cta_team} release confidence and test stability. My tailored CV ({cv_res['docx_filename']}) is attached, and I am available 1 week after offer.\n\n"
+                f"I would welcome the opportunity to contribute to {cta_team} {en_goal}. My tailored CV is attached, and I am available 1 week after offer.\n\n"
                 f"Best regards,\n{contact_footer}"
             )
 

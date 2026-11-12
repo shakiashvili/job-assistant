@@ -430,9 +430,9 @@ class GroundTruthStore:
         if email_m:
             result["email"] = email_m.group(0)
 
-        phone_m = re.search(r"(?:Phone|ტელეფონი|Tel)\**\s*:\**\s*([+\d\s()-]{7,22})", md_content, re.I)
+        phone_m = re.search(r"(?:Phone|ტელეფონი|Tel)\**\s*:\**\s*([+\d \t()-]{7,22})", md_content, re.I)
         if phone_m:
-            result["phone"] = phone_m.group(1).strip()
+            result["phone"] = phone_m.group(1).strip(" -\t\r\n")
 
         name_m = re.search(r"(?:Full Name|სახელი და გვარი|Name)\**\s*:\**\s*([^\n]+)", md_content, re.I)
         if name_m:

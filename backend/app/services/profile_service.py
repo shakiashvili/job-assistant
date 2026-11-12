@@ -241,9 +241,9 @@ class ProfileService:
         if email_m:
             email = email_m.group(0)
 
-        phone_m = re.search(r"(?:Phone|ტელეფონი|Tel)\**\s*:\**\s*([+\d\s()-]{7,22})", text, re.I)
+        phone_m = re.search(r"(?:Phone|ტელეფონი|Tel)\**\s*:\**\s*([+\d \t()-]{7,22})", text, re.I)
         if phone_m:
-            phone = phone_m.group(1).strip()
+            phone = phone_m.group(1).strip(" -\t\r\n")
 
         loc_m = re.search(r"(?:Location|მდებარეობა)\**\s*:\**\s*([^\n]+)", text, re.I)
         if loc_m:
