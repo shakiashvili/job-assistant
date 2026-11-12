@@ -78,8 +78,14 @@ class HrGovScraper(BasePortalScraper):
                     deadline_txt = dl_m.group(1)
 
             lower_row = f"{title} {company}".lower()
-            is_intern_entry = any(w in lower_row for w in ["სტაჟიორ", "დამწყებ", "უმცროს", "intern", "trainee", "junior", "ასისტენტ", "სპეციალისტ"])
-            matches_kw = (not kw_lower) or is_intern_entry or any(k in lower_row for k in kw_lower)
+            is_intern_entry = any(w in lower_row for w in ["სტაჟიორ", "დამწყებ", "უმცროს", "intern", "trainee", "junior"])
+            if kw_lower:
+                matches_kw = any(
+                    (re.search(r"\b" + re.escape(k) + r"\b", lower_row) if len(k) <= 3 else (k in lower_row))
+                    for k in kw_lower
+                )
+            else:
+                matches_kw = is_intern_entry
             if not matches_kw:
                 continue
 

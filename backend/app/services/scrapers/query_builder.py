@@ -244,6 +244,10 @@ def build_search_queries(
     dou_url = f"https://jobs.dou.ua/vacancies/?category={quote_plus(dou_cat)}&remote" if dou_cat else None
     justjoin_url = f"https://justjoin.it/job-offers/all-locations/{justjoin_cat}?workplace=remote" if justjoin_cat else None
 
+    hr_gov_queries = list(dict.fromkeys(
+        ["IT", "ანალიტიკ", "სისტემ"] if is_it else (primary_ge[:2] + adjacent_ge[:1])
+    ))
+
     pkg = SearchQueryPackage(
         target_role=primary_role,
         detected_industry=detected_ind,
@@ -254,7 +258,7 @@ def build_search_queries(
         jobs_ge_urls=jobs_ge_urls,
         hr_ge_urls=hr_ge_urls,
         headhunter_urls=headhunter_urls,
-        hr_gov_queries=internship_queries,
+        hr_gov_queries=hr_gov_queries,
         djinni_url=djinni_url,
         dou_url=dou_url,
         justjoin_url=justjoin_url,

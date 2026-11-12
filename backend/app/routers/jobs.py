@@ -186,6 +186,8 @@ async def list_scraped_jobs(
             if min_score is not None and r.suitability_score < min_score:
                 continue
             dumped = r.model_dump(mode="json")
+            if str(dumped.get("salary_currency") or "").lower() in ("gel", "ლარი", "ᲚᲐᲠᲘ", "₾"):
+                dumped["salary_currency"] = "GEL"
             dumped["company"] = sanitize_company_name(dumped.get("company"), target_email=dumped.get("target_email"), fallback="კომპანია")
             if dumped.get("portal") == "djinni.co" and dumped.get("title"):
                 raw_t = str(dumped["title"])

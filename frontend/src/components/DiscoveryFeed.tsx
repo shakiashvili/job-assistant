@@ -65,13 +65,19 @@ interface DiscoveryFeedProps {
 
 function formatSalaryDisplay(job: DbJobPosting): string | null {
   if (!job.salary_min || !job.salary_max) return null;
-  const cur = (job.salary_currency || 'USD').toUpperCase();
-  const sym = cur === 'GEL' ? '₾' : cur === 'EUR' ? '€' : cur === 'GBP' ? '£' : '$';
-  const labelCur = cur === 'GEL' ? 'GEL' : cur;
+  const curRaw = (job.salary_currency || 'USD').trim();
+  const curUpper = curRaw.toUpperCase();
+  const isGel =
+    curUpper === 'GEL' ||
+    curRaw === '₾' ||
+    curRaw.toLowerCase() === 'ლარი' ||
+    curRaw === 'ᲚᲐᲠᲘ';
+  const sym = isGel ? '₾' : curUpper === 'EUR' ? '€' : curUpper === 'GBP' ? '£' : '$';
+  const labelCur = isGel ? 'GEL' : curUpper;
   if (job.salary_min === job.salary_max) {
-    return `${sym}${job.salary_max.toLocaleString()} ${labelCur}`;
+    return `${job.salary_max.toLocaleString()} ${sym} (${labelCur})`;
   }
-  return `${sym}${job.salary_min.toLocaleString()}–${sym}${job.salary_max.toLocaleString()} ${labelCur}`;
+  return `${job.salary_min.toLocaleString()}–${job.salary_max.toLocaleString()} ${sym} (${labelCur})`;
 }
 
 export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({

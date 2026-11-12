@@ -186,19 +186,48 @@ class ProfileService:
                         full_name = cand_first
                     break
 
-        # 2. Universal Domain-Agnostic Industry, Primary Role & Adjacent Role Detection
+        # 2. Universal Weighted-Evidence Domain, Primary Role & Adjacent Role Detection
+        # Score by header/headline (+12), verified skills (+4), and body (+1) so mentioning
+        # e.g. "Exactpro Systems (Financial Systems)" in a QA Engineer resume NEVER overrides QA -> Finance!
         target_industry = "general_professional"
         detected_industry = "General Business & Operations"
         primary_role = "Operations & Administrative Specialist"
         adjacent_roles = ["Project Coordinator", "Operations Analyst", "Customer Support Specialist", "Administrative Assistant"]
 
+        header_lines = "\n".join(text.splitlines()[:12]).lower()
+        skills_blob = " ".join(str(x).lower() for x in (taxonomy_dict.get("all_skills") or []))
+        has_qa_tax = bool(taxonomy_dict.get("qa_automation") or taxonomy_dict.get("manual_qa"))
+
+        best_score = 0
+        best_dom: Optional[Dict[str, Any]] = None
         for dom in _DOMAIN_PROFILE_CATALOG:
-            if any(sig in lower_text for sig in dom["signals"]):
-                target_industry = dom["target_industry"]
-                detected_industry = dom["detected_industry"]
-                primary_role = dom["primary_role"]
-                adjacent_roles = list(dom["adjacent_roles"])
-                break
+            score = 0
+            for sig in dom["signals"]:
+                if len(sig) <= 2:
+                    hit_hdr = bool(re.search(r"\b" + re.escape(sig) + r"\b", header_lines))
+                    hit_sk = bool(re.search(r"\b" + re.escape(sig) + r"\b", skills_blob))
+                    hit_body = bool(re.search(r"\b" + re.escape(sig) + r"\b", lower_text))
+                else:
+                    hit_hdr = sig in header_lines
+                    hit_sk = sig in skills_blob
+                    hit_body = sig in lower_text
+                if hit_hdr:
+                    score += 12
+                if hit_sk:
+                    score += 4
+                if hit_body:
+                    score += 1
+            if dom["target_industry"] == "qa_tech" and has_qa_tax:
+                score += 6 * (len(taxonomy_dict.get("qa_automation") or []) + len(taxonomy_dict.get("manual_qa") or []))
+            if score > best_score:
+                best_score = score
+                best_dom = dom
+
+        if best_dom and best_score > 0:
+            target_industry = best_dom["target_industry"]
+            detected_industry = best_dom["detected_industry"]
+            primary_role = best_dom["primary_role"]
+            adjacent_roles = list(best_dom["adjacent_roles"])
 
         # Refine QA vs General headline and extract explicit Target Role / Headline if authored in skills.md
         if target_industry == "qa_tech":

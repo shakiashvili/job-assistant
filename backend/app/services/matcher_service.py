@@ -481,10 +481,6 @@ Markdown:
         primary_role = str(parsed_skills.get("primary_role") or parsed_skills.get("headline") or "").lower()
         adjacent_roles = [str(r) for r in (parsed_skills.get("adjacent_roles") or []) if r]
 
-        # 1. Public Sector & Internship Portal (hr.gov.ge)
-        if portal == "hr.gov.ge":
-            return ("PUBLIC_INTERNSHIP", "Public Sector & Entry/Internship Role (HR.gov.ge)")
-
         # Build direct domain signals from search_queries + primary_role tokens + catalog
         direct_signals = [str(s).lower() for s in (search_q.get("domain_keywords") or []) if len(str(s)) >= 2]
         if target_industry == "qa_tech" and not direct_signals:
@@ -499,6 +495,24 @@ Markdown:
             if len(tok) >= 4 and tok not in ("engineer", "specialist", "coordinator", "junior", "associate", "senior") and tok not in direct_signals:
                 direct_signals.append(tok)
 
+        adj_signals = [str(s).lower() for s in (search_q.get("adjacent_keywords") or []) if len(str(s)) >= 3]
+        c_list = [str(s).lower() for s in (candidate_skills or parsed_skills.get("verified_skills") or parsed_skills.get("all_skills") or [])]
+        r_list = [str(s).lower() for s in (required_skills or [])]
+        overlap_count = sum(1 for r in r_list if any(r in c or c in r for c in c_list))
+
+        # 1. Public Sector & Internship Portal (hr.gov.ge) — STRICTLY require relevance to candidate's skills.md!
+        if portal == "hr.gov.ge":
+            it_gov_signals = ["it", "ინფორმაციულ ტექნოლოგ", "ტექნოლოგ", "პროგრამ", "მონაცემ", "ანალიტ", "სისტემ", "კიბერ", "ქსელ", "ტესტ", "მხარდაჭერ", "sql", "developer"]
+            is_tech_cand = target_industry in ("qa_tech", "software_engineering", "data_analytics")
+            has_domain_hit = any(sig in combined for sig in (direct_signals + adj_signals))
+            has_tech_hit = is_tech_cand and any(
+                (re.search(r"\b" + re.escape(t) + r"\b", combined) if len(t) <= 3 else (t in combined))
+                for t in it_gov_signals
+            )
+            if has_domain_hit or has_tech_hit or overlap_count >= 1 or target_industry == "public_admin_legal":
+                return ("PUBLIC_INTERNSHIP", "Public Sector & Entry/Internship Role (HR.gov.ge)")
+            return ("NONE", f"Domain Gate: '{job_title}' on HR.gov.ge does not match candidate's {target_industry} skills.md.")
+
         if any(sig in title_lower for sig in direct_signals) or (
             target_industry in ("receptionist_hospitality", "healthcare_hospital", "customer_service", "logistics_supply_chain", "finance_accounting")
             and any(sig in combined[:240] for sig in direct_signals)
@@ -506,7 +520,6 @@ Markdown:
             return ("DIRECT", parsed_skills.get("primary_role") or "Direct Role Match")
 
         # 2. Adjacent Role / Transferable Skill Alignment
-        adj_signals = [str(s).lower() for s in (search_q.get("adjacent_keywords") or []) if len(str(s)) >= 3]
         matched_adj_role = adjacent_roles[0] if adjacent_roles else "Transferable Adjacent Role"
 
         # Match explicit adjacent role titles first
@@ -516,9 +529,6 @@ Markdown:
                 return ("ADJACENT", adj_r)
 
         # Match transferable candidate skills against job requirements (>= 2 core skills or >= 50% overlap)
-        c_list = [str(s).lower() for s in (candidate_skills or parsed_skills.get("verified_skills") or parsed_skills.get("all_skills") or [])]
-        r_list = [str(s).lower() for s in (required_skills or [])]
-        overlap_count = sum(1 for r in r_list if any(r in c or c in r for c in c_list))
         has_adj_sig = any(sig in title_lower or sig in combined[:300] for sig in adj_signals)
 
         # Require either explicit adjacent-role keywords or strong >= 2 transferable skills overlap

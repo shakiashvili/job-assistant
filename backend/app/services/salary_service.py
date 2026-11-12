@@ -62,7 +62,7 @@ class SalaryService:
         )
         if code_range:
             v1, k1, v2, k2, code = code_range.groups()
-            cur = "GEL" if code.upper() in ("GEL", "ლარი", "₾") else code.upper()
+            cur = "GEL" if code.lower() in ("gel", "ლარი", "₾") else code.upper()
             low = float(v1.replace(",", "")) * (1000.0 if (k1 or k2) and float(v1.replace(",", "")) < 500 else 1.0)
             high = float(v2.replace(",", "")) * (1000.0 if k2 and float(v2.replace(",", "")) < 500 else 1.0)
             if low >= 300 and high >= low:
@@ -125,7 +125,7 @@ class SalaryService:
         )
         if single_code:
             val, code = single_code.groups()
-            cur = "GEL" if code.upper() in ("GEL", "ლარი") else code.upper()
+            cur = "GEL" if code.lower() in ("gel", "ლარი", "₾") else code.upper()
             base = float(val.replace(",", ""))
             if base >= 500:
                 return (base, base, cur)

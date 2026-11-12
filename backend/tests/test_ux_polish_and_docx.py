@@ -535,6 +535,32 @@ def test_universal_domain_agnostic_ingestion_query_builder_hr_gov_and_multi_tier
     assert res_pub["status"] != "FILTERED_OUT"
     assert res_pub["match_tier"] == "PUBLIC_INTERNSHIP"
 
+    # 3b. Irrelevant forestry/park-inspection hr.gov.ge internship is FILTERED_OUT for QA/IT candidate
+    res_park = matcher_service.evaluate_job_tiered(
+        title="ინსპექტირების დეპარტამენტის სტაჟიორი",
+        description="სსიპ - დაცული ტერიტორიების სააგენტო. ბუნების დაცვა და ტერიტორიის ინსპექტირება.",
+        parsed_skills=qa_parsed,
+        portal="hr.gov.ge",
+    )
+    assert res_park["status"] == "FILTERED_OUT"
+
+    # 3c. Georgian "720 ლარი" normalizes currency strictly to "GEL" (never Mtavruli "ᲚᲐᲠᲘ")
+    sal_gel = salary_service.extract_vacancy_salary("IT სპეციალისტი", "თანამდებობრივი სარგო: 720 ლარი")
+    assert sal_gel["currency"] == "GEL"
+    assert sal_gel["min_salary"] == 720.0
+
+    # 3d. QA resume mentioning Exactpro Financial Systems / audit MUST remain qa_tech (not finance_accounting)
+    qa_exactpro_md = """# Giorgi Shakiashvili — QA Automation Engineer
+## Core Skills
+- Playwright, Selenium, PyTest, Robot Framework, Exploratory Testing, Test Plans, REST API, Postman, Docker, SQL
+## Work Experience
+### Software QA Intern (Financial Systems) | Exactpro Systems
+- Validated financial calculation rules and trading audit logs.
+"""
+    ev_prof = profile_service.extract_structured_profile(qa_exactpro_md)
+    assert ev_prof.target_industry == "qa_tech"
+    assert "QA" in ev_prof.detected_industry
+
     # 4. Preset switching purges stale JobPosting rows cleanly (fixes Screenshot 3)
     with Session(engine) as s:
         s.add(JobPosting(
