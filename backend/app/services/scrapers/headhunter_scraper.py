@@ -190,20 +190,21 @@ class HeadhunterScraper(BasePortalScraper):
         self,
         allow_network: bool = True,
         search_url: Optional[str] = None,
+        search_urls: Optional[List[str]] = None,
         domain_keywords: Optional[List[str]] = None,
         candidate_languages: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         if not allow_network:
             return []
 
-        base_urls = [
+        base_urls = search_urls or [
             search_url or self.SEARCH_URL,
-            "https://tbilisi.headhunter.ge/search/vacancy?text=QA+Automation&area=28",
         ]
         pages = await asyncio.gather(*(self.fetch_html(u) for u in base_urls), return_exceptions=True)
 
         candidates: List[Dict[str, Any]] = []
         seen_ids: set[str] = set()
+        seen_title_comp: set[tuple[str, str]] = set()
         for html in pages:
             if isinstance(html, str) and html:
                 for item in self.parse_html_listings(
@@ -211,8 +212,10 @@ class HeadhunterScraper(BasePortalScraper):
                     domain_keywords=domain_keywords,
                     candidate_languages=candidate_languages,
                 ):
-                    if item["external_id"] not in seen_ids:
+                    tc_key = (item["title"].lower().strip(), item["company"].lower().strip())
+                    if item["external_id"] not in seen_ids and tc_key not in seen_title_comp:
                         seen_ids.add(item["external_id"])
+                        seen_title_comp.add(tc_key)
                         candidates.append(item)
 
         if not candidates:

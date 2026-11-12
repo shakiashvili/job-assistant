@@ -129,22 +129,29 @@ class HrGeScraper(BasePortalScraper):
         self,
         allow_network: bool = True,
         search_url: Optional[str] = None,
+        search_urls: Optional[List[str]] = None,
         domain_keywords: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         if not allow_network:
             return []
 
-        target_url = search_url or self.CATEGORY_IT_QA_URL
-        html = await self.fetch_html(target_url)
-        if not html:
-            return []
+        urls = search_urls or ([search_url] if search_url else [self.CATEGORY_IT_QA_URL])
+        pages = await asyncio.gather(*(self.fetch_html(u) for u in urls), return_exceptions=True)
 
-        candidates = self.parse_html_listings(html, domain_keywords=domain_keywords)
+        candidates: List[Dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for html in pages:
+            if isinstance(html, str) and html:
+                for item in self.parse_html_listings(html, domain_keywords=domain_keywords):
+                    if item["external_id"] not in seen_ids:
+                        seen_ids.add(item["external_id"])
+                        candidates.append(item)
+
         if not candidates:
             return []
 
         enriched = await asyncio.gather(
-            *(self._enrich_and_verify_item(c) for c in candidates[:16]),
+            *(self._enrich_and_verify_item(c) for c in candidates[:18]),
             return_exceptions=True,
         )
         return [item for item in enriched if isinstance(item, dict)]
