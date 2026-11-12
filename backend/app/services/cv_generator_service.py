@@ -16,7 +16,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
 
 from ..config import GENERATED_RESUMES_DIR, FONTS_DIR
-from ..storage.ground_truth_store import ground_truth_store
+from ..db.profile_repository import ground_truth_store
 from ..services.gemini_service import GEORGIAN_SKILL_TRANSLATIONS
 from ..services.scrapers.base_scraper import sanitize_company_name
 
@@ -910,6 +910,7 @@ class CVGeneratorService:
         email_subject_template: Optional[str] = None,
         cv_language: str = "auto",
         cv_style: str = "tailored",
+        skills_md_override: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Generates a complete, ready-to-send email package for any vacancy:
@@ -923,7 +924,7 @@ class CVGeneratorService:
         gt = ground_truth_store.get_data()
         candidate = dict(gt.get("candidate", {}))
         ps = gt.get("parsed_skills_taxonomy") or {}
-        skills_md = gt.get("skills_md_raw") or ""
+        skills_md = skills_md_override or gt.get("skills_md_raw") or ""
         cand_name = str(candidate.get("full_name") or "Candidate").strip()
         raw_phone = str(candidate.get("phone") or "").strip(" -\t\r\n")
         # Never inject placeholder '+000 000 0000' or '-' into outgoing emails

@@ -10,7 +10,7 @@ from ..models.schemas import ApplicationItem, ApplicationCreate, ApplicationUpda
 from ..services.auth_service import get_current_user
 from ..services.gmail_service import gmail_service
 from ..services.interview_service import interview_service
-from ..storage.tracker_store import tracker_store
+from ..db.tracker_repository import tracker_store
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/applications", tags=["Application Tracker & Interview Copilot"])

@@ -9,6 +9,7 @@ import {
   PortalVacancyItem,
   SkillsPresetItem,
   DbJobPosting,
+  PaginatedJobsResponse,
   ParsedSkillsTaxonomy,
   UserProfile,
   AuthResponse,
@@ -142,19 +143,43 @@ export async function fetchDbProfile(): Promise<{
   return res.json();
 }
 
-export async function fetchScrapedJobs(statusFilter?: string): Promise<DbJobPosting[]> {
-  const qs = statusFilter && statusFilter !== 'ALL' ? `?status=${encodeURIComponent(statusFilter)}` : '';
-  const res = await fetch(`${API_BASE}/jobs${qs}`, {
+export async function fetchScrapedJobs(params?: {
+  page?: number;
+  limit?: number;
+  portal?: string;
+  status?: string;
+  min_score?: number;
+  tier?: string;
+} | string): Promise<PaginatedJobsResponse> {
+  const qs = new URLSearchParams();
+  if (typeof params === 'string') {
+    if (params && params !== 'ALL') qs.set('status', params);
+  } else if (params) {
+    if (params.page) qs.set('page', String(params.page));
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.portal && params.portal !== 'ALL') qs.set('portal', params.portal);
+    if (params.status && params.status !== 'ALL') qs.set('status', params.status);
+    if (params.min_score !== undefined) qs.set('min_score', String(params.min_score));
+    if (params.tier && params.tier !== 'ALL') qs.set('tier', params.tier);
+  }
+  const queryStr = qs.toString() ? `?${qs.toString()}` : '';
+  const res = await fetch(`${API_BASE}/jobs${queryStr}`, {
     headers: getAuthHeaders(),
   });
-  if (!res.ok) return [];
-  return res.json();
+  if (!res.ok) return { items: [], total: 0, page: 1, limit: 12, total_pages: 1 };
+  const data = await res.json();
+  if (Array.isArray(data)) {
+    return { items: data, total: data.length, page: 1, limit: data.length || 12, total_pages: 1 };
+  }
+  return data;
 }
 
 export async function triggerMultiPortalScrape(allowNetwork = true): Promise<{
   total_processed: number;
   staged_ready_count: number;
   filtered_out_count: number;
+  cache_hits?: number;
+  rejection_reasons?: Array<{ portal: string; title: string; company: string; reason: string }>;
   jobs: DbJobPosting[];
 }> {
   const res = await fetch(`${API_BASE}/jobs/scrape`, {
@@ -211,6 +236,7 @@ export async function generateCvEdition(params: {
   target_role?: string;
   target_company?: string;
   job_description?: string;
+  job_url?: string;
   cv_language?: 'en' | 'ka';
 }): Promise<{
   status: string;

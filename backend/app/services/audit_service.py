@@ -3,7 +3,7 @@ import logging
 import httpx
 from bs4 import BeautifulSoup
 from typing import List, Optional
-from ..storage.ground_truth_store import ground_truth_store
+from ..db.profile_repository import ground_truth_store
 from ..services.gemini_service import gemini_service
 from ..services.portal_detector import detect_portal_from_html, detect_portal_from_url
 from ..services.company_validator import company_validator

@@ -31,7 +31,6 @@ import {
   fetchSkillsMd,
   uploadSkillsMdFile,
   saveSkillsMdText,
-  applySkillsPreset,
   fetchScrapedJobs,
   fetchDbProfile,
   triggerMultiPortalScrape,
@@ -42,21 +41,18 @@ import { JobAuditResponse, ScreeningAnswer, PortalVacancyItem, DbJobPosting } fr
 import { StageModal } from './StageModal';
 import { DiscoveryFeed } from './DiscoveryFeed';
 
-const INDUSTRY_PRESETS = [
-  { id: 'qa_tech', label: '💻 QA & Software Tech', badge: 'Tech / SDET' },
-  { id: 'receptionist_hospitality', label: '🏨 Receptionist & Hospitality', badge: 'Hotels & Front Desk' },
-  { id: 'customer_service', label: '🎧 Customer Service & Care', badge: 'Support / CRM' },
-  { id: 'healthcare_hospital', label: '🏥 Hospital & Medical Admin', badge: 'Clinic / Patient Care' },
-];
-
 export const AuditPanel: React.FC = () => {
   const [vacancies, setVacancies] = useState<PortalVacancyItem[]>([]);
   const [selectedPortalFilter, setSelectedPortalFilter] = useState<string>('ALL');
   const [selectedIndustryFilter, setSelectedIndustryFilter] = useState<string>('ALL');
 
-  // Relational DB Scraped JobPostings State
+  // Relational DB Scraped JobPostings State + Server-Side Pagination
   const [scrapedJobs, setScrapedJobs] = useState<DbJobPosting[]>([]);
   const [dbStatusFilter, setDbStatusFilter] = useState<string>('ALL');
+  const [tierTab, setTierTab] = useState<'ALL' | 'DIRECT' | 'ADJACENT' | 'PUBLIC_INTERNSHIP'>('ALL');
+  const [page, setPage] = useState<number>(1);
+  const [totalPages, setTotalPages] = useState<number>(1);
+  const [totalJobs, setTotalJobs] = useState<number>(0);
   const [isScraping, setIsScraping] = useState(false);
   const [scrapeStats, setScrapeStats] = useState<{
     total: number;
@@ -69,7 +65,6 @@ export const AuditPanel: React.FC = () => {
   const [jobText, setJobText] = useState('');
   const [selectedVariant, setSelectedVariant] = useState('qa_automation');
   const [cvLanguage, setCvLanguage] = useState<'en' | 'ka'>('en');
-  const [activePresetId, setActivePresetId] = useState<string>('qa_tech');
   const [candidateProfile, setCandidateProfile] = useState<{
     full_name?: string;
     experience_years?: number;
@@ -79,6 +74,9 @@ export const AuditPanel: React.FC = () => {
     detected_industry?: string;
     primary_role?: string;
     adjacent_roles?: string[];
+    education?: Array<{ degree?: string; field_of_study?: string; institution?: string }>;
+    courses_and_certifications?: string[];
+    eligible_internships?: boolean;
     headline?: string;
   } | null>(null);
 
@@ -174,12 +172,36 @@ export const AuditPanel: React.FC = () => {
           detected_industry: p.parsed_skills?.detected_industry || p.parsed_skills?.target_industry || 'Domain-Agnostic',
           primary_role: p.parsed_skills?.primary_role || p.parsed_skills?.headline || 'Specialist',
           adjacent_roles: p.parsed_skills?.adjacent_roles || [],
+          education: p.parsed_skills?.education || [],
+          courses_and_certifications: p.parsed_skills?.courses_and_certifications || [],
+          eligible_internships: Boolean(p.parsed_skills?.eligible_internships),
           headline: p.parsed_skills?.headline || 'Specialist',
         });
         return uploaded;
       }
     } catch {}
     return false;
+  };
+
+  const loadPagedJobs = async (
+    nextPage = page,
+    nextPortal = selectedPortalFilter,
+    nextStatus = dbStatusFilter,
+    nextTier = tierTab
+  ) => {
+    const res = await fetchScrapedJobs({
+      page: nextPage,
+      limit: 12,
+      portal: nextPortal,
+      status: nextStatus,
+      min_score: 60,
+      tier: nextTier === 'PUBLIC_INTERNSHIP' ? 'internship' : nextTier,
+    });
+    setScrapedJobs(res.items || []);
+    setPage(res.page || 1);
+    setTotalPages(res.total_pages || 1);
+    setTotalJobs(res.total || 0);
+    return res;
   };
 
   const loadInitialData = async () => {
@@ -192,19 +214,20 @@ export const AuditPanel: React.FC = () => {
       if (!uploaded) {
         setVacancies([]);
         setScrapedJobs([]);
+        setTotalJobs(0);
+        setTotalPages(1);
         setExtractedSkillsCount(0);
         setJobUrl('');
         setJobText('');
         return;
       }
 
-      const [vacs, dbJobs] = await Promise.all([
+      const [vacs, paged] = await Promise.all([
         fetchVacancies(),
-        fetchScrapedJobs(),
+        loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab),
       ]);
-      const validJobs = dbJobs.filter((j) => j.status !== 'FILTERED_OUT');
+      const validJobs = (paged.items || []).filter((j) => j.status !== 'FILTERED_OUT');
       setVacancies(vacs);
-      setScrapedJobs(validJobs);
       if (validJobs.length > 0) {
         setJobUrl(validJobs[0].url);
         setJobText(validJobs[0].description_raw);
@@ -220,16 +243,21 @@ export const AuditPanel: React.FC = () => {
     setError(null);
     try {
       const res = await triggerMultiPortalScrape(true);
-      const [dbAll, vacs] = await Promise.all([fetchScrapedJobs(), fetchVacancies()]);
-      const validJobs = (dbAll.length > 0 ? dbAll : res.jobs).filter((j) => j.status !== 'FILTERED_OUT');
-      setScrapedJobs(validJobs);
+      if (res.rejection_reasons?.length) {
+        console.debug('[TalentFlow Matcher Diagnostics] Rejected vacancies:', res.rejection_reasons);
+      }
+      const [paged, vacs] = await Promise.all([
+        loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab),
+        fetchVacancies(),
+      ]);
+      const validJobs = paged.items || [];
       setVacancies(vacs);
       if (validJobs.length > 0 && !jobUrl) {
         setJobUrl(validJobs[0].url);
         setJobText(validJobs[0].description_raw);
       }
       setScrapeStats({
-        total: validJobs.length,
+        total: paged.total || validJobs.length,
         staged: validJobs.filter((j) => j.status === 'STAGED').length,
         filteredOut: res.filtered_out_count,
       });
@@ -246,38 +274,6 @@ export const AuditPanel: React.FC = () => {
     setError(null);
   };
 
-  const handleApplyPreset = async (presetId: string) => {
-    setIsScraping(true);
-    try {
-      setError(null);
-      const res = await applySkillsPreset(presetId);
-      setProfileUploaded(true);
-      setActivePresetId(presetId);
-      setSkillsMdContent(res.content);
-      setExtractedSkillsCount(res.extracted_skills.length);
-      setSelectedVariant(presetId === 'qa_tech' ? 'qa_automation' : presetId);
-
-      // Run live role-based scrape matching this preset
-      const scrapeRes = await triggerMultiPortalScrape(true);
-      const validJobs = scrapeRes.jobs.filter((j) => j.status !== 'FILTERED_OUT');
-      setScrapedJobs(validJobs);
-      const vacs = await fetchVacancies();
-      setVacancies(vacs);
-      if (validJobs.length > 0) {
-        setJobUrl(validJobs[0].url);
-        setJobText(validJobs[0].description_raw);
-      }
-      await refreshProfileData();
-
-      setSkillsStatusMsg(`✅ Loaded "${presetId}" (${res.extracted_skills.length} skills) & scanned ${validJobs.length} live matching vacancies!`);
-      setTimeout(() => setSkillsStatusMsg(null), 5000);
-    } catch (err: any) {
-      setError(err.message || 'Failed to load profession template');
-    } finally {
-      setIsScraping(false);
-    }
-  };
-
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -289,19 +285,18 @@ export const AuditPanel: React.FC = () => {
       setSkillsMdContent(res.content);
       setSkillsFilename(res.filename);
       setExtractedSkillsCount(res.extracted_skills.length);
-      const [refreshedJobs, vacs] = await Promise.all([
-        fetchScrapedJobs(),
+      const [paged, vacs] = await Promise.all([
+        loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab),
         fetchVacancies(),
       ]);
-      const validJobs = refreshedJobs.filter((j) => j.status !== 'FILTERED_OUT');
-      setScrapedJobs(validJobs);
+      const validJobs = paged.items || [];
       setVacancies(vacs);
       if (validJobs.length > 0) {
         setJobUrl(validJobs[0].url);
         setJobText(validJobs[0].description_raw);
       }
       await refreshProfileData();
-      setSkillsStatusMsg(`✅ ${res.message} Found ${validJobs.length} live verified vacancies.`);
+      setSkillsStatusMsg(`✅ ${res.message} Found ${paged.total || validJobs.length} live verified vacancies.`);
       setTimeout(() => setSkillsStatusMsg(null), 5000);
     } catch (err: any) {
       setError(err.message || 'Failed to upload .md file');
@@ -317,12 +312,16 @@ export const AuditPanel: React.FC = () => {
       setProfileUploaded(true);
       setExtractedSkillsCount(res.extracted_skills.length);
       const scrapeRes = await triggerMultiPortalScrape(true);
-      const validJobs = scrapeRes.jobs.filter((j) => j.status !== 'FILTERED_OUT');
-      setScrapedJobs(validJobs);
-      const vacs = await fetchVacancies();
+      if (scrapeRes.rejection_reasons?.length) {
+        console.debug('[TalentFlow Matcher Diagnostics] Rejected vacancies:', scrapeRes.rejection_reasons);
+      }
+      const [paged, vacs] = await Promise.all([
+        loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab),
+        fetchVacancies(),
+      ]);
       setVacancies(vacs);
       await refreshProfileData();
-      setSkillsStatusMsg(`✅ Synced CandidateProfile (${res.extracted_skills.length} skills) & scanned ${validJobs.length} live vacancies!`);
+      setSkillsStatusMsg(`✅ Synced CandidateProfile (${res.extracted_skills.length} skills) & scanned ${paged.total} live vacancies!`);
       setShowSkillsEditor(false);
       setTimeout(() => setSkillsStatusMsg(null), 5000);
     } catch (err: any) {
@@ -528,7 +527,7 @@ export const AuditPanel: React.FC = () => {
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
-                Upload your <code className="text-slate-300">skills.md</code> or switch between ready-made industry profiles below — automatically re-scores all scraped DB jobs:
+                Upload your <code className="text-slate-300">skills.md</code> — Gemini automatically detects your profession, academic background, certifications, and matching internships &amp; live roles.
               </p>
             </div>
           </div>
@@ -558,56 +557,28 @@ export const AuditPanel: React.FC = () => {
           </div>
         </div>
 
-        {/* Dynamic Candidate Seniority & Industry Profile Gate Badges */}
+        {/* Dynamic Role & Industry Profile Gate Badges (auto-detected from skills.md) */}
         <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-slate-800/60">
           <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Active Profile Gate:</span>
           <span className="text-xs px-2.5 py-1 rounded-lg bg-sky-950 text-sky-300 border border-sky-800 font-semibold flex items-center gap-1">
             <span>👤 {candidateProfile?.full_name || 'Candidate'}</span>
           </span>
           <span className="text-xs px-2.5 py-1 rounded-lg bg-indigo-950 text-indigo-300 border border-indigo-800 font-semibold flex items-center gap-1">
-            <span>Industry: {candidateProfile?.target_industry === 'qa_tech' ? '💻 Software QA & Tech' : candidateProfile?.target_industry || '💻 Software QA'}</span>
+            <span>Industry: {candidateProfile?.detected_industry || candidateProfile?.target_industry || 'Auto-Detect on Upload'}</span>
           </span>
           <span className="text-xs px-2.5 py-1 rounded-lg bg-emerald-950 text-emerald-300 border border-emerald-800 font-semibold flex items-center gap-1">
-            <span>Experience: {candidateProfile?.experience_years ?? 1.5} Years</span>
+            <span>Experience: {candidateProfile?.experience_years ?? 1.5} Years (Cap {(candidateProfile?.max_allowed_years ?? 2.0).toFixed(1)})</span>
           </span>
-          <span className="text-xs px-2.5 py-1 rounded-lg bg-amber-950 text-amber-300 border border-amber-800 font-semibold flex items-center gap-1">
-            <span>Target: {candidateProfile?.seniority_level === 'JUNIOR' ? 'Junior - Mid' : candidateProfile?.seniority_level || 'Junior - Mid'}</span>
-          </span>
+          {candidateProfile?.eligible_internships && (
+            <span className="text-xs px-2.5 py-1 rounded-lg bg-cyan-950 text-cyan-300 border border-cyan-800 font-semibold">
+              🎓 Internship &amp; Graduate Tracks Active
+            </span>
+          )}
           {candidateProfile?.headline && (
             <span className="text-[11px] px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-medium">
               {candidateProfile.headline}
             </span>
           )}
-        </div>
-
-        {/* 1-Click Industry Profile Preset Selector */}
-        <div className="pt-2 border-t border-slate-800/80">
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-2 flex items-center gap-1.5">
-            <Briefcase className="w-3.5 h-3.5 text-sky-400" />
-            <span>1-Click Profession Profile Templates (QA/Tech, Receptionist, Customer Service, Hospital):</span>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
-            {INDUSTRY_PRESETS.map((preset) => {
-              const isCurrent = activePresetId === preset.id;
-              return (
-                <button
-                  key={preset.id}
-                  onClick={() => handleApplyPreset(preset.id)}
-                  className={`p-3 rounded-xl border text-left transition-all flex items-center justify-between ${
-                    isCurrent
-                      ? 'bg-sky-950/60 border-sky-500 text-white shadow-sm'
-                      : 'bg-slate-950/70 border-slate-800 text-slate-300 hover:border-slate-700 hover:text-white'
-                  }`}
-                >
-                  <div className="min-w-0">
-                    <div className="text-xs font-bold truncate">{preset.label}</div>
-                    <div className="text-[10px] text-slate-400">{preset.badge}</div>
-                  </div>
-                  {isCurrent && <CheckCircle2 className="w-4 h-4 text-sky-400 flex-shrink-0" />}
-                </button>
-              );
-            })}
-          </div>
         </div>
 
         {skillsStatusMsg && (
@@ -644,9 +615,24 @@ export const AuditPanel: React.FC = () => {
         profileUploaded={profileUploaded}
         isScraping={isScraping}
         selectedPortalFilter={selectedPortalFilter}
-        onSelectPortalFilter={setSelectedPortalFilter}
+        onSelectPortalFilter={(p) => {
+          setSelectedPortalFilter(p);
+          loadPagedJobs(1, p, dbStatusFilter, tierTab);
+        }}
         dbStatusFilter={dbStatusFilter}
-        onSelectStatusFilter={setDbStatusFilter}
+        onSelectStatusFilter={(s) => {
+          setDbStatusFilter(s);
+          loadPagedJobs(1, selectedPortalFilter, s, tierTab);
+        }}
+        tierTab={tierTab}
+        onSelectTierTab={(t) => {
+          setTierTab(t);
+          loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, t);
+        }}
+        page={page}
+        totalPages={totalPages}
+        totalJobs={totalJobs}
+        onPageChange={(nextP) => loadPagedJobs(nextP, selectedPortalFilter, dbStatusFilter, tierTab)}
         scrapeStats={scrapeStats}
         preparedEmailPkg={preparedEmailPkg}
         onDismissEmailPkg={() => setPreparedEmailPkg(null)}

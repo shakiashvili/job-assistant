@@ -1,130 +1,119 @@
 from collections import Counter
+import copy
 import json
 import logging
 from typing import List, Dict, Any, Optional
+from urllib.parse import quote_plus
 from sqlmodel import Session, select
+from sqlalchemy.orm.attributes import flag_modified
 
-from ..config import GEMINI_MODEL
 from ..db.models import User, SkillActionPlan, CandidateProfile, JobPosting
-from ..services.gemini_service import gemini_service
+from ..db.profile_repository import profile_repository
+from ..services.gemini_service import gemini_service, safe_parse_json
 from ..services.matcher_service import matcher_service
-from ..storage.ground_truth_store import ground_truth_store
 
 logger = logging.getLogger(__name__)
 
-# Curated rich 7-day action plans keyed by trainable QA/SDET skill
-CURATED_SKILL_ROADMAPS: List[Dict[str, Any]] = [
-    {
-        "match_keys": ["ai qa", "ai tools", "ai-assisted", "generative ai", "llm", "gemini", "chatgpt", "copilot", "prompt engineering", "mcp"],
-        "skill_name": "AI-Assisted QA & LLM Test Engineering",
-        "category": "AUTOMATION",
+
+def _default_docs_url(skill: str) -> str:
+    low = skill.lower()
+    known = {
+        "playwright": "https://playwright.dev/docs/intro",
+        "cypress": "https://docs.cypress.io/guides/overview/why-cypress",
+        "docker": "https://docs.docker.com/get-started/",
+        "k6": "https://k6.io/docs/",
+        "typescript": "https://www.typescriptlang.org/docs/",
+        "graphql": "https://graphql.org/learn/",
+        "appium": "https://appium.io/docs/en/latest/",
+        "python": "https://docs.python.org/3/tutorial/",
+        "sql": "https://www.postgresql.org/docs/current/tutorial.html",
+        "kubernetes": "https://kubernetes.io/docs/tutorials/",
+        "github actions": "https://docs.github.com/en/actions",
+        "selenium": "https://www.selenium.dev/documentation/",
+        "pytest": "https://docs.pytest.org/en/stable/",
+    }
+    for k, url in known.items():
+        if k in low:
+            return url
+    return f"https://roadmap.sh/search?q={quote_plus(skill)}"
+
+
+def _build_dynamic_skill_roadmap(skill_name: str, role: str = "Specialist") -> Dict[str, Any]:
+    """
+    Domain-agnostic dynamic fallback roadmap generator when Gemini/Search API is offline:
+    builds a structured 7-day learning plan with Official Docs, YouTube Tutorials, and Blog Guides.
+    """
+    docs_url = _default_docs_url(skill_name)
+    yt_q = quote_plus(f"{skill_name} tutorial practical project")
+    yt_deep_q = quote_plus(f"{skill_name} crash course best practices")
+    blog_dev_q = quote_plus(f"{skill_name} guide examples")
+    blog_med_q = quote_plus(f"{skill_name} architecture best practices")
+
+    steps = [
+        ("Environment Setup & Core Concepts", f"Install & configure {skill_name} locally and walk through official quickstart exercises."),
+        ("Core Workflows & Syntax Mastery", f"Build 3 foundational {skill_name} examples tailored to {role} real-world scenarios."),
+        ("Error Handling & Edge Cases", f"Practice debugging failures, inspecting logs, and validating negative edge cases in {skill_name}."),
+        ("Real Dataset / API Integration", f"Connect {skill_name} with a staging dataset, REST endpoint, or sandbox workflow."),
+        ("Automation & Repeatable Workflows", f"Automate a repeatable {skill_name} checklist or pipeline step ready for code review."),
+        ("Performance, Security & Quality Review", f"Audit {skill_name} outputs against industry benchmarks and troubleshoot bottlenecks."),
+        ("Portfolio Deliverable & Documentation", f"Publish a clean GitHub/portfolio project showcasing verified {skill_name} competence."),
+    ]
+
+    milestones = []
+    for idx, (stage, task_desc) in enumerate(steps, start=1):
+        yt_list = [
+            {
+                "title": f"{skill_name}: {stage} (Video Walkthrough)",
+                "channel": "YouTube Engineering Tutorials",
+                "url": f"https://www.youtube.com/results?search_query={quote_plus(f'{skill_name} {stage} tutorial')}",
+            },
+            {
+                "title": f"{skill_name} Full Crash Course & Hands-On Lab",
+                "channel": "YouTube Tech Deep Dive",
+                "url": f"https://www.youtube.com/results?search_query={yt_deep_q}",
+            },
+        ]
+        blogs_list = [
+            {
+                "title": f"{skill_name} Practical Guide: {stage}",
+                "source": "DEV Community",
+                "url": f"https://dev.to/search?q={blog_dev_q}",
+            },
+            {
+                "title": f"{skill_name} Production Best Practices",
+                "source": "Engineering Blogs",
+                "url": f"https://medium.com/search?q={blog_med_q}",
+            },
+        ]
+        milestones.append(
+            {
+                "day": idx,
+                "task": f"[{stage}] {task_desc}",
+                "completed": False,
+                "resource_url": docs_url,
+                "tutorial_url": f"https://www.youtube.com/results?search_query={yt_q}",
+                "youtube_videos": yt_list,
+                "blog_posts": blogs_list,
+            }
+        )
+
+    low = skill_name.lower()
+    category = (
+        "DEVOPS" if any(k in low for k in ("docker", "kubernetes", "ci", "aws", "cloud"))
+        else ("API" if any(k in low for k in ("api", "graphql", "postman", "sql")) else "CORE_GAP")
+    )
+    return {
+        "skill_name": skill_name,
+        "category": category,
         "days_to_learn": 7,
-        "milestones": [
-            {"day": 1, "task": "Explore AI-assisted Playwright test generation and locator self-healing workflows using Playwright Codegen + MCP", "completed": False, "resource_url": "https://playwright.dev/docs/codegen", "tutorial_url": "https://github.com/microsoft/playwright-mcp"},
-            {"day": 2, "task": "Master structured Prompt Engineering to derive edge-case test matrices, boundary inputs, and API negative suites from OpenAPI specs", "completed": False, "resource_url": "https://ai.google.dev/gemini-api/docs/prompting-strategies", "tutorial_url": "https://ai.google.dev/gemini-api/docs/structured-output"},
-            {"day": 3, "task": "Evaluate LLM outputs systematically using deterministic assertions, JSON schema checks, and Promptfoo eval suites", "completed": False, "resource_url": "https://www.promptfoo.dev/docs/getting-started/", "tutorial_url": "https://www.promptfoo.dev/docs/guides/evaluate-llm-rag/"},
-            {"day": 4, "task": "Detect hallucinations, prompt-injection vulnerabilities, and context regressions in AI chatbots with automated PyTest harnesses", "completed": False, "resource_url": "https://owasp.org/www-project-top-10-for-large-language-model-applications/", "tutorial_url": "https://docs.pytest.org/en/stable/"},
-            {"day": 5, "task": "Integrate Gemini / LLM API contract checks into CI pipelines with strict latency & token budget thresholds", "completed": False, "resource_url": "https://ai.google.dev/gemini-api/docs", "tutorial_url": "https://docs.github.com/en/actions"},
-            {"day": 6, "task": "Audit accessibility and visual regressions automatically combining Playwright traces with AI failure triage summaries", "completed": False, "resource_url": "https://playwright.dev/docs/accessibility-testing", "tutorial_url": "https://playwright.dev/docs/trace-viewer"},
-            {"day": 7, "task": "Publish a portfolio repo demonstrating automated LLM/RAG evaluation + AI-accelerated E2E test suite", "completed": False, "resource_url": "https://www.promptfoo.dev/docs/configuration/guide/", "tutorial_url": "https://playwright.dev/docs/test-reporters"},
-        ],
-    },
-    {
-        "match_keys": ["k6", "performance", "load testing"],
-        "skill_name": "k6 Performance & Load Testing",
-        "category": "AUTOMATION",
-        "days_to_learn": 7,
-        "milestones": [
-            {"day": 1, "task": "Install Grafana k6 CLI and run a local HTTP smoke script with VUs and duration checks", "completed": False, "resource_url": "https://k6.io/docs/get-started/running-k6/", "tutorial_url": "https://grafana.com/blog/2024/01/30/a-complete-guide-to-load-testing-with-k6/"},
-            {"day": 2, "task": "Script authenticated REST GET/POST endpoints with custom headers and JSON assertions", "completed": False, "resource_url": "https://k6.io/docs/using-k6/http-requests/", "tutorial_url": "https://k6.io/docs/examples/"},
-            {"day": 3, "task": "Define automated SLO thresholds (p95 latency < 250ms, http_req_failed < 1%)", "completed": False, "resource_url": "https://k6.io/docs/using-k6/thresholds/", "tutorial_url": "https://k6.io/docs/testing-guides/api-load-testing/"},
-            {"day": 4, "task": "Configure ramping-vus executors to simulate peak traffic spikes and soak runs", "completed": False, "resource_url": "https://k6.io/docs/using-k6/scenarios/", "tutorial_url": "https://k6.io/docs/testing-guides/stress-testing/"},
-            {"day": 5, "task": "Parameterize dynamic test data payloads using SharedArray from JSON/CSV datasets", "completed": False, "resource_url": "https://k6.io/docs/examples/data-parameterization/", "tutorial_url": "https://k6.io/docs/javascript-api/k6-data/sharedarray/"},
-            {"day": 6, "task": "Integrate k6 performance threshold gates directly into GitHub Actions CI", "completed": False, "resource_url": "https://k6.io/docs/integrations/", "tutorial_url": "https://grafana.com/docs/k6/latest/using-k6/k6-github-action/"},
-            {"day": 7, "task": "Export HTML summary reports and benchmark a real portfolio API service", "completed": False, "resource_url": "https://k6.io/docs/results-output/", "tutorial_url": "https://github.com/benc-uk/k6-reporter"},
-        ],
-    },
-    {
-        "match_keys": ["docker", "container"],
-        "skill_name": "Docker & Containerized Test Runners",
-        "category": "DEVOPS",
-        "days_to_learn": 7,
-        "milestones": [
-            {"day": 1, "task": "Build a minimal Dockerfile packaging Python/PyTest + Playwright dependencies", "completed": False, "resource_url": "https://docs.docker.com/get-started/", "tutorial_url": "https://playwright.dev/python/docs/docker"},
-            {"day": 2, "task": "Use multi-stage Docker builds and layer caching to cut test image build times by 50%", "completed": False, "resource_url": "https://docs.docker.com/build/building/multi-stage/", "tutorial_url": "https://docs.docker.com/build/cache/"},
-            {"day": 3, "task": "Orchestrate App + Postgres + QA test runner services with Docker Compose healthchecks", "completed": False, "resource_url": "https://docs.docker.com/compose/", "tutorial_url": "https://pytest-with-eric.com/pytest-advanced/pytest-docker/"},
-            {"day": 4, "task": "Mount host artifact volumes to collect Playwright traces, screenshots, and HTML reports", "completed": False, "resource_url": "https://docs.docker.com/storage/volumes/", "tutorial_url": "https://playwright.dev/python/docs/trace-viewer-intro"},
-            {"day": 5, "task": "Run parallelized containerized tests inside GitHub Actions with clean exit codes", "completed": False, "resource_url": "https://docs.github.com/en/actions", "tutorial_url": "https://docs.docker.com/build/ci/github-actions/"},
-            {"day": 6, "task": "Inspect live container logs and troubleshoot flaky network calls via docker exec", "completed": False, "resource_url": "https://docs.docker.com/reference/cli/docker/container/exec/", "tutorial_url": "https://docs.docker.com/config/containers/logging/"},
-            {"day": 7, "task": "Publish your reusable QA runner container image to GitHub Container Registry (GHCR)", "completed": False, "resource_url": "https://docs.github.com/en/packages/working-with-a-github-packages-registry", "tutorial_url": "https://docs.docker.com/get-started/workshop/04_sharing_app/"},
-        ],
-    },
-    {
-        "match_keys": ["cypress"],
-        "skill_name": "Cypress End-to-End Automation",
-        "category": "AUTOMATION",
-        "days_to_learn": 7,
-        "milestones": [
-            {"day": 1, "task": "Initialize a Cypress project and explore automatic retry-ability and time-travel debugging", "completed": False, "resource_url": "https://docs.cypress.io/guides/getting-started/installing-cypress", "tutorial_url": "https://learn.cypress.io/testing-your-first-application"},
-            {"day": 2, "task": "Master cy.intercept() to stub and assert REST network responses deterministically", "completed": False, "resource_url": "https://docs.cypress.io/api/commands/intercept", "tutorial_url": "https://learn.cypress.io/advanced-cypress-concepts/intercepting-network-requests"},
-            {"day": 3, "task": "Implement reusable custom commands (Cypress.Commands.add) and session caching", "completed": False, "resource_url": "https://docs.cypress.io/api/cypress-api/custom-commands", "tutorial_url": "https://docs.cypress.io/api/commands/session"},
-            {"day": 4, "task": "Build App Actions / Page Object abstractions in TypeScript with clean selectors", "completed": False, "resource_url": "https://docs.cypress.io/guides/tooling/typescript-support", "tutorial_url": "https://www.cypress.io/blog/stop-using-page-objects-and-start-using-app-actions"},
-            {"day": 5, "task": "Execute API-only contract assertions using cy.request() alongside UI flows", "completed": False, "resource_url": "https://docs.cypress.io/api/commands/request", "tutorial_url": "https://learn.cypress.io/testing-your-first-application/how-to-test-api-requests"},
-            {"day": 6, "task": "Configure Cypress GitHub Action with video/screenshot failure artifact uploads", "completed": False, "resource_url": "https://docs.cypress.io/guides/continuous-integration/github-actions", "tutorial_url": "https://github.com/cypress-io/github-action"},
-            {"day": 7, "task": "Run a full regression suite against a staging web app and add CI badge to README", "completed": False, "resource_url": "https://docs.cypress.io/guides/guides/command-line", "tutorial_url": "https://docs.cypress.io/guides/dashboard/introduction"},
-        ],
-    },
-    {
-        "match_keys": ["typescript"],
-        "skill_name": "TypeScript & Playwright SDET Specialization",
-        "category": "CODING",
-        "days_to_learn": 7,
-        "milestones": [
-            {"day": 1, "task": "Master TypeScript strict types, generics, async/await promises, and utility types", "completed": False, "resource_url": "https://www.typescriptlang.org/docs/handbook/intro.html", "tutorial_url": "https://www.typescriptlang.org/docs/handbook/typescript-from-scratch.html"},
-            {"day": 2, "task": "Scaffold a Playwright TypeScript project using role/label accessibility locators", "completed": False, "resource_url": "https://playwright.dev/docs/intro", "tutorial_url": "https://playwright.dev/docs/locators"},
-            {"day": 3, "task": "Design strictly typed Page Object Models and reusable authenticated fixtures", "completed": False, "resource_url": "https://playwright.dev/docs/pom", "tutorial_url": "https://playwright.dev/docs/test-fixtures"},
-            {"day": 4, "task": "Use Playwright APIRequestContext + UI interception for hybrid API+UI verification", "completed": False, "resource_url": "https://playwright.dev/docs/api-testing", "tutorial_url": "https://playwright.dev/docs/network"},
-            {"day": 5, "task": "Enable sharded parallel execution with trace-on-first-retry reporting", "completed": False, "resource_url": "https://playwright.dev/docs/test-sharding", "tutorial_url": "https://playwright.dev/docs/trace-viewer"},
-            {"day": 6, "task": "Add ESLint + strict tsconfig rules for zero-warning test maintainability", "completed": False, "resource_url": "https://playwright.dev/docs/test-typescript", "tutorial_url": "https://typescript-eslint.io/getting-started/"},
-            {"day": 7, "task": "Deploy Playwright HTML report to GitHub Pages automatically from CI", "completed": False, "resource_url": "https://playwright.dev/docs/test-reporters", "tutorial_url": "https://playwright.dev/docs/ci-intro"},
-        ],
-    },
-    {
-        "match_keys": ["appium", "mobile"],
-        "skill_name": "Mobile Test Automation (Appium)",
-        "category": "AUTOMATION",
-        "days_to_learn": 7,
-        "milestones": [
-            {"day": 1, "task": "Set up Appium 2 server with UiAutomator2 (Android) and Appium Inspector", "completed": False, "resource_url": "https://appium.io/docs/en/latest/quickstart/", "tutorial_url": "https://appium.io/docs/en/latest/intro/"},
-            {"day": 2, "task": "Inspect mobile accessibility IDs and build resilient mobile locators", "completed": False, "resource_url": "https://appium.io/docs/en/latest/guides/migrating-1-to-2/", "tutorial_url": "https://appium.github.io/appium-inspector/"},
-            {"day": 3, "task": "Automate login, scroll gestures, and WebView switches in Python or JavaScript", "completed": False, "resource_url": "https://appium.io/docs/en/latest/guides/actions/", "tutorial_url": "https://appium.io/docs/en/latest/ecosystem/clients/"},
-            {"day": 4, "task": "Execute cross-device tests using Android Emulator + Playwright/Appium matrix", "completed": False, "resource_url": "https://developer.android.com/studio/run/emulator-commandline", "tutorial_url": "https://appium.io/docs/en/latest/guides/execute-methods/"},
-            {"day": 5, "task": "Capture device logs and failure screenshots automatically in PyTest fixtures", "completed": False, "resource_url": "https://docs.pytest.org/en/stable/how-to/fixtures.html", "tutorial_url": "https://appium.io/docs/en/latest/guides/troubleshooting/"},
-            {"day": 6, "task": "Handle biometric/OTP permission dialogs via adb / capabilities cleanly", "completed": False, "resource_url": "https://developer.android.com/tools/adb", "tutorial_url": "https://appium.io/docs/en/latest/guides/caps/"},
-            {"day": 7, "task": "Publish a sample mobile regression suite runnable on emulator in CI", "completed": False, "resource_url": "https://github.com/reactivecircus/android-emulator-runner", "tutorial_url": "https://appium.io/docs/en/latest/quickstart/test-py/"},
-        ],
-    },
-    {
-        "match_keys": ["graphql", "swagger", "openapi"],
-        "skill_name": "GraphQL & OpenAPI Contract Testing",
-        "category": "API",
-        "days_to_learn": 7,
-        "milestones": [
-            {"day": 1, "task": "Understand GraphQL queries, mutations, introspection schemas, and error arrays", "completed": False, "resource_url": "https://graphql.org/learn/", "tutorial_url": "https://learning.postman.com/docs/sending-requests/graphql/graphql-overview/"},
-            {"day": 2, "task": "Automate GraphQL schema & variable validation tests in PyTest or Postman", "completed": False, "resource_url": "https://swagger.io/specification/", "tutorial_url": "https://schemathesis.readthedocs.io/"},
-            {"day": 3, "task": "Use Schemathesis / OpenAPI fuzzing to catch 500 errors and edge-case inputs", "completed": False, "resource_url": "https://schemathesis.readthedocs.io/en/stable/", "tutorial_url": "https://docs.pytest.org/en/stable/"},
-            {"day": 4, "task": "Validate negative auth paths (expired JWT, RBAC 403, rate limits)", "completed": False, "resource_url": "https://owasp.org/API-Security/", "tutorial_url": "https://owasp.org/www-project-api-security/"},
-            {"day": 5, "task": "Test pagination cursors, idempotency keys, and concurrent write safety", "completed": False, "resource_url": "https://graphql.org/learn/pagination/", "tutorial_url": "https://learning.postman.com/docs/tests-and-scripts/write-scripts/test-scripts/"},
-            {"day": 6, "task": "Generate Allure API contract test reports inside GitHub Actions", "completed": False, "resource_url": "https://allurereport.org/docs/pytest/", "tutorial_url": "https://docs.github.com/en/actions"},
-            {"day": 7, "task": "Add automated contract check before merge on a public REST/GraphQL demo API", "completed": False, "resource_url": "https://swagger.io/tools/swagger-ui/", "tutorial_url": "https://graphql.org/learn/validation/"},
-        ],
-    },
-]
+        "milestones": milestones,
+    }
 
 
 class PlanService:
     """
-    AI-driven skill gap analyzer and interactive action plan generator.
+    AI-driven skill gap analyzer & interactive roadmap generator powered by Gemini 2.5 Flash
+    (+ optional Google Search grounding), generating live YouTube video tutorials and engineering blog posts.
     """
 
     def generate_plans_for_user(
@@ -133,22 +122,19 @@ class PlanService:
         session: Session,
         force_refresh: bool = False,
     ) -> List[SkillActionPlan]:
-        """
-        Analyzes the candidate's existing profile against live matching vacancies in DB,
-        identifies top 3 missing trainable skills, and persists 7-day learning roadmaps
-        complete with official docs + curated tutorials + hands-on tasks.
-        """
-        # 1. Fetch Candidate Skills (read all_skills & vault core safely)
-        gt = ground_truth_store.get_data()
+        gt = profile_repository.get_data()
         existing_skills: set[str] = {str(s) for s in (gt.get("skills", {}).get("core") or [])}
-        candidate_prof = session.exec(select(CandidateProfile)).first()
+        candidate_prof = session.exec(
+            select(CandidateProfile).order_by(CandidateProfile.updated_at.desc())
+        ).first()
+        primary_role = "Specialist"
         if candidate_prof and isinstance(candidate_prof.parsed_skills, dict):
-            for key in ("all_skills", "qa_automation", "manual_qa", "languages", "api_and_performance", "cicd_and_devops", "core_skills"):
+            primary_role = str(candidate_prof.parsed_skills.get("primary_role") or candidate_prof.parsed_skills.get("headline") or "Specialist")
+            for key in ("verified_skills", "all_skills", "qa_automation", "manual_qa", "languages", "api_and_performance", "cicd_and_devops", "core_skills"):
                 for s in candidate_prof.parsed_skills.get(key) or []:
                     existing_skills.add(str(s))
         existing_lower = {s.lower() for s in existing_skills}
 
-        # 2. Check active plans (replace unstarted/incomplete plans when user explicitly clicks Generate)
         existing_plans = session.exec(
             select(SkillActionPlan).where(SkillActionPlan.user_id == user.id)
         ).all()
@@ -160,10 +146,10 @@ class PlanService:
                     session.delete(ep)
             session.commit()
 
-        # 3. Extract real missing skills across matched JobPosting vacancies
+        # Compare CandidateProfile against missing requirements across live JobPosting rows
         gap_counts: Counter = Counter()
         market_jobs = session.exec(
-            select(JobPosting).where(JobPosting.status != "FILTERED_OUT").limit(25)
+            select(JobPosting).where(JobPosting.status != "FILTERED_OUT").limit(35)
         ).all()
         for job in market_jobs:
             reqs = matcher_service.extract_job_requirements(job.title, job.description_raw)
@@ -173,73 +159,66 @@ class PlanService:
                     gap_counts[req] += 1
 
         top_gaps = [skill for skill, _ in gap_counts.most_common(6)]
+        role_low = primary_role.lower()
+        is_qa_profile = any(k in role_low for k in ("qa", "test", "sdet", "quality"))
+        has_ai_skill = any("ai " in ex or "ai-" in ex or "llm" in ex or "gemini" in ex or "copilot" in ex for ex in existing_lower)
+        if is_qa_profile and not has_ai_skill and not any("ai" in g.lower() or "llm" in g.lower() for g in top_gaps):
+            top_gaps.insert(0, "AI-Assisted QA & LLM Test Engineering")
+        if not top_gaps:
+            # Suggest domain-appropriate growth areas if 0 gaps exist yet in DB
+            if "logistics" in role_low or "supply" in role_low:
+                top_gaps = ["SAP SCM", "SQL Analytics", "Power BI"]
+            elif "finance" in role_low or "account" in role_low:
+                top_gaps = ["IFRS Reporting", "Python Financial Modeling", "Power BI"]
+            else:
+                top_gaps = ["AI-Assisted QA & LLM Test Engineering", "Docker", "k6 Performance Testing"]
 
-        # 4. Attempt Gemini-driven personalized roadmap generation if API key is configured
-        created_plans: List[SkillActionPlan] = []
+        plans_data: List[Dict[str, Any]] = []
         if gemini_service.is_available:
             try:
-                plans_data = self._generate_with_gemini(list(existing_skills), top_gaps)
-                for pd in plans_data[:3]:
-                    plan = SkillActionPlan(
-                        user_id=user.id,
-                        skill_name=pd["skill_name"],
-                        category=pd.get("category", "AUTOMATION"),
-                        days_to_learn=pd.get("days_to_learn", 7),
-                        milestones=pd.get("milestones", []),
-                        is_completed=False,
-                    )
-                    session.add(plan)
-                    created_plans.append(plan)
-                session.commit()
-                for p in created_plans:
-                    session.refresh(p)
-                return created_plans
-            except Exception as e:
-                logger.warning(f"Gemini skill plan generation fallback: {e}")
-
-        # 5. Match real missing skills against curated rich QA/SDET roadmaps (skipping already-known skills first)
-        selected_templates: List[Dict[str, Any]] = []
-        used_names: set[str] = set()
-
-        for gap in top_gaps:
-            gl = gap.lower()
-            for tmpl in CURATED_SKILL_ROADMAPS:
-                if tmpl["skill_name"] in used_names:
-                    continue
-                if any(mk in gl or gl in mk for mk in tmpl["match_keys"]):
-                    selected_templates.append(tmpl)
-                    used_names.add(tmpl["skill_name"])
-                    break
-            if len(selected_templates) >= 3:
-                break
-
-        # Fill remaining slots with genuinely unpossessed high-impact QA roadmaps (prioritizing AI QA & DevOps gaps)
-        for tmpl in CURATED_SKILL_ROADMAPS:
-            if len(selected_templates) >= 3:
-                break
-            if tmpl["skill_name"] in used_names:
-                continue
-            already_has = any(
-                any(
-                    (mk == ex) or bool(__import__("re").search(r"\b" + __import__("re").escape(mk) + r"\b", ex))
-                    for ex in existing_lower
+                plans_data = self._generate_with_gemini(
+                    existing_skills=list(existing_skills),
+                    top_gaps=top_gaps[:3],
+                    primary_role=primary_role,
                 )
-                for mk in tmpl["match_keys"]
-            )
-            if not already_has:
-                selected_templates.append(tmpl)
-                used_names.add(tmpl["skill_name"])
+            except Exception as e:
+                logger.warning(f"Gemini skill roadmap generation fallback: {e}")
 
-        if not selected_templates:
-            selected_templates = CURATED_SKILL_ROADMAPS[:3]
+        if not plans_data:
+            plans_data = [_build_dynamic_skill_roadmap(skill, role=primary_role) for skill in top_gaps[:3]]
 
-        for item in selected_templates[:3]:
+        created_plans: List[SkillActionPlan] = []
+        for pd in plans_data[:3]:
+            milestones = pd.get("milestones", [])
+            # Ensure every milestone guarantees clickable YouTube & Blog links cleanly
+            skill_lbl = str(pd.get("skill_name") or top_gaps[0])
+            for m in milestones:
+                if isinstance(m, dict):
+                    m.setdefault("resource_url", _default_docs_url(skill_lbl))
+                    if not m.get("youtube_videos"):
+                        m["youtube_videos"] = [
+                            {
+                                "title": f"{skill_lbl} Tutorial ({m.get('day', 1)})",
+                                "channel": "YouTube Search",
+                                "url": f"https://www.youtube.com/results?search_query={quote_plus(skill_lbl + ' tutorial')}",
+                            }
+                        ]
+                    if not m.get("blog_posts"):
+                        m["blog_posts"] = [
+                            {
+                                "title": f"{skill_lbl} Technical Guide",
+                                "source": "DEV Community",
+                                "url": f"https://dev.to/search?q={quote_plus(skill_lbl)}",
+                            }
+                        ]
+                    m.setdefault("tutorial_url", m["youtube_videos"][0]["url"])
+
             plan = SkillActionPlan(
                 user_id=user.id,
-                skill_name=item["skill_name"],
-                category=item["category"],
-                days_to_learn=item["days_to_learn"],
-                milestones=item["milestones"],
+                skill_name=skill_lbl,
+                category=str(pd.get("category", "CORE_GAP")),
+                days_to_learn=int(pd.get("days_to_learn", len(milestones) or 7)),
+                milestones=milestones,
                 is_completed=False,
             )
             session.add(plan)
@@ -250,29 +229,65 @@ class PlanService:
             session.refresh(p)
         return created_plans
 
-    def _generate_with_gemini(self, existing_skills: List[str], top_gaps: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    def _generate_with_gemini(
+        self,
+        existing_skills: List[str],
+        top_gaps: List[str],
+        primary_role: str = "Specialist",
+    ) -> List[Dict[str, Any]]:
         prompt = f"""
-You are a Staff QA Architect and Engineering Career Coach.
-Existing skills: {json.dumps(existing_skills[:25])}.
-Top missing skills detected from matching vacancies: {json.dumps(top_gaps or [])}.
-For the top 3 missing trainable skills, build a focused 7-day learning roadmap where EVERY day has an official documentation URL (`resource_url`), a practical engineering guide/tutorial URL (`tutorial_url`), and a concrete hands-on task.
+You are a Staff Career Architect & Technical Curriculum Designer.
+Candidate Role: {primary_role}
+Existing verified skills: {json.dumps(existing_skills[:25])}
+Top missing skill gaps from matched job vacancies: {json.dumps(top_gaps)}
 
-Return ONLY valid JSON list of 3 objects with keys `skill_name`, `category`, `days_to_learn`, `milestones`.
+Build up to 3 focused 7-day interactive learning roadmaps (one per missing skill).
+For EACH milestone (day 1..7), include:
+- "day": integer (1..7)
+- "task": concise hands-on deliverable
+- "completed": false
+- "resource_url": official documentation URL
+- "youtube_videos": list of 2 objects {{"title": str, "channel": str, "url": str}} (real YouTube tutorial or specific YouTube search URL)
+- "blog_posts": list of 2 objects {{"title": str, "source": str, "url": str}} (technical blog/article URLs)
+- "tutorial_url": primary YouTube tutorial URL
+
+Return ONLY a valid JSON array of objects with keys: skill_name, category, days_to_learn, milestones.
 """
-        response_text = gemini_service._call_gemini_with_retry(prompt)
-        parsed = gemini_service.safe_parse_json(response_text)
-        if isinstance(parsed, list) and len(parsed) >= 1:
-            return parsed
+        resp_obj = None
+        if gemini_service.client:
+            try:
+                from google.genai import types
+                cfg = types.GenerateContentConfig(
+                    temperature=0.2,
+                    tools=[{"google_search": {}}],
+                )
+                resp = gemini_service.client.models.generate_content(
+                    model=gemini_service.model,
+                    contents=prompt,
+                    config=cfg,
+                )
+                resp_obj = resp.text
+            except Exception:
+                resp = gemini_service._call_gemini_with_retry(prompt, temperature=0.2)
+                resp_obj = getattr(resp, "text", None)
+
+        if resp_obj:
+            cleaned = resp_obj.strip()
+            if cleaned.startswith("```"):
+                import re as _re
+                cleaned = _re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=_re.I).strip()
+            try:
+                parsed = json.loads(cleaned)
+                if isinstance(parsed, list) and parsed:
+                    return parsed
+            except Exception:
+                pass
+            parsed_dict = safe_parse_json(resp_obj)
+            if isinstance(parsed_dict, list) and parsed_dict:
+                return parsed_dict
         raise ValueError("Invalid Gemini action plan JSON shape")
 
     def toggle_milestone(self, plan: SkillActionPlan, milestone_index: int, session: Session) -> SkillActionPlan:
-        """
-        Toggles milestone status. When 100% of milestones are checked off,
-        automatically adds this skill to the candidate's active skills database!
-        """
-        import copy
-        from sqlalchemy.orm.attributes import flag_modified
-
         milestones = copy.deepcopy(list(plan.milestones))
         if 0 <= milestone_index < len(milestones):
             current_status = milestones[milestone_index].get("completed", False)
@@ -284,7 +299,6 @@ Return ONLY valid JSON list of 3 objects with keys `skill_name`, `category`, `da
         flag_modified(plan, "milestones")
         session.add(plan)
 
-        # If completed, ingest skill into CandidateProfile
         if all_done:
             self._ingest_mastered_skill(plan.skill_name, session)
 
@@ -293,9 +307,10 @@ Return ONLY valid JSON list of 3 objects with keys `skill_name`, `category`, `da
         return plan
 
     def _ingest_mastered_skill(self, skill_name: str, session: Session) -> None:
-        """Dynamically ingests newly learned skill into candidate profile & ground truth."""
         try:
-            candidate_prof = session.exec(select(CandidateProfile)).first()
+            candidate_prof = session.exec(
+                select(CandidateProfile).order_by(CandidateProfile.updated_at.desc())
+            ).first()
             if candidate_prof:
                 parsed = dict(candidate_prof.parsed_skills or {})
                 all_sk = list(parsed.get("all_skills", []))
@@ -304,15 +319,13 @@ Return ONLY valid JSON list of 3 objects with keys `skill_name`, `category`, `da
                     parsed["all_skills"] = all_sk
                     candidate_prof.parsed_skills = parsed
                     session.add(candidate_prof)
-                    logger.info(f"Ingested completed skill '{skill_name}' into CandidateProfile database!")
+                    logger.info("Ingested mastered skill '%s' into CandidateProfile", skill_name)
 
-            # Also update relational vault
-            gt = ground_truth_store.get_data()
+            gt = profile_repository.get_data()
             gt_core = gt.setdefault("skills", {}).setdefault("core", [])
             if skill_name not in gt_core:
                 gt_core.append(skill_name)
-                ground_truth_store.update_data(gt)
-                logger.info(f"Ingested completed skill '{skill_name}' into CandidateProfile vault!")
+                profile_repository.update_data(gt)
         except Exception as e:
             logger.warning(f"Error updating candidate profile with completed skill: {e}")
 

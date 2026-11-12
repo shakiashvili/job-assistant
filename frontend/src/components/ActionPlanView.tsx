@@ -226,20 +226,48 @@ export const ActionPlanView: React.FC = () => {
                           {m.task}
                         </span>
                       </div>
-                      <div className="flex flex-wrap items-center gap-3 mt-1">
+                      <div className="flex flex-wrap items-center gap-2 mt-1.5">
                         {m.resource_url && (
                           <a
                             href={m.resource_url}
                             target="_blank"
                             rel="noopener noreferrer"
                             onClick={(e) => e.stopPropagation()}
-                            className="inline-flex items-center gap-1 text-[10px] text-sky-400 hover:text-sky-300 hover:underline"
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-sky-950/70 border border-sky-800/70 text-[10px] text-sky-300 hover:text-sky-200"
                           >
                             <span>Official Docs</span>
                             <ExternalLink className="w-2.5 h-2.5" />
                           </a>
                         )}
-                        {m.tutorial_url && (
+                        {(m.youtube_videos || []).slice(0, 2).map((yt, yIdx) => (
+                          <a
+                            key={`yt-${yIdx}`}
+                            href={yt.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-rose-950/70 border border-rose-800/70 text-[10px] text-rose-300 hover:text-rose-200"
+                            title={yt.channel || 'YouTube Tutorial'}
+                          >
+                            <span>YouTube: {yt.title.slice(0, 28)}</span>
+                            <ExternalLink className="w-2.5 h-2.5" />
+                          </a>
+                        ))}
+                        {(m.blog_posts || []).slice(0, 2).map((bp, bIdx) => (
+                          <a
+                            key={`blog-${bIdx}`}
+                            href={bp.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-950/70 border border-emerald-800/70 text-[10px] text-emerald-300 hover:text-emerald-200"
+                            title={bp.source || 'Engineering Blog'}
+                          >
+                            <span>Blog: {bp.title.slice(0, 26)}</span>
+                            <ExternalLink className="w-2.5 h-2.5" />
+                          </a>
+                        ))}
+                        {!m.youtube_videos?.length && !m.blog_posts?.length && m.tutorial_url && (
                           <a
                             href={m.tutorial_url}
                             target="_blank"
@@ -247,7 +275,7 @@ export const ActionPlanView: React.FC = () => {
                             onClick={(e) => e.stopPropagation()}
                             className="inline-flex items-center gap-1 text-[10px] text-emerald-400 hover:text-emerald-300 hover:underline"
                           >
-                            <span>Practical Guide</span>
+                            <span>Tutorial</span>
                             <ExternalLink className="w-2.5 h-2.5" />
                           </a>
                         )}

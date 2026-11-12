@@ -1,16 +1,13 @@
-import json
 import logging
 import uuid
 from typing import List, Optional
 from sqlmodel import Session, select
-from ..config import APPLICATIONS_FILE
-from ..database import engine, init_db
-from ..models.db_models import JobPosting, ApplicationRecord, utc_now
+from .database import engine, init_db
+from .models import JobPosting, ApplicationRecord, utc_now
 from ..models.schemas import ApplicationItem, ApplicationCreate, ApplicationUpdate
 
 logger = logging.getLogger(__name__)
 
-# Map between UI status names and ApplicationRecord.submission_status
 UI_TO_DB_STATUS = {
     "Discovered": "DISCOVERED",
     "Saved": "DISCOVERED",
@@ -35,63 +32,11 @@ DB_TO_UI_STATUS = {
 }
 
 
-class TrackerStore:
-    """
-    Relational Database-backed Application Tracker store (SQLModel / SQLAlchemy).
-    Persists all applications in `application_records` and `job_postings` tables.
-    """
+class TrackerRepository:
+    """Pure SQLModel repository replacing legacy tracker_store.py."""
 
-    def __init__(self, filepath=APPLICATIONS_FILE):
-        self.filepath = filepath
+    def __init__(self):
         init_db()
-        self._seed_from_json_if_empty()
-
-    def _seed_from_json_if_empty(self) -> None:
-        with Session(engine) as session:
-            existing_app = session.exec(select(ApplicationRecord)).first()
-            if existing_app:
-                return
-            if not self.filepath.exists():
-                return
-            try:
-                raw = json.loads(self.filepath.read_text(encoding="utf-8"))
-                for entry in raw:
-                    url = entry.get("url") or f"https://portal.local/{uuid.uuid4().hex[:6]}"
-                    portal = entry.get("portal") or "generic"
-                    ext_id = entry.get("id") or f"seed-{uuid.uuid4().hex[:6]}"
-
-                    job = session.exec(select(JobPosting).where(JobPosting.url == url)).first()
-                    if not job:
-                        job = JobPosting(
-                            portal=portal,
-                            external_id=ext_id,
-                            title=entry.get("role", "QA Engineer"),
-                            company=entry.get("company", "Company"),
-                            url=url,
-                            market="INT_REMOTE",
-                            is_remote=True,
-                            language_requirements=["English"],
-                            description_raw=entry.get("notes") or "",
-                            suitability_score=float(entry.get("match_score") or 85.0),
-                            match_rationale=entry.get("notes") or "Seeded from tracker",
-                            status="STAGED",
-                        )
-                        session.add(job)
-                        session.commit()
-                        session.refresh(job)
-
-                    db_status = UI_TO_DB_STATUS.get(entry.get("status", "Saved"), "STAGED")
-                    rec = ApplicationRecord(
-                        job_posting_id=job.id,
-                        custom_cv_path=entry.get("cv_pdf_url") or "/api/resumes/resume_qa_automation.pdf",
-                        cover_letter_text=entry.get("notes") or "",
-                        submission_status=db_status,
-                        applied_at=utc_now(),
-                    )
-                    session.add(rec)
-                session.commit()
-            except Exception as e:
-                logger.warning(f"Tracker seed migration note: {e}")
 
     def _record_to_item(self, rec: ApplicationRecord, job: Optional[JobPosting]) -> ApplicationItem:
         ui_status = DB_TO_UI_STATUS.get(rec.submission_status, "Discovered")
@@ -114,7 +59,7 @@ class TrackerStore:
             interview_date=interview_dt,
             company_reviews=25,
             cv_pdf_url=rec.custom_cv_path or None,
-            variant_used="qa_automation",
+            variant_used="tailored",
             applied_date=rec.applied_at.strftime("%Y-%m-%d") if rec.applied_at else None,
             notes=rec.cover_letter_text or (job.match_rationale if job else ""),
         )
@@ -156,7 +101,7 @@ class TrackerStore:
             db_status = UI_TO_DB_STATUS.get(item_in.status or "Saved", "STAGED")
             rec = ApplicationRecord(
                 job_posting_id=job.id,
-                custom_cv_path=item_in.cv_pdf_url or "/api/resumes/resume_qa_automation.pdf",
+                custom_cv_path=item_in.cv_pdf_url or "",
                 cover_letter_text=item_in.notes or "",
                 submission_status=db_status,
                 applied_at=utc_now(),
@@ -179,8 +124,10 @@ class TrackerStore:
             if item_update.status is not None:
                 rec.submission_status = UI_TO_DB_STATUS.get(item_update.status, rec.submission_status)
                 if job:
-                    job.status = "APPLIED" if rec.submission_status == "SUBMITTED" else (
-                        "REJECTED" if rec.submission_status == "REJECTED" else job.status
+                    job.status = (
+                        "APPLIED"
+                        if rec.submission_status == "SUBMITTED"
+                        else ("REJECTED" if rec.submission_status == "REJECTED" else job.status)
                     )
                     session.add(job)
             if item_update.notes is not None:
@@ -214,4 +161,5 @@ class TrackerStore:
             return True
 
 
-tracker_store = TrackerStore()
+tracker_repository = TrackerRepository()
+tracker_store = tracker_repository

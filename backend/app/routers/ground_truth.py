@@ -1,10 +1,13 @@
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from ..storage.ground_truth_store import ground_truth_store, PROFESSION_MD_PRESETS
+from ..db.profile_repository import ground_truth_store, PROFESSION_MD_PRESETS
+from ..db.models import User
+from ..services.auth_service import get_current_user
+from ..services.answer_service import load_live_candidate_profile
 from ..config import RESUMES_DIR, GENERATED_RESUMES_DIR
 from ..database import engine, delete_job_posting_cascade
 from ..models.db_models import JobPosting
@@ -37,6 +40,7 @@ class GenerateEditionRequest(BaseModel):
     target_role: Optional[str] = None
     target_company: Optional[str] = None
     job_description: Optional[str] = ""
+    job_url: Optional[str] = None
     cv_language: str = "en"
 
 
@@ -250,20 +254,28 @@ def get_user_cv_file(filename: str):
 
 
 @router.post("/resumes/generate-edition")
-def generate_cv_edition(req: GenerateEditionRequest):
+def generate_cv_edition(
+    req: GenerateEditionRequest,
+    current_user: User = Depends(get_current_user),
+):
     """Generates an ATS-Optimized, Recruiter-Ready, or Job-Tailored CV (Word .docx + PDF) + Cover Letter."""
     from ..services.cv_generator_service import cv_generator_service
 
+    live = load_live_candidate_profile(current_user.email)
     gt = ground_truth_store.get_data()
     cand = gt.get("candidate", {})
-    default_role = cand.get("headline") or "QA Automation & Manual QA Engineer"
+    default_role = live.get("primary_role") or live.get("headline") or cand.get("headline") or "Specialist"
     role = (req.target_role or "").strip() or default_role
     company = (req.target_company or "").strip() or ("ATS Edition" if req.edition == "ats" else "Recruiter Edition" if req.edition == "recruiter" else "Target Company")
+    desc = (req.job_description or "").strip()
+    if req.job_url and req.job_url.strip():
+        desc = f"{desc}\nJob URL: {req.job_url.strip()}".strip()
 
     pkg = cv_generator_service.prepare_email_application_package(
         job_title=role,
         company=company,
-        description=req.job_description or "",
+        description=desc,
+        skills_md_override=live.get("skills_markdown") or None,
         cv_language=req.cv_language or "en",
         cv_style=req.edition or "ats",
     )

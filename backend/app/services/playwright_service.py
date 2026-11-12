@@ -15,7 +15,7 @@ from playwright.async_api import (
 )
 
 from ..config import RESUMES_DIR, GENERATED_RESUMES_DIR
-from ..storage.ground_truth_store import ground_truth_store
+from ..db.profile_repository import ground_truth_store
 from ..services.portal_detector import detect_portal_from_url, detect_portal_from_html
 from ..services.company_validator import company_validator
 from ..services.cv_generator_service import cv_generator_service

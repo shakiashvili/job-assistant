@@ -1,7 +1,8 @@
+import asyncio
 import logging
 import re
 from datetime import datetime, timezone
-from typing import Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 import httpx
 from bs4 import BeautifulSoup
 
@@ -216,3 +217,22 @@ async def verify_vacancy_liveness(url: str, timeout: float = 8.0) -> bool:
     """
     is_valid, _, _ = await fetch_and_validate_live_vacancy(url, timeout=timeout)
     return is_valid
+
+
+async def validate_urls_batch(
+    urls: List[str],
+    concurrency: int = 5,
+    timeout: float = 8.0,
+) -> Dict[str, Tuple[bool, str, str]]:
+    """Checks multiple vacancy URLs concurrently bounded by asyncio.Semaphore(concurrency)."""
+    sem = asyncio.Semaphore(max(1, concurrency))
+    results: Dict[str, Tuple[bool, str, str]] = {}
+
+    async def _check_one(u: str) -> None:
+        async with sem:
+            results[u] = await fetch_and_validate_live_vacancy(u, timeout=timeout)
+
+    unique_urls = list(dict.fromkeys(u for u in urls if u))
+    if unique_urls:
+        await asyncio.gather(*(_check_one(u) for u in unique_urls), return_exceptions=True)
+    return results

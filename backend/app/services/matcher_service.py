@@ -429,6 +429,21 @@ Markdown:
                     False,
                     f"Disqualified by Experience Gate: Role requires {job_req_years:g} yrs exp (strictly capped at {cap:.1f} yrs).",
                 )
+            duty_leadership_signals = [
+                "manage a team of",
+                "lead a team of",
+                "architect enterprise",
+                "define company-wide strategy",
+                "full p&l ownership",
+                "direct report to the ceo",
+                "budget ownership across",
+            ]
+            hit_duty = next((d for d in duty_leadership_signals if d in combined), None)
+            if hit_duty:
+                return (
+                    False,
+                    f"Disqualified by Duty Gate: Job expects senior/management responsibility ('{hit_duty}') above {cap:.1f} yr cap.",
+                )
 
         # Gate 2: Mid level (2.5 to 5.0 years)
         elif candidate_years <= 5.0:
@@ -500,18 +515,36 @@ Markdown:
         r_list = [str(s).lower() for s in (required_skills or [])]
         overlap_count = sum(1 for r in r_list if any(r in c or c in r for c in c_list))
 
-        # 1. Public Sector & Internship Portal (hr.gov.ge) — STRICTLY require relevance to candidate's skills.md!
+        edu_entries = parsed_skills.get("education") or []
+        courses_list = [str(c).lower() for c in (parsed_skills.get("courses_and_certifications") or []) if c]
+        eligible_internships = bool(parsed_skills.get("eligible_internships") or edu_entries or courses_list or float(parsed_skills.get("years_of_experience") or 1.5) <= 2.5)
+        edu_tokens = [
+            tok.lower()
+            for e in edu_entries
+            if isinstance(e, dict)
+            for tok in re.split(r"[\s/,&()-]+", f"{e.get('degree', '')} {e.get('field_of_study', '')}")
+            if len(tok) >= 4 and tok.lower() not in ("bachelor", "master", "degree", "university", "science", "arts", "present", "student")
+        ]
+        is_intern_role = any(w in title_lower for w in ("intern", "trainee", "graduate", "apprentice", "სტაჟიორ", "დამწყებ", "სასწავლო"))
+
+        # 1. Public Sector & Internship Portal (hr.gov.ge) — match by domain, tech, or academic/internship track
         if portal == "hr.gov.ge":
             it_gov_signals = ["it", "ინფორმაციულ ტექნოლოგ", "ტექნოლოგ", "პროგრამ", "მონაცემ", "ანალიტ", "სისტემ", "კიბერ", "ქსელ", "ტესტ", "მხარდაჭერ", "sql", "developer"]
             is_tech_cand = target_industry in ("qa_tech", "software_engineering", "data_analytics")
-            has_domain_hit = any(sig in combined for sig in (direct_signals + adj_signals))
+            has_domain_hit = any(sig in combined for sig in (direct_signals + adj_signals + edu_tokens))
             has_tech_hit = is_tech_cand and any(
                 (re.search(r"\b" + re.escape(t) + r"\b", combined) if len(t) <= 3 else (t in combined))
                 for t in it_gov_signals
             )
-            if has_domain_hit or has_tech_hit or overlap_count >= 1 or target_industry == "public_admin_legal":
-                return ("PUBLIC_INTERNSHIP", "Public Sector & Entry/Internship Role (HR.gov.ge)")
-            return ("NONE", f"Domain Gate: '{job_title}' on HR.gov.ge does not match candidate's {target_industry} skills.md.")
+            if has_domain_hit or has_tech_hit or overlap_count >= 1 or target_industry == "public_admin_legal" or (eligible_internships and is_intern_role and any(tok in combined for tok in (direct_signals + edu_tokens))):
+                return ("PUBLIC_INTERNSHIP", "Public Sector & Graduate Internship (HR.gov.ge)")
+            return ("NONE", f"Domain Gate: '{job_title}' on HR.gov.ge does not match candidate's {target_industry} / education profile.")
+
+        # Graduate / Corporate Internship matching via Education + Coursework
+        if is_intern_role and eligible_internships and (
+            any(sig in combined for sig in (direct_signals + adj_signals + edu_tokens)) or overlap_count >= 1
+        ):
+            return ("ADJACENT", f"Internship / Graduate Track ({parsed_skills.get('primary_role') or target_industry})")
 
         if any(sig in title_lower for sig in direct_signals) or (
             target_industry in ("receptionist_hospitality", "healthcare_hospital", "customer_service", "logistics_supply_chain", "finance_accounting")
@@ -574,6 +607,7 @@ Markdown:
             candidate_years, candidate_seniority, title, description, max_allowed_years=max_allowed
         )
         if not sen_passed:
+            logger.info("[MATCHER REJECT] [%s] '%s' -> %s", portal, title, sen_reason)
             return {
                 "suitability_score": 0.0,
                 "status": "FILTERED_OUT",
@@ -605,6 +639,7 @@ Markdown:
             candidate_skills=candidate_skills, required_skills=required_skills,
         )
         if tier_hint == "NONE":
+            logger.info("[MATCHER REJECT] [%s] '%s' -> %s", portal, title, tier_label)
             return {
                 "suitability_score": 0.0,
                 "status": "FILTERED_OUT",

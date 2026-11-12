@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sqlmodel import Session, select
 from ..database import engine, init_db, delete_job_posting_cascade
 from ..models.db_models import CandidateProfile, JobPosting, User
-from ..storage.ground_truth_store import ground_truth_store
+from ..db.profile_repository import ground_truth_store
 from ..services.auth_service import get_current_user
 from ..services.scrapers.scraper_orchestrator import scraper_orchestrator
 from ..services.salary_service import salary_service
@@ -150,45 +150,75 @@ async def trigger_multi_portal_scrape(request: Optional[ScrapeRequest] = None):
 
 @router.get("/jobs")
 async def list_scraped_jobs(
+    page: int = Query(1, ge=1, description="1-based page index"),
+    limit: int = Query(12, ge=1, le=200, description="Page size"),
     portal: Optional[str] = Query(None),
     market: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
-    min_score: Optional[float] = Query(60.0, description="Minimum suitability score threshold (default 60% so only suitable vacancies return)."),
-    include_filtered: bool = Query(False, description="Include FILTERED_OUT (blocked/disqualified) jobs. Hidden by default."),
+    tier: Optional[str] = Query(None, description="Optional tier filter: direct, adjacent, or internship"),
+    min_score: Optional[float] = Query(60.0, description="Minimum suitability score threshold."),
+    include_filtered: bool = Query(False, description="Include FILTERED_OUT (blocked/disqualified) jobs."),
     current_user: User = Depends(get_current_user),
-) -> List[Dict[str, Any]]:
-    """Lists ONLY suitable JobPosting records matching the candidate's uploaded skills.md profile.
-    Returns an empty list until the candidate uploads skills.md.
+) -> Dict[str, Any]:
     """
+    Lists suitable JobPosting records with SQL-backed filtering and server-side pagination:
+    returns {"items": [...], "total": total, "page": page, "limit": limit, "total_pages": total_pages}.
+    """
+    import math
+    import re as _re
+    from sqlalchemy import func
+    from ..services.scrapers.base_scraper import sanitize_company_name
+
     init_db()
     with Session(engine) as session:
         profile = session.exec(
             select(CandidateProfile).order_by(CandidateProfile.updated_at.desc())
         ).first()
         if not _is_profile_uploaded_for_user(profile, current_user.email):
-            return []
+            return {"items": [], "total": 0, "page": page, "limit": limit, "total_pages": 1}
 
-        stmt = select(JobPosting).order_by(JobPosting.suitability_score.desc(), JobPosting.scraped_at.desc())
+        conditions = []
+        if not include_filtered:
+            conditions.append(JobPosting.status != "FILTERED_OUT")
+        if portal and portal.upper() != "ALL":
+            conditions.append(JobPosting.portal == portal)
+        if market and market.upper() != "ALL":
+            conditions.append(JobPosting.market == market)
+        if status and status.upper() != "ALL":
+            conditions.append(JobPosting.status == status)
+        if min_score is not None and min_score > 0:
+            conditions.append(JobPosting.suitability_score >= min_score)
+        if tier and tier.upper() != "ALL":
+            t_low = tier.strip().lower()
+            if t_low == "direct":
+                conditions.append(JobPosting.match_tier == "DIRECT")
+            elif t_low == "adjacent":
+                conditions.append(JobPosting.match_tier == "ADJACENT")
+            elif t_low in ("internship", "public_internship"):
+                conditions.append((JobPosting.match_tier == "PUBLIC_INTERNSHIP") | (JobPosting.portal == "hr.gov.ge"))
+
+        count_stmt = select(func.count()).select_from(JobPosting)
+        if conditions:
+            count_stmt = count_stmt.where(*conditions)
+        total = int(session.exec(count_stmt).one() or 0)
+        total_pages = max(1, math.ceil(total / limit))
+
+        stmt = select(JobPosting)
+        if conditions:
+            stmt = stmt.where(*conditions)
+        stmt = (
+            stmt.order_by(JobPosting.suitability_score.desc(), JobPosting.scraped_at.desc())
+            .offset((page - 1) * limit)
+            .limit(limit)
+        )
         rows = session.exec(stmt).all()
-        from ..services.scrapers.base_scraper import sanitize_company_name
-        import re as _re
-        filtered = []
-        seen_title_company: set[tuple[str, str]] = set()
+
+        items: List[Dict[str, Any]] = []
         for r in rows:
-            if not include_filtered and r.status == "FILTERED_OUT":
-                continue
-            if portal and r.portal != portal:
-                continue
-            if market and r.market != market:
-                continue
-            if status and r.status != status:
-                continue
-            if min_score is not None and r.suitability_score < min_score:
-                continue
             dumped = r.model_dump(mode="json")
             if str(dumped.get("salary_currency") or "").lower() in ("gel", "ლარი", "ᲚᲐᲠᲘ", "₾"):
                 dumped["salary_currency"] = "GEL"
-            dumped["company"] = sanitize_company_name(dumped.get("company"), target_email=dumped.get("target_email"), fallback="კომპანია")
+            dumped["company"] = sanitize_company_name(dumped.get("company"), target_email=dumped.get("target_email"), fallback="Employer")
             if dumped.get("portal") == "djinni.co" and dumped.get("title"):
                 raw_t = str(dumped["title"])
                 clean_t = _re.sub(r"🔥+", "", raw_t)
@@ -205,15 +235,15 @@ async def list_scraped_jobs(
                         dumped["salary_min"], dumped["salary_max"], dumped["salary_currency"] = sal_ex
                         dumped["salary_is_estimated"] = False
                         dumped["salary_estimated_by_ai"] = False
-            tc_key = (
-                _re.sub(r"\s+", " ", str(dumped.get("title") or "").lower().strip()),
-                _re.sub(r"\s+", " ", str(dumped.get("company") or "").lower().strip()),
-            )
-            if tc_key in seen_title_company:
-                continue
-            seen_title_company.add(tc_key)
-            filtered.append(dumped)
-        return filtered
+            items.append(dumped)
+
+        return {
+            "items": items,
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "total_pages": total_pages,
+        }
 
 
 @router.post("/salary/estimate")

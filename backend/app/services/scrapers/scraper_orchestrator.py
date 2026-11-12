@@ -1,4 +1,5 @@
 import asyncio
+from datetime import timedelta, timezone
 import logging
 from typing import Dict, Any, List, Optional
 from sqlmodel import Session, select
@@ -113,7 +114,13 @@ class ScraperOrchestrator:
 
         raw_discovered: List[Dict[str, Any]] = []
         if tasks:
-            batches = await asyncio.gather(*tasks, return_exceptions=True)
+            sem = asyncio.Semaphore(5)
+
+            async def _bounded_task(coro):
+                async with sem:
+                    return await coro
+
+            batches = await asyncio.gather(*(_bounded_task(t) for t in tasks), return_exceptions=True)
             for b in batches:
                 if isinstance(b, list):
                     raw_discovered.extend(b)
@@ -125,20 +132,23 @@ class ScraperOrchestrator:
     def ingest_scraped_jobs(self, raw_jobs: List[Dict[str, Any]]) -> Dict[str, Any]:
         init_db()
         serialized_jobs: List[Dict[str, Any]] = []
+        rejection_reasons: List[Dict[str, str]] = []
         staged_count = 0
         filtered_out_count = 0
+        cache_hits = 0
 
         with Session(engine, expire_on_commit=False) as session:
             profile = session.exec(
                 select(CandidateProfile).order_by(CandidateProfile.updated_at.desc())
             ).first()
             parsed_skills = profile.parsed_skills if profile else matcher_service.parse_skills_markdown("")
+            now_utc = utc_now()
 
             for item in raw_jobs:
                 portal = item.get("portal", "custom")
                 ext_id = item.get("external_id", "")
                 url = item.get("url", "")
-                title = item.get("title", "QA Engineer")
+                title = item.get("title", "Specialist")
                 company = sanitize_company_name(
                     item.get("company"),
                     target_email=item.get("target_email"),
@@ -148,6 +158,30 @@ class ScraperOrchestrator:
                 market = item.get("market", "GLOBAL_REMOTE")
                 initial_status = item.get("status", "DISCOVERED")
                 initial_rationale = item.get("filter_out_reason") or item.get("match_rationale") or ""
+
+                existing = session.exec(
+                    select(JobPosting).where(
+                        (JobPosting.url == url)
+                        | ((JobPosting.portal == portal) & (JobPosting.external_id == ext_id))
+                    )
+                ).first()
+
+                # 24h DB evaluation cache: skip re-auditing identical posting if profile hasn't changed
+                if existing and existing.scraped_at and existing.status != "FILTERED_OUT":
+                    scr_ts = existing.scraped_at if existing.scraped_at.tzinfo else existing.scraped_at.replace(tzinfo=timezone.utc)
+                    prof_ts = (
+                        (profile.updated_at if profile.updated_at.tzinfo else profile.updated_at.replace(tzinfo=timezone.utc))
+                        if profile and profile.updated_at
+                        else scr_ts
+                    )
+                    age_ok = (now_utc - scr_ts) < timedelta(hours=24)
+                    profile_unchanged = prof_ts <= scr_ts
+                    if age_ok and profile_unchanged and initial_status != "FILTERED_OUT" and len(desc) <= len(existing.description_raw or "") + 40:
+                        cache_hits += 1
+                        if existing.status == "STAGED":
+                            staged_count += 1
+                        serialized_jobs.append(existing.model_dump(mode="json"))
+                        continue
 
                 # 1. Explicit salary extraction ONLY (never fabricate fake salary if unmentioned)
                 sal_info = salary_service.extract_vacancy_salary(
@@ -161,7 +195,7 @@ class ScraperOrchestrator:
                     initial_status = "FILTERED_OUT"
                     initial_rationale = f"Vacancy expired on {dl_str}"
 
-                # 3. Multi-Tier Optimal Match Evaluation (DIRECT, ADJACENT, PUBLIC_INTERNSHIP + Strict 2.0-Yr Guard)
+                # 3. Multi-Tier Optimal Match Evaluation (DIRECT, ADJACENT, PUBLIC_INTERNSHIP + Strict 2.0-Yr & Duty Guard)
                 tier_res = matcher_service.evaluate_job_tiered(
                     title=title,
                     description=desc,
@@ -180,14 +214,16 @@ class ScraperOrchestrator:
                 filter_reason = (initial_rationale or match_rationale) if final_status == "FILTERED_OUT" else None
                 if final_status == "FILTERED_OUT":
                     filtered_out_count += 1
-                    existing_disq = session.exec(
-                        select(JobPosting).where(
-                            (JobPosting.url == url)
-                            | ((JobPosting.portal == portal) & (JobPosting.external_id == ext_id))
-                        )
-                    ).first()
-                    if existing_disq and existing_disq.status not in ("APPLIED", "REJECTED"):
-                        delete_job_posting_cascade(session, existing_disq)
+                    rej_msg = filter_reason or match_rationale or "Rejected by matcher gate"
+                    rejection_reasons.append({
+                        "portal": portal,
+                        "title": title,
+                        "company": company,
+                        "reason": rej_msg,
+                    })
+                    logger.info("[REJECTED VACANCY] %s | %s (%s): %s", portal, title, company, rej_msg)
+                    if existing and existing.status not in ("APPLIED", "REJECTED"):
+                        delete_job_posting_cascade(session, existing)
                         session.commit()
                     continue
                 elif final_status == "STAGED":
@@ -197,12 +233,6 @@ class ScraperOrchestrator:
                 is_est = bool(sal_info["salary_estimated_by_ai"])
 
                 # 4. Upsert JobPosting by (portal, external_id) or url
-                existing = session.exec(
-                    select(JobPosting).where(
-                        (JobPosting.url == url)
-                        | ((JobPosting.portal == portal) & (JobPosting.external_id == ext_id))
-                    )
-                ).first()
 
                 if existing:
                     existing.title = title
@@ -303,10 +333,19 @@ class ScraperOrchestrator:
                         session.add(app_rec)
                         session.commit()
 
+            logger.info(
+                "[SCRAPER SUMMARY] processed=%d staged=%d rejected=%d cache_hits=%d",
+                len(serialized_jobs),
+                staged_count,
+                filtered_out_count,
+                cache_hits,
+            )
             return {
                 "total_processed": len(serialized_jobs),
                 "staged_ready_count": staged_count,
                 "filtered_out_count": filtered_out_count,
+                "cache_hits": cache_hits,
+                "rejection_reasons": rejection_reasons[:50],
                 "jobs": [j for j in serialized_jobs if j.get("status") != "FILTERED_OUT"],
             }
 

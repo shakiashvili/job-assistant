@@ -153,6 +153,24 @@ export interface ParsedSkillsTaxonomy {
   frameworks: string[];
   years_of_experience: number;
   all_skills: string[];
+  education?: Array<{
+    degree?: string;
+    field_of_study?: string;
+    institution?: string;
+    graduation_year?: number | null;
+    is_student_or_recent_grad?: boolean;
+  }>;
+  courses_and_certifications?: string[];
+  eligible_internships?: boolean;
+  internship_tracks?: string[];
+}
+
+export interface PaginatedJobsResponse {
+  items: DbJobPosting[];
+  total: number;
+  page: number;
+  limit: number;
+  total_pages: number;
 }
 
 export interface GapItem {
@@ -320,12 +338,21 @@ export interface AuthResponse {
   user: UserProfile;
 }
 
+export interface MilestoneLink {
+  title: string;
+  channel?: string;
+  source?: string;
+  url: string;
+}
+
 export interface Milestone {
   day: number;
   task: string;
   completed: boolean;
   resource_url?: string;
   tutorial_url?: string;
+  youtube_videos?: MilestoneLink[];
+  blog_posts?: MilestoneLink[];
 }
 
 export interface SkillActionPlan {

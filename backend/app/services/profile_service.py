@@ -22,25 +22,29 @@ class ExtractedSkillsTaxonomy(BaseModel):
     frameworks: List[str] = Field(default_factory=list)
     spoken_languages: List[str] = Field(default_factory=list)
     achievements: List[str] = Field(default_factory=list)
+    education: List[Dict[str, Any]] = Field(default_factory=list)
+    courses_and_certifications: List[str] = Field(default_factory=list)
     all_skills: List[str] = Field(default_factory=list)
 
 
 class ParsedCandidateProfileSchema(BaseModel):
     full_name: str = "Candidate"
     headline: str = "Specialist"
-    primary_role: str = "QA Engineer"
-    detected_industry: str = "IT & Software QA"
+    primary_role: str = "Specialist"
+    detected_industry: str = "General Professional"
     adjacent_roles: List[str] = Field(default_factory=list)
     verified_skills: List[str] = Field(default_factory=list)
+    eligible_internships: bool = True
+    internship_tracks: List[str] = Field(default_factory=list)
     email: str = "candidate@example.com"
-    phone: str = "+000 000 0000"
-    location: str = "Tbilisi, Georgia (Remote / Abroad)"
-    github_url: str = "https://github.com/example-candidate"
-    linkedin_url: str = "https://linkedin.com/in/example-candidate"
+    phone: str = ""
+    location: str = ""
+    github_url: str = ""
+    linkedin_url: str = ""
     experience_years: float = 1.5
     max_allowed_years: float = 2.0
     seniority_level: str = "JUNIOR"
-    target_industry: str = "qa_tech"
+    target_industry: str = "general_professional"
     parsed_skills: ExtractedSkillsTaxonomy = Field(default_factory=ExtractedSkillsTaxonomy)
 
 
@@ -287,28 +291,93 @@ class ProfileService:
             linkedin_url = li_m.group(0)
 
         achievements: List[str] = []
+        education_entries: List[Dict[str, Any]] = []
+        courses_certs: List[str] = []
+
+        in_edu_sec = False
+        in_courses_sec = False
         for line in text.splitlines():
             s = line.strip()
-            if s.startswith(("- ", "* ")) and any(ch.isdigit() for ch in s):
+            if s.startswith("## "):
+                lh = s.lower()
+                in_edu_sec = any(k in lh for k in ("education", "academic", "university", "განათლება"))
+                in_courses_sec = any(k in lh for k in ("course", "certif", "bootcamp", "training", "კურს", "სერტიფიკატ"))
+                continue
+            if s.startswith(("- ", "* ")) and any(ch.isdigit() for ch in s) and not in_edu_sec:
                 achievements.append(re.sub(r"^[-*]\s*", "", s))
+
+            clean_line = re.sub(r"^[-*#\s]+", "", s).strip()
+            clean_line = re.sub(r"[*_`]+", "", clean_line).strip()
+            if not clean_line:
+                continue
+
+            if in_courses_sec or re.search(
+                r"\b(?:istqb|aws\s+certified|coursera|udemy|bootcamp|certificate|certification|tbc\s+academy|it\s+academy|epam\s+lab|კურსი|სერტიფიკატ)\b",
+                clean_line,
+                re.I,
+            ):
+                if len(clean_line) >= 4 and clean_line not in courses_certs and not clean_line.lower().startswith("http"):
+                    courses_certs.append(clean_line[:140])
+
+            looks_like_edu = in_edu_sec or bool(
+                re.search(
+                    r"\b(?:b\.?s\.?c?|m\.?s\.?c?|b\.?a\.?|m\.?b\.?a\.?|bachelor|master|phd|university|institute|faculty|undergraduate|student|graduate|tsu|gtu|btu|freeuni|ilia|ბაკალავრ|მაგისტრ|უნივერსიტეტ|სტუდენტ)\b",
+                    clean_line,
+                    re.I,
+                )
+            )
+            if looks_like_edu and len(clean_line) >= 5 and not re.fullmatch(r"[-*_•–—.\s]+", clean_line):
+                yr_m = re.search(r"\b(19\d{2}|20[0-3]\d)\b", clean_line)
+                grad_year = int(yr_m.group(1)) if yr_m else None
+                parts_e = [p.strip() for p in re.split(r"[|•@—–-]", clean_line, maxsplit=2) if p.strip()]
+                degree = parts_e[0] if parts_e else clean_line
+                institution = parts_e[1] if len(parts_e) > 1 else ""
+                field_study = parts_e[2] if len(parts_e) > 2 else degree
+                is_recent = bool(
+                    re.search(r"\b(?:student|present|expected|202[4-9]|სტუდენტ)\b", clean_line, re.I)
+                    or (grad_year is not None and grad_year >= 2022)
+                )
+                education_entries.append({
+                    "degree": degree[:120],
+                    "field_of_study": field_study[:120],
+                    "institution": institution[:120],
+                    "graduation_year": grad_year,
+                    "is_student_or_recent_grad": is_recent,
+                })
 
         exp_years = float(taxonomy_dict.get("years_of_experience") or 1.5)
         max_allowed_years = min(exp_years + 0.5, 2.0) if exp_years <= 2.0 else round(exp_years + 0.5, 1)
         seniority_level = taxonomy_dict.get("seniority_level") or ("JUNIOR" if exp_years <= 2.0 else "MID")
         verified_skills = list(taxonomy_dict.get("all_skills") or [])
+        eligible_internships = bool(
+            exp_years <= 2.5
+            or courses_certs
+            or any(e.get("is_student_or_recent_grad") for e in education_entries)
+            or len(education_entries) > 0
+        )
+        internship_tracks: List[str] = []
+        if eligible_internships:
+            internship_tracks = list(dict.fromkeys(
+                [f"{primary_role} Intern", f"Junior {primary_role.split()[0]} Trainee"]
+                + [f"{e.get('field_of_study', '')} Graduate Intern".strip() for e in education_entries[:2] if e.get("field_of_study")]
+            ))
 
         # Live Gemini 2.5 Flash structured extraction with Pydantic schema if key is configured
         if self.client:
             try:
                 from google.genai import types
-                prompt = f"""Extract the candidate profile and universal domain-agnostic taxonomy from the following markdown.
+                prompt = f"""Extract the candidate profile, education, coursework, and universal domain-agnostic taxonomy from the following markdown.
 CRITICAL INSTRUCTIONS:
 - Works for ANY profession (IT/QA, Logistics, Supply Chain, Finance, Accounting, Marketing, Sales, HR, Legal, Public Admin, Hospitality, Healthcare, Engineering).
 - `detected_industry`: Human-readable industry (e.g. "Supply Chain & Logistics", "Finance & Accounting", "IT & Software QA").
 - `primary_role`: Candidate's exact primary target role.
-- `adjacent_roles`: Top 3-4 optimal adjacent/transferable roles where their skills transfer seamlessly (e.g., QA with SQL/Python -> ["Technical Support Engineer L2/L3", "Data Quality Analyst", "Junior Automation Dev"]).
+- `adjacent_roles`: Top 3-4 optimal adjacent/transferable roles where their skills transfer seamlessly.
 - `verified_skills`: All concrete tools, software, methodologies, and domain skills.
-- `experience_years`: Exact numeric years from profile (never inflate to Senior/5+ unless stated).
+- `parsed_skills.education`: List of education objects with `degree`, `field_of_study`, `institution`, `graduation_year` (int or null), `is_student_or_recent_grad` (bool).
+- `parsed_skills.courses_and_certifications`: List of completed bootcamps, courses, and certificates.
+- `eligible_internships`: True if candidate is a student, recent grad, completed courses/bootcamps, or has <= 2.5 yrs experience.
+- `internship_tracks`: Specific internship / graduate trainee tracks suited to their degree + courses + skills.
+- `experience_years`: Exact numeric years from profile (never inflate unless stated).
 - `max_allowed_years`: Strictly min(experience_years + 0.5, 2.0) when experience_years <= 2.0.
 - `seniority_level`: Must be "JUNIOR", "MID", "SENIOR", or "LEAD".
 
@@ -326,11 +395,19 @@ Markdown:
                 )
                 if resp and resp.text:
                     gem_parsed = ParsedCandidateProfileSchema.model_validate_json(resp.text)
-                    gem_parsed.max_allowed_years = min(float(gem_parsed.experience_years) + 0.5, 2.0)
+                    gem_parsed.max_allowed_years = min(float(gem_parsed.experience_years) + 0.5, 2.0) if gem_parsed.experience_years <= 2.0 else round(float(gem_parsed.experience_years) + 0.5, 1)
                     for k in ["qa_automation", "manual_qa", "languages", "api_and_performance", "cicd_and_devops", "all_skills"]:
                         existing_list = getattr(gem_parsed.parsed_skills, k)
                         merged = list(dict.fromkeys(existing_list + taxonomy_dict.get(k, [])))
                         setattr(gem_parsed.parsed_skills, k, merged)
+                    if not gem_parsed.parsed_skills.education and education_entries:
+                        gem_parsed.parsed_skills.education = education_entries
+                    if courses_certs:
+                        gem_parsed.parsed_skills.courses_and_certifications = list(dict.fromkeys(gem_parsed.parsed_skills.courses_and_certifications + courses_certs))
+                    if eligible_internships:
+                        gem_parsed.eligible_internships = True
+                    if not gem_parsed.internship_tracks and internship_tracks:
+                        gem_parsed.internship_tracks = internship_tracks
                     gem_parsed.verified_skills = list(dict.fromkeys(gem_parsed.verified_skills + gem_parsed.parsed_skills.all_skills))
                     if not gem_parsed.adjacent_roles:
                         gem_parsed.adjacent_roles = adjacent_roles
@@ -345,6 +422,8 @@ Markdown:
             detected_industry=detected_industry,
             adjacent_roles=adjacent_roles,
             verified_skills=verified_skills,
+            eligible_internships=eligible_internships,
+            internship_tracks=internship_tracks,
             email=email,
             phone=phone,
             location=location,
@@ -364,6 +443,8 @@ Markdown:
                 frameworks=taxonomy_dict.get("frameworks", []),
                 spoken_languages=taxonomy_dict.get("spoken_languages", ["English", "Georgian"]),
                 achievements=achievements,
+                education=education_entries,
+                courses_and_certifications=courses_certs,
                 all_skills=taxonomy_dict.get("all_skills", []),
             ),
         )
@@ -396,6 +477,8 @@ Markdown:
         skills_payload["primary_role"] = extracted.primary_role
         skills_payload["adjacent_roles"] = extracted.adjacent_roles
         skills_payload["verified_skills"] = extracted.verified_skills or skills_payload.get("all_skills", [])
+        skills_payload["eligible_internships"] = extracted.eligible_internships
+        skills_payload["internship_tracks"] = extracted.internship_tracks
         skills_payload["headline"] = extracted.headline
         search_cfg = self.get_search_queries_for_profile(skills_payload, headline=extracted.headline)
         skills_payload["target_role"] = search_cfg["target_role"]

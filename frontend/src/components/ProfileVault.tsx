@@ -144,19 +144,19 @@ export const ProfileVault: React.FC = () => {
   const candidate = data.candidate || ({} as GroundTruth['candidate']);
   const links = candidate.links || { linkedin: '', github: '', portfolio: '' };
   const workAuth = candidate.work_authorization || {
-    citizenship: ['Georgia'],
+    citizenship: [],
     eu_work_permit: false,
-    requires_eu_visa: true,
-    us_work_authorization: 'Remote B2B Contractor (No US Work Permit)',
-    requires_us_visa_sponsorship: true,
-    uk_work_authorization: 'Remote B2B Contractor',
+    requires_eu_visa: false,
+    us_work_authorization: '',
+    requires_us_visa_sponsorship: false,
+    uk_work_authorization: '',
     security_clearance: false,
   };
   const compensation = candidate.compensation || {
     expected_salary_eur: 0,
     min_salary_eur: 0,
     expected_salary_usd: 0,
-    notice_period: '1 week after offer',
+    notice_period: '',
   };
   const skillsCore = data.skills?.core || [];
   const work_history = Array.isArray(data.work_history) ? data.work_history : [];
@@ -323,11 +323,28 @@ export const ProfileVault: React.FC = () => {
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
-              <span className="text-xs font-semibold text-slate-300 block">Primary Work Base & B2B Status</span>
-              <div className="text-xs text-emerald-400 flex items-center gap-1.5 font-medium">
-                <CheckCircle2 className="w-4 h-4" />
-                <span>{(workAuth.citizenship || ['Georgia']).join(', ')} • Remote B2B Contractor Ready</span>
-              </div>
+              <span className="text-xs font-semibold text-slate-300 block">Citizenship &amp; EU Work Status</span>
+              <input
+                type="text"
+                placeholder="Citizenship (comma-separated, e.g. Georgia)"
+                value={(workAuth.citizenship || []).join(', ')}
+                onChange={(e) =>
+                  setData({
+                    ...data,
+                    candidate: {
+                      ...candidate,
+                      work_authorization: {
+                        ...workAuth,
+                        citizenship: e.target.value
+                          .split(',')
+                          .map((s) => s.trim())
+                          .filter(Boolean),
+                      },
+                    },
+                  })
+                }
+                className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
+              />
               <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
                 <input
                   type="checkbox"
@@ -352,10 +369,11 @@ export const ProfileVault: React.FC = () => {
             </div>
 
             <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
-              <span className="text-xs font-semibold text-slate-300 block">International / US Work Authorization</span>
+              <span className="text-xs font-semibold text-slate-300 block">International / Work Authorization</span>
               <input
                 type="text"
-                value={workAuth.us_work_authorization || 'Remote B2B Contractor'}
+                placeholder="e.g. Remote B2B Contractor or Work Authorized"
+                value={workAuth.us_work_authorization || ''}
                 onChange={(e) =>
                   setData({
                     ...data,
@@ -368,7 +386,7 @@ export const ProfileVault: React.FC = () => {
                 className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
               />
               <p className="text-[11px] text-slate-400">
-                Audits validate role skills first and only flag positions strictly demanding citizenship or security clearance.
+                Audits prioritize verified skills and only flag roles requiring explicit citizenship or security clearance.
               </p>
             </div>
 
@@ -415,7 +433,8 @@ export const ProfileVault: React.FC = () => {
                   <span className="text-[10px] text-slate-500 uppercase block mb-1">Notice Period</span>
                   <input
                     type="text"
-                    value={compensation.notice_period || '1 week after offer'}
+                    placeholder="e.g. 1 week after offer"
+                    value={compensation.notice_period || ''}
                     onChange={(e) =>
                       setData({
                         ...data,

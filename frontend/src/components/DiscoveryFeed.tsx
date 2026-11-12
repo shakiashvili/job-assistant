@@ -21,6 +21,8 @@ export interface CandidateRoleHeaderInfo {
   primary_role?: string;
   detected_industry?: string;
   adjacent_roles?: string[];
+  education?: Array<{ degree?: string; field_of_study?: string; institution?: string }>;
+  courses_and_certifications?: string[];
   experience_years?: number;
   max_allowed_years?: number;
   target_industry?: string;
@@ -52,6 +54,12 @@ interface DiscoveryFeedProps {
   onSelectPortalFilter: (portal: string) => void;
   dbStatusFilter: string;
   onSelectStatusFilter: (status: string) => void;
+  tierTab?: 'ALL' | 'DIRECT' | 'ADJACENT' | 'PUBLIC_INTERNSHIP';
+  onSelectTierTab?: (tier: 'ALL' | 'DIRECT' | 'ADJACENT' | 'PUBLIC_INTERNSHIP') => void;
+  page?: number;
+  totalPages?: number;
+  totalJobs?: number;
+  onPageChange?: (page: number) => void;
   scrapeStats: { total: number; staged: number; filteredOut: number } | null;
   preparedEmailPkg: PreparedEmailPkg | null;
   onDismissEmailPkg: () => void;
@@ -89,6 +97,12 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
   onSelectPortalFilter,
   dbStatusFilter,
   onSelectStatusFilter,
+  tierTab: controlledTierTab,
+  onSelectTierTab,
+  page = 1,
+  totalPages = 1,
+  totalJobs,
+  onPageChange,
   scrapeStats,
   preparedEmailPkg,
   onDismissEmailPkg,
@@ -99,7 +113,12 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
   onOpenFillForm,
   onDraftInGmail,
 }) => {
-  const [tierTab, setTierTab] = useState<'ALL' | 'DIRECT' | 'ADJACENT' | 'PUBLIC_INTERNSHIP'>('ALL');
+  const [localTierTab, setLocalTierTab] = useState<'ALL' | 'DIRECT' | 'ADJACENT' | 'PUBLIC_INTERNSHIP'>('ALL');
+  const tierTab = controlledTierTab ?? localTierTab;
+  const handleTierClick = (t: 'ALL' | 'DIRECT' | 'ADJACENT' | 'PUBLIC_INTERNSHIP') => {
+    if (onSelectTierTab) onSelectTierTab(t);
+    else setLocalTierTab(t);
+  };
 
   const directJobs = visibleJobs.filter((j) => (j.match_tier || 'DIRECT') === 'DIRECT');
   const adjacentJobs = visibleJobs.filter((j) => j.match_tier === 'ADJACENT');
@@ -107,7 +126,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
     (j) => j.match_tier === 'PUBLIC_INTERNSHIP' || j.portal === 'hr.gov.ge'
   );
 
-  const filteredDbJobs = visibleJobs.filter((j) => {
+  const filteredDbJobs = onSelectTierTab ? visibleJobs : visibleJobs.filter((j) => {
     const tier = j.match_tier || (j.portal === 'hr.gov.ge' ? 'PUBLIC_INTERNSHIP' : 'DIRECT');
     const matchesTier = tierTab === 'ALL' || tier === tierTab;
     const matchStatus = dbStatusFilter === 'ALL' || j.status === dbStatusFilter;
@@ -120,8 +139,9 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
   const primaryRole = candidateProfile?.primary_role || candidateProfile?.headline || 'Upload skills.md';
   const detectedIndustry = candidateProfile?.detected_industry || candidateProfile?.target_industry || 'Domain-Agnostic';
   const adjacentRoles = candidateProfile?.adjacent_roles || [];
+  const eduList = candidateProfile?.education || [];
 
-  const portals = ['ALL', 'jobs.ge', 'hr.ge', 'headhunter.ge', 'hr.gov.ge', 'djinni.co', 'dou.ua', 'justjoin.it'];
+  const portals = ['ALL', 'jobs.ge', 'hr.ge', 'headhunter.ge', 'hr.gov.ge', 'linkedin.com', 'djinni.co', 'dou.ua', 'justjoin.it'];
 
   return (
     <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl space-y-4">
@@ -156,6 +176,19 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                     className="px-2 py-0.5 rounded-md bg-indigo-950/60 border border-indigo-700/50 text-indigo-200"
                   >
                     {r}
+                  </span>
+                ))}
+              </div>
+            )}
+            {eduList.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-slate-400">
+                <span className="font-semibold text-cyan-300">Education &amp; Internships:</span>
+                {eduList.slice(0, 2).map((e, i) => (
+                  <span
+                    key={i}
+                    className="px-2 py-0.5 rounded-md bg-cyan-950/60 border border-cyan-800/50 text-cyan-200"
+                  >
+                    {e.degree || e.field_of_study}
                   </span>
                 ))}
               </div>
@@ -208,17 +241,17 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
       {/* Multi-Tier Tabs (Direct Matches / Adjacent Roles / Public Sector & Internships) */}
       <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-800/60">
         <button
-          onClick={() => setTierTab('ALL')}
+          onClick={() => handleTierClick('ALL')}
           className={`text-xs px-3 py-1.5 rounded-xl font-bold transition-all ${
             tierTab === 'ALL'
               ? 'bg-slate-800 text-white border border-slate-600'
               : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
           }`}
         >
-          All Tiers ({visibleJobs.length})
+          All Tiers ({totalJobs ?? visibleJobs.length})
         </button>
         <button
-          onClick={() => setTierTab('DIRECT')}
+          onClick={() => handleTierClick('DIRECT')}
           className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl font-bold transition-all ${
             tierTab === 'DIRECT'
               ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/20'
@@ -229,7 +262,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
           <span>🎯 Direct Matches ({directJobs.length})</span>
         </button>
         <button
-          onClick={() => setTierTab('ADJACENT')}
+          onClick={() => handleTierClick('ADJACENT')}
           className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl font-bold transition-all ${
             tierTab === 'ADJACENT'
               ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/20'
@@ -240,7 +273,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
           <span>🚀 Optimal Adjacent Roles ({adjacentJobs.length})</span>
         </button>
         <button
-          onClick={() => setTierTab('PUBLIC_INTERNSHIP')}
+          onClick={() => handleTierClick('PUBLIC_INTERNSHIP')}
           className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl font-bold transition-all ${
             tierTab === 'PUBLIC_INTERNSHIP'
               ? 'bg-cyan-600 text-white shadow-sm shadow-cyan-600/20'
@@ -528,6 +561,48 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
           );
         })}
       </div>
+
+      {/* Server-Side Pagination Bar */}
+      {onPageChange && (totalJobs ?? filteredDbJobs.length) > 0 && (
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-2 pt-3 border-t border-slate-800/80 text-xs">
+          <span className="text-slate-400">
+            Page <strong className="text-white">{page}</strong> of <strong className="text-white">{totalPages}</strong> &bull;{' '}
+            <strong className="text-emerald-300">{totalJobs ?? filteredDbJobs.length}</strong> total matching opportunities
+          </span>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              disabled={page <= 1}
+              onClick={() => onPageChange(Math.max(1, page - 1))}
+              className="px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-slate-300 hover:text-white disabled:opacity-40"
+            >
+              Previous
+            </button>
+            {Array.from({ length: Math.min(totalPages, 5) }, (_, idx) => idx + 1).map((pNum) => (
+              <button
+                key={pNum}
+                type="button"
+                onClick={() => onPageChange(pNum)}
+                className={`px-2.5 py-1.5 rounded-lg font-semibold ${
+                  pNum === page
+                    ? 'bg-sky-600 text-white'
+                    : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
+                }`}
+              >
+                {pNum}
+              </button>
+            ))}
+            <button
+              type="button"
+              disabled={page >= totalPages}
+              onClick={() => onPageChange(Math.min(totalPages, page + 1))}
+              className="px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-slate-300 hover:text-white disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

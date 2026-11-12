@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from sqlmodel import SQLModel, Field, Column, Relationship
-from sqlalchemy import JSON, Text, UniqueConstraint, event
+from sqlalchemy import JSON, Text, UniqueConstraint, Index, event
 from ..services.crypto_service import EncryptedString, EncryptedText, EncryptedJSON, blind_index
 
 
@@ -110,10 +110,12 @@ class JobPosting(SQLModel, table=True):
     __tablename__ = "job_postings"
     __table_args__ = (
         UniqueConstraint("portal", "external_id", name="uq_portal_external_id"),
+        Index("ix_job_postings_user_status_score", "user_id", "status", "suitability_score"),
     )
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    portal: str = Field(index=True)  # "jobs.ge", "hr.ge", "dou.ua", "djinni.co", "lever", "greenhouse", "custom"
+    user_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
+    portal: str = Field(index=True)  # "jobs.ge", "hr.ge", "dou.ua", "djinni.co", "lever", "greenhouse", "linkedin.com", "custom"
     external_id: str = Field(index=True)  # unique index per portal
     title: str = Field(index=True)
     company: str = Field(index=True)

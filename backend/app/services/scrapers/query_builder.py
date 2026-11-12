@@ -214,9 +214,22 @@ def build_search_queries(
             if len(tok) >= 4 and tok not in adjacent_kw and tok not in ("junior", "associate", "specialist"):
                 adjacent_kw.append(tok)
 
-    internship_queries = ["სტაჟიორი", "დამწყები"]
+    edu_entries = skills.get("education") or []
+    courses_certs = skills.get("courses_and_certifications") or []
+    eligible_internships = bool(skills.get("eligible_internships") or edu_entries or courses_certs or exp_years <= 2.5)
+    for e in edu_entries:
+        if isinstance(e, dict):
+            fos = str(e.get("field_of_study") or "").strip()
+            for tok in fos.lower().split():
+                if len(tok) >= 4 and tok not in ("bachelor", "master", "degree", "university"):
+                    if tok not in domain_kw:
+                        domain_kw.append(tok)
+
+    internship_queries = ["სტაჟიორი", "დამწყები", "Junior", "Trainee"]
     if primary_ge:
         internship_queries.append(primary_ge[0])
+    if eligible_internships and primary_ge:
+        internship_queries.append(f"{primary_ge[0]} სტაჟიორი")
 
     # Jobs.ge: loop through primary_queries_ge + adjacent_queries_ge (only add cid=6 for IT/Software roles)
     cid_suffix = "&cid=6" if is_it else ""

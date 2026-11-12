@@ -29,6 +29,9 @@ export const CVVariantManager: React.FC = () => {
   const [generatingKey, setGeneratingKey] = useState<string | null>(null);
   const [targetRole, setTargetRole] = useState('');
   const [targetCompany, setTargetCompany] = useState('');
+  const [customJobUrl, setCustomJobUrl] = useState('');
+  const [customJobDescription, setCustomJobDescription] = useState('');
+  const [vacancySearch, setVacancySearch] = useState('');
   const [jobsList, setJobsList] = useState<DbJobPosting[]>([]);
   const [selectedJobId, setSelectedJobId] = useState<string>('');
   const [generatedOutput, setGeneratedOutput] = useState<{
@@ -53,19 +56,12 @@ export const CVVariantManager: React.FC = () => {
   }, []);
 
   const loadInitial = async () => {
-    const [cvs, jobs] = await Promise.all([
+    const [cvs, jobsRes] = await Promise.all([
       fetchMyCvs().catch(() => []),
-      fetchScrapedJobs().catch(() => []),
+      fetchScrapedJobs({ page: 1, limit: 100, min_score: 0 }).catch(() => ({ items: [], total: 0, page: 1, limit: 100, total_pages: 1 })),
     ]);
     setMyCvs(cvs);
-    const seen = new Set<string>();
-    const deduped = jobs.filter((j) => {
-      const key = `${j.title.toLowerCase().trim()}||${j.company.toLowerCase().trim()}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-    setJobsList(deduped);
+    setJobsList(jobsRes.items || []);
   };
 
   const handleUploadFile = async (file: File) => {
@@ -98,6 +94,8 @@ export const CVVariantManager: React.FC = () => {
     if (found) {
       setTargetRole(found.title);
       setTargetCompany(found.company);
+      setCustomJobUrl(found.url || '');
+      setCustomJobDescription(found.description_raw || '');
     }
   };
 
@@ -111,7 +109,8 @@ export const CVVariantManager: React.FC = () => {
         edition,
         target_role: edition === 'tailored' ? targetRole || selectedJob?.title : undefined,
         target_company: edition === 'tailored' ? targetCompany || selectedJob?.company : undefined,
-        job_description: edition === 'tailored' ? selectedJob?.description_raw || '' : '',
+        job_description: edition === 'tailored' ? (customJobDescription || selectedJob?.description_raw || '') : '',
+        job_url: edition === 'tailored' ? (customJobUrl || selectedJob?.url || undefined) : undefined,
         cv_language: cvLanguage,
       });
       setGeneratedOutput({
@@ -355,35 +354,68 @@ export const CVVariantManager: React.FC = () => {
             </span>
             <h3 className="text-base font-bold text-white">Job-Tailored CV &amp; Cover Letter</h3>
             {jobsList.length > 0 && (
-              <select
-                value={selectedJobId}
-                onChange={(e) => handleSelectVacancy(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
-              >
-                <option value="">-- Optional: pick matched vacancy --</option>
-                {jobsList.slice(0, 20).map((j) => (
-                  <option key={j.id} value={String(j.id)}>
-                    {j.title} ({j.company})
-                  </option>
-                ))}
-              </select>
+              <div className="space-y-1.5">
+                <input
+                  type="text"
+                  placeholder={`Filter ${jobsList.length} vacancies by title, company, or portal...`}
+                  value={vacancySearch}
+                  onChange={(e) => setVacancySearch(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-200 focus:outline-none focus:border-amber-500"
+                />
+                <select
+                  value={selectedJobId}
+                  onChange={(e) => handleSelectVacancy(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
+                >
+                  <option value="">-- Optional: pick discovered vacancy --</option>
+                  {jobsList
+                    .filter((j) => {
+                      const q = vacancySearch.trim().toLowerCase();
+                      if (!q) return true;
+                      return (
+                        j.title.toLowerCase().includes(q) ||
+                        j.company.toLowerCase().includes(q) ||
+                        j.portal.toLowerCase().includes(q)
+                      );
+                    })
+                    .map((j) => (
+                      <option key={j.id} value={String(j.id)}>
+                        {j.title} — {j.company} [{j.portal}] ({Math.round(j.suitability_score)}%)
+                      </option>
+                    ))}
+                </select>
+              </div>
             )}
             <div className="grid grid-cols-2 gap-2">
               <input
                 type="text"
-                placeholder="Role (e.g. Manual QA)"
+                placeholder="Role (e.g. Junior Analyst)"
                 value={targetRole}
                 onChange={(e) => setTargetRole(e.target.value)}
                 className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
               />
               <input
                 type="text"
-                placeholder="Company (e.g. GenofIT)"
+                placeholder="Company (e.g. Employer)"
                 value={targetCompany}
                 onChange={(e) => setTargetCompany(e.target.value)}
                 className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
               />
             </div>
+            <input
+              type="url"
+              placeholder="Custom job URL (optional)"
+              value={customJobUrl}
+              onChange={(e) => setCustomJobUrl(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-200 focus:outline-none focus:border-amber-500"
+            />
+            <textarea
+              rows={2}
+              placeholder="Paste custom job description (optional — tailors keywords automatically)"
+              value={customJobDescription}
+              onChange={(e) => setCustomJobDescription(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-200 focus:outline-none focus:border-amber-500"
+            />
           </div>
           <button
             type="button"

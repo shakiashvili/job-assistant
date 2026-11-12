@@ -193,7 +193,7 @@ def test_jobsge_location_never_parsed_as_company_and_clean_highlights():
     """Ensures 'საქართველოს მასშტაბით' is never treated as company name and '---' never yields '--' bullet."""
     from app.services.scrapers.jobs_ge_scraper import jobs_ge_scraper
     from app.services.scrapers.base_scraper import sanitize_company_name
-    from app.storage.ground_truth_store import ground_truth_store
+    from app.db.profile_repository import ground_truth_store
     from app.services.cv_generator_service import cv_generator_service
 
     # 1. Jobs.ge row without view=client link & last column location

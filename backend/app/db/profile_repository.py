@@ -1,43 +1,19 @@
-import json
 import logging
-import os
 import re
-import threading
-from pathlib import Path
 from typing import Dict, Any, List, Optional
 from sqlmodel import Session, select
-from ..config import GROUND_TRUTH_FILE, SKILLS_MD_FILE
-from ..database import engine, init_db
-from ..models.db_models import CandidateProfile, utc_now
+from ..config import SKILLS_MD_FILE
+from .database import engine, init_db
+from .models import CandidateProfile, utc_now
 from ..services.matcher_service import matcher_service, dedupe_skills_case_insensitive
 
 logger = logging.getLogger(__name__)
 
-_storage_lock = threading.Lock()
-
-
-def atomic_write_text(filepath: Path, content: str, encoding: str = "utf-8") -> None:
-    """Performs thread-safe, atomic file writes using temp file + atomic os.replace."""
-    filepath = Path(filepath)
-    filepath.parent.mkdir(parents=True, exist_ok=True)
-    with _storage_lock:
-        temp_file = filepath.with_suffix(f".tmp.{os.getpid()}")
-        try:
-            temp_file.write_text(content, encoding=encoding)
-            os.replace(temp_file, filepath)
-        except Exception as e:
-            if temp_file.exists():
-                try:
-                    temp_file.unlink()
-                except Exception:
-                    pass
-            logger.warning(f"Atomic file write warning for {filepath}: {e}")
-
-
+# Minimal sample templates retained ONLY for automated backend test suites
 PROFESSION_MD_PRESETS: Dict[str, Dict[str, str]] = {
     "qa_tech": {
         "id": "qa_tech",
-        "label": "💻 QA Automation & Tech Engineer",
+        "label": "QA Automation & Tech Engineer",
         "industry": "qa_tech",
         "content": """# Sample QA Automation & API Testing Engineer
 
@@ -45,11 +21,10 @@ PROFESSION_MD_PRESETS: Dict[str, Dict[str, str]] = {
 - **Full Name:** Sample QA Candidate
 - **Email:** qa.candidate@example.com
 - **Phone:** +000 000 0000
-- **Location:** Tbilisi, Georgia (Remote & Abroad Ready)
+- **Location:** Remote & International
 - **LinkedIn:** https://linkedin.com/in/example-candidate
 - **GitHub:** https://github.com/example-candidate
 - **Availability / Notice Period:** 1 week after offer
-- **Salary Expectation:** $3,000 - $3,500/mo remote
 
 ## Applicant Summary
 I build reliable test automation and API test suites that help engineering teams ship faster with high quality. Over the past 1.5 years, I have engineered test suites across web and API architectures using Playwright, Cypress, Python, and Postman.
@@ -65,136 +40,76 @@ I build reliable test automation and API test suites that help engineering teams
 *Jan 2023 – Present*
 - Engineered comprehensive REST API test framework in Postman and Playwright with automated boundary value analysis and JSON schema validation.
 - Built automated test runners with CI/CD integration, cutting manual verification cycles significantly.
-"""
+""",
     },
     "receptionist_hospitality": {
         "id": "receptionist_hospitality",
-        "label": "🏨 Hotel Receptionist & Hospitality",
+        "label": "Hotel Receptionist & Hospitality",
         "industry": "hospitality_reception",
         "content": """# Nino Kalandadze — Front Desk Receptionist & Guest Relations Specialist
 
 ## Contact & Personal Info
 - **Full Name:** Nino Kalandadze (ნინო კალანდაძე)
 - **Email:** hospitality.candidate@example.com
-- **Phone:** +000 000 0000
 - **Location:** Tbilisi, Georgia
 - **LinkedIn:** https://linkedin.com/in/nino-kalandadze
 - **Availability / Notice Period:** 1 week after offer
-- **Salary Expectation:** 2,500 GEL – 3,200 GEL / month
 
 ## Applicant Summary
-Warm, organized, and detail-oriented Front Desk Receptionist and Hospitality Specialist with 4+ years of experience at 5-star boutique and international hotels. Skilled in Opera PMS, Fidelio, Booking.com/Expedia channel management, VIP guest check-in/check-out, and calm multi-line phone & reservation handling in Georgian, English, and Russian.
+Front Desk Receptionist and Hospitality Specialist with 4+ years of experience at 5-star boutique and international hotels. Skilled in Opera PMS, Fidelio, Booking.com/Expedia channel management, VIP guest check-in/check-out, and reservation handling in Georgian, English, and Russian.
 
 ## Core Skills
 - **Front Desk & Hospitality:** Front Office Operations, Check-in / Check-out, Guest Relations, Concierge Services, VIP Protocol
 - **Reservation & Hotel Software:** Opera PMS, Fidelio, Booking.com Extranet, Expedia Partner Central, POS Terminals, MS Office
-- **Customer Care & Administration:** Multi-line Phone Etiquette, Cash & Card Billing, Night Audit, Shift Handover, Event Coordination
 - **Languages:** Georgian (Native), English (Fluent C1), Russian (Fluent C1)
-
-## Work Experience
-### Senior Front Desk Receptionist | Rooms Hotel & Adjara Group
-*Tbilisi, Georgia • Feb 2023 – Present*
-- Welcomed 120+ international guests daily, managing seamless check-ins, room upgrades, and VIP hospitality requests using Opera PMS.
-- Maintained a 9.6/10 Guest Satisfaction Score on Booking.com by resolving guest inquiries on the first contact.
-
-### Front Office & Reservations Agent | Courtyard by Marriott Tbilisi
-*Tbilisi, Georgia • May 2021 – Jan 2023*
-- Handled phone, email, and walk-in reservations, group bookings, billing reconciliations, and daily front-desk coordination.
-"""
+""",
     },
     "customer_service": {
         "id": "customer_service",
-        "label": "🎧 Customer Service & Support Specialist",
+        "label": "Customer Service & Support Specialist",
         "industry": "customer_service",
         "content": """# Giorgi Beridze — Senior Customer Service & Client Care Specialist
 
 ## Contact & Personal Info
 - **Full Name:** Giorgi Beridze (გიორგი ბერიძე)
 - **Email:** support.candidate@example.com
-- **Phone:** +000 000 0000
 - **Location:** Tbilisi, Georgia / Remote International
-- **LinkedIn:** https://linkedin.com/in/giorgi-beridze-cs
-- **Availability / Notice Period:** 1 week after offer
-- **Salary Expectation:** $1,800 – $2,400 / month (or 3,500 GEL)
-
-## Applicant Summary
-Empathetic and high-performing Customer Service & Client Success Specialist with 4+ years of experience supporting international customers across live chat, email, and phone. Expert in Zendesk, Intercom, Salesforce CRM, conflict de-escalation, and maintaining 98%+ CSAT scores.
 
 ## Core Skills
-- **Customer Support Channels:** Omnichannel Support, Live Chat, Inbound/Outbound Calls, Email Ticketing, Social Media Care
-- **CRM & Helpdesk Tools:** Zendesk, Intercom, Salesforce CRM, Freshdesk, HubSpot, Jira Service Desk
-- **Soft Skills & Operations:** Conflict De-escalation, Client Retention, SLA Management, KYC Verification, Order & Billing Support
+- **Customer Support Channels:** Omnichannel Support, Live Chat, Inbound/Outbound Calls, Email Ticketing
+- **CRM & Helpdesk Tools:** Zendesk, Intercom, Salesforce CRM, Freshdesk, HubSpot
 - **Languages:** Georgian (Native), English (C2 Fluent), German (B2)
-
-## Work Experience
-### Senior Customer Support Specialist | Global FinTech Care Hub
-*Tbilisi / Remote • Jan 2023 – Present*
-- Resolved 75+ daily customer inquiries via Zendesk live chat and phone with a 98.4% CSAT rating and <2 minute first-response time.
-- Handled VIP account escalations, refund disputes, and onboarding guidance for EU and US clients.
-
-### Customer Care Representative | Evolution / International BPO
-*Tbilisi, Georgia • Apr 2021 – Dec 2022*
-- Provided 24/7 multilingual customer assistance, troubleshooting account issues and documenting clear FAQ guides for new agents.
-"""
+""",
     },
     "healthcare_hospital": {
         "id": "healthcare_hospital",
-        "label": "🏥 Hospital & Healthcare Coordinator",
+        "label": "Hospital & Healthcare Coordinator",
         "industry": "healthcare_hospital",
         "content": """# Mariam Maisuradze — Hospital Patient Coordinator & Medical Administrator
 
 ## Contact & Personal Info
 - **Full Name:** Mariam Maisuradze (მარიამ მაისურაძე)
 - **Email:** medical.candidate@example.com
-- **Phone:** +000 000 0000
 - **Location:** Tbilisi, Georgia
-- **LinkedIn:** https://linkedin.com/in/mariam-maisuradze-med
-- **Availability / Notice Period:** 1 week after offer
-- **Salary Expectation:** 2,400 GEL – 3,000 GEL / month
-
-## Applicant Summary
-Compassionate, composed, and highly organized Hospital Patient Coordinator & Medical Receptionist with 5 years of experience in modern multi-profile clinics and hospitals. Proficient in Electronic Medical Records (EMR/EHR), patient registration, insurance claims verification, doctor appointment scheduling, and reassuring patient communication.
 
 ## Core Skills
-- **Hospital & Clinical Operations:** Patient Intake & Registration, Triage Coordination, Doctor Appointment Scheduling, Outpatient & Inpatient Flow
-- **Medical Systems & Insurance:** EMR / EHR Databases, Health Insurance Authorization, ICD-10 Coding Basics, Medical Billing & Invoicing
-- **Patient Care & Compliance:** Medical Confidentiality (HIPAA/GDPR), Calm Crisis Communication, Lab Results Coordination, Bilingual Patient Support
-
-## Work Experience
-### Senior Patient Care Coordinator | Evex Hospitals / Caucasus Medical Centre
-*Tbilisi, Georgia • Mar 2022 – Present*
-- Coordinated daily registration and appointment scheduling for 150+ patients across cardiology, radiology, and surgery departments.
-- Managed health insurance pre-authorizations (GPI, Aldagi, Imedi L, State Universal Healthcare) with zero billing discrepancies.
-
-### Medical Receptionist & Clinic Administrator | Todua Clinic
-*Tbilisi, Georgia • Jun 2020 – Feb 2022*
-- Welcomed patients and families at the main reception desk, maintained digital EHR records, and coordinated urgent diagnostic slots.
-"""
-    }
+- **Hospital & Clinical Operations:** Patient Intake & Registration, Triage Coordination, Doctor Appointment Scheduling
+- **Medical Systems & Insurance:** EMR / EHR Databases, Health Insurance Authorization, ICD-10 Coding Basics
+""",
+    },
 }
 
 
-class GroundTruthStore:
+class ProfileRepository:
     """
-    Relational Database-backed CandidateProfile store (SQLModel / SQLAlchemy).
-    Replaces raw JSON persistence with the `candidate_profiles` SQL table while preserving
-    full backward compatibility for existing endpoints.
+    Pure SQLModel repository replacing legacy JSON ground_truth_store.py.
+    Stores all candidate profile, work history, education, skills, and FAQ data
+    encrypted at rest inside the `candidate_profiles` SQL table.
     """
 
-    def __init__(self, filepath=GROUND_TRUTH_FILE, skills_md_path=SKILLS_MD_FILE):
-        self.filepath = filepath
+    def __init__(self, skills_md_path=SKILLS_MD_FILE):
         self.skills_md_path = skills_md_path
         init_db()
-        self._ensure_seeded()
-
-    def _load_seed_json(self) -> Dict[str, Any]:
-        if self.filepath.exists():
-            try:
-                with open(self.filepath, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception as e:
-                logger.warning(f"Failed reading seed JSON: {e}")
-        return {}
 
     def _ensure_seeded(self) -> CandidateProfile:
         with Session(engine) as session:
@@ -208,9 +123,6 @@ class GroundTruthStore:
         raw_md = ""
         if self.skills_md_path.exists():
             raw_md = self.skills_md_path.read_text(encoding="utf-8")
-        if not raw_md:
-            raw_md = PROFESSION_MD_PRESETS["qa_tech"]["content"]
-
         return profile_service.upsert_candidate_profile(raw_md, mark_uploaded=False)
 
     def get_profile_record(self) -> CandidateProfile:
@@ -227,27 +139,23 @@ class GroundTruthStore:
 
     def _default_faq_bank(self, cand: Dict[str, Any]) -> List[Dict[str, Any]]:
         loc = cand.get("location", {})
-        city = loc.get("city", "Tbilisi") if isinstance(loc, dict) else "Tbilisi"
+        city = loc.get("city", "") if isinstance(loc, dict) else ""
+        base_note = f"Based in {city}; " if city else ""
         return [
             {
                 "question_trigger": "notice period / earliest start date",
                 "tags": ["availability", "notice", "start_date"],
-                "answer": "Available to start 1 week after offer acceptance (or immediately upon contract signing).",
+                "answer": "Available to start 1 week after offer acceptance.",
             },
             {
                 "question_trigger": "work authorization / remote B2B & visa status",
                 "tags": ["visa", "b2b", "remote", "authorization"],
-                "answer": f"Based in {city}, Georgia; authorized to work locally and collaborate globally on remote B2B / independent contractor engagements without employer relocation sponsorship.",
-            },
-            {
-                "question_trigger": "remote collaboration / timezone overlap",
-                "tags": ["remote", "timezone", "communication"],
-                "answer": "Comfortable working asynchronously and overlapping core EU (CET/EET) and US morning business hours with clear English communication.",
+                "answer": f"{base_note}Available for local employment or international remote B2B engagements.",
             },
         ]
 
     def _normalize_vault(self, vault: Dict[str, Any], profile: CandidateProfile) -> Dict[str, Any]:
-        """Guarantees complete, null-safe vault structure so Profile Vault / Visas / FAQ Bank never crash."""
+        """Normalizes vault fields without hardcoding citizenship, visa assumptions, or fake salary targets."""
         data = dict(vault or {})
         raw_md = profile.raw_markdown or ""
         parsed_md = self.parse_profile_from_md(raw_md) if raw_md else {}
@@ -256,63 +164,60 @@ class GroundTruthStore:
         cand = dict(data.get("candidate") or {})
         full_name = cand.get("full_name") or profile.full_name or "Candidate"
         parts = full_name.split()
-        cand.setdefault("first_name", parts[0] if parts else "Candidate")
+        cand.setdefault("first_name", parts[0] if parts else "")
         cand.setdefault("last_name", " ".join(parts[1:]) if len(parts) > 1 else "")
         cand["full_name"] = full_name
-        cand.setdefault("headline", ps.get("headline") or parsed_md.get("headline") or "QA Engineer")
-        cand.setdefault("email", profile.email or "candidate@example.com")
-        cand.setdefault("phone", profile.phone or "+000 000 0000")
+        cand.setdefault("headline", ps.get("headline") or parsed_md.get("headline") or "")
+        cand.setdefault("email", profile.email if profile.email != "candidate@example.com" else "")
+        cand.setdefault("phone", profile.phone if "+000" not in str(profile.phone or "") else "")
 
         loc = cand.get("location")
         if not isinstance(loc, dict):
             loc = {}
-        loc.setdefault("city", "Tbilisi")
-        loc.setdefault("country", "Georgia")
-        loc.setdefault("timezone", "Asia/Tbilisi (UTC+4)")
-        loc.setdefault("open_to_relocation", True)
-        loc.setdefault("remote_preference", "Remote / Hybrid / Georgia")
+        loc.setdefault("city", "")
+        loc.setdefault("country", "")
+        loc.setdefault("timezone", "")
+        loc.setdefault("open_to_relocation", False)
+        loc.setdefault("remote_preference", "")
         cand["location"] = loc
 
         links = cand.get("links")
         if not isinstance(links, dict):
             links = {}
-        links.setdefault("linkedin", profile.linkedin_url or "")
-        links.setdefault("github", profile.github_url or "")
+        links.setdefault("linkedin", "" if "example-candidate" in str(profile.linkedin_url or "") else (profile.linkedin_url or ""))
+        links.setdefault("github", "" if "example-candidate" in str(profile.github_url or "") else (profile.github_url or ""))
         links.setdefault("portfolio", "")
         cand["links"] = links
 
+        # Neutral empty defaults for citizenship & visas until explicitly populated by user
         wa = cand.get("work_authorization")
         if not isinstance(wa, dict):
             wa = {}
-        wa.setdefault("citizenship", ["Georgia"])
+        wa.setdefault("citizenship", [])
         wa.setdefault("eu_work_permit", False)
-        wa.setdefault("requires_eu_visa", True)
-        wa.setdefault("us_work_authorization", "Remote B2B Contractor (No US Work Permit)")
-        wa.setdefault("requires_us_visa_sponsorship", True)
-        wa.setdefault("uk_work_authorization", "Remote B2B Contractor")
+        wa.setdefault("requires_eu_visa", False)
+        wa.setdefault("us_work_authorization", "")
+        wa.setdefault("requires_us_visa_sponsorship", False)
+        wa.setdefault("uk_work_authorization", "")
         wa.setdefault("security_clearance", False)
         cand["work_authorization"] = wa
 
         comp = cand.get("compensation")
         if not isinstance(comp, dict):
             comp = {}
-        if not comp.get("expected_salary_eur"):
-            comp["expected_salary_eur"] = 38000
-        if not comp.get("min_salary_eur"):
-            comp["min_salary_eur"] = 32000
-        if not comp.get("expected_salary_usd"):
-            comp["expected_salary_usd"] = 42000
-        comp.setdefault("notice_period", "1 week after offer")
+        comp.setdefault("expected_salary_eur", 0)
+        comp.setdefault("min_salary_eur", 0)
+        comp.setdefault("expected_salary_usd", 0)
+        comp.setdefault("notice_period", "")
         cand["compensation"] = comp
 
         langs = cand.get("languages")
         if not isinstance(langs, list) or not langs:
-            spoken = ps.get("spoken_languages") or ["English", "Georgian"]
-            langs = [{"language": str(l), "proficiency": "Fluent / Native"} for l in spoken]
+            spoken = ps.get("spoken_languages") or []
+            langs = [{"language": str(l), "proficiency": ""} for l in spoken]
         cand["languages"] = langs
         data["candidate"] = cand
 
-        # Skills normalization & clean deduplication
         skills = dict(data.get("skills") or {})
         raw_core = skills.get("core") or ps.get("all_skills") or []
         skills["core"] = dedupe_skills_case_insensitive([str(x) for x in raw_core])
@@ -336,8 +241,8 @@ class GroundTruthStore:
         data["work_history"] = cleaned_wh
 
         edu = data.get("education")
-        if not isinstance(edu, list):
-            edu = []
+        if not isinstance(edu, list) or not edu:
+            edu = ps.get("education") or parsed_md.get("education") or []
         data["education"] = edu
 
         faq = data.get("faq_bank")
@@ -351,13 +256,11 @@ class GroundTruthStore:
         return data
 
     def get_data(self) -> Dict[str, Any]:
-        """Returns the full candidate vault backed by CandidateProfile in SQLite/PostgreSQL."""
         profile = self.get_profile_record()
-        raw_vault = dict(profile.parsed_skills.get("ground_truth_vault") or self._load_seed_json())
+        raw_vault = dict((profile.parsed_skills or {}).get("ground_truth_vault") or {})
         return self._normalize_vault(raw_vault, profile)
 
     def update_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Persists updated candidate vault into CandidateProfile in the relational DB (encrypted at rest)."""
         save_copy = dict(data)
         raw_md = save_copy.pop("skills_md_raw", None)
         save_copy.pop("parsed_skills_taxonomy", None)
@@ -386,15 +289,13 @@ class GroundTruthStore:
 
             existing_ps = dict(profile.parsed_skills or {})
             taxonomy = matcher_service.parse_skills_markdown(profile.raw_markdown)
-            # Preserve user-edited skills if provided in Profile Vault
             if isinstance(save_copy.get("skills"), dict) and isinstance(save_copy["skills"].get("core"), list):
                 cleaned_core = dedupe_skills_case_insensitive([str(x) for x in save_copy["skills"]["core"]])
                 save_copy["skills"]["core"] = cleaned_core
                 taxonomy["all_skills"] = cleaned_core
-            if "user_uploaded" in existing_ps:
-                taxonomy["user_uploaded"] = existing_ps["user_uploaded"]
-            if "owner_email" in existing_ps:
-                taxonomy["owner_email"] = existing_ps["owner_email"]
+            for preserve_key in ("user_uploaded", "owner_email", "education", "courses_and_certifications", "eligible_internships"):
+                if preserve_key in existing_ps:
+                    taxonomy[preserve_key] = existing_ps[preserve_key]
             taxonomy["ground_truth_vault"] = save_copy
             profile.parsed_skills = taxonomy
             profile.updated_at = utc_now()
@@ -404,15 +305,10 @@ class GroundTruthStore:
         return self.get_data()
 
     def get_skills_md(self) -> str:
-        """Reads the candidate's raw_markdown directly from CandidateProfile in the relational database."""
         profile = self.get_profile_record()
         return profile.raw_markdown or ""
 
     def parse_profile_from_md(self, md_content: str) -> Dict[str, Any]:
-        """
-        Extracts name, headline, email, phone, location, summary, skills,
-        and work history from any English or Georgian .md skills file.
-        """
         result: Dict[str, Any] = {}
         lines = md_content.splitlines()
 
@@ -453,18 +349,21 @@ class GroundTruthStore:
         result["skills"] = self.extract_skills_from_md(md_content)
 
         work_history = []
+        education_items = []
         in_exp = False
+        in_edu = False
         current_job = None
         for line in lines:
             s = line.strip()
             if s.startswith("## ") and not s.startswith("### "):
-                in_exp = any(w in s.lower() for w in ["experience", "history", "work", "გამოცდილება", "სამუშაო"])
+                low_h = s.lower()
+                in_exp = any(w in low_h for w in ["experience", "history", "work", "გამოცდილება", "სამუშაო"])
+                in_edu = any(w in low_h for w in ["education", "academic", "university", "განათლება", "სწავლა"])
                 if not in_exp and current_job:
                     work_history.append(current_job)
                     current_job = None
                 continue
             if in_exp:
-                # Never treat Markdown horizontal separators (---, ***, ___) as bullet items!
                 if re.fullmatch(r"[-*_=\s]{2,}", s):
                     continue
                 if s.startswith("### "):
@@ -477,16 +376,18 @@ class GroundTruthStore:
                     current_job = {
                         "role": role,
                         "company": comp,
-                        "location": "Tbilisi / Remote",
+                        "location": "",
                         "start_date": "",
                         "end_date": "Present",
-                        "highlights": []
+                        "highlights": [],
                     }
                 elif current_job and (
                     (s.startswith(("*", "-")) and not s.startswith("* ") and s.endswith("*"))
-                    or re.search(r"(?:20\d{2}|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|present)", s, re.I)
-                    and len(s) < 90
-                    and "•" in s or ("*" in s and ("–" in s or "-" in s) and len(s) < 90)
+                    or (
+                        re.search(r"(?:20\d{2}|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|present)", s, re.I)
+                        and len(s) < 90
+                        and ("•" in s or ("*" in s and ("–" in s or "-" in s)))
+                    )
                 ):
                     meta = re.sub(r"[*_`]+", "", s).strip()
                     if "•" in meta:
@@ -506,28 +407,41 @@ class GroundTruthStore:
                     bullet = re.sub(r"[*_`]+", "", bullet).strip()
                     if bullet and not re.fullmatch(r"[-*_•–—.\s]+", bullet):
                         current_job["highlights"].append(bullet)
+            elif in_edu and s and not s.startswith("#"):
+                clean_e = re.sub(r"^[-*]\s*", "", s)
+                clean_e = re.sub(r"[*_`]+", "", clean_e).strip()
+                if clean_e and not re.fullmatch(r"[-*_•–—.\s]+", clean_e):
+                    yr_m = re.search(r"\b(19\d{2}|20[0-3]\d)\b", clean_e)
+                    education_items.append({
+                        "degree": clean_e.split("|")[0].split("—")[0].strip(),
+                        "institution": clean_e.split("|")[1].strip() if "|" in clean_e else clean_e,
+                        "graduation_year": int(yr_m.group(1)) if yr_m else None,
+                        "focus": clean_e,
+                    })
+
         if current_job:
             work_history.append(current_job)
         if work_history:
             result["work_history"] = work_history
+        if education_items:
+            result["education"] = education_items
 
         return result
 
     def ingest_skills_markdown(self, md_content: str) -> CandidateProfile:
-        """
-        Ingests a skills.md file into the CandidateProfile relational table via ProfileService,
-        extracting personal info, QA/SDET taxonomy, and work history.
-        """
         from ..services.profile_service import profile_service
         profile = profile_service.upsert_candidate_profile(md_content)
         parsed = self.parse_profile_from_md(md_content)
-        if parsed.get("work_history"):
+        if parsed.get("work_history") or parsed.get("education"):
             with Session(engine, expire_on_commit=False) as session:
                 db_prof = session.get(CandidateProfile, profile.id)
                 if db_prof:
                     skills_copy = dict(db_prof.parsed_skills)
                     vault = dict(skills_copy.get("ground_truth_vault") or {})
-                    vault["work_history"] = parsed["work_history"]
+                    if parsed.get("work_history"):
+                        vault["work_history"] = parsed["work_history"]
+                    if parsed.get("education") and not vault.get("education"):
+                        vault["education"] = parsed["education"]
                     skills_copy["ground_truth_vault"] = vault
                     db_prof.parsed_skills = skills_copy
                     session.add(db_prof)
@@ -537,12 +451,10 @@ class GroundTruthStore:
         return profile
 
     def save_skills_md(self, md_content: str) -> Dict[str, Any]:
-        """Saves skills.md into CandidateProfile and returns the updated ground truth dictionary."""
         self.ingest_skills_markdown(md_content)
         return self.get_data()
 
     def extract_skills_from_md(self, md_content: str) -> List[str]:
-        """Extracts clean, deduplicated technical & domain skills from markdown via MatcherService."""
         if not md_content:
             return []
         taxonomy = matcher_service.parse_skills_markdown(md_content)
@@ -564,4 +476,5 @@ class GroundTruthStore:
         return self.get_data().get("faq_bank", [])
 
 
-ground_truth_store = GroundTruthStore()
+profile_repository = ProfileRepository()
+ground_truth_store = profile_repository

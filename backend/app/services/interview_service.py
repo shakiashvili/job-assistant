@@ -5,7 +5,7 @@ from sqlmodel import Session, select
 
 from ..db.models import ApplicationTracker, InterviewRound
 from ..services.gemini_service import gemini_service
-from ..storage.ground_truth_store import ground_truth_store
+from ..db.profile_repository import ground_truth_store
 
 logger = logging.getLogger(__name__)
 

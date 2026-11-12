@@ -14,7 +14,7 @@ from ..services.cv_generator_service import cv_generator_service
 from ..services.gemini_service import gemini_service
 from ..services.matcher_service import matcher_service
 from ..services.salary_service import salary_service
-from ..storage.ground_truth_store import ground_truth_store
+from ..db.profile_repository import ground_truth_store
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/extension", tags=["Chrome Extension Copilot"])
