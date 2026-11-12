@@ -235,3 +235,155 @@ def test_global_tier_and_status_counts():
     assert data["status_counts"]["ALL"] == 6
     assert data["status_counts"]["STAGED"] == 4
     assert data["status_counts"]["AUDITED"] == 2
+
+
+def test_foreign_portal_hybrid_and_onsite_disqualification():
+    """
+    Verifies that ANY foreign vacancy (Djinni, JustJoin, DOU, LinkedIn non-GE) that is
+    Hybrid or On-site is disqualified and never returned to the suitable feed.
+    """
+    # 1. JustJoin Hybrid in Polish ("Praca hybrydowa")
+    rem1, st1, r1, _ = evaluate_remote_and_language_gate(
+        title="Junior QA Engineer",
+        description="Oferujemy pracę hybrydową (2 dni w biurze w Warszawie). Doświadczenie z Cypress.",
+        location_text="Warszawa, Poland (Hybrid)",
+        portal="justjoin.it",
+    )
+    assert st1 == "FILTERED_OUT"
+    assert "Hybrid" in r1
+
+    # 2. JustJoin On-site in Polish ("Praca stacjonarna")
+    rem2, st2, r2, _ = evaluate_remote_and_language_gate(
+        title="QA Tester",
+        description="Wymagana praca stacjonarna w biurze w Krakowie.",
+        location_text="Kraków, Poland (Office)",
+        portal="justjoin.it",
+    )
+    assert st2 == "FILTERED_OUT"
+    assert "On-site" in r2
+
+    # 3. Djinni Hybrid in Ukrainian ("Київ, гібрид")
+    rem3, st3, r3, _ = evaluate_remote_and_language_gate(
+        title="Junior QA Automation",
+        description="Гібридний формат роботи (1-2 дні в офісі у Києві).",
+        location_text="Київ, гібрид",
+        portal="djinni.co",
+        candidate_languages=["Ukrainian", "English"],
+    )
+    assert st3 == "FILTERED_OUT"
+    assert "Hybrid" in r3
+
+    # 4. Djinni On-site ("Тільки офіс")
+    rem4, st4, r4, _ = evaluate_remote_and_language_gate(
+        title="Manual QA",
+        description="Робота тільки в офісі компанії у Львові.",
+        location_text="Львів, тільки офіс",
+        portal="djinni.co",
+        candidate_languages=["Ukrainian", "English"],
+    )
+    assert st4 == "FILTERED_OUT"
+    assert "On-site" in r4
+
+    # 5. LinkedIn Hybrid in Europe ("Berlin, Germany (Hybrid)")
+    rem5, st5, r5, _ = evaluate_remote_and_language_gate(
+        title="QA Specialist",
+        description="Hybrid work policy: 3 days in Berlin office.",
+        location_text="Berlin, Germany (Hybrid)",
+        portal="linkedin.com",
+    )
+    assert st5 == "FILTERED_OUT"
+    assert "Hybrid" in r5
+
+    # 6. DOU.ua Onsite in Kyiv without remote
+    rem6, st6, r6, _ = evaluate_remote_and_language_gate(
+        title="Junior QA",
+        description="Вакансія в офісі компанії в Києві.",
+        location_text="Київ",
+        portal="dou.ua",
+        candidate_languages=["Ukrainian", "English"],
+    )
+    assert st6 == "FILTERED_OUT"
+    assert "On-site" in r6 or "Remote" in r6
+
+
+def test_foreign_portal_100pct_remote_accepted():
+    """
+    Verifies that genuine 100% remote vacancies from foreign portals are accepted.
+    """
+    # JustJoin 100% Remote B2B
+    rem1, st1, r1, _ = evaluate_remote_and_language_gate(
+        title="QA Automation Engineer",
+        description="100% remote B2B role across Europe. Playwright and TypeScript.",
+        location_text="Remote EU",
+        portal="justjoin.it",
+    )
+    assert st1 == "DISCOVERED"
+    assert rem1 is True
+
+    # Djinni Full Remote
+    rem2, st2, r2, _ = evaluate_remote_and_language_gate(
+        title="QA Engineer",
+        description="Full remote role. English B2+. Manual and API testing.",
+        location_text="Тільки віддалено",
+        portal="djinni.co",
+    )
+    assert st2 == "DISCOVERED"
+    assert rem2 is True
+
+    # LinkedIn Worldwide Remote
+    rem3, st3, r3, _ = evaluate_remote_and_language_gate(
+        title="QA Engineer",
+        description="Worldwide remote position. Work from anywhere in the world.",
+        location_text="Remote",
+        portal="linkedin.com",
+    )
+    assert st3 == "DISCOVERED"
+    assert rem3 is True
+
+
+def test_domestic_georgian_onsite_and_hybrid_allowed():
+    """
+    Verifies that domestic Georgian vacancies (jobs.ge, hr.ge, hr.gov.ge) in Tbilisi
+    are NOT filtered out by the foreign remote gate.
+    """
+    # Jobs.ge on-site in Tbilisi
+    rem1, st1, r1, _ = evaluate_remote_and_language_gate(
+        title="Manual QA სტაჟიორი",
+        description="სამუშაო ადგილი: თბილისი, ვაკე. ოფისში მუშაობა.",
+        location_text="თბილისი",
+        portal="jobs.ge",
+    )
+    assert st1 == "DISCOVERED"
+    assert rem1 is False  # On-site in Tbilisi is acknowledged but permitted
+
+    # HR.ge hybrid in Tbilisi
+    rem2, st2, r2, _ = evaluate_remote_and_language_gate(
+        title="QA Engineer",
+        description="ჰიბრიდული გრაფიკი თბილისის ოფისში.",
+        location_text="Tbilisi, Georgia",
+        portal="hr.ge",
+    )
+    assert st2 == "DISCOVERED"
+
+
+def test_matcher_tiered_rejects_foreign_hybrid():
+    """
+    Verifies that matcher_service.evaluate_job_tiered rejects foreign hybrid vacancies.
+    """
+    parsed_skills = {
+        "years_of_experience": 1.5,
+        "max_allowed_years": 2.0,
+        "seniority_level": "JUNIOR",
+        "primary_role": "QA Engineer",
+        "qa_automation": ["Playwright", "Cypress"],
+        "spoken_languages": ["English", "Georgian"],
+    }
+    res = matcher_service.evaluate_job_tiered(
+        title="QA Automation Engineer",
+        description="We offer a hybrid setup: 2 days in office in Warsaw. Playwright required.",
+        parsed_skills=parsed_skills,
+        portal="justjoin.it",
+    )
+    assert res["status"] == "FILTERED_OUT"
+    assert "Hybrid" in res["match_rationale"]
+

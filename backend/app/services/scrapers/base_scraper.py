@@ -138,6 +138,124 @@ POLISH_LANGUAGE_REQUIREMENT_PATTERNS = [
 ]
 
 
+# Hybrid work mode patterns (English, Polish, Ukrainian, Russian)
+HYBRID_WORK_PATTERNS = [
+    # English hybrid work mode
+    r"\bhybrid\s+(?:work|working|mode|model|role|job|schedule|position|policy|setup|option|environment|arrangement|contract|employment)\b",
+    r"\b(?:work|working|model|mode|format|policy|schedule|workplace|employment|setup|arrangement)[\s:]+hybrid\b",
+    r"\b(?:remote\s*[\/-]\s*hybrid|hybrid\s*[\/-]\s*remote|hybrid\s+remote)\b",
+    r"\b(?:1|2|3|4)\s*days?\s*(?:a\s+week\s+)?(?:in|from|at)\s*(?:the\s+)?office\b",
+    r"\b(?:in[\s-]office|office)\s*(?:1|2|3|4)\s*days?\b",
+    r"\bpartially\s+remote\b",
+    r"\bpart[\s-]time\s+remote\b",
+    r"\bsemi[\s-]remote\b",
+    r"\bcombination\s+of\s+(?:home|remote)\s+and\s+office\b",
+    r"\bmix\s+of\s+(?:home|remote)\s+and\s+office\b",
+    r"\b(?:flexible\s+)?hybrid\b",
+    # Polish hybrid work mode
+    r"\bhybrydow[a-zęóąśłżźć]*\b",
+    r"\bhybryda\b",
+    r"\bmodel\s+hybrydowy\b",
+    r"\btryb\s+hybrydowy\b",
+    r"\bpraca\s+hybrydowa\b",
+    r"\bforma\s+pracy\s*:\s*hybrydow[a-zęóąśłżźć]*\b",
+    r"\bczęściowo\s+zdalnie\b",
+    r"\bczęściowo\s+zdalna\b",
+    r"\b(?:1|2|3|4)\s*dn[ia|i]\s*(?:w\s+tygodniu\s+)?w\s+biurze\b",
+    r"\bwymagana\s+obecność\s+w\s+biurze\b",
+    # Ukrainian hybrid work mode
+    r"\bгібрид\b",
+    r"\bгібридн[а-яіїєґ]*\b",
+    r"\bгібридний\s+формат\b",
+    r"\bгібридний\s+режим\b",
+    r"\bгібридний\s+графік\b",
+    r"\bчастин[а-я]*\s+віддален[а-я]*\b",
+    r"\b(?:1|2|3|4)\s*(?:дні|дня|днів)\s*(?:на\s+тиждень\s+)?в\s+офісі\b",
+    r"\bробота\s+в\s+офісі\s+і\s+віддалено\b",
+    # Russian hybrid work mode
+    r"\bгибрид\b",
+    r"\bгибридн[а-яё]*\b",
+    r"\bгибридный\s+формат\b",
+    r"\bгибридный\s+график\b",
+    r"\bчастично\s+удален[а-яё]*\b",
+    r"\b(?:1|2|3|4)\s*(?:дня|дней)\s*(?:в\s+неделю\s+)?в\s+офисе\b",
+]
+
+# On-site / Office work mode patterns
+ONSITE_WORK_PATTERNS = [
+    # English onsite/office
+    r"\bon-?site\s+only\b",
+    r"\bonsite\s+only\b",
+    r"\boffice\s+only\b",
+    r"\bonly\s+office\b",
+    r"\bon-?site\b",
+    r"\bin-?office\b",
+    r"\boffice-?based\b",
+    r"\bwork\s+(?:only\s+)?from\s+(?:the\s+)?office\b",
+    r"\bwork\s+in\s+the\s+office\b",
+    r"\bmust\s+work\s+from\s+(?:the\s+|our\s+)?office\b",
+    r"\boffice\s+presence\s+required\b",
+    r"\bno\s+remote\b",
+    r"\bnot\s+remote\b",
+    r"\bnot\s+open\s+to\s+remote\b",
+    r"\b100%?\s*(?:on-?site|in-?office|office)\b",
+    r"\bworkplace\s*:\s*(?:on-?site|office|stacjonarna)\b",
+    # Polish onsite/office
+    r"\bstacjonarn[a-zęóąśłżźć]*\b",
+    r"\bpraca\s+stacjonarna\b",
+    r"\btryb\s+stacjonarny\b",
+    r"\bforma\s+pracy\s*:\s*stacjonarna\b",
+    r"\bw\s+biurze\b",
+    r"\btylko\s+w\s+biurze\b",
+    r"\btylko\s+stacjonarnie\b",
+    r"\bwymagana\s+praca\s+w\s+biurze\b",
+    # Ukrainian onsite/office
+    r"\bтільки\s+офіс\b",
+    r"\bтільки\s+в\s+офісі\b",
+    r"\bробота\s+в\s+офісі\b",
+    r"\bофісн[а-яіїєґ]*\s+робота\b",
+    r"\bне\s+віддален[а-я]*\b",
+    r"\bбез\s+віддален[а-я]*\b",
+    # Russian onsite/office
+    r"\bтолько\s+офис\b",
+    r"\bтолько\s+в\s+офисе\b",
+    r"\bработа\s+в\s+офисе\b",
+    r"\bофисн[а-яё]*\s+работа\b",
+    r"\bне\s+удален[а-яё]*\b",
+    r"\bбез\s+удаленк[а-яё]*\b",
+]
+
+# Genuine full remote patterns
+FULL_REMOTE_PATTERNS = [
+    r"\b(?:100%|full[\s-]time|fully|strictly)\s*remote\b",
+    r"\b100%?\s*zdalnie\b",
+    r"\bcałkowicie\s+zdalnie\b",
+    r"\bpełna\s+praca\s+zdalna\b",
+    r"\b100%?\s*віддалено\b",
+    r"\bповністю\s+віддалено\b",
+    r"\bтільки\s+віддалено\b",
+    r"\b100%?\s*удаленно\b",
+    r"\bполностью\s+удаленно\b",
+    r"\bтолько\s+удаленно\b",
+    r"\bworldwide\b",
+    r"\bglobal\s+remote\b",
+    r"\bwork\s+from\s+anywhere\b",
+    r"\bremote\s+worldwide\b",
+    r"\bremote\s+first\b",
+    r"\banywhere\b",
+    r"\bzdalnie\b",
+    r"\bвіддалено\b",
+    r"\bудаленно\b",
+    r"\bдистанционн[а-яё]*\b",
+    r"\bremote\b",
+]
+
+_TECH_HYBRID_PATTERN = re.compile(
+    r"\bhybrid\s+(?:cloud|app|apps|application|applications|mobile|testing|framework|infrastructure|network|architecture|solution)\b",
+    re.IGNORECASE,
+)
+
+
 def evaluate_remote_and_language_gate(
     title: str,
     description: str,
@@ -149,6 +267,8 @@ def evaluate_remote_and_language_gate(
     Evaluates a scraped vacancy against the Remote & Spoken-Language Gate:
     Returns:
       (is_remote, status, filter_out_reason, detected_languages)
+    - Strict Foreign Remote Gate: ANY vacancy from a foreign portal (Djinni, JustJoin, DOU, LinkedIn outside GE)
+      MUST be 100% Remote. Any hybrid or on-site role requiring physical presence abroad is disqualified.
     - Supports dynamic unlocking via `candidate_languages` from `skills.md`:
       If the vacancy requires Ukrainian, Russian, or Polish, allow it when the candidate
       explicitly lists that language in `skills.md`; otherwise filter it out.
@@ -160,6 +280,7 @@ def evaluate_remote_and_language_gate(
 
     body_only = f"{title}\n{description}".lower()
     combined = f"{title}\n{description}\n{location_text}".lower()
+    loc_lower = (location_text or "").lower()
     langs_detected: List[str] = []
 
     if any(w in combined for w in ["english", "upper-intermediate", "b2", "c1", "fluent english", "spoken english"]):
@@ -195,34 +316,33 @@ def evaluate_remote_and_language_gate(
     if not langs_detected:
         langs_detected.append("English")
 
-    is_office_only = any(
-        w in combined for w in ["office only", "on-site only", "onsite only", "тільки офіс", "только офис", "only office", "stacjonarnie"]
-    )
-    is_remote = not is_office_only and any(
-        w in combined for w in ["remote", "віддалено", "удален", "удалён", "zdalnie", "relocate", "relocation", "anywhere", "worldwide", "abroad", "tbilisi", "georgia"]
-    )
+    # Detect hybrid work mode
+    has_hybrid_loc = any(re.search(pat, loc_lower, re.IGNORECASE) for pat in HYBRID_WORK_PATTERNS)
+    has_hybrid_body = any(re.search(pat, body_only, re.IGNORECASE) for pat in HYBRID_WORK_PATTERNS)
+    if has_hybrid_body and not has_hybrid_loc:
+        hybrid_matches = list(re.finditer(r"\bhybrid\b", body_only, re.IGNORECASE))
+        tech_matches = list(_TECH_HYBRID_PATTERN.finditer(body_only))
+        if hybrid_matches and len(hybrid_matches) == len(tech_matches):
+            has_hybrid_body = False
+    is_hybrid = has_hybrid_loc or has_hybrid_body
 
-    loc_lower = (location_text or "").lower()
-    ukraine_restricted = (
-        "(ukraine)" in title.lower()
-        or "ukraine-based role" in combined
-        or "located in ukraine" in combined
-        or "ukraine only" in combined
-        or "only ukraine" in combined
-        or "office in the center of lviv" in combined
-        or "office in lviv" in combined
-        or "office in kyiv" in combined
-        or ("ukraine" in loc_lower and not any(w in loc_lower for w in ["worldwide", "europe", "eu", "global", "abroad", "georgia", "relocat", "other countries", "віддалено"]))
-    )
+    # Detect on-site work mode
+    has_onsite_loc = any(re.search(pat, loc_lower, re.IGNORECASE) for pat in ONSITE_WORK_PATTERNS)
+    has_onsite_body = any(re.search(pat, body_only, re.IGNORECASE) for pat in ONSITE_WORK_PATTERNS)
+    is_onsite = has_onsite_loc or has_onsite_body
 
-    is_georgia_location = any(w in loc_lower for w in ["georgia", "tbilisi", "batumi", "kutaisi", "თბილისი", "საქართველო"])
-    is_worldwide_remote = any(
-        w in combined for w in [
-            "worldwide", "work from anywhere", "anywhere in the world",
-            "global remote", "remote worldwide", "remote - emea", "remote (europe)",
-            "remote (eu)", "b2b contractor", "contractor worldwide", "remote (georgia)"
+    # Detect full remote eligibility
+    has_remote = any(re.search(pat, combined, re.IGNORECASE) for pat in FULL_REMOTE_PATTERNS)
+
+    is_georgia_location = any(
+        w in loc_lower for w in [
+            "georgia", "tbilisi", "batumi", "kutaisi", "rustavi",
+            "თბილისი", "ბათუმი", "ქუთაისი", "საქართველო",
+            "тбилиси", "батуми", "кутаиси", "рустави", "грузия"
         ]
     )
+    is_domestic_portal = portal in ("jobs.ge", "hr.ge", "hr.gov.ge") or (portal == "headhunter.ge" and is_georgia_location)
+    is_foreign_portal_or_job = not is_domestic_portal and not (portal in ("jobs.ge", "hr.ge", "hr.gov.ge") or is_georgia_location)
 
     # Disqualify US-only vacancies or vacancies requiring US work authorization / residency
     has_us_legal_restriction = any(
@@ -240,6 +360,13 @@ def evaluate_remote_and_language_gate(
             "seattle", "los angeles", "california", "texas", "washington", "boston", "ny", "ca", "tx", "wa"
         ]
     )
+    is_worldwide_remote = any(
+        w in combined for w in [
+            "worldwide", "work from anywhere", "anywhere in the world",
+            "global remote", "remote worldwide", "remote - emea", "remote (europe)",
+            "remote (eu)", "b2b contractor", "contractor worldwide", "remote (georgia)"
+        ]
+    )
 
     if (portal == "linkedin.com" or "linkedin" in portal) and (has_us_legal_restriction or (is_us_location and not is_georgia_location and not is_worldwide_remote)):
         return (
@@ -248,6 +375,46 @@ def evaluate_remote_and_language_gate(
             "Location Gate: US-based position (requires US residency / work authorization; not open to remote from Georgia)",
             langs_detected,
         )
+
+    # 1. STRICT FOREIGN PORTAL / WORK-MODE GATE:
+    # Foreign vacancies (Djinni, JustJoin, DOU, LinkedIn non-GE, etc.) MUST be 100% Remote.
+    # Hybrid or On-site positions requiring foreign physical presence MUST be filtered out.
+    if is_foreign_portal_or_job:
+        if is_hybrid:
+            return (
+                False,
+                "FILTERED_OUT",
+                "Location/Work-Mode Gate: Foreign vacancy is Hybrid (requires physical office attendance abroad; only 100% Remote positions accepted)",
+                langs_detected,
+            )
+        if is_onsite:
+            return (
+                False,
+                "FILTERED_OUT",
+                "Location/Work-Mode Gate: Foreign vacancy is On-site (requires physical presence abroad; only 100% Remote positions accepted)",
+                langs_detected,
+            )
+        if not has_remote:
+            return (
+                False,
+                "FILTERED_OUT",
+                "Location/Work-Mode Gate: Foreign vacancy is not Remote (requires physical presence abroad; only 100% Remote positions accepted)",
+                langs_detected,
+            )
+
+    is_remote = has_remote and not is_onsite and not is_hybrid
+
+    ukraine_restricted = (
+        "(ukraine)" in title.lower()
+        or "ukraine-based role" in combined
+        or "located in ukraine" in combined
+        or "ukraine only" in combined
+        or "only ukraine" in combined
+        or "office in the center of lviv" in combined
+        or "office in lviv" in combined
+        or "office in kyiv" in combined
+        or ("ukraine" in loc_lower and not any(w in loc_lower for w in ["worldwide", "europe", "eu", "global", "abroad", "georgia", "relocat", "other countries", "віддалено"]))
+    )
 
     if portal in ("dou.ua", "djinni.co", "justjoin.it", "headhunter.ge"):
         requires_uk = "Ukrainian" in langs_detected
@@ -286,11 +453,11 @@ def evaluate_remote_and_language_gate(
             return (
                 False,
                 "FILTERED_OUT",
-                "Not Remote / Relocation eligible",
+                "Location/Work-Mode Gate: Foreign vacancy is not Remote (requires physical presence abroad; only 100% Remote positions accepted)",
                 langs_detected,
             )
 
-    return (is_remote, "DISCOVERED", "", langs_detected)
+    return (True if is_foreign_portal_or_job else is_remote, "DISCOVERED", "", langs_detected)
 
 
 class BasePortalScraper:

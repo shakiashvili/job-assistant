@@ -646,6 +646,31 @@ Markdown:
                 "skill_overlap_pct": None,
             }
 
+        # Fail-Safe Foreign Remote Gate: Foreign portal jobs (Djinni, JustJoin, DOU, LinkedIn non-GE)
+        # MUST be 100% remote from Georgia — disqualify any hybrid or on-site role.
+        if portal in ("djinni.co", "justjoin.it", "dou.ua") or portal.startswith("linkedin"):
+            from .scrapers.base_scraper import evaluate_remote_and_language_gate
+            cand_langs = parsed_skills.get("spoken_languages") or []
+            _, gate_status, gate_reason, _ = evaluate_remote_and_language_gate(
+                title=title,
+                description=description,
+                location_text="Remote" if portal in ("djinni.co", "justjoin.it", "dou.ua") else "International",
+                portal=portal,
+                candidate_languages=cand_langs,
+            )
+            if gate_status == "FILTERED_OUT":
+                logger.info("[MATCHER REJECT] [%s] '%s' -> %s", portal, title, gate_reason)
+                return {
+                    "suitability_score": 0.0,
+                    "status": "FILTERED_OUT",
+                    "match_rationale": gate_reason,
+                    "matched_skills": [],
+                    "missing_skills": [],
+                    "match_tier": "DIRECT",
+                    "adjacent_role_tag": None,
+                    "skill_overlap_pct": None,
+                }
+
         required_skills = self.extract_job_requirements(title, description)
 
         # Build candidate skill set dynamically from verified_skills + all taxonomy buckets

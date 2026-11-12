@@ -63,6 +63,25 @@ class JustJoinScraper(BasePortalScraper):
                 slug_head = slug.split("-")[0]
                 company = slug_head.capitalize() if len(slug_head) > 1 else "JustJoin Partner"
 
+            # Scan card text and container for workplace badges (hybrid, partly remote, office, stacjonarnie)
+            card_blob = a_tag.get_text(" ", strip=True)
+            parent_box = a_tag.find_parent("div")
+            if parent_box:
+                card_blob = f"{card_blob} {parent_box.get_text(' ', strip=True)}"
+
+            is_card_hybrid = bool(re.search(r"\b(hybrid|hybryd|partly[\s-]remote|częściowo)\b", card_blob, re.IGNORECASE))
+            is_card_onsite = bool(re.search(r"\b(office|stacjonarn|w\s+biurze)\b", card_blob, re.IGNORECASE))
+            initial_status = "FILTERED_OUT" if (is_card_hybrid or is_card_onsite) else "DISCOVERED"
+            initial_filter_reason = (
+                "Location/Work-Mode Gate: Foreign vacancy is Hybrid (requires physical office attendance abroad; only 100% Remote positions accepted)"
+                if is_card_hybrid
+                else (
+                    "Location/Work-Mode Gate: Foreign vacancy is On-site (requires physical presence abroad; only 100% Remote positions accepted)"
+                    if is_card_onsite
+                    else None
+                )
+            )
+
             results.append({
                 "portal": self.portal_name,
                 "external_id": ext_id,
@@ -70,12 +89,13 @@ class JustJoinScraper(BasePortalScraper):
                 "company": company or "JustJoin Partner",
                 "url": full_url,
                 "market": self.market,
-                "is_remote": True,
+                "is_remote": not (is_card_hybrid or is_card_onsite),
                 "channel": "WEB_FORM",
                 "detected_languages": ["English"],
                 "language_requirements": ["English"],
                 "description_raw": f"{title} at {company} (JustJoin.it Remote)",
-                "status": "DISCOVERED",
+                "status": initial_status,
+                "filter_out_reason": initial_filter_reason,
             })
 
         return results
@@ -100,9 +120,15 @@ class JustJoinScraper(BasePortalScraper):
         if len(page_text) < 200:
             return None
 
-        # Trim navigation chrome before "Job description" if present
-        jd_idx = page_text.lower().find("job description")
-        body_text = page_text[jd_idx:jd_idx + 5000] if jd_idx != -1 else page_text[:5000]
+        # Extract workplace and location badges from the offer page header
+        loc_badges = [
+            t.strip() for t in soup.find_all(string=re.compile(r"\b(hybrid|hybryd|stacjonarn|remote|zdaln|office|biur|b2b|contract)\b", re.I))
+            if len(t.strip()) < 50
+        ]
+        location_meta = " | ".join(dict.fromkeys(loc_badges)) if loc_badges else "Remote EU / B2B"
+
+        # Retain full body text so header badges and job description are both inspected
+        body_text = page_text[:8000]
 
         # Extract authentic company name from page header / h2 if slug fallback was short
         h1_el = soup.find("h1")
@@ -120,7 +146,7 @@ class JustJoinScraper(BasePortalScraper):
         is_remote, status, filter_reason, langs = evaluate_remote_and_language_gate(
             title=item["title"],
             description=body_text,
-            location_text="Remote EU / B2B",
+            location_text=location_meta,
             portal=self.portal_name,
             candidate_languages=candidate_languages,
         )
