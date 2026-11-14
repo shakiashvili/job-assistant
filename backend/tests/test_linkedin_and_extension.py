@@ -190,3 +190,117 @@ def test_answers_solve_screening_dynamic_non_qa_grounding():
 
     # Restore QA profile for suite consistency
     client.post("/api/skills-md/preset/qa_tech")
+
+
+def test_extension_requires_uploaded_profile_no_sample_cv_and_tailored_letter_no_notice_clutter():
+    """
+    Verifies:
+    1. Newly registered account without skills.md upload cannot generate 'Sample QA Candidate' CVs (400 PROFILE_REQUIRED).
+    2. Registering another user never wipes an earlier user's uploaded skills.md profile.
+    3. /api/extension/upload-skills parses inline bullet Location & +phone, removes '1 week after offer' / '| , |' clutter,
+       and generates a job-requirement & CV-matched motivational letter referencing real workplaces.
+    """
+    from docx import Document
+    from app.config import GENERATED_RESUMES_DIR
+
+    user_a = f"giorgi_{uuid.uuid4().hex[:8]}@example.com"
+    user_b = f"other_{uuid.uuid4().hex[:8]}@example.com"
+    pw = "StrongPassword123!"
+
+    reg_a = client.post("/api/auth/register", json={"email": user_a, "password": pw, "full_name": "Giorgi Shakiashvili"})
+    assert reg_a.status_code == 201
+    hdr_a = {"Authorization": f"Bearer {reg_a.json()['access_token']}"}
+
+    # Before upload: profile_uploaded is False and prepare-application refuses with 400 (no Sample QA Candidate fallback!)
+    prof_before = client.get("/api/extension/profile", headers=hdr_a)
+    assert prof_before.status_code == 200
+    assert prof_before.json()["profile_uploaded"] is False
+
+    blocked = client.post(
+        "/api/extension/prepare-application",
+        headers=hdr_a,
+        json={"url": "https://jobs.dou.ua/companies/acme/vacancies/12345/", "job_title": "QA Engineer", "company_name": "Acme"},
+    )
+    assert blocked.status_code == 400
+    assert "PROFILE_REQUIRED" in blocked.json()["detail"]
+
+    # Upload rich markdown directly through the extension endpoint
+    sample_md = """# Giorgi Shakiashvili
+
+**QA Engineer • Tech & FinTech Testing • QA Automation**
+Tbilisi, Georgia • +995 571-15-68-07 • [giorgishakiashvili21@gmail.com](mailto:giorgishakiashvili21@gmail.com)
+[LinkedIn Profile](https://linkedin.com/in/george-shakiashvili) • [GitHub Portfolio](https://github.com/GiorgiShakiashvili)
+
+## Experience (1.5 Years Total)
+
+### QA Intern | EPAM Systems
+*Tbilisi, Georgia • Nov 2024 – May 2025*
+- Built automated Playwright end-to-end tests in TypeScript and integrated checks into GitHub Actions.
+- Validated REST API contracts with Postman and SQL queries across staging builds.
+
+### Software QA Intern | Vention Development
+*Tbilisi, Georgia • Jun 2024 – Oct 2024*
+- Authored regression test suites in Jira and verified release stability across sprints.
+
+## Core Skills
+- Playwright, TypeScript, Python, Postman, REST API, SQL, GitHub Actions, Jira
+
+## Education
+- Master of Science in Economics — Tbilisi State University
+"""
+    up_a = client.post("/api/extension/upload-skills", headers=hdr_a, json={"content": sample_md, "filename": "skills.md"})
+    assert up_a.status_code == 200
+    assert up_a.json()["profile_uploaded"] is True
+    assert up_a.json()["full_name"] == "Giorgi Shakiashvili"
+
+    # Registering User B MUST NOT wipe User A's uploaded profile!
+    reg_b = client.post("/api/auth/register", json={"email": user_b, "password": pw, "full_name": "Other Candidate"})
+    assert reg_b.status_code == 201
+    hdr_b = {"Authorization": f"Bearer {reg_b.json()['access_token']}"}
+    assert client.get("/api/extension/profile", headers=hdr_b).json()["profile_uploaded"] is False
+    assert client.get("/api/extension/profile", headers=hdr_a).json()["profile_uploaded"] is True
+
+    # Prepare tailored application as User A
+    prep = client.post(
+        "/api/extension/prepare-application",
+        headers=hdr_a,
+        json={
+            "url": "https://jobs.dou.ua/companies/fintech-co/vacancies/88888/",
+            "job_title": "Junior QA Automation Engineer",
+            "company_name": "FinTechCo",
+            "job_description": "Requirements: Playwright, TypeScript, REST API testing, SQL, CI/CD with GitHub Actions.",
+            "fields": [
+                {"field_id": "cl", "label": "Cover Letter / Motivation", "field_type": "textarea"},
+            ],
+        },
+    )
+    assert prep.status_code == 200
+    body = prep.json()
+    letter = body["cover_letter"]
+    assert "Sample QA Candidate" not in letter
+    assert "1 week after offer" not in letter.lower()
+    assert "notice period" not in letter.lower()
+    assert "EPAM Systems" in letter or "Vention Development" in letter
+    assert "Playwright" in letter or "REST API" in letter
+    assert "Giorgi Shakiashvili" in letter
+
+    # Verify generated PDF, DOCX, and HTML preview contain zero '| , |' or '1 week after offer' / 'Notice Period' clutter
+    pdf_path = GENERATED_RESUMES_DIR / body["tailored_cv"]["pdf_filename"]
+    docx_path = GENERATED_RESUMES_DIR / body["tailored_cv"]["docx_filename"]
+    html_path = pdf_path.with_suffix(".html")
+    assert pdf_path.exists() and pdf_path.read_bytes().startswith(b"%PDF-")
+    assert docx_path.exists()
+    assert html_path.exists()
+
+    docx_text = "\n".join(p.text for p in Document(str(docx_path)).paragraphs)
+    html_text = html_path.read_text(encoding="utf-8")
+    for rendered in (docx_text, html_text):
+        assert "Giorgi Shakiashvili" in rendered
+        assert "Sample QA Candidate" not in rendered
+        assert ", |" not in rendered
+        assert "| ," not in rendered
+        assert "Tbilisi, Georgia" in rendered
+        assert "+995 571-15-68-07" in rendered
+        assert "1 week after offer" not in rendered.lower()
+        assert "notice period" not in rendered.lower()
+        assert "(None)" not in rendered

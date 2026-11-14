@@ -100,17 +100,20 @@ def sanitize_email(email: str) -> str:
 
 
 def _sync_profile_owner_on_auth(session: Session, clean_email: str, force_reset: bool = False) -> None:
-    """Ensures a newly registered user or switched account starts with an empty feed until skills.md upload."""
-    for prof in session.exec(select(CandidateProfile)).all():
-        skills_copy = dict(prof.parsed_skills or {})
-        if force_reset or skills_copy.get("owner_email") != clean_email:
-            skills_copy["user_uploaded"] = False
-            skills_copy["owner_email"] = clean_email
-            prof.parsed_skills = skills_copy
-            session.add(prof)
-            for stale_job in session.exec(select(JobPosting).where(JobPosting.status != "APPLIED")).all():
-                delete_job_posting_cascade(session, stale_job)
-    if force_reset:
+    """Preserves each user's uploaded skills.md profile across logins/registrations without wiping others."""
+    all_profiles = session.exec(select(CandidateProfile)).all()
+    user_has_profile = any(
+        str((p.parsed_skills or {}).get("owner_email") or "").strip().lower() == clean_email
+        for p in all_profiles
+    )
+    if force_reset and not user_has_profile:
+        for prof in all_profiles:
+            skills_copy = dict(prof.parsed_skills or {})
+            row_owner = str(skills_copy.get("owner_email") or "").strip().lower()
+            if not row_owner:
+                skills_copy["user_uploaded"] = False
+                prof.parsed_skills = skills_copy
+                session.add(prof)
         for stale_job in session.exec(select(JobPosting).where(JobPosting.status != "APPLIED")).all():
             delete_job_posting_cascade(session, stale_job)
     session.commit()

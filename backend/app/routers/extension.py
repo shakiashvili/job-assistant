@@ -1,7 +1,7 @@
 import logging
 import re
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
@@ -160,7 +160,20 @@ class LogApplicationRequest(BaseModel):
 def get_extension_profile(current_user: User = Depends(require_extension_user)) -> Dict[str, Any]:
     """Returns the live CandidateProfile summary for the authenticated extension user."""
     live = load_live_candidate_profile(current_user.email)
-    gt = ground_truth_store.get_data()
+    uploaded = bool(live and live.get("user_uploaded", False))
+    if not uploaded:
+        return {
+            "user_email": current_user.email,
+            "full_name": current_user.full_name or "",
+            "primary_role": "",
+            "detected_industry": "",
+            "target_industry": "",
+            "years_of_experience": 0.0,
+            "verified_skills": [],
+            "profile_uploaded": False,
+        }
+
+    gt = ground_truth_store.get_data(owner_email=current_user.email)
     cand = gt.get("candidate", {})
     skills_md = live.get("skills_markdown") or gt.get("skills_md_raw") or ""
     parsed_md = ground_truth_store.parse_profile_from_md(skills_md) if skills_md else {}
@@ -173,7 +186,56 @@ def get_extension_profile(current_user: User = Depends(require_extension_user)) 
         "target_industry": live.get("target_industry") or "qa_tech",
         "years_of_experience": float(live.get("years_of_experience") or live.get("experience_years") or 1.5),
         "verified_skills": list(live.get("verified_skills") or live.get("all_skills") or parsed_md.get("skills") or [])[:25],
-        "profile_uploaded": bool(live.get("user_uploaded", bool(skills_md))),
+        "profile_uploaded": True,
+    }
+
+
+@router.post("/upload-skills")
+async def extension_upload_skills(
+    request: Request,
+    current_user: User = Depends(require_extension_user),
+) -> Dict[str, Any]:
+    """Allows the Chrome Extension user to upload or refresh their own skills.md profile directly."""
+    md_text = ""
+    filename = "skills.md"
+    content_type = (request.headers.get("content-type") or "").lower()
+
+    if "application/json" in content_type:
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        md_text = str((body or {}).get("content") or "")
+        filename = str((body or {}).get("filename") or "skills.md")
+    else:
+        form = await request.form()
+        uploaded_file = form.get("file")
+        if uploaded_file is not None and hasattr(uploaded_file, "read"):
+            filename = getattr(uploaded_file, "filename", None) or "skills.md"
+            raw_bytes = await uploaded_file.read()
+            md_text = raw_bytes.decode("utf-8", errors="replace")
+        elif form.get("content") is not None:
+            md_text = str(form.get("content") or "")
+
+    if not md_text.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Please provide a non-empty .md/.txt skills profile.",
+        )
+
+    profile = ground_truth_store.ingest_skills_markdown(md_text, owner_email=current_user.email)
+    ps = dict(profile.parsed_skills or {})
+    return {
+        "status": "success",
+        "user_email": current_user.email,
+        "full_name": profile.full_name,
+        "primary_role": ps.get("primary_role") or ps.get("headline") or "Specialist",
+        "detected_industry": ps.get("detected_industry") or "General Professional",
+        "target_industry": ps.get("target_industry") or "qa_tech",
+        "years_of_experience": float(profile.experience_years or 1.5),
+        "verified_skills": list(ps.get("verified_skills") or ps.get("all_skills") or [])[:25],
+        "profile_uploaded": True,
+        "filename": filename,
     }
 
 
@@ -191,6 +253,14 @@ def prepare_application(
     5. Builds tailored ATS PDF + DOCX resume for direct DataTransfer attachment.
     6. Generates grounded per-field answers matching form controls & select options.
     """
+    live_profile = load_live_candidate_profile(current_user.email)
+    if not live_profile or not bool(live_profile.get("user_uploaded", False)):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="PROFILE_REQUIRED: Please upload your skills.md profile before generating a tailored CV or cover letter.",
+            headers={"X-Profile-Required": "true"},
+        )
+
     portal = _infer_portal(req.url, req.portal)
     dom_title = (req.job_title or "").strip()
     dom_company = (req.company_name or "").strip()
@@ -211,9 +281,8 @@ def prepare_application(
         job_title = dom_title
         company_name = dom_company
 
-    live_profile = load_live_candidate_profile(current_user.email)
-    gt = dict(ground_truth_store.get_data())
-    skills_md = live_profile.get("skills_markdown") or gt.get("skills_md_raw") or ground_truth_store.get_skills_md()
+    gt = dict(ground_truth_store.get_data(owner_email=current_user.email))
+    skills_md = live_profile.get("skills_markdown") or gt.get("skills_md_raw") or ""
     gt["skills_md_raw"] = skills_md
 
     if live_profile:
@@ -322,12 +391,17 @@ def prepare_application(
         description=desc_text,
         cv_language=cv_lang,
     )
+    req_skills = matcher_service.extract_job_requirements(job_title, desc_text)
     job_details = {
         "title": job_title,
         "company": company_name,
         "industry": str(parsed_skills.get("target_industry") or "qa_tech"),
         "portal": portal,
-        "summary": desc_text[:1200],
+        "summary": desc_text[:1600],
+        "description": desc_text[:2000],
+        "required_skills": req_skills or matched_skills,
+        "work_history": gt.get("work_history") or [],
+        "education": gt.get("education") or [],
     }
     narratives = gemini_service.craft_human_tone_narratives(
         job_details=job_details,
@@ -350,6 +424,9 @@ def prepare_application(
         dou_motivational_letter=narratives["dou_motivational_letter"],
         skills_md_override=skills_md,
         cv_language=cv_lang,
+        required_skills=req_skills,
+        owner_email=current_user.email,
+        vault_override=gt,
     )
 
     # Per-field answers
@@ -376,7 +453,9 @@ def prepare_application(
         for f, ans_obj in zip(non_file_fields, raw_ans):
             val = str(ans_obj.get("answer", "")).strip() if isinstance(ans_obj, dict) else ""
             q_label = (f.label or f.placeholder or f.name or "").lower()
-            if any(k in q_label for k in ("cover letter", "motivation", "why us", "why do you want", "message to")) and len(val) < 120:
+            if any(k in q_label for k in ("cover letter", "motivational", "motivation letter", "სამოტივაციო")):
+                val = narratives["dou_motivational_letter"]
+            elif any(k in q_label for k in ("motivation", "why us", "why do you want", "message to")) and len(val) < 120:
                 val = narratives["dou_motivational_letter"]
             elif any(k in q_label for k in ("summary", "about yourself", "headline")) and len(val) < 80:
                 val = narratives["human_tone_summary"]

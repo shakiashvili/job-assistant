@@ -68,17 +68,19 @@
 
   function renderProfile(profile) {
     if (!profile) return;
-    const name = profile.full_name || "Candidate";
+    const uploaded = Boolean(profile.profile_uploaded);
+    const name = profile.full_name || "Upload skills.md";
     const initials = name
       .split(/\s+/)
       .filter((w) => w && !w.startsWith("("))
       .slice(0, 2)
-      .map((w) => w[0].toUpperCase())
+      .map((s) => s[0].toUpperCase())
       .join("") || "TF";
-
     el("cand-avatar").textContent = initials;
-    el("cand-name").textContent = name;
-    el("cand-role").textContent = `${profile.primary_role || "Specialist"} · ${profile.years_of_experience ?? 1.5} yrs`;
+    el("cand-name").textContent = uploaded ? name : `${name} (Profile Missing)`;
+    el("cand-role").textContent = uploaded
+      ? `${profile.primary_role || "Specialist"} · ${profile.years_of_experience ?? 1.5} yrs`
+      : "Upload skills.md to enable tailored CV & cover letter generation";
 
     const skillsBox = el("cand-skills");
     skillsBox.innerHTML = "";
@@ -88,6 +90,18 @@
       chip.textContent = sk;
       skillsBox.appendChild(chip);
     });
+
+    if (uploaded) {
+      el("profile-upload-banner")?.classList.add("hidden");
+      el("skills-upload-box")?.classList.add("hidden");
+      if (el("btn-prepare-fill")) el("btn-prepare-fill").disabled = false;
+      if (el("btn-fill-step")) el("btn-fill-step").disabled = false;
+    } else {
+      el("profile-upload-banner")?.classList.remove("hidden");
+      el("skills-upload-box")?.classList.remove("hidden");
+      if (el("btn-prepare-fill")) el("btn-prepare-fill").disabled = true;
+      if (el("btn-fill-step")) el("btn-fill-step").disabled = true;
+    }
   }
 
   function renderAuthView() {
@@ -248,6 +262,9 @@
         if (res?.status === 401) {
           state.authenticated = false;
           renderAuthView();
+        } else if (res?.status === 400 && String(res?.error || "").includes("PROFILE_REQUIRED")) {
+          el("profile-upload-banner")?.classList.remove("hidden");
+          el("skills-upload-box")?.classList.remove("hidden");
         }
         showStatus(res?.error || "Failed to prepare application.", "error");
         return;
@@ -299,6 +316,40 @@
     el("btn-toggle-token")?.addEventListener("click", () => el("token-box")?.classList.toggle("hidden"));
     el("btn-toggle-api")?.addEventListener("click", () => el("api-settings-card")?.classList.toggle("hidden"));
     el("btn-toggle-settings")?.addEventListener("click", () => el("api-settings-card")?.classList.toggle("hidden"));
+    el("btn-toggle-upload")?.addEventListener("click", () => el("skills-upload-box")?.classList.toggle("hidden"));
+
+    el("btn-upload-skills")?.addEventListener("click", async () => {
+      const fileInput = el("skills-file-input");
+      const file = fileInput?.files?.[0];
+      if (!file) {
+        showStatus("Select your skills.md or .txt file first.", "error");
+        return;
+      }
+      const btn = el("btn-upload-skills");
+      btn.disabled = true;
+      btn.textContent = "⏳ Uploading...";
+      try {
+        const content = await file.text();
+        const res = await sendBg({
+          type: "UPLOAD_SKILLS_MD",
+          content,
+          filename: file.name || "skills.md",
+        });
+        if (!res?.ok) {
+          showStatus(res?.error || "Failed to upload skills.md.", "error");
+          return;
+        }
+        state.profile = res.data;
+        renderProfile(state.profile);
+        fileInput.value = "";
+        showStatus(`Profile synced for ${res.data?.full_name || "candidate"} (${file.name}).`, "success");
+      } catch (err) {
+        showStatus(`Could not read file: ${err?.message || err}`, "error");
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "⬆️ Upload & Sync skills.md";
+      }
+    });
 
     el("btn-save-api")?.addEventListener("click", async () => {
       const url = el("api-base-url").value.trim();

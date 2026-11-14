@@ -302,6 +302,24 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (type === "UPLOAD_SKILLS_MD") {
+    (async () => {
+      const res = await apiRequest("/api/extension/upload-skills", {
+        method: "POST",
+        body: { content: message.content || "", filename: message.filename || "skills.md" },
+        requiresAuth: true,
+      });
+      if (res.ok && res.data?.user_email) {
+        await chrome.storage.local.set({
+          userEmail: res.data.user_email,
+          userName: res.data.full_name || "Candidate",
+        });
+      }
+      sendResponse(res);
+    })();
+    return true;
+  }
+
   if (type === "ANSWER_QUESTIONS") {
     apiRequest("/api/answers/solve-screening", {
       method: "POST",

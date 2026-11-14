@@ -63,7 +63,8 @@ async def upload_skills_profile(
         raise HTTPException(status_code=400, detail="Provide a .md/.txt file upload or 'content' field.")
 
     try:
-        profile: CandidateProfile = ground_truth_store.ingest_skills_markdown(md_text)
+        owner = current_user.email if current_user.email != "guest@talentflow.local" else None
+        profile: CandidateProfile = ground_truth_store.ingest_skills_markdown(md_text, owner_email=owner)
 
         # Stamp ownership and clear old unapplied vacancies so ONLY suitable matches for this skills.md remain
         with Session(engine) as session:
@@ -71,8 +72,8 @@ async def upload_skills_profile(
             if db_prof:
                 skills_copy = dict(db_prof.parsed_skills or {})
                 skills_copy["user_uploaded"] = True
-                if current_user.email != "guest@talentflow.local":
-                    skills_copy["owner_email"] = current_user.email
+                if owner:
+                    skills_copy["owner_email"] = owner
                 db_prof.parsed_skills = skills_copy
                 session.add(db_prof)
             jobs = session.exec(select(JobPosting)).all()
@@ -114,20 +115,21 @@ async def upload_skills_profile(
 @router.get("/profile")
 def get_candidate_profile_db(current_user: User = Depends(get_current_user)):
     """Returns the current CandidateProfile record from the relational database."""
-    profile = ground_truth_store.get_profile_record()
+    owner = current_user.email if current_user.email != "guest@talentflow.local" else None
+    profile = ground_truth_store.get_profile_record(owner_email=owner)
     uploaded = _is_profile_uploaded_for_user(profile, current_user.email)
     clean_taxonomy = {
-        k: v for k, v in profile.parsed_skills.items() if k != "ground_truth_vault"
+        k: v for k, v in (profile.parsed_skills or {}).items() if k != "ground_truth_vault"
     }
     return {
         "id": profile.id,
-        "full_name": profile.full_name,
-        "email": profile.email,
-        "phone": profile.phone,
-        "location": profile.location,
-        "github_url": profile.github_url,
-        "linkedin_url": profile.linkedin_url,
-        "experience_years": profile.experience_years,
+        "full_name": profile.full_name if uploaded else "",
+        "email": profile.email if uploaded else "",
+        "phone": profile.phone if uploaded else "",
+        "location": profile.location if uploaded else "",
+        "github_url": profile.github_url if uploaded else "",
+        "linkedin_url": profile.linkedin_url if uploaded else "",
+        "experience_years": profile.experience_years if uploaded else 0.0,
         "profile_uploaded": uploaded,
         "raw_markdown": profile.raw_markdown if uploaded else "",
         "parsed_skills": clean_taxonomy if uploaded else {},
@@ -170,10 +172,9 @@ async def list_scraped_jobs(
     from ..services.scrapers.base_scraper import sanitize_company_name
 
     init_db()
+    owner = current_user.email if current_user.email != "guest@talentflow.local" else None
+    profile = ground_truth_store.get_profile_record(owner_email=owner)
     with Session(engine) as session:
-        profile = session.exec(
-            select(CandidateProfile).order_by(CandidateProfile.updated_at.desc())
-        ).first()
         if not _is_profile_uploaded_for_user(profile, current_user.email):
             return {
                 "items": [],
@@ -305,6 +306,7 @@ def prepare_job_email_package(
         if not job:
             raise HTTPException(status_code=404, detail="Vacancy not found")
 
+        owner = current_user.email if current_user.email != "guest@talentflow.local" else None
         pkg = cv_generator_service.prepare_email_application_package(
             job_title=job.title,
             company=job.company,
@@ -314,6 +316,7 @@ def prepare_job_email_package(
             email_subject_template=job.email_subject,
             cv_language=cv_language,
             cv_style="tailored",
+            owner_email=owner,
         )
 
         draft_res = {

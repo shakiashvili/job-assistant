@@ -108,11 +108,32 @@
         (document.querySelector('meta[property="og:site_name"]')?.getAttribute("content") || "");
       location = firstText([".location", ".posting-categories .location"]);
       jobDescription = firstText(["#content", ".posting-page", ".section-wrapper"]);
+    } else if (portal === "dou.ua") {
+      jobTitle = firstText(["h1.g-h2", ".b-vacancy h1", "h1"]);
+      companyName = firstText([
+        ".b-compinfo .l-n a",
+        ".b-compinfo .l-n",
+        ".comp-name a",
+        ".company-name",
+      ]) || "";
+      location = firstText([".place", ".b-vacancy .place", ".location"]);
+      jobDescription = firstText([".b-typo.vacancy-section", ".b-vacancy", "article", "main"]);
+    } else if (portal === "djinni.co") {
+      jobTitle = firstText(["header h1", "h1"]);
+      companyName = firstText([
+        ".job-details--title a",
+        "a.text-reset[href*='/jobs/company-']",
+        ".company-name",
+      ]) || "";
+      location = firstText([".location-text", ".job-additional-info--item"]);
+      jobDescription = firstText([".job-post__description", ".profile-page-section", "main"]);
     } else {
       jobTitle = firstText(["h1.job-title", "h1", ".vacancy-title", "h2"]);
+      const metaSite = (document.querySelector('meta[property="og:site_name"]')?.getAttribute("content") || "").trim();
+      const genericPortalSites = new Set(["dou", "dou.ua", "djinni", "djinni.co", "jobs.ge", "hr.ge", "hr.gov.ge", "linkedin", "workday"]);
       companyName =
         firstText([".company-name", ".employer-name", '[itemprop="hiringOrganization"]']) ||
-        (document.querySelector('meta[property="og:site_name"]')?.getAttribute("content") || "");
+        (!genericPortalSites.has(metaSite.toLowerCase()) ? metaSite : "");
       jobDescription = firstText(["main", "article", ".job-description", ".description"]);
     }
 

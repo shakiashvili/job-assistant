@@ -125,7 +125,16 @@ class ProfileRepository:
             raw_md = self.skills_md_path.read_text(encoding="utf-8")
         return profile_service.upsert_candidate_profile(raw_md, mark_uploaded=False)
 
-    def get_profile_record(self) -> CandidateProfile:
+    def get_profile_record(self, owner_email: Optional[str] = None) -> CandidateProfile:
+        target = owner_email.strip().lower() if owner_email else ""
+        if target and target != "guest@talentflow.local":
+            with Session(engine) as session:
+                profiles = session.exec(
+                    select(CandidateProfile).order_by(CandidateProfile.updated_at.desc())
+                ).all()
+                for prof in profiles:
+                    if str((prof.parsed_skills or {}).get("owner_email") or "").strip().lower() == target:
+                        return prof
         return self._ensure_seeded()
 
     def get_profession_presets(self) -> Dict[str, Dict[str, str]]:
@@ -170,10 +179,18 @@ class ProfileRepository:
         cand.setdefault("headline", ps.get("headline") or parsed_md.get("headline") or "")
         cand.setdefault("email", profile.email if profile.email != "candidate@example.com" else "")
         cand.setdefault("phone", profile.phone if "+000" not in str(profile.phone or "") else "")
+        if not cand.get("phone") and parsed_md.get("phone"):
+            cand["phone"] = parsed_md["phone"]
 
         loc = cand.get("location")
         if not isinstance(loc, dict):
             loc = {}
+        raw_loc_str = (profile.location or parsed_md.get("location") or "").strip()
+        if raw_loc_str and not loc.get("city"):
+            loc_parts = [p.strip() for p in raw_loc_str.split(",", 1)]
+            loc["city"] = loc_parts[0]
+            if len(loc_parts) > 1 and not loc.get("country"):
+                loc["country"] = loc_parts[1]
         loc.setdefault("city", "")
         loc.setdefault("country", "")
         loc.setdefault("timezone", "")
@@ -255,8 +272,8 @@ class ProfileRepository:
         data["parsed_skills_taxonomy"] = {k: v for k, v in ps.items() if k != "ground_truth_vault"}
         return data
 
-    def get_data(self) -> Dict[str, Any]:
-        profile = self.get_profile_record()
+    def get_data(self, owner_email: Optional[str] = None) -> Dict[str, Any]:
+        profile = self.get_profile_record(owner_email=owner_email)
         raw_vault = dict((profile.parsed_skills or {}).get("ground_truth_vault") or {})
         return self._normalize_vault(raw_vault, profile)
 
@@ -304,13 +321,14 @@ class ProfileRepository:
 
         return self.get_data()
 
-    def get_skills_md(self) -> str:
-        profile = self.get_profile_record()
+    def get_skills_md(self, owner_email: Optional[str] = None) -> str:
+        profile = self.get_profile_record(owner_email=owner_email)
         return profile.raw_markdown or ""
 
     def parse_profile_from_md(self, md_content: str) -> Dict[str, Any]:
         result: Dict[str, Any] = {}
         lines = md_content.splitlines()
+        header_block = "\n".join(lines[:15])
 
         for line in lines:
             s = line.strip()
@@ -327,8 +345,23 @@ class ProfileRepository:
             result["email"] = email_m.group(0)
 
         phone_m = re.search(r"(?:Phone|ტელეფონი|Tel)\**\s*:\**\s*([+\d \t()-]{7,22})", md_content, re.I)
+        if not phone_m:
+            phone_m = re.search(
+                r"(?<!\d)(\+\d{1,3}[\s.-]?(?:\(?\d{2,4}\)?[\s.-]?){2,4}\d{2,4})(?!\d)",
+                header_block,
+            )
         if phone_m:
             result["phone"] = phone_m.group(1).strip(" -\t\r\n")
+
+        loc_m = re.search(r"(?:Location|მდებარეობა)\**\s*:\**\s*([^\n]+)", md_content, re.I)
+        if not loc_m:
+            loc_m = re.search(
+                r"(?:^|[•|])\s*([A-Z][A-Za-zÀ-ÿ .-]{1,28},\s*[A-Z][A-Za-zÀ-ÿ .-]{1,28})\s*(?:$|[•|])",
+                header_block,
+                re.M,
+            )
+        if loc_m:
+            result["location"] = loc_m.group(1).strip()
 
         name_m = re.search(r"(?:Full Name|სახელი და გვარი|Name)\**\s*:\**\s*([^\n]+)", md_content, re.I)
         if name_m:
@@ -428,9 +461,11 @@ class ProfileRepository:
 
         return result
 
-    def ingest_skills_markdown(self, md_content: str) -> CandidateProfile:
+    def ingest_skills_markdown(self, md_content: str, owner_email: Optional[str] = None) -> CandidateProfile:
         from ..services.profile_service import profile_service
-        profile = profile_service.upsert_candidate_profile(md_content)
+        profile = profile_service.upsert_candidate_profile(
+            md_content, mark_uploaded=True, owner_email=owner_email
+        )
         parsed = self.parse_profile_from_md(md_content)
         if parsed.get("work_history") or parsed.get("education"):
             with Session(engine, expire_on_commit=False) as session:
@@ -440,7 +475,7 @@ class ProfileRepository:
                     vault = dict(skills_copy.get("ground_truth_vault") or {})
                     if parsed.get("work_history"):
                         vault["work_history"] = parsed["work_history"]
-                    if parsed.get("education") and not vault.get("education"):
+                    if parsed.get("education"):
                         vault["education"] = parsed["education"]
                     skills_copy["ground_truth_vault"] = vault
                     db_prof.parsed_skills = skills_copy
@@ -450,9 +485,9 @@ class ProfileRepository:
                     return db_prof
         return profile
 
-    def save_skills_md(self, md_content: str) -> Dict[str, Any]:
-        self.ingest_skills_markdown(md_content)
-        return self.get_data()
+    def save_skills_md(self, md_content: str, owner_email: Optional[str] = None) -> Dict[str, Any]:
+        self.ingest_skills_markdown(md_content, owner_email=owner_email)
+        return self.get_data(owner_email=owner_email)
 
     def extract_skills_from_md(self, md_content: str) -> List[str]:
         if not md_content:

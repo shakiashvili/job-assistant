@@ -62,9 +62,20 @@
               <div id="cand-role" class="candidate-role">Syncing role...</div>
             </div>
           </div>
-          <button id="btn-logout" class="btn-link" type="button" title="Sign out">Sign Out</button>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <button id="btn-toggle-upload" class="btn-link" type="button" title="Upload or replace skills.md">📄 skills.md</button>
+            <button id="btn-logout" class="btn-link" type="button" title="Sign out">Sign Out</button>
+          </div>
         </div>
         <div id="cand-skills" class="skills-row"></div>
+        <div id="profile-upload-banner" class="warning-banner hidden" style="margin-top:8px;">
+          No <code>skills.md</code> uploaded for this account yet. Upload your <code>skills.md</code> below before generating tailored CVs &amp; cover letters.
+        </div>
+        <div id="skills-upload-box" class="hidden" style="margin-top:8px; padding-top:8px; border-top:1px solid #334155;">
+          <label class="section-label" for="skills-file-input">Upload Candidate Profile (.md / .txt)</label>
+          <input type="file" id="skills-file-input" accept=".md,.txt,text/markdown,text/plain" class="input-field" style="padding:4px;" />
+          <button id="btn-upload-skills" class="btn btn-secondary" type="button" style="width:100%;">⬆️ Upload &amp; Sync skills.md</button>
+        </div>
       </div>
 
       <!-- Extracted Page Context -->

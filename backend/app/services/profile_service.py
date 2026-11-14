@@ -270,15 +270,28 @@ class ProfileService:
                         headline = primary_role
                     break
 
+        header_lines = "\n".join(text.splitlines()[:15])
+
         email_m = re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", text)
         if email_m:
             email = email_m.group(0)
 
         phone_m = re.search(r"(?:Phone|ტელეფონი|Tel)\**\s*:\**\s*([+\d \t()-]{7,22})", text, re.I)
+        if not phone_m:
+            phone_m = re.search(
+                r"(?<!\d)(\+\d{1,3}[\s.-]?(?:\(?\d{2,4}\)?[\s.-]?){2,4}\d{2,4})(?!\d)",
+                header_lines,
+            )
         if phone_m:
             phone = phone_m.group(1).strip(" -\t\r\n")
 
         loc_m = re.search(r"(?:Location|მდებარეობა)\**\s*:\**\s*([^\n]+)", text, re.I)
+        if not loc_m:
+            loc_m = re.search(
+                r"(?:^|[•|])\s*([A-Z][A-Za-zÀ-ÿ .-]{1,28},\s*[A-Z][A-Za-zÀ-ÿ .-]{1,28})\s*(?:$|[•|])",
+                header_lines,
+                re.M,
+            )
         if loc_m:
             location = loc_m.group(1).strip()
 
@@ -460,12 +473,21 @@ Markdown:
         from .scrapers.query_builder import build_search_queries
         return build_search_queries(parsed_skills, headline=headline)
 
-    def upsert_candidate_profile(self, raw_markdown: str, mark_uploaded: bool = True) -> CandidateProfile:
+    def upsert_candidate_profile(
+        self,
+        raw_markdown: str,
+        mark_uploaded: bool = True,
+        owner_email: Optional[str] = None,
+    ) -> CandidateProfile:
         """
         Extracts structured profile data from raw_markdown and upserts it into CandidateProfile in SQLite/PostgreSQL.
-        All PII stays encrypted at rest in CandidateProfile; never writes plaintext markdown to disk.
+        Scopes records per owner_email when provided so separate accounts keep isolated uploaded profiles.
         """
         init_db()
+
+        clean_owner = owner_email.strip().lower() if owner_email and owner_email.strip() else ""
+        if clean_owner == "guest@talentflow.local":
+            clean_owner = ""
 
         extracted = self.extract_structured_profile(raw_markdown)
         skills_payload: Dict[str, Any] = extracted.parsed_skills.model_dump()
@@ -484,16 +506,50 @@ Markdown:
         skills_payload["target_role"] = search_cfg["target_role"]
         skills_payload["search_queries"] = search_cfg
         skills_payload["user_uploaded"] = mark_uploaded
+        if clean_owner:
+            skills_payload["owner_email"] = clean_owner
 
         with Session(engine, expire_on_commit=False) as session:
-            profile = session.exec(
+            all_profiles = session.exec(
                 select(CandidateProfile).order_by(CandidateProfile.updated_at.desc())
-            ).first()
+            ).all()
+            profile = None
+            if clean_owner:
+                for cand_prof in all_profiles:
+                    ps_row = cand_prof.parsed_skills or {}
+                    if str(ps_row.get("owner_email") or "").strip().lower() == clean_owner:
+                        profile = cand_prof
+                        break
+                if profile is None:
+                    for cand_prof in all_profiles:
+                        ps_row = cand_prof.parsed_skills or {}
+                        if not str(ps_row.get("owner_email") or "").strip() and not bool(ps_row.get("user_uploaded", False)):
+                            profile = cand_prof
+                            break
+            else:
+                for cand_prof in all_profiles:
+                    ps_row = cand_prof.parsed_skills or {}
+                    row_owner = str(ps_row.get("owner_email") or "").strip().lower()
+                    if not row_owner or cand_prof.email == "candidate@example.com":
+                        profile = cand_prof
+                        break
+                if profile is None and all_profiles and mark_uploaded:
+                    profile = all_profiles[0]
 
             existing_vault: Dict[str, Any] = {}
-            if profile and isinstance(profile.parsed_skills, dict):
-                existing_vault = dict(profile.parsed_skills.get("ground_truth_vault") or {})
-            elif GROUND_TRUTH_FILE.exists():
+            same_owner = bool(
+                profile
+                and isinstance(profile.parsed_skills, dict)
+                and (
+                    not clean_owner
+                    or str(profile.parsed_skills.get("owner_email") or "").strip().lower() == clean_owner
+                )
+            )
+            if same_owner:
+                existing_vault = dict((profile.parsed_skills or {}).get("ground_truth_vault") or {})
+                if not clean_owner and (profile.parsed_skills or {}).get("owner_email"):
+                    skills_payload["owner_email"] = profile.parsed_skills.get("owner_email")
+            elif GROUND_TRUTH_FILE.exists() and not mark_uploaded:
                 try:
                     existing_vault = json.loads(GROUND_TRUTH_FILE.read_text(encoding="utf-8"))
                 except Exception:
@@ -507,6 +563,12 @@ Markdown:
             cand["headline"] = extracted.headline
             cand["email"] = extracted.email
             cand["phone"] = extracted.phone
+            if extracted.location:
+                loc_parts = [p.strip() for p in extracted.location.split(",", 1)]
+                loc_dict = dict(cand.get("location") or {}) if isinstance(cand.get("location"), dict) else {}
+                loc_dict["city"] = loc_parts[0]
+                loc_dict["country"] = loc_parts[1] if len(loc_parts) > 1 else loc_dict.get("country", "")
+                cand["location"] = loc_dict
             cand.setdefault("links", {})["github"] = extracted.github_url
             cand.setdefault("links", {})["linkedin"] = extracted.linkedin_url
             cand.setdefault("compensation", {})["notice_period"] = "1 week after offer"

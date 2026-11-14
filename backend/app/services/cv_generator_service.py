@@ -232,6 +232,33 @@ def safe_unicode_slug(text: str, default: str = "item", max_len: int = 24) -> st
     return slug[:max_len]
 
 
+def _format_candidate_location(loc_val: Any) -> str:
+    """Formats structured or string location cleanly, returning '' instead of ', ' when empty."""
+    if isinstance(loc_val, dict):
+        city = str(loc_val.get("city") or "").strip()
+        country = str(loc_val.get("country") or "").strip()
+        return ", ".join(p for p in (city, country) if p)
+    return str(loc_val or "").strip()
+
+
+def _prioritize_job_highlights(
+    highlights: List[str],
+    target_keywords: List[str],
+) -> List[str]:
+    """Ranks genuine work-history bullets mentioning job/matched requirements first without fabricating content."""
+    cleaned = clean_bullets(highlights)
+    if not cleaned or not target_keywords:
+        return cleaned
+    kws = [k.strip().lower() for k in target_keywords if k and len(k.strip()) >= 2]
+    scored = []
+    for idx, bullet in enumerate(cleaned):
+        b_low = bullet.lower()
+        hits = sum(1 for kw in kws if kw in b_low)
+        scored.append((-hits, idx, bullet))
+    scored.sort(key=lambda t: (t[0], t[1]))
+    return [t[2] for t in scored]
+
+
 class CVGeneratorService:
     """
     Grounded, Non-Exaggerated Single-Column ATS CV Generator using ReportLab.
@@ -255,9 +282,12 @@ class CVGeneratorService:
         skills_md_override: Optional[str] = None,
         cv_language: str = "en",
         cv_style: str = "tailored",
+        required_skills: Optional[List[str]] = None,
+        owner_email: Optional[str] = None,
+        vault_override: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        gt = ground_truth_store.get_data()
-        skills_md = skills_md_override or gt.get("skills_md_raw") or ground_truth_store.get_skills_md()
+        gt = vault_override if vault_override else ground_truth_store.get_data(owner_email=owner_email)
+        skills_md = skills_md_override or gt.get("skills_md_raw") or ground_truth_store.get_skills_md(owner_email=owner_email)
         parsed_md = ground_truth_store.parse_profile_from_md(skills_md) if skills_md else {}
 
         candidate = dict(gt.get("candidate", {}))
@@ -269,6 +299,12 @@ class CVGeneratorService:
             candidate["email"] = parsed_md["email"]
         if parsed_md.get("phone"):
             candidate["phone"] = parsed_md["phone"]
+        if parsed_md.get("location") and not _format_candidate_location(candidate.get("location")):
+            loc_parts = [p.strip() for p in str(parsed_md["location"]).split(",", 1)]
+            candidate["location"] = {
+                "city": loc_parts[0],
+                "country": loc_parts[1] if len(loc_parts) > 1 else "",
+            }
 
         cand_links = dict(candidate.get("links") or {})
         if skills_md:
@@ -280,15 +316,23 @@ class CVGeneratorService:
                 cand_links["linkedin"] = li_m.group(1).rstrip("/")
         candidate["links"] = cand_links
 
-        core_skills = gt.get("skills", {}).get("core", []) or parsed_md.get("skills") or []
+        core_skills = parsed_md.get("skills") or gt.get("skills", {}).get("core", []) or []
         raw_work_history = parsed_md.get("work_history") or gt.get("work_history", [])
-        education = gt.get("education", [])
+        education = parsed_md.get("education") or gt.get("education", [])
+
+        # Tailor bullet ordering per job description & matched requirements (ZERO fabrication)
+        target_kws = list(dict.fromkeys((matched_skills or []) + (required_skills or []) + re.findall(r"[A-Za-z]{3,}", job_title or "")))
+        prioritized_wh: List[Dict[str, Any]] = []
+        for job in raw_work_history:
+            j_copy = dict(job)
+            j_copy["highlights"] = _prioritize_job_highlights(j_copy.get("highlights") or [], target_kws)
+            prioritized_wh.append(j_copy)
 
         # Enforce 100% single-language work history when Georgian CV is explicitly built
-        if cv_language == "ka" and raw_work_history:
+        if cv_language == "ka" and prioritized_wh:
             from .gemini_service import gemini_service as _gs
             work_history = []
-            for job in raw_work_history:
+            for job in prioritized_wh:
                 j_copy = dict(job)
                 clean_b = clean_bullets(j_copy.get("highlights"))
                 j_copy["highlights"] = _gs.translate_bullets_to_georgian(clean_b) if clean_b else []
@@ -297,7 +341,7 @@ class CVGeneratorService:
                 j_copy["role"] = r_txt
                 work_history.append(j_copy)
         else:
-            work_history = raw_work_history
+            work_history = prioritized_wh
 
         # Order genuine skills so matched ATS keywords appear first (NO FABRICATION)
         matched_lower = {s.lower() for s in matched_skills}
@@ -436,14 +480,12 @@ class CVGeneratorService:
         subtle = RGBColor(0x47, 0x55, 0x69)
 
         full_name = str(candidate.get("full_name", "Candidate"))
-        email = str(candidate.get("email", "candidate@example.com"))
-        phone = str(candidate.get("phone", "+000 000 0000"))
-        loc_dict = candidate.get("location", {})
-        loc = (
-            f"{loc_dict.get('city', 'Tbilisi')}, {loc_dict.get('country', 'Georgia')}"
-            if isinstance(loc_dict, dict)
-            else str(loc_dict)
-        )
+        email = str(candidate.get("email") or "").strip()
+        if email == "candidate@example.com":
+            email = ""
+        raw_phone = str(candidate.get("phone") or "").strip()
+        phone = "" if (not raw_phone or "+000" in raw_phone or re.fullmatch(r"[+\s0()-]+", raw_phone)) else raw_phone
+        loc = _format_candidate_location(candidate.get("location"))
         links = candidate.get("links", {}) if isinstance(candidate.get("links"), dict) else {}
         linkedin = str(links.get("linkedin", "")).strip()
         github = str(links.get("github", "")).strip()
@@ -556,14 +598,16 @@ class CVGeneratorService:
         add_section_heading(lbl_edu)
         if education:
             for edu in education:
-                p_e = doc.add_paragraph(f"{edu.get('degree', '')} — {edu.get('institution', '')} ({edu.get('graduation_year', '')})")
+                yr_val = edu.get("graduation_year")
+                yr_suffix = f" ({yr_val})" if yr_val else ""
+                p_e = doc.add_paragraph(f"{edu.get('degree', '')} — {edu.get('institution', '')}{yr_suffix}")
                 p_e.paragraph_format.space_after = Pt(2)
                 for r in p_e.runs:
                     r.font.size = Pt(9.5)
         langs_line = (
             "ენები: ქართული (მშობლიური), ინგლისური (თავისუფლად)"
             if is_ka
-            else "Languages: English (Fluent), Georgian (Native)  |  Availability: 1 week after offer"
+            else "Languages: English (Fluent), Georgian (Native)"
         )
         p_lang = doc.add_paragraph(langs_line)
         for r in p_lang.runs:
@@ -657,24 +701,24 @@ class CVGeneratorService:
 
         full_name = escape(str(candidate.get("full_name", "Candidate")))
         raw_email = str(candidate.get("email", "candidate@example.com")).strip()
-        email = escape(raw_email)
-        phone = escape(str(candidate.get("phone", "+000 000 0000")))
-        loc_dict = candidate.get("location", {})
-        loc = escape(
-            f"{loc_dict.get('city', 'Tbilisi')}, {loc_dict.get('country', 'Georgia')}"
-            if isinstance(loc_dict, dict)
-            else str(loc_dict)
-        )
+        email = escape(raw_email) if raw_email and raw_email != "candidate@example.com" else ""
+        raw_phone = str(candidate.get("phone") or "").strip()
+        phone = "" if (not raw_phone or "+000" in raw_phone or re.fullmatch(r"[+\s0()-]+", raw_phone)) else escape(raw_phone)
+        loc = escape(_format_candidate_location(candidate.get("location")))
         links = candidate.get("links", {}) if isinstance(candidate.get("links"), dict) else {}
         raw_linkedin = str(links.get("linkedin", "")).strip()
         raw_github = str(links.get("github", "")).strip()
         raw_portfolio = str(links.get("portfolio", "")).strip()
 
-        pdf_links = [
-            f'<link href="{escape(normalize_contact_href(raw_email, is_email=True))}" color="#0369a1"><u>{email}</u></link>',
-            phone,
-            loc,
-        ]
+        pdf_links = []
+        if email:
+            pdf_links.append(
+                f'<link href="{escape(normalize_contact_href(raw_email, is_email=True))}" color="#0369a1"><u>{email}</u></link>'
+            )
+        if phone:
+            pdf_links.append(phone)
+        if loc:
+            pdf_links.append(loc)
         if raw_linkedin:
             pdf_links.append(
                 f'<link href="{escape(normalize_contact_href(raw_linkedin))}" color="#0369a1"><u>{escape(raw_linkedin)}</u></link>'
@@ -696,7 +740,6 @@ class CVGeneratorService:
         lbl_skills = "ტექნიკური კომპეტენციების მატრიცა" if is_ka else "TECHNICAL SKILLS MATRIX"
         lbl_exp = "სამუშაო გამოცდილება" if is_ka else "WORK EXPERIENCE"
         lbl_edu = "განათლება და სერტიფიკატები" if is_ka else "EDUCATION & CERTIFICATIONS"
-        lbl_start = "მზადყოფნა: შეთავაზებიდან 1 კვირაში" if is_ka else "Availability: 1 week after offer"
 
         story = []
 
@@ -704,8 +747,8 @@ class CVGeneratorService:
         role_display = candidate_headline or str(candidate.get("headline") or "QA Automation Engineer & SDET | Playwright • Python • API • CI/CD")
         story.append(Paragraph(f"<b>{full_name}</b>", header_style))
         story.append(Paragraph(escape(role_display), role_style))
-        pdf_links.append(lbl_start)
-        story.append(Paragraph(" | ".join(x for x in pdf_links if x), contact_style))
+        if pdf_links:
+            story.append(Paragraph(" | ".join(x for x in pdf_links if x), contact_style))
         story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#0284c7"), spaceAfter=6))
 
         # 2. Summary
@@ -742,13 +785,14 @@ class CVGeneratorService:
         for edu in education:
             deg = escape(str(edu.get("degree", "")))
             inst = escape(str(edu.get("institution", "")))
-            yr = escape(str(edu.get("graduation_year", "")))
-            story.append(Paragraph(f"<b>{deg}</b> — {inst} ({yr})", body_style))
+            raw_yr = edu.get("graduation_year")
+            yr_suffix = f" ({escape(str(raw_yr))})" if raw_yr else ""
+            story.append(Paragraph(f"<b>{deg}</b> — {inst}{yr_suffix}", body_style))
 
         lang_line = (
-            "ენები: ქართული (მშობლიური), ინგლისური (თავისუფლად C1/C2) | მუშაობის დაწყება: 1 კვირა შეთავაზებიდან"
+            "ენები: ქართული (მშობლიური), ინგლისური (თავისუფლად C1/C2)"
             if is_ka
-            else "Languages: English (Fluent C1/C2), Georgian (Native) | Notice Period: 1 week after offer"
+            else "Languages: English (Fluent C1/C2), Georgian (Native)"
         )
         story.append(Paragraph(lang_line, body_style))
 
@@ -768,24 +812,25 @@ class CVGeneratorService:
     ) -> str:
         is_ka = cv_language == "ka"
         full_name = candidate.get("full_name", "Candidate")
-        email = candidate.get("email", "candidate@example.com")
-        phone = candidate.get("phone", "+000 000 0000")
-        loc_dict = candidate.get("location", {})
-        loc = (
-            f"{loc_dict.get('city', 'Tbilisi')}, {loc_dict.get('country', 'Georgia')}"
-            if isinstance(loc_dict, dict)
-            else str(loc_dict)
-        )
+        raw_email = str(candidate.get("email") or "").strip()
+        email = "" if raw_email == "candidate@example.com" else raw_email
+        raw_phone = str(candidate.get("phone") or "").strip()
+        phone = "" if (not raw_phone or "+000" in raw_phone or re.fullmatch(r"[+\s0()-]+", raw_phone)) else raw_phone
+        loc = _format_candidate_location(candidate.get("location"))
         links = candidate.get("links", {}) if isinstance(candidate.get("links"), dict) else {}
         linkedin = str(links.get("linkedin", "")).strip()
         github = str(links.get("github", "")).strip()
         portfolio = str(links.get("portfolio", "")).strip()
 
-        html_contact_parts = [
-            f'<a href="{escape(normalize_contact_href(email, is_email=True))}" style="color:#0369a1;">{escape(email)}</a>',
-            escape(phone),
-            escape(loc),
-        ]
+        html_contact_parts = []
+        if email:
+            html_contact_parts.append(
+                f'<a href="{escape(normalize_contact_href(email, is_email=True))}" style="color:#0369a1;">{escape(email)}</a>'
+            )
+        if phone:
+            html_contact_parts.append(escape(phone))
+        if loc:
+            html_contact_parts.append(escape(loc))
         if linkedin:
             html_contact_parts.append(
                 f'<a href="{escape(normalize_contact_href(linkedin))}" target="_blank" style="color:#0369a1;">{escape(linkedin)}</a>'
@@ -804,7 +849,6 @@ class CVGeneratorService:
         lbl_skills = "ტექნიკური კომპეტენციების მატრიცა" if is_ka else "TECHNICAL SKILLS MATRIX"
         lbl_exp = "სამუშაო გამოცდილება" if is_ka else "WORK EXPERIENCE"
         lbl_edu = "განათლება და სერტიფიკატები" if is_ka else "EDUCATION & CERTIFICATIONS"
-        lbl_start = "მუშაობის დაწყება: შეთავაზებიდან 1 კვირაში" if is_ka else "Availability: 1 week after offer"
 
         grouped_html = group_skills_into_ats_buckets(display_skills[:30], cv_language=cv_language)
         if grouped_html:
@@ -838,7 +882,9 @@ class CVGeneratorService:
 
         edu_blocks = ""
         for edu in education:
-            edu_blocks += f"<div style='font-size:12px; color:#334155;'><strong>{edu.get('degree', '')}</strong> — {edu.get('institution', '')} ({edu.get('graduation_year', '')})</div>"
+            yr_val = edu.get("graduation_year")
+            yr_suffix = f" ({escape(str(yr_val))})" if yr_val else ""
+            edu_blocks += f"<div style='font-size:12px; color:#334155;'><strong>{escape(str(edu.get('degree', '')))}</strong> — {escape(str(edu.get('institution', '')))}{yr_suffix}</div>"
 
         return f"""<!DOCTYPE html>
 <html lang="{cv_language}">
@@ -878,7 +924,7 @@ class CVGeneratorService:
       <h1 class="name">{full_name}</h1>
       <div class="role">{escape(candidate_headline or str(candidate.get('headline') or 'QA Automation Engineer & SDET | Playwright • Python • API • CI/CD'))}</div>
       <div class="contact">
-        {html_contact_line} &nbsp;•&nbsp; <strong>{lbl_start}</strong>
+        {html_contact_line}
       </div>
     </div>
 
@@ -894,7 +940,7 @@ class CVGeneratorService:
     <div class="section-title">{lbl_edu}</div>
     {edu_blocks}
     <div style="font-size:12px; color:#475569; margin-top:6px;">
-      {"ენები: ქართული (მშობლიური), ინგლისური (თავისუფლად C1/C2) • მზადყოფნა: შეთავაზებიდან 1 კვირაში" if is_ka else "Languages: English (Fluent), Georgian (Native) • Notice Period: 1 week after offer"}
+      {"ენები: ქართული (მშობლიური), ინგლისური (თავისუფლად C1/C2)" if is_ka else "Languages: English (Fluent), Georgian (Native)"}
     </div>
   </div>
 </body>
@@ -911,6 +957,7 @@ class CVGeneratorService:
         cv_language: str = "auto",
         cv_style: str = "tailored",
         skills_md_override: Optional[str] = None,
+        owner_email: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Generates a complete, ready-to-send email package for any vacancy:
@@ -921,7 +968,7 @@ class CVGeneratorService:
         from .gemini_service import gemini_service
         from .matcher_service import matcher_service
 
-        gt = ground_truth_store.get_data()
+        gt = ground_truth_store.get_data(owner_email=owner_email)
         candidate = dict(gt.get("candidate", {}))
         ps = gt.get("parsed_skills_taxonomy") or {}
         skills_md = skills_md_override or gt.get("skills_md_raw") or ""
@@ -964,6 +1011,10 @@ class CVGeneratorService:
                 "portal": portal,
                 "industry": target_industry,
                 "required_skills": req_skills,
+                "summary": (description or "")[:1600],
+                "description": (description or "")[:2000],
+                "work_history": gt.get("work_history") or [],
+                "education": gt.get("education") or [],
             },
             skills_md=skills_md,
             matched_skills=matched,
@@ -984,6 +1035,9 @@ class CVGeneratorService:
             skills_md_override=skills_md,
             cv_language=cv_lang,
             cv_style=cv_style,
+            required_skills=req_skills,
+            owner_email=owner_email,
+            vault_override=gt,
         )
 
         # Clean subject & sanitize company (never address location strings or portal chrome)
@@ -1112,10 +1166,11 @@ class CVGeneratorService:
             ka_area, ka_action, ka_goal = ka_tuple
             salutation = f"მოგესალმებით, {real_company}-ის გუნდს," if real_company else "მოგესალმებით, გუნდს,"
             hook_company = f"{real_company}-ში" if real_company else "თქვენს კომპანიაში"
+            req_snippet = ", ".join(req_skills[:4]) if req_skills else skills_highlight
             proof_para = (
-                f"{companies_phrase}-ში მუშაობისას პრაქტიკულად გამოვიყენე {skills_highlight} — ვუზრუნველყოფდი {ka_action}."
+                f"{companies_phrase}-ში მუშაობისას პრაქტიკულად გამოვიყენე {skills_highlight} — ვუზრუნველყოფდი {ka_action}, რაც პირდაპირ პასუხობს ვაკანსიის მოთხოვნებს ({req_snippet})."
                 if companies_phrase
-                else f"ჩემს ყოველდღიურ პრაქტიკაში ({skills_highlight}) ფოკუსირებული ვარ {ka_action}-ზე."
+                else f"ჩემს ყოველდღიურ პრაქტიკაში ({skills_highlight}) ფოკუსირებული ვარ {ka_action}-ზე, რაც შეესაბამება პოზიციის მოთხოვნებს ({req_snippet})."
             )
             cta_company = f"{real_company}-ის" if real_company else "თქვენი გუნდის"
             cover_letter = (
@@ -1123,24 +1178,30 @@ class CVGeneratorService:
                 f"დიდი ინტერესით გიგზავნით განაცხადს „{job_title}“ პოზიციაზე {hook_company}. "
                 f"მაქვს {exp_years:g} წლიანი პრაქტიკული გამოცდილება {ka_area} ({skills_highlight}).\n\n"
                 f"{proof_para}\n\n"
-                f"მოხარული ვიქნები შევუერთდე {cta_company} გუნდს და წვლილი შევიტანო {ka_goal}. მუშაობის დაწყება შემიძლია შეთავაზებიდან 1 კვირაში. თანდართულია ჩემი რეზიუმე (CV).\n\n"
+                f"მოხარული ვიქნები შევუერთდე {cta_company} გუნდს და წვლილი შევიტანო {ka_goal}. თანდართულია ამ პოზიციისთვის მორგებული ჩემი რეზიუმე (CV).\n\n"
                 f"პატივისცემით,\n{contact_footer}"
             )
         else:
             en_area, en_action, en_goal = en_tuple
             salutation = f"Dear {real_company} Hiring Team," if real_company else "Dear Hiring Team,"
             target_phrase = f"at {real_company}" if real_company else "with your team"
+            req_snippet = ", ".join(req_skills[:5]) if req_skills else skills_highlight
+            gap_bridge = (
+                f" Beyond core alignment on {skills_highlight}, my adaptable foundation enables me to ramp quickly on {', '.join(missing[:2])}."
+                if missing and not is_non_tech_domain
+                else ""
+            )
             proof_para = (
-                f"Across my previous roles at {companies_phrase}, I applied {skills_highlight}—focusing on {en_action}."
+                f"Across my roles at {companies_phrase}, I applied {skills_highlight}—focusing on {en_action} to meet core role needs ({req_snippet}).{gap_bridge}"
                 if companies_phrase
-                else f"In my hands-on work spanning {skills_highlight}, I focus on {en_action}."
+                else f"In my hands-on work spanning {skills_highlight}, I focus on {en_action} aligned with your role priorities ({req_snippet}).{gap_bridge}"
             )
             cta_team = f"{real_company}'s" if real_company else "your team's"
             cover_letter = (
                 f"{salutation}\n\n"
-                f"I am applying for the {job_title} role {target_phrase}. With {exp_years:g} years of hands-on experience in {en_area} ({skills_highlight}), I can add value from day one.\n\n"
+                f"I am writing to apply for the {job_title} role {target_phrase}. With {exp_years:g} years of hands-on experience in {en_area} ({skills_highlight}), my background directly aligns with your stated requirements in {req_snippet}.\n\n"
                 f"{proof_para}\n\n"
-                f"I would welcome the opportunity to contribute to {cta_team} {en_goal}. My tailored CV is attached, and I am available 1 week after offer.\n\n"
+                f"I would welcome the opportunity to discuss how my tailored CV and experience can support {cta_team} {en_goal}.\n\n"
                 f"Best regards,\n{contact_footer}"
             )
 
