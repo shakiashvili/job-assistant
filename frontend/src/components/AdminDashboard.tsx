@@ -14,8 +14,8 @@ import {
   UserX,
   Lock,
 } from 'lucide-react';
-import { fetchAdminMetrics, fetchAdminUsers, updateAdminUser, deactivateAdminUser } from '../services/api';
-import { PlatformMetrics, AdminUser, UserProfile } from '../types';
+import { fetchAdminMetrics, fetchAdminUsers, updateAdminUser, deactivateAdminUser, fetchAdminAiMetrics } from '../services/api';
+import { PlatformMetrics, AdminUser, UserProfile, AIMetricsResponse } from '../types';
 
 interface AdminDashboardProps {
   currentUser: UserProfile | null;
@@ -23,6 +23,7 @@ interface AdminDashboardProps {
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) => {
   const [metrics, setMetrics] = useState<PlatformMetrics | null>(null);
+  const [aiMetrics, setAiMetrics] = useState<AIMetricsResponse | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
@@ -40,9 +41,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
     setLoading(true);
     setError(null);
     try {
-      const [m, u] = await Promise.all([fetchAdminMetrics(), fetchAdminUsers()]);
+      const [m, u, ai] = await Promise.all([
+        fetchAdminMetrics(),
+        fetchAdminUsers(),
+        fetchAdminAiMetrics().catch(() => null),
+      ]);
       setMetrics(m);
       setUsers(u);
+      setAiMetrics(ai);
     } catch (err: any) {
       setError(err.message || 'Failed to load administrator data.');
     } finally {
@@ -186,6 +192,97 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
               {metrics.total_discovered_jobs} Vacancies Ingested
             </div>
           </div>
+        </div>
+      )}
+
+      {/* AI Telemetry & Cost Observability */}
+      {aiMetrics && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <Activity className="w-4 h-4 text-sky-400" />
+                <span>Gemini AI Pipeline & Cost Observability</span>
+              </h3>
+              <p className="text-xs text-slate-400">
+                Primary model: <code className="text-sky-300">{aiMetrics.quality_model}</code> · Fast model:{' '}
+                <code className="text-emerald-300">{aiMetrics.fast_model}</code>
+              </p>
+            </div>
+            <span
+              className={`text-[11px] font-bold px-2.5 py-1 rounded-full border ${
+                aiMetrics.gemini_configured
+                  ? 'bg-emerald-950/60 text-emerald-300 border-emerald-800'
+                  : 'bg-amber-950/60 text-amber-300 border-amber-800'
+              }`}
+            >
+              {aiMetrics.gemini_configured ? 'Gemini Live Key Active' : 'Deterministic Fallback Mode'}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+            <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+              <div className="text-[10px] uppercase text-slate-500 font-bold">Total Calls</div>
+              <div className="text-lg font-extrabold text-white">{aiMetrics.total_requests}</div>
+            </div>
+            <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+              <div className="text-[10px] uppercase text-slate-500 font-bold">Cache Hit Rate</div>
+              <div className="text-lg font-extrabold text-emerald-400">{aiMetrics.cache_hit_rate}%</div>
+            </div>
+            <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+              <div className="text-[10px] uppercase text-slate-500 font-bold">Avg / P95 Latency</div>
+              <div className="text-sm font-bold text-slate-200 mt-1">
+                {aiMetrics.avg_latency_ms}ms / {aiMetrics.p95_latency_ms}ms
+              </div>
+            </div>
+            <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+              <div className="text-[10px] uppercase text-slate-500 font-bold">Total Tokens</div>
+              <div className="text-lg font-extrabold text-sky-300">{aiMetrics.total_tokens.toLocaleString()}</div>
+            </div>
+            <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+              <div className="text-[10px] uppercase text-slate-500 font-bold">Est. Cost</div>
+              <div className="text-lg font-extrabold text-indigo-300">
+                {aiMetrics.estimated_cost_usd !== null && aiMetrics.estimated_cost_usd !== undefined
+                  ? `$${aiMetrics.estimated_cost_usd.toFixed(4)}`
+                  : 'N/A'}
+              </div>
+            </div>
+            <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+              <div className="text-[10px] uppercase text-slate-500 font-bold">Rate Limits / Fails</div>
+              <div className="text-lg font-extrabold text-amber-300">
+                {aiMetrics.rate_limited_count} / {aiMetrics.failed_count}
+              </div>
+            </div>
+          </div>
+
+          {Object.keys(aiMetrics.by_task || {}).length > 0 && (
+            <div className="overflow-x-auto rounded-xl border border-slate-800">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-950 text-slate-400 text-[10px] uppercase border-b border-slate-800">
+                  <tr>
+                    <th className="py-2 px-3">Task</th>
+                    <th className="py-2 px-3">Requests</th>
+                    <th className="py-2 px-3">Success</th>
+                    <th className="py-2 px-3">Cache Hits</th>
+                    <th className="py-2 px-3">Errors</th>
+                    <th className="py-2 px-3">Avg Latency</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {Object.entries(aiMetrics.by_task).map(([taskName, t]) => (
+                    <tr key={taskName}>
+                      <td className="py-2 px-3 font-mono text-sky-300">{taskName}</td>
+                      <td className="py-2 px-3 text-slate-200">{t.count}</td>
+                      <td className="py-2 px-3 text-emerald-300">{t.success}</td>
+                      <td className="py-2 px-3 text-emerald-400">{t.cache_hits}</td>
+                      <td className="py-2 px-3 text-rose-400">{t.errors}</td>
+                      <td className="py-2 px-3 text-slate-300">{t.avg_latency_ms}ms</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 

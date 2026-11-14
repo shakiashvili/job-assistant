@@ -254,11 +254,12 @@ class PlaywrightStagerService:
                 candidate.get("full_name", "Candidate"),
                 "full_name",
             )
+            is_local_mock = str(job_url or "").startswith("file://")
             await fill_semantic_cascade(
                 re.compile(r"e-?mail|ელ\.?\s*ფოსტა", re.I),
                 re.compile(r"email|@", re.I),
                 "input[type='email'], input[name*='email']",
-                candidate.get("email", "candidate@example.com"),
+                candidate.get("email") or ("candidate@example.com" if is_local_mock else ""),
                 "email",
             )
             await fill_semantic_cascade(

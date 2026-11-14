@@ -2,7 +2,7 @@ import hashlib
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, List
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlmodel import Session, select, delete
@@ -16,6 +16,7 @@ from ..db.models import (
     ApplicationRecord,
     ApplicationTracker,
     CandidateDocument,
+    CVVersion,
     utc_now,
 )
 from ..services.auth_service import get_current_user
@@ -317,17 +318,23 @@ async def upload_skills_md_file(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
 ):
-    """Accepts an uploaded .md skills file, validates size, saves it for the current user, and syncs skills."""
+    """Accepts .pdf, .docx, .md, or .txt resume/skills uploads, parses profile & computes missing fields."""
+    from ..services.cv_parser_service import cv_parser_service
+
     raw_bytes = await file.read()
     if len(raw_bytes) == 0:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
     if len(raw_bytes) > MAX_UPLOAD_SIZE_BYTES:
         raise HTTPException(status_code=413, detail="Uploaded file exceeds 10 MB maximum size limit.")
+    filename = file.filename or "candidate_skills.md"
+    try:
+        md_text = cv_parser_service.extract_text_from_bytes(raw_bytes, filename=filename)
+    except ValueError as parse_err:
+        raise HTTPException(status_code=400, detail=str(parse_err))
     try:
         from ..services.scrapers.scraper_orchestrator import scraper_orchestrator
         owner = current_user.email if not _is_guest(current_user) else None
         uid = current_user.id if not _is_guest(current_user) else None
-        md_text = raw_bytes.decode("utf-8", errors="replace")
         updated_gt = ground_truth_store.save_skills_md(
             md_text,
             owner_email=owner,
@@ -335,16 +342,19 @@ async def upload_skills_md_file(
         )
         scraper_orchestrator.rescore_existing_jobs(owner_email=owner, user_id=uid)
         extracted = ground_truth_store.extract_skills_from_md(md_text)
+        completeness_score, missing_fields = cv_parser_service.compute_missing_fields(updated_gt)
         return {
             "status": "success",
-            "filename": file.filename or "candidate_skills.md",
+            "filename": filename,
             "content": md_text,
             "extracted_skills": extracted,
+            "completeness_score": completeness_score,
+            "missing_fields": missing_fields,
             "ground_truth": updated_gt,
-            "message": f"Uploaded {file.filename} and synced {len(extracted)} skills!",
+            "message": f"Uploaded {filename} and synced {len(extracted)} skills!",
         }
     except Exception as e:
-        logger.error(f"Error uploading skills.md file: {e}")
+        logger.error(f"Error uploading skills/CV file: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -382,9 +392,12 @@ def list_my_uploaded_cvs(current_user: User = Depends(get_current_user)):
 @router.post("/resumes/my-cvs/upload")
 async def upload_personal_cv(
     file: UploadFile = File(...),
+    parse_into_profile: bool = Form(True),
     current_user: User = Depends(get_current_user),
 ):
-    """Uploads a personal resume (.pdf, .docx, .md, .txt) with size/type validation and ownership tracking."""
+    """Uploads a personal resume (.pdf, .docx, .md, .txt), stores it safely, and optionally parses it into the vault."""
+    from ..services.cv_parser_service import cv_parser_service
+
     safe_name = Path(file.filename or "resume.pdf").name
     ext = Path(safe_name).suffix.lower()
     if ext not in (".pdf", ".docx", ".doc", ".md", ".txt"):
@@ -399,6 +412,31 @@ async def upload_personal_cv(
         raise HTTPException(status_code=400, detail="Invalid PDF file header.")
     if ext == ".docx" and not content.startswith(b"PK"):
         raise HTTPException(status_code=400, detail="Invalid DOCX file header.")
+
+    parsed_summary: Optional[Dict[str, Any]] = None
+    if parse_into_profile:
+        try:
+            extracted_md = cv_parser_service.extract_text_from_bytes(content, filename=safe_name)
+            owner = current_user.email if not _is_guest(current_user) else None
+            uid = current_user.id if not _is_guest(current_user) else None
+            updated_gt = ground_truth_store.save_skills_md(
+                extracted_md,
+                owner_email=owner,
+                user_id=uid,
+            )
+            completeness_score, missing_fields = cv_parser_service.compute_missing_fields(updated_gt)
+            parsed_summary = {
+                "completeness_score": completeness_score,
+                "missing_fields": missing_fields,
+                "extracted_skills_count": len((updated_gt.get("skills") or {}).get("core") or []),
+            }
+        except ValueError as parse_err:
+            # File passed header validation; preserve upload in My CVs vault and surface non-fatal warning
+            parsed_summary = {
+                "completeness_score": None,
+                "missing_fields": [],
+                "parse_warning": str(parse_err),
+            }
 
     USER_CV_DIR.mkdir(parents=True, exist_ok=True)
     dest = USER_CV_DIR / safe_name
@@ -417,6 +455,7 @@ async def upload_personal_cv(
         "url": f"/api/resumes/user/{safe_name}",
         "ext": ext.lstrip("."),
         "size_kb": round(len(content) / 1024, 1),
+        "parsed_profile": parsed_summary,
     }
 
 
@@ -494,17 +533,230 @@ def generate_cv_edition(
         cv_language=req.cv_language or "en",
         cv_style=req.edition or "ats",
     )
-    if pkg.get("cv_filename"):
-        pdf_p = GENERATED_RESUMES_DIR / pkg["cv_filename"]
-        record_candidate_document(
+    recorded_names: set[str] = set()
+    for fname_key in ("pdf_filename", "docx_filename", "cv_filename"):
+        fname_val = pkg.get(fname_key)
+        if fname_val and fname_val not in recorded_names:
+            recorded_names.add(fname_val)
+            file_p = GENERATED_RESUMES_DIR / fname_val
+            record_candidate_document(
+                user_id=current_user.id,
+                filename=fname_val,
+                file_path=file_p,
+                doc_type=f"generated_{req.edition}_cv",
+                target_company=company,
+                target_role=role,
+            )
+
+    cv_version_id: Optional[int] = None
+    try:
+        with Session(engine) as session:
+            cv_ver = CVVersion(
+                user_id=current_user.id,
+                title=f"{role} — {company} ({req.edition.upper()})",
+                target_company=company,
+                target_role=role,
+                edition=req.edition or "ats",
+                cv_language=pkg.get("cv_language") or req.cv_language or "en",
+                structured_content=pkg.get("cv_sections") or {},
+                rendered_html=pkg.get("rendered_html") or "",
+                pdf_filename=pkg.get("pdf_filename"),
+                docx_filename=pkg.get("docx_filename"),
+                version_number=1,
+            )
+            session.add(cv_ver)
+            session.commit()
+            session.refresh(cv_ver)
+            cv_version_id = cv_ver.id
+    except Exception as ver_err:
+        logger.debug("Could not persist CVVersion snapshot: %s", ver_err)
+
+    return {"status": "ok", "edition": req.edition, "cv_version_id": cv_version_id, **pkg}
+
+
+class CVVersionCreateRequest(BaseModel):
+    title: str
+    target_company: str = ""
+    target_role: str = ""
+    edition: str = "tailored"
+    language: str = "en"
+    job_posting_id: Optional[int] = None
+    structured_json: Dict[str, Any] = {}
+
+
+class CVVersionPatchRequest(BaseModel):
+    title: Optional[str] = None
+    target_company: Optional[str] = None
+    target_role: Optional[str] = None
+    structured_json: Optional[Dict[str, Any]] = None
+    language: Optional[str] = None
+    edition: Optional[str] = None
+
+
+def _serialize_cv_version(v: CVVersion) -> Dict[str, Any]:
+    html_name = f"{Path(v.pdf_filename).stem}.html" if v.pdf_filename else None
+    return {
+        "id": v.id,
+        "user_id": v.user_id,
+        "job_posting_id": v.job_posting_id,
+        "title": v.title,
+        "target_company": v.target_company,
+        "target_role": v.target_role,
+        "edition": v.edition,
+        "language": v.cv_language,
+        "structured_json": v.structured_content or {},
+        "rendered_html": v.rendered_html or "",
+        "pdf_filename": v.pdf_filename,
+        "docx_filename": v.docx_filename,
+        "pdf_url": f"/api/resumes/generated/{v.pdf_filename}" if v.pdf_filename else None,
+        "docx_url": f"/api/resumes/generated/{v.docx_filename}" if v.docx_filename else None,
+        "html_preview_url": f"/api/resumes/generated/{html_name}" if html_name else None,
+        "version_number": v.version_number,
+        "is_active": v.is_active,
+        "created_at": v.created_at.isoformat() if v.created_at else "",
+        "updated_at": v.updated_at.isoformat() if v.updated_at else "",
+    }
+
+
+@router.get("/cv-versions")
+def list_cv_versions(current_user: User = Depends(get_current_user)):
+    """Lists all saved editable CV Studio versions for the current user."""
+    with Session(engine) as session:
+        rows = session.exec(
+            select(CVVersion)
+            .where(CVVersion.user_id == current_user.id)
+            .order_by(CVVersion.updated_at.desc())
+        ).all()
+        return {"items": [_serialize_cv_version(r) for r in rows]}
+
+
+@router.post("/cv-versions")
+def create_cv_version(
+    req: CVVersionCreateRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Creates a new editable CV Studio version and renders its HTML, PDF, and DOCX files."""
+    from ..services.cv_generator_service import cv_generator_service
+
+    sections = dict(req.structured_json or {})
+    if not sections:
+        gt = ground_truth_store.get_data(owner_email=current_user.email, user_id=current_user.id)
+        cand = gt.get("candidate") or {}
+        sections = {
+            "candidate": cand,
+            "summary": cand.get("headline") or "",
+            "skills": (gt.get("skills") or {}).get("core") or [],
+            "work_history": gt.get("work_history") or [],
+            "education": gt.get("education") or [],
+            "target_role": req.target_role or cand.get("headline") or "Specialist",
+            "target_company": req.target_company or "Tailored",
+            "cv_language": req.language,
+            "cv_style": req.edition,
+        }
+
+    rendered = cv_generator_service.render_cv_from_sections(sections)
+    for fname in (rendered.get("pdf_filename"), rendered.get("docx_filename")):
+        if fname:
+            record_candidate_document(
+                user_id=current_user.id,
+                filename=fname,
+                file_path=GENERATED_RESUMES_DIR / fname,
+                doc_type=f"cv_studio_{req.edition}",
+                target_company=req.target_company,
+                target_role=req.target_role,
+            )
+
+    with Session(engine) as session:
+        ver = CVVersion(
             user_id=current_user.id,
-            filename=pkg["cv_filename"],
-            file_path=pdf_p,
-            doc_type=f"generated_{req.edition}_cv",
-            target_company=company,
-            target_role=role,
+            job_posting_id=req.job_posting_id,
+            title=req.title,
+            target_company=req.target_company,
+            target_role=req.target_role,
+            edition=req.edition,
+            cv_language=req.language,
+            structured_content=sections,
+            rendered_html=rendered.get("rendered_html") or "",
+            pdf_filename=rendered.get("pdf_filename"),
+            docx_filename=rendered.get("docx_filename"),
+            version_number=1,
         )
-    return {"status": "ok", "edition": req.edition, **pkg}
+        session.add(ver)
+        session.commit()
+        session.refresh(ver)
+        return _serialize_cv_version(ver)
+
+
+@router.patch("/cv-versions/{version_id}")
+def update_cv_version(
+    version_id: int,
+    req: CVVersionPatchRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Updates structured CV Studio sections and re-renders HTML, PDF, and DOCX files cleanly."""
+    from ..services.cv_generator_service import cv_generator_service
+
+    with Session(engine) as session:
+        ver = session.get(CVVersion, version_id)
+        if not ver or ver.user_id != current_user.id:
+            raise HTTPException(status_code=404, detail="CV version not found.")
+
+        sections = dict(req.structured_json if req.structured_json is not None else (ver.structured_content or {}))
+        if req.language:
+            ver.cv_language = req.language
+            sections["cv_language"] = req.language
+        if req.edition:
+            ver.edition = req.edition
+            sections["cv_style"] = req.edition
+        if req.target_role is not None and req.target_role.strip():
+            ver.target_role = req.target_role.strip()
+            sections["target_role"] = ver.target_role
+        if req.target_company is not None and req.target_company.strip():
+            ver.target_company = req.target_company.strip()
+            sections["target_company"] = ver.target_company
+        if req.title is not None and req.title.strip():
+            ver.title = req.title.strip()
+
+        rendered = cv_generator_service.render_cv_from_sections(
+            sections,
+            base_name_override=ver.pdf_filename,
+        )
+        for fname in (rendered.get("pdf_filename"), rendered.get("docx_filename")):
+            if fname:
+                record_candidate_document(
+                    user_id=current_user.id,
+                    filename=fname,
+                    file_path=GENERATED_RESUMES_DIR / fname,
+                    doc_type=f"cv_studio_{ver.edition}",
+                    target_company=ver.target_company,
+                    target_role=ver.target_role,
+                )
+
+        ver.structured_content = sections
+        ver.rendered_html = rendered.get("rendered_html") or ""
+        ver.pdf_filename = rendered.get("pdf_filename") or ver.pdf_filename
+        ver.docx_filename = rendered.get("docx_filename") or ver.docx_filename
+        ver.version_number = (ver.version_number or 1) + 1
+        ver.updated_at = utc_now()
+        session.add(ver)
+        session.commit()
+        session.refresh(ver)
+        return _serialize_cv_version(ver)
+
+
+@router.delete("/cv-versions/{version_id}")
+def delete_cv_version(
+    version_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    """Deletes an editable CV Studio version owned by the current user."""
+    with Session(engine) as session:
+        ver = session.get(CVVersion, version_id)
+        if not ver or ver.user_id != current_user.id:
+            raise HTTPException(status_code=404, detail="CV version not found.")
+        session.delete(ver)
+        session.commit()
+        return {"status": "deleted", "id": version_id}
 
 
 @router.get("/resumes/generated")

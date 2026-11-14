@@ -33,11 +33,11 @@ export const StageModal: React.FC<StageModalProps> = ({
   companyValidation,
   tailoredCv
 }) => {
-  const [urlInput, setUrlInput] = useState(jobUrl || 'https://jobs.dou.ua/companies/macpaw/vacancies/289104/');
+  const [urlInput, setUrlInput] = useState(jobUrl || '');
   const [applicantSummary, setApplicantSummary] = useState('');
   const [motivationLetter, setMotivationLetter] = useState('');
-  const [expectedSalary, setExpectedSalary] = useState('€85,000 / year ($4,500/mo remote)');
-  const [startDate, setStartDate] = useState('1 week after offer');
+  const [expectedSalary, setExpectedSalary] = useState('');
+  const [startDate, setStartDate] = useState('');
   const [headless, setHeadless] = useState(false);
   const [autoSubmit, setAutoSubmit] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -55,7 +55,7 @@ export const StageModal: React.FC<StageModalProps> = ({
           : tailoredCv.motivation_statement || tailoredCv.dou_motivational_letter
       );
       if (tailoredCv.expected_salary) setExpectedSalary(tailoredCv.expected_salary);
-      setStartDate(tailoredCv.start_date_default || '1 week after offer');
+      setStartDate(tailoredCv.start_date_default || '');
     }
   }, [jobUrl, tailoredCv]);
 
@@ -86,14 +86,9 @@ export const StageModal: React.FC<StageModalProps> = ({
     }
   };
 
-  const portalPresets = [
-    { label: 'DOU.ua (+Motivational Letter)', url: 'https://jobs.dou.ua/companies/macpaw/vacancies/289104/' },
-    { label: 'Djinni.co', url: 'https://djinni.co/jobs/654321-qa-engineer-playwright/' },
-    { label: 'Jobs.ge / HR.ge / HH.ge', url: 'https://jobs.ge/en/?view=jobs&id=541092' },
-    { label: 'JustJoin.it (B2B)', url: 'https://justjoin.it/offers/allegro-qa-automation-engineer' },
-    { label: 'Greenhouse', url: 'https://boards.greenhouse.io/cloudscale/jobs/7123910' },
-    { label: 'Lever', url: 'https://jobs.lever.co/datasphere/sdet' },
-  ];
+  const portalPresets: Array<{ label: string; url: string }> = jobUrl
+    ? [{ label: 'Selected Vacancy URL', url: jobUrl }]
+    : [];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200 overflow-y-auto">

@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import { UserProfile } from '../types';
 
-export type NavTab = 'audit' | 'vault' | 'variants' | 'tracker' | 'plans' | 'admin';
+export type NavTab = 'dashboard' | 'audit' | 'vault' | 'variants' | 'tracker' | 'plans' | 'admin';
 
 interface NavbarProps {
   activeTab: NavTab;
@@ -44,14 +44,10 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [copiedCmd, setCopiedCmd] = useState(false);
 
-  const gitCommands = `cd "C:\\Users\\giorg\\.gemini\\antigravity\\scratch\\job-application-assistant"
-git init
-git add .
-git commit -m "feat: Mobile-First Career Platform with Auth, Admin Panel & Interview Copilot"
-git branch -M main
-# Create a new repo on https://github.com/new then run:
-git remote add origin https://github.com/YOUR_USERNAME/ai-job-application-assistant.git
-git push -u origin main`;
+  const gitCommands = `git clone https://github.com/shakiashvili/job-assistant.git
+cd job-assistant
+git checkout -b my-feature-branch
+git push -u origin my-feature-branch`;
 
   const handleCopyGit = () => {
     navigator.clipboard.writeText(gitCommands);
@@ -60,11 +56,12 @@ git push -u origin main`;
   };
 
   const navItems: Array<{ id: NavTab; label: string; icon: React.FC<{ className?: string }>; adminOnly?: boolean }> = [
+    { id: 'dashboard', label: 'Home', icon: Sparkles },
+    { id: 'audit', label: 'Jobs & Audit', icon: Compass },
     { id: 'tracker', label: 'Kanban Tracker', icon: LayoutDashboard },
-    { id: 'audit', label: 'Audit & Feed', icon: Compass },
-    { id: 'plans', label: 'Action Plans', icon: GraduationCap },
+    { id: 'variants', label: 'CV Studio', icon: FileText },
     { id: 'vault', label: 'Profile Vault', icon: User },
-    { id: 'variants', label: 'CVs', icon: FileText },
+    { id: 'plans', label: 'Action Plans', icon: GraduationCap },
     { id: 'admin', label: 'Admin Panel', icon: Shield, adminOnly: true },
   ];
 

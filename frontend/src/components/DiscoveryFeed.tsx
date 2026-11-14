@@ -76,6 +76,7 @@ interface DiscoveryFeedProps {
   totalJobs?: number;
   onPageChange?: (page: number) => void;
   scrapeStats: { total: number; staged: number; filteredOut: number } | null;
+  scrapeTaskInfo?: { status: string; progressPct: number; errorMessage?: string | null } | null;
   preparedEmailPkg: PreparedEmailPkg | null;
   onDismissEmailPkg: () => void;
   draftingJobId: number | null;
@@ -129,6 +130,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
   totalJobs,
   onPageChange,
   scrapeStats,
+  scrapeTaskInfo,
   preparedEmailPkg,
   onDismissEmailPkg,
   draftingJobId,
@@ -262,10 +264,10 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
             type="button"
             onClick={onUploadClick}
             className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-sky-600/20 hover:bg-sky-600/30 border border-sky-500/40 text-sky-300 text-xs font-bold transition-all"
-            title="Upload or replace your skills.md profile"
+            title="Upload or replace your CV (.pdf, .docx, .md, .txt)"
           >
             <Upload className="w-3.5 h-3.5" />
-            <span>{profileUploaded ? 'Update skills.md' : 'Upload skills.md'}</span>
+            <span>{profileUploaded ? 'Update CV / skills.md' : 'Upload CV / skills.md'}</span>
           </button>
 
           <button
@@ -508,6 +510,34 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
         </div>
       )}
 
+      {/* Async Background Scan Status Bar */}
+      {scrapeTaskInfo && ['PENDING', 'PROCESSING', 'FAILED'].includes(scrapeTaskInfo.status) && (
+        <div
+          className={`text-xs px-3.5 py-2.5 rounded-xl border space-y-1.5 ${
+            scrapeTaskInfo.status === 'FAILED'
+              ? 'bg-rose-950/40 border-rose-800 text-rose-300'
+              : 'bg-sky-950/40 border-sky-800/70 text-sky-200'
+          }`}
+        >
+          <div className="flex items-center justify-between gap-2 font-semibold">
+            <span>
+              {scrapeTaskInfo.status === 'FAILED'
+                ? `Scan Failed: ${scrapeTaskInfo.errorMessage || 'Check portal network status'}`
+                : `Portal Scan (${scrapeTaskInfo.status}) — scoring remote & local matches...`}
+            </span>
+            <span className="font-mono">{scrapeTaskInfo.progressPct}%</span>
+          </div>
+          {scrapeTaskInfo.status !== 'FAILED' && (
+            <div className="w-full h-1.5 rounded-full bg-slate-800 overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-sky-500 to-emerald-400 transition-all duration-300"
+                style={{ width: `${Math.min(100, Math.max(8, scrapeTaskInfo.progressPct))}%` }}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Synchronized Feed Stats Banner */}
       {(Boolean(totalJobs) || visibleJobs.length > 0 || Boolean(scrapeStats)) && (
         <div className="text-xs bg-emerald-950/30 border border-emerald-800/60 text-emerald-300 px-3.5 py-2 rounded-xl flex items-center justify-between flex-wrap gap-2">
@@ -664,26 +694,44 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 <div className="text-[11px] text-slate-300 font-medium">{job.company}</div>
 
                 {salaryStr ? (
-                  <div className="flex items-center gap-1.5 text-[11px] pt-0.5">
+                  <div className="flex items-center gap-1.5 text-[11px] pt-0.5 flex-wrap">
                     <span className="text-emerald-300 font-semibold">{salaryStr}</span>
-                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-900 text-slate-300 border border-slate-700">
-                      📄 Stated
-                    </span>
+                    {job.salary_source === 'ai_estimated' || job.salary_estimated_by_ai ? (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-950/70 text-amber-300 border border-amber-800/70">
+                        🤖 AI Estimated
+                      </span>
+                    ) : (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-950/70 text-emerald-300 border border-emerald-800/70">
+                        ✓ Verified
+                      </span>
+                    )}
                   </div>
                 ) : (
-                  <div className="text-[10px] text-slate-500 pt-0.5">
-                    {(job.description_raw || '').includes('არ ითვალისწინებს ანაზღაურებას') ||
-                    (job.description_raw || '').toLowerCase().includes('unpaid')
-                      ? 'Salary: Unpaid Internship'
-                      : 'Salary not specified'}
+                  <div className="text-[10px] text-slate-500 pt-0.5 flex items-center gap-1.5">
+                    <span>
+                      {(job.description_raw || '').includes('არ ითვალისწინებს ანაზღაურებას') ||
+                      (job.description_raw || '').toLowerCase().includes('unpaid')
+                        ? 'Salary: Unpaid Internship'
+                        : 'Salary: Not Listed'}
+                    </span>
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-900 text-slate-400 border border-slate-800">
+                      Not Listed
+                    </span>
                   </div>
                 )}
 
-                {job.deadline_text && (
-                  <div className="text-[10px] text-amber-300 bg-amber-950/40 border border-amber-800/60 px-2 py-0.5 rounded-md inline-block">
-                    📅 Deadline: {job.deadline_text}
-                  </div>
-                )}
+                <div className="flex items-center gap-2 flex-wrap">
+                  {(job.posting_date || job.scraped_at) && (
+                    <span className="text-[10px] text-slate-500">
+                      🕒 {job.posting_date || new Date(job.scraped_at).toLocaleDateString()}
+                    </span>
+                  )}
+                  {job.deadline_text && (
+                    <span className="text-[10px] text-amber-300 bg-amber-950/40 border border-amber-800/60 px-2 py-0.5 rounded-md">
+                      📅 Deadline: {job.deadline_text}
+                    </span>
+                  )}
+                </div>
 
                 <div className="text-[10px] text-slate-400 line-clamp-2 pt-1 border-t border-slate-800/60">
                   <span>{job.match_rationale}</span>

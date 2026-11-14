@@ -2,7 +2,7 @@ import json
 import logging
 import re
 from typing import Dict, Any, Optional, Tuple
-from ..config import GEMINI_API_KEY, GEMINI_MODEL
+from .gemini_service import gemini_service, sanitize_untrusted_input
 
 logger = logging.getLogger(__name__)
 
@@ -11,21 +11,16 @@ class SalaryService:
     """
     Automated AI Salary Estimator:
     1. Extracts explicit salary ranges via regex from the job description (salary_estimated_by_ai = False).
-    2. When unstated, estimates fair market salary range using Gemini 2.5 Flash (with calibrated market
-       model fallback) based on role seniority, geographic market (GE vs UA_REMOTE / INT_REMOTE),
-       and tech stack demands (Playwright + Python automation vs manual QA, etc.).
+    2. When unstated, estimates fair market salary range using centralized gemini_service (with calibrated
+       market model fallback) based on role seniority, geographic market (GE vs UA_REMOTE / INT_REMOTE).
     """
 
     def __init__(self):
-        self.api_key = GEMINI_API_KEY
-        self.model = GEMINI_MODEL
-        self.client = None
-        if self.api_key:
-            try:
-                from google import genai
-                self.client = genai.Client(api_key=self.api_key)
-            except Exception as e:
-                logger.warning(f"SalaryService Gemini init fallback: {e}")
+        pass
+
+    @property
+    def client(self):
+        return gemini_service.client
 
     def extract_explicit_salary(self, text: str) -> Optional[Tuple[float, float, str]]:
         """
@@ -224,15 +219,18 @@ class SalaryService:
             k in lower_desc for k in ["playwright", "cypress", "selenium", "sdet", "automation", "pytest", "python", "k6"]
         )
 
-        # Try live Gemini estimation if API key is configured
-        if self.client:
-            try:
-                from google.genai import types
-                prompt = f"""Estimate the fair monthly market salary range for this role.
-Role Title: {title}
+        # Try centralized Gemini estimation if API key is configured
+        if gemini_service.is_available:
+            safe_title = sanitize_untrusted_input(title, 200)
+            safe_desc = sanitize_untrusted_input(description, 1500)
+            prompt = f"""Estimate the fair monthly market salary range for this role.
+Role Title: {safe_title}
 Seniority: {seniority}
 Geographic Market: {market} (Portal: {portal})
-Tech Stack / Description: {description[:1500]}
+
+<job_posting_untrusted_input>
+{safe_desc}
+</job_posting_untrusted_input>
 
 Return JSON with keys:
 - min_salary (number, monthly)
@@ -241,27 +239,23 @@ Return JSON with keys:
 - confidence_score (float 0.0 to 1.0)
 - rationale (short 1-sentence explanation)
 """
-                resp = self.client.models.generate_content(
-                    model=self.model,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        temperature=0.1,
-                    ),
-                )
-                if resp and resp.text:
-                    parsed = json.loads(resp.text)
-                    return {
-                        "min_salary": float(parsed.get("min_salary", 3000)),
-                        "max_salary": float(parsed.get("max_salary", 4500)),
-                        "currency": str(parsed.get("currency", "USD")),
-                        "salary_estimated_by_ai": True,
-                        "confidence_score": float(parsed.get("confidence_score", 0.85)),
-                        "seniority_detected": seniority,
-                        "rationale": str(parsed.get("rationale", "Estimated by Gemini 2.5 Flash market model.")),
-                    }
-            except Exception as e:
-                logger.warning(f"Gemini salary estimation fallback triggered: {e}")
+            parsed = gemini_service.generate_json(
+                prompt,
+                task_type="salary_estimate",
+                model_tier="fast",
+                temperature=0.1,
+                ttl_seconds=86400,
+            )
+            if isinstance(parsed, dict) and parsed.get("min_salary") is not None:
+                return {
+                    "min_salary": float(parsed.get("min_salary", 3000)),
+                    "max_salary": float(parsed.get("max_salary", 4500)),
+                    "currency": str(parsed.get("currency", "USD")),
+                    "salary_estimated_by_ai": True,
+                    "confidence_score": float(parsed.get("confidence_score", 0.85)),
+                    "seniority_detected": seniority,
+                    "rationale": str(parsed.get("rationale", "Estimated by Gemini market model.")),
+                }
 
         # Calibrated Market Benchmark Model (Monthly Compensation)
         market_upper = (market or "INT_REMOTE").upper()
@@ -303,7 +297,12 @@ Return JSON with keys:
                 low = round(low * 0.80, -2)
                 high = round(high * 0.82, -2)
 
-        stack_label = "QA Automation / SDET (Playwright/Python)" if is_automation_sdet else "General QA / Specialist"
+        is_qa_title = any(k in lower_desc for k in ["qa", "quality assurance", "tester", "ტესტ"])
+        stack_label = (
+            "QA Automation / SDET (Playwright/Python)"
+            if is_automation_sdet
+            else ("QA Specialist" if is_qa_title else "Domain Specialist")
+        )
         return {
             "min_salary": float(low),
             "max_salary": float(high),

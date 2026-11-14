@@ -34,6 +34,8 @@ import {
   fetchScrapedJobs,
   fetchDbProfile,
   triggerMultiPortalScrape,
+  triggerAsyncScrape,
+  fetchScrapeTaskStatus,
   prepareJobEmailPackage,
   saveJob,
   unsaveJob,
@@ -65,6 +67,11 @@ export const AuditPanel: React.FC = () => {
     total: number;
     staged: number;
     filteredOut: number;
+  } | null>(null);
+  const [scrapeTaskInfo, setScrapeTaskInfo] = useState<{
+    status: string;
+    progressPct: number;
+    errorMessage?: string | null;
   } | null>(null);
 
   const [jobUrl, setJobUrl] = useState('');
@@ -292,10 +299,32 @@ export const AuditPanel: React.FC = () => {
   const handleRunMultiPortalScrapers = async () => {
     setIsScraping(true);
     setError(null);
+    setScrapeTaskInfo({ status: 'PENDING', progressPct: 10 });
     try {
-      const res = await triggerMultiPortalScrape(true);
-      if (res.rejection_reasons?.length) {
-        console.debug('[TalentFlow Matcher Diagnostics] Rejected vacancies:', res.rejection_reasons);
+      let filteredOutCount = 0;
+      try {
+        const asyncStart = await triggerAsyncScrape(true);
+        const taskId = asyncStart.task_id;
+        for (let attempt = 0; attempt < 45; attempt++) {
+          await new Promise((r) => setTimeout(r, 1200));
+          const st = await fetchScrapeTaskStatus(taskId);
+          setScrapeTaskInfo({
+            status: st.status,
+            progressPct: st.progress_pct ?? (st.status === 'COMPLETED' ? 100 : 50),
+            errorMessage: st.error_message,
+          });
+          if (st.status === 'COMPLETED') {
+            filteredOutCount = st.filtered_out_count || 0;
+            break;
+          }
+          if (st.status === 'FAILED') {
+            throw new Error(st.error_message || 'Background scan failed');
+          }
+        }
+      } catch (_asyncErr) {
+        const res = await triggerMultiPortalScrape(true);
+        filteredOutCount = res.filtered_out_count || 0;
+        setScrapeTaskInfo({ status: 'COMPLETED', progressPct: 100 });
       }
       const [paged, vacs] = await Promise.all([
         loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab),
@@ -310,10 +339,11 @@ export const AuditPanel: React.FC = () => {
       setScrapeStats({
         total: paged.total || validJobs.length,
         staged: validJobs.filter((j) => j.status === 'STAGED').length,
-        filteredOut: res.filtered_out_count,
+        filteredOut: filteredOutCount,
       });
     } catch (err: any) {
       setError(err.message || 'Live multi-portal scrape failed');
+      setScrapeTaskInfo({ status: 'FAILED', progressPct: 0, errorMessage: err?.message });
     } finally {
       setIsScraping(false);
     }
@@ -596,7 +626,7 @@ export const AuditPanel: React.FC = () => {
             <input
               ref={fileInputRef}
               type="file"
-              accept=".md,.txt,.markdown"
+              accept=".pdf,.docx,.doc,.md,.txt,.markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
               onChange={handleFileUpload}
               className="hidden"
             />
@@ -605,7 +635,7 @@ export const AuditPanel: React.FC = () => {
               className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold transition-colors shadow-sm"
             >
               <Upload className="w-3.5 h-3.5" />
-              <span>Upload skills.md to DB</span>
+              <span>Upload CV (.pdf / .docx / .md)</span>
             </button>
             <button
               onClick={() => setShowSkillsEditor(!showSkillsEditor)}
@@ -713,6 +743,7 @@ export const AuditPanel: React.FC = () => {
         totalJobs={totalJobs}
         onPageChange={(nextP) => loadPagedJobs(nextP, selectedPortalFilter, dbStatusFilter, tierTab, searchQuery, remoteTypeFilter, onlySavedFilter)}
         scrapeStats={scrapeStats}
+        scrapeTaskInfo={scrapeTaskInfo}
         preparedEmailPkg={preparedEmailPkg}
         onDismissEmailPkg={() => setPreparedEmailPkg(null)}
         draftingJobId={draftingJobId}

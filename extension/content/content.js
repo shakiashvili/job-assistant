@@ -241,14 +241,19 @@
       });
     }
 
-    // 2. Inputs, textareas, selects
+    // 2. Inputs, textareas, selects, and SPA contenteditable textboxes
     const controls = root.querySelectorAll(
-      'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="radio"]), textarea, select'
+      'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="radio"]), textarea, select, [role="textbox"][contenteditable="true"]'
     );
     for (const el of controls) {
       if (!isVisible(el)) continue;
       const tag = el.tagName.toLowerCase();
-      const inputType = tag === "input" ? (el.getAttribute("type") || "text").toLowerCase() : tag;
+      const isRichTextbox = tag !== "input" && tag !== "textarea" && tag !== "select";
+      const inputType = isRichTextbox
+        ? "textarea"
+        : tag === "input"
+        ? (el.getAttribute("type") || "text").toLowerCase()
+        : tag;
       const fieldId = el.getAttribute("data-tf-field-id") || `tf-field-${idx++}`;
       el.setAttribute("data-tf-field-id", fieldId);
 
@@ -264,7 +269,7 @@
         name: el.getAttribute("name") || el.id || null,
         label: resolveFieldLabel(el, root),
         field_type: inputType,
-        placeholder: el.getAttribute("placeholder") || null,
+        placeholder: el.getAttribute("placeholder") || el.getAttribute("aria-placeholder") || null,
         required: Boolean(el.required || el.getAttribute("aria-required") === "true"),
         options,
       });
@@ -354,6 +359,16 @@
           first.classList.add("ai-autofilled-field");
           filledCount++;
         }
+        continue;
+      }
+
+      if (first.isContentEditable || first.getAttribute("role") === "textbox") {
+        first.focus();
+        first.innerText = val;
+        first.dispatchEvent(new Event("input", { bubbles: true }));
+        first.dispatchEvent(new Event("blur", { bubbles: true }));
+        first.classList.add("ai-autofilled-field");
+        filledCount++;
         continue;
       }
 

@@ -141,6 +141,7 @@ class PrepareApplicationResponse(BaseModel):
     company_intel: Dict[str, Any]
     tailored_cv: Dict[str, Any]
     cover_letter: str
+    motivational_letter: str = ""
     applicant_summary: str
     field_answers: List[FieldAnswerItem] = Field(default_factory=list)
 
@@ -195,8 +196,12 @@ async def extension_upload_skills(
     request: Request,
     current_user: User = Depends(require_extension_user),
 ) -> Dict[str, Any]:
-    """Allows the Chrome Extension user to upload or refresh their own skills.md profile directly."""
+    """Allows the Chrome Extension user to upload or refresh their CV/profile (.pdf, .docx, .md, .txt)."""
+    import base64
+    from ..services.cv_parser_service import cv_parser_service
+
     md_text = ""
+    raw_bytes: Optional[bytes] = None
     filename = "skills.md"
     content_type = (request.headers.get("content-type") or "").lower()
 
@@ -205,25 +210,42 @@ async def extension_upload_skills(
             body = await request.json()
         except Exception:
             body = {}
-        md_text = str((body or {}).get("content") or "")
-        filename = str((body or {}).get("filename") or "skills.md")
+        body = body or {}
+        filename = str(body.get("filename") or "skills.md")
+        if body.get("content_base64"):
+            b64_str = str(body.get("content_base64") or "")
+            if "," in b64_str and b64_str.startswith("data:"):
+                b64_str = b64_str.split(",", 1)[1]
+            try:
+                raw_bytes = base64.b64decode(b64_str)
+            except Exception as dec_err:
+                raise HTTPException(status_code=400, detail=f"Invalid base64 CV payload: {dec_err}")
+        else:
+            md_text = str(body.get("content") or "")
     else:
         form = await request.form()
         uploaded_file = form.get("file")
         if uploaded_file is not None and hasattr(uploaded_file, "read"):
             filename = getattr(uploaded_file, "filename", None) or "skills.md"
             raw_bytes = await uploaded_file.read()
-            md_text = raw_bytes.decode("utf-8", errors="replace")
         elif form.get("content") is not None:
             md_text = str(form.get("content") or "")
+
+    if raw_bytes is not None:
+        try:
+            md_text = cv_parser_service.extract_text_from_bytes(raw_bytes, filename=filename)
+        except ValueError as parse_err:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(parse_err))
 
     if not md_text.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Please provide a non-empty .md/.txt skills profile.",
+            detail="Please provide a non-empty .pdf, .docx, .md, or .txt CV/skills profile.",
         )
 
     profile = ground_truth_store.ingest_skills_markdown(md_text, owner_email=current_user.email)
+    gt = ground_truth_store.get_data(owner_email=current_user.email, user_id=current_user.id)
+    completeness_score, missing_fields = cv_parser_service.compute_missing_fields(gt)
     ps = dict(profile.parsed_skills or {})
     return {
         "status": "success",
@@ -236,6 +258,8 @@ async def extension_upload_skills(
         "verified_skills": list(ps.get("verified_skills") or ps.get("all_skills") or [])[:25],
         "profile_uploaded": True,
         "filename": filename,
+        "completeness_score": completeness_score,
+        "missing_fields": missing_fields,
     }
 
 
@@ -495,7 +519,8 @@ def prepare_application(
             "docx_url": cv_res.get("docx_url"),
             "cv_language": cv_lang,
         },
-        cover_letter=narratives["dou_motivational_letter"],
+        cover_letter=narratives.get("cover_letter") or narratives["dou_motivational_letter"],
+        motivational_letter=narratives["dou_motivational_letter"],
         applicant_summary=narratives["human_tone_summary"],
         field_answers=field_answers,
     )

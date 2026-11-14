@@ -25,7 +25,7 @@ from ..db.models import (
     utc_now,
 )
 from ..db.profile_repository import ground_truth_store
-from ..services.auth_service import get_current_user
+from ..services.auth_service import get_current_user, get_current_admin
 from ..services.scrapers.scraper_orchestrator import scraper_orchestrator
 from ..services.scrapers.base_scraper import sanitize_company_name
 from ..services.salary_service import salary_service
@@ -70,10 +70,12 @@ async def upload_skills_profile(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Accepts a .md or .txt file upload (e.g., skills.md) or markdown form content,
-    validates upload size, extracts role & technical capabilities into the user's CandidateProfile,
-    rescores existing jobs immediately, and optionally scrapes live role-matching vacancies.
+    Accepts .pdf, .docx, .md, or .txt CV/skills uploads or markdown form content,
+    validates size & format, extracts role & technical capabilities into the user's CandidateProfile,
+    computes missing fields & completeness score, and rescores existing jobs.
     """
+    from ..services.cv_parser_service import cv_parser_service
+
     md_text = ""
     filename = "skills.md"
     if file is not None:
@@ -83,13 +85,16 @@ async def upload_skills_profile(
             raise HTTPException(status_code=400, detail="Uploaded file is empty.")
         if len(raw_bytes) > MAX_UPLOAD_SIZE_BYTES:
             raise HTTPException(status_code=413, detail="Uploaded file exceeds 10 MB maximum size limit.")
-        md_text = raw_bytes.decode("utf-8", errors="replace")
+        try:
+            md_text = cv_parser_service.extract_text_from_bytes(raw_bytes, filename=filename)
+        except ValueError as parse_err:
+            raise HTTPException(status_code=400, detail=str(parse_err))
     elif content is not None:
         if len(content.encode("utf-8")) > MAX_UPLOAD_SIZE_BYTES:
             raise HTTPException(status_code=413, detail="Content exceeds 10 MB maximum size limit.")
         md_text = content
     else:
-        raise HTTPException(status_code=400, detail="Provide a .md/.txt file upload or 'content' field.")
+        raise HTTPException(status_code=400, detail="Provide a .pdf/.docx/.md/.txt file upload or 'content' field.")
 
     try:
         owner = current_user.email if current_user.email != "guest@talentflow.local" else None
@@ -142,12 +147,16 @@ async def upload_skills_profile(
         clean_taxonomy = {
             k: v for k, v in (profile.parsed_skills or {}).items() if k != "ground_truth_vault"
         }
+        gt_after = ground_truth_store.get_data(owner_email=owner, user_id=uid)
+        completeness_score, missing_fields = cv_parser_service.compute_missing_fields(gt_after)
         return {
             "status": "success",
             "id": profile.id,
             "full_name": profile.full_name,
             "experience_years": profile.experience_years,
             "profile_uploaded": True,
+            "completeness_score": completeness_score,
+            "missing_fields": missing_fields,
             "filename": filename,
             "raw_markdown": profile.raw_markdown,
             "parsed_skills": clean_taxonomy,
@@ -507,6 +516,13 @@ async def list_scraped_jobs(
                         dumped["salary_min"], dumped["salary_max"], dumped["salary_currency"] = sal_ex
                         dumped["salary_is_estimated"] = False
                         dumped["salary_estimated_by_ai"] = False
+            if dumped.get("salary_min") is None and dumped.get("salary_max") is None:
+                dumped["salary_source"] = "missing"
+            elif dumped.get("salary_is_estimated") or dumped.get("salary_estimated_by_ai"):
+                dumped["salary_source"] = "ai_estimated"
+            else:
+                dumped["salary_source"] = "verified"
+            dumped["posting_date"] = dumped.get("scraped_at")
             items.append(dumped)
 
         return {
@@ -689,14 +705,14 @@ def mark_notification_read(
 
 
 @router.post("/admin/backup")
-def create_database_backup(current_user: User = Depends(get_current_user)):
-    """Creates a hot atomic SQLite database backup with SHA-256 verification."""
+def create_database_backup(current_user: User = Depends(get_current_admin)):
+    """Creates a hot atomic SQLite database backup with SHA-256 verification (Admin only)."""
     return backup_service.create_backup(reason="api")
 
 
 @router.get("/admin/backups")
-def list_database_backups(current_user: User = Depends(get_current_user)):
-    """Lists available database backup snapshots."""
+def list_database_backups(current_user: User = Depends(get_current_admin)):
+    """Lists available database backup snapshots (Admin only)."""
     return {"backups": backup_service.list_backups()}
 
 
@@ -744,15 +760,17 @@ def prepare_job_email_package(
             owner_email=owner,
         )
 
-        if pkg.get("cv_filename"):
-            record_candidate_document(
-                user_id=current_user.id,
-                filename=pkg["cv_filename"],
-                file_path=GENERATED_RESUMES_DIR / pkg["cv_filename"],
-                doc_type="generated_email_cv",
-                target_company=job.company,
-                target_role=job.title,
-            )
+        for fname_key in ("pdf_filename", "docx_filename", "cv_filename"):
+            fname_val = pkg.get(fname_key)
+            if fname_val:
+                record_candidate_document(
+                    user_id=current_user.id,
+                    filename=fname_val,
+                    file_path=GENERATED_RESUMES_DIR / fname_val,
+                    doc_type="generated_email_cv",
+                    target_company=job.company,
+                    target_role=job.title,
+                )
 
         draft_res = {
             "draft_created": False,
@@ -778,3 +796,116 @@ def prepare_job_email_package(
         pkg["draft_mode_used"] = draft_res.get("mode_used")
         pkg["draft_error"] = draft_res.get("error")
         return pkg
+
+
+@router.get("/analytics/candidate")
+def get_candidate_analytics(current_user: User = Depends(get_current_user)):
+    """
+    Real SQL-computed candidate funnel analytics, match tier summary, and profile completeness check.
+    """
+    from ..db.models import UserJobMatch, ApplicationTracker, InterviewRound, CVVersion
+
+    init_db()
+    owner = current_user.email if current_user.email != "guest@talentflow.local" else None
+    uid = current_user.id if owner else None
+    profile = ground_truth_store.get_profile_record(owner_email=owner, user_id=uid)
+    gt = ground_truth_store.get_data(owner_email=owner, user_id=uid)
+    cand = gt.get("candidate") or {}
+    ps = (profile.parsed_skills or {}) if profile else {}
+
+    checks = {
+        "full_name": bool((cand.get("full_name") or "").strip() and cand.get("full_name") != "Candidate"),
+        "email": bool((cand.get("email") or "").strip()),
+        "phone": bool((cand.get("phone") or "").strip()),
+        "location": bool(isinstance(cand.get("location"), dict) and (cand["location"].get("city") or cand["location"].get("country"))),
+        "skills": bool((gt.get("skills") or {}).get("core")),
+        "work_history": bool(gt.get("work_history")),
+        "education": bool(gt.get("education")),
+        "links": bool(isinstance(cand.get("links"), dict) and (cand["links"].get("linkedin") or cand["links"].get("github") or cand["links"].get("portfolio"))),
+    }
+    missing_fields = [k for k, ok in checks.items() if not ok]
+    completeness_pct = int(round((sum(1 for ok in checks.values() if ok) / len(checks)) * 100))
+
+    with Session(engine) as session:
+        if uid is not None:
+            matches = session.exec(
+                select(UserJobMatch).where(UserJobMatch.user_id == uid)
+            ).all()
+            matching_jobs = [m for m in matches if m.status != "FILTERED_OUT"]
+            ready_to_apply = sum(1 for m in matching_jobs if float(m.suitability_score or 0) >= 75.0)
+        else:
+            jobs = session.exec(
+                select(JobPosting).where(JobPosting.status != "FILTERED_OUT")
+            ).all()
+            matching_jobs = jobs
+            ready_to_apply = sum(1 for j in jobs if float(j.suitability_score or 0) >= 75.0)
+
+        tier_counts: Dict[str, int] = {"DIRECT": 0, "ADJACENT": 0, "PUBLIC_INTERNSHIP": 0}
+        for row in matching_jobs:
+            t = str(getattr(row, "match_tier", None) or "DIRECT")
+            tier_counts[t] = tier_counts.get(t, 0) + 1
+
+        saved_count = len(
+            session.exec(
+                select(SavedJob).where(SavedJob.user_id == current_user.id)
+            ).all()
+        )
+        apps = session.exec(
+            select(ApplicationTracker).where(
+                ApplicationTracker.user_id == current_user.id,
+                ApplicationTracker.is_deleted == False,  # noqa: E712
+            )
+        ).all()
+        app_status_counts: Dict[str, int] = {}
+        for a in apps:
+            app_status_counts[a.status] = app_status_counts.get(a.status, 0) + 1
+
+        upcoming_interviews = session.exec(
+            select(InterviewRound)
+            .where(InterviewRound.user_id == current_user.id)
+            .order_by(InterviewRound.scheduled_at.asc())
+        ).all()
+        cv_versions_count = len(
+            session.exec(
+                select(CVVersion).where(CVVersion.user_id == current_user.id)
+            ).all()
+        )
+
+    applied_count = sum(
+        v for k, v in app_status_counts.items()
+        if k in ("APPLIED", "HR_SCREEN", "TECH_INTERVIEW", "FINAL_ROUND", "OFFER", "Applied", "Interviewing", "Technical Interview", "Offer")
+    )
+    interview_count = sum(
+        v for k, v in app_status_counts.items()
+        if k in ("HR_SCREEN", "TECH_INTERVIEW", "FINAL_ROUND", "OFFER", "Interviewing", "Technical Interview", "Offer")
+    )
+    offer_count = sum(v for k, v in app_status_counts.items() if k in ("OFFER", "Offer"))
+
+    return {
+        "profile_uploaded": _is_profile_uploaded_for_user(profile, current_user.email),
+        "completeness_score": completeness_pct,
+        "missing_fields": missing_fields,
+        "detected_industry": ps.get("detected_industry") or "Not detected yet",
+        "primary_role": ps.get("primary_role") or (cand.get("headline") or ""),
+        "matching_jobs_count": len(matching_jobs),
+        "ready_to_apply_count": ready_to_apply,
+        "tier_breakdown": tier_counts,
+        "saved_jobs_count": saved_count,
+        "active_applications_count": len(apps),
+        "applied_count": applied_count,
+        "interviews_count": interview_count,
+        "offers_count": offer_count,
+        "cv_versions_count": cv_versions_count,
+        "response_rate_pct": round((interview_count / applied_count) * 100.0, 1) if applied_count > 0 else 0.0,
+        "applications_by_status": app_status_counts,
+        "upcoming_interviews": [
+            {
+                "id": ir.id,
+                "application_id": ir.application_id,
+                "round_type": ir.round_type,
+                "scheduled_at": ir.scheduled_at.isoformat() if ir.scheduled_at else None,
+                "interviewer": ir.interviewer,
+            }
+            for ir in upcoming_interviews[:5]
+        ],
+    }

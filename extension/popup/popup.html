@@ -64,18 +64,18 @@
             </div>
           </div>
           <div style="display:flex; align-items:center; gap:8px;">
-            <button id="btn-toggle-upload" class="btn-link" type="button" title="Upload or replace skills.md">📄 skills.md</button>
+            <button id="btn-toggle-upload" class="btn-link" type="button" title="Upload or replace CV (.pdf/.docx/.md)">📄 Upload CV</button>
             <button id="btn-logout" class="btn-link" type="button" title="Sign out">Sign Out</button>
           </div>
         </div>
         <div id="cand-skills" class="skills-row"></div>
         <div id="profile-upload-banner" class="warning-banner hidden" style="margin-top:8px;">
-          No <code>skills.md</code> uploaded for this account yet. Upload your <code>skills.md</code> below before generating tailored CVs &amp; cover letters.
+          No CV or <code>skills.md</code> uploaded for this account yet. Upload your <code>.pdf</code>, <code>.docx</code>, or <code>.md</code> resume below before generating tailored CVs &amp; cover letters.
         </div>
         <div id="skills-upload-box" class="hidden" style="margin-top:8px; padding-top:8px; border-top:1px solid #334155;">
-          <label class="section-label" for="skills-file-input">Upload Candidate Profile (.md / .txt)</label>
-          <input type="file" id="skills-file-input" accept=".md,.txt,text/markdown,text/plain" class="input-field" style="padding:4px;" />
-          <button id="btn-upload-skills" class="btn btn-secondary" type="button" style="width:100%;">⬆️ Upload &amp; Sync skills.md</button>
+          <label class="section-label" for="skills-file-input">Upload Candidate CV / Profile (.pdf, .docx, .md, .txt)</label>
+          <input type="file" id="skills-file-input" accept=".pdf,.docx,.md,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/markdown,text/plain" class="input-field" style="padding:4px;" />
+          <button id="btn-upload-skills" class="btn btn-secondary" type="button" style="width:100%;">⬆️ Upload &amp; Sync Profile</button>
         </div>
       </div>
 
@@ -154,6 +154,14 @@
             <button id="btn-copy-letter" class="btn-link" type="button">Copy</button>
           </div>
           <div id="cover-letter-preview" style="font-size:11px; color:#cbd5e1; max-height:95px; overflow-y:auto; background:#0f172a; padding:7px; border-radius:6px; white-space:pre-wrap;"></div>
+        </div>
+
+        <div id="field-answers-wrap" class="hidden" style="margin-top:8px; padding-top:8px; border-top:1px solid #334155;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <span class="section-label" style="margin-bottom:0;">Editable Auto-Fill Answers</span>
+            <button id="btn-reapply-edited" class="btn-link" type="button">Apply Edits to Page</button>
+          </div>
+          <div id="field-answers-list" style="display:flex; flex-direction:column; gap:6px; max-height:170px; overflow-y:auto;"></div>
         </div>
       </div>
     </div>

@@ -132,6 +132,8 @@ export interface DbJobPosting {
   salary_max: number | null;
   salary_currency: string | null;
   salary_estimated_by_ai: boolean;
+  salary_source?: 'verified' | 'ai_estimated' | 'missing' | string;
+  posting_date?: string | null;
   suitability_score: number;
   match_rationale: string;
   match_tier?: 'DIRECT' | 'ADJACENT' | 'PUBLIC_INTERNSHIP' | string;
@@ -220,7 +222,10 @@ export interface TailoredCVResult {
   human_tone_summary: string;
   applicant_summary: string;
   motivation_statement: string;
+  cover_letter?: string;
   dou_motivational_letter: string;
+  cv_sections?: Record<string, any>;
+  rendered_html?: string;
   tailored_highlights: string[];
   ats_keywords_covered: string[];
   start_date_default: string;
@@ -427,5 +432,93 @@ export interface AdminUser {
   created_at: string;
   application_count: number;
   has_gmail_oauth: boolean;
+}
+
+export interface CVVersionItem {
+  id: number;
+  title: string;
+  target_company?: string | null;
+  target_role?: string | null;
+  edition: string;
+  language: string;
+  structured_json: Record<string, any>;
+  rendered_html?: string;
+  pdf_filename?: string | null;
+  docx_filename?: string | null;
+  pdf_url?: string | null;
+  docx_url?: string | null;
+  html_preview_url?: string | null;
+  version_number: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CandidateAnalyticsResponse {
+  profile_uploaded: boolean;
+  completeness_score: number;
+  missing_fields: string[];
+  detected_industry?: string;
+  primary_role?: string;
+  matching_jobs_count: number;
+  ready_to_apply_count?: number;
+  tier_breakdown: Record<string, number>;
+  saved_jobs_count: number;
+  active_applications_count: number;
+  applied_count: number;
+  interviews_count: number;
+  offers_count: number;
+  cv_versions_count?: number;
+  response_rate_pct: number;
+  applications_by_status: Record<string, number>;
+  upcoming_interviews: Array<{
+    id: number;
+    application_id: number;
+    round_type: string;
+    scheduled_at?: string | null;
+    interviewer?: string | null;
+  }>;
+}
+
+export interface AIMetricsResponse {
+  gemini_configured: boolean;
+  quality_model: string;
+  fast_model: string;
+  total_requests: number;
+  success_count: number;
+  cache_hits: number;
+  cache_hit_rate: number;
+  active_cache_entries?: number;
+  rate_limited_count: number;
+  failed_count: number;
+  unconfigured_count?: number;
+  avg_latency_ms: number;
+  p95_latency_ms: number;
+  prompt_tokens?: number;
+  output_tokens?: number;
+  total_tokens: number;
+  estimated_cost_usd: number | null;
+  by_task: Record<
+    string,
+    {
+      count: number;
+      success: number;
+      cache_hits: number;
+      errors: number;
+      avg_latency_ms: number;
+    }
+  >;
+  recent_logs: Array<{
+    id: number;
+    task_type: string;
+    model_name: string;
+    cache_hit: boolean;
+    latency_ms: number;
+    status: string;
+    error_type?: string | null;
+    total_tokens?: number | null;
+    estimated_cost_usd?: number | null;
+    created_at: string;
+  }>;
 }
 

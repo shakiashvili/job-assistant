@@ -194,8 +194,20 @@ class ScraperOrchestrator:
         serialized_jobs: List[Dict[str, Any]] = []
         staged_count = 0
         filtered_count = 0
+        resolved_uid = user_id or (profile.user_id if profile else None)
+        now_utc = utc_now()
         with Session(engine, expire_on_commit=False) as session:
             rows = session.exec(select(JobPosting)).all()
+            existing_matches = (
+                {
+                    m.job_posting_id: m
+                    for m in session.exec(
+                        select(UserJobMatch).where(UserJobMatch.user_id == resolved_uid)
+                    ).all()
+                }
+                if resolved_uid is not None
+                else {}
+            )
             for j in rows:
                 tier_res = matcher_service.evaluate_job_tiered(
                     title=j.title or "",
@@ -206,23 +218,72 @@ class ScraperOrchestrator:
                 )
                 score = float(tier_res["suitability_score"])
                 final_status = str(tier_res["status"])
-                if final_status == "FILTERED_OUT":
-                    filtered_count += 1
+                match_tier = str(tier_res.get("match_tier") or j.match_tier or "DIRECT")
+                adj_tag = tier_res.get("adjacent_role_tag")
+                overlap_pct = tier_res.get("skill_overlap_pct")
+                rationale = str(tier_res.get("match_rationale") or "")
+                filter_reason = str(tier_res.get("filter_out_reason") or "")
+
+                if resolved_uid is not None and j.id is not None:
+                    um = existing_matches.get(j.id)
+                    if um:
+                        um.suitability_score = score
+                        um.match_score = score
+                        um.match_tier = match_tier
+                        um.adjacent_role_tag = adj_tag
+                        um.skill_overlap_pct = overlap_pct
+                        um.match_rationale = rationale
+                        um.filter_out_reason = filter_reason
+                        if um.status not in ("APPLIED", "REJECTED"):
+                            um.status = final_status
+                        um.evaluated_at = now_utc
+                        session.add(um)
+                    else:
+                        session.add(
+                            UserJobMatch(
+                                user_id=resolved_uid,
+                                job_posting_id=j.id,
+                                suitability_score=score,
+                                match_score=score,
+                                match_tier=match_tier,
+                                adjacent_role_tag=adj_tag,
+                                skill_overlap_pct=overlap_pct,
+                                status=final_status,
+                                match_rationale=rationale,
+                                filter_out_reason=filter_reason,
+                                evaluated_at=now_utc,
+                            )
+                        )
+                    if final_status == "FILTERED_OUT":
+                        filtered_count += 1
+                        continue
+                    item_dict = j.model_dump(mode="json")
+                    item_dict["suitability_score"] = score
+                    item_dict["match_score"] = score
+                    item_dict["match_tier"] = match_tier
+                    item_dict["adjacent_role_tag"] = adj_tag
+                    item_dict["skill_overlap_pct"] = overlap_pct
+                    item_dict["match_rationale"] = rationale
+                    item_dict["status"] = final_status if (um is None or um.status not in ("APPLIED", "REJECTED")) else um.status
+                    if final_status == "STAGED":
+                        staged_count += 1
+                    serialized_jobs.append(item_dict)
+                else:
+                    if final_status == "FILTERED_OUT":
+                        filtered_count += 1
+                        continue
+                    j.suitability_score = score
+                    j.match_score = score
+                    j.match_tier = match_tier
+                    j.adjacent_role_tag = adj_tag
+                    j.skill_overlap_pct = overlap_pct
+                    j.match_rationale = rationale
                     if j.status not in ("APPLIED", "REJECTED"):
-                        delete_job_posting_cascade(session, j)
-                    continue
-                j.suitability_score = score
-                j.match_score = score
-                j.match_tier = str(tier_res.get("match_tier") or j.match_tier or "DIRECT")
-                j.adjacent_role_tag = tier_res.get("adjacent_role_tag")
-                j.skill_overlap_pct = tier_res.get("skill_overlap_pct")
-                j.match_rationale = str(tier_res.get("match_rationale") or "")
-                if j.status not in ("APPLIED", "REJECTED"):
-                    j.status = final_status
-                session.add(j)
-                if final_status == "STAGED":
-                    staged_count += 1
-                serialized_jobs.append(j.model_dump(mode="json"))
+                        j.status = final_status
+                    session.add(j)
+                    if final_status == "STAGED":
+                        staged_count += 1
+                    serialized_jobs.append(j.model_dump(mode="json"))
             session.commit()
 
         return {

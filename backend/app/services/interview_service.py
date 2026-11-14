@@ -178,8 +178,13 @@ Provide:
 
 Return ONLY valid JSON.
 """
-        response_text = gemini_service._call_gemini_with_retry(prompt)
-        parsed = gemini_service.safe_parse_json(response_text)
+        parsed = gemini_service.generate_json(
+            prompt,
+            task_type="interview_prep",
+            model_tier="quality",
+            temperature=0.2,
+            ttl_seconds=3600,
+        )
         if isinstance(parsed, dict) and "predicted_questions" in parsed and len(parsed["predicted_questions"]) >= 5:
             return parsed
         raise ValueError("Invalid Gemini interview prep shape")

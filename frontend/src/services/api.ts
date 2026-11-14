@@ -17,6 +17,9 @@ import {
   InterviewBrief,
   PlatformMetrics,
   AdminUser,
+  CVVersionItem,
+  CandidateAnalyticsResponse,
+  AIMetricsResponse,
 } from '../types';
 
 export const BACKEND_ORIGIN = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
@@ -358,11 +361,16 @@ export async function generateCvEdition(params: {
   title: string;
   subject: string;
   cover_letter: string;
+  motivational_letter?: string;
   cv_language: string;
   docx_filename: string;
   docx_url: string;
   pdf_filename: string;
   pdf_url: string;
+  html_preview_url?: string;
+  cv_version_id?: number | null;
+  cv_sections?: Record<string, any>;
+  rendered_html?: string;
 }> {
   const res = await apiFetch(`${API_BASE}/resumes/generate-edition`, {
     method: 'POST',
@@ -385,6 +393,7 @@ export async function prepareJobEmailPackage(
   recipient_email: string;
   subject: string;
   cover_letter: string;
+  motivational_letter?: string;
   cv_language: string;
   docx_filename: string;
   docx_url: string;
@@ -804,5 +813,75 @@ export async function deleteActionPlan(planId: number): Promise<void> {
     headers: getAuthHeaders(),
   });
   if (!res.ok) throw new Error('Failed to delete action plan');
+}
+
+// --- Candidate Analytics, Admin AI Observability & CV Studio Versions ---
+
+export async function fetchCandidateAnalytics(): Promise<CandidateAnalyticsResponse> {
+  const res = await apiFetch(`${API_BASE}/analytics/candidate`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to load candidate dashboard analytics');
+  return res.json();
+}
+
+export async function fetchAdminAiMetrics(): Promise<AIMetricsResponse> {
+  const res = await apiFetch(`${API_BASE}/admin/ai-metrics`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to load AI telemetry metrics');
+  return res.json();
+}
+
+export async function fetchCvVersions(): Promise<{ items: CVVersionItem[] }> {
+  const res = await apiFetch(`${API_BASE}/cv-versions`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) return { items: [] };
+  return res.json();
+}
+
+export async function createCvVersion(payload: {
+  title: string;
+  target_company?: string;
+  target_role?: string;
+  edition?: string;
+  language?: string;
+  structured_json?: Record<string, any>;
+}): Promise<CVVersionItem> {
+  const res = await apiFetch(`${API_BASE}/cv-versions`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error('Failed to save CV version');
+  return res.json();
+}
+
+export async function patchCvVersion(
+  versionId: number,
+  payload: {
+    title?: string;
+    target_company?: string;
+    target_role?: string;
+    language?: string;
+    structured_json?: Record<string, any>;
+  }
+): Promise<CVVersionItem> {
+  const res = await apiFetch(`${API_BASE}/cv-versions/${versionId}`, {
+    method: 'PATCH',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error('Failed to update & re-render CV version');
+  return res.json();
+}
+
+export async function deleteCvVersion(versionId: number): Promise<void> {
+  const res = await apiFetch(`${API_BASE}/cv-versions/${versionId}`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to delete CV version');
 }
 

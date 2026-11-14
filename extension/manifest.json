@@ -30,10 +30,10 @@
     "http://127.0.0.1:8000/*",
     "http://localhost:5173/*",
     "https://*.onrender.com/*",
-    "https://*.up.railway.app/*"
-  ],
-  "optional_host_permissions": [
-    "<all_urls>"
+    "https://*.up.railway.app/*",
+    "https://*.vercel.app/*",
+    "https://*.pages.dev/*",
+    "https://*.fly.dev/*"
   ],
   "background": {
     "service_worker": "background/service_worker.js"

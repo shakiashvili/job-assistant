@@ -5,6 +5,7 @@ import { AuthModal } from './components/AuthModal';
 import { BACKEND_ORIGIN, fetchHealth, fetchCurrentUser, logoutUser } from './services/api';
 import { UserProfile } from './types';
 
+const DashboardHome = lazy(() => import('./components/DashboardHome').then((m) => ({ default: m.DashboardHome })));
 const AuditPanel = lazy(() => import('./components/AuditPanel').then((m) => ({ default: m.AuditPanel })));
 const ProfileVault = lazy(() => import('./components/ProfileVault').then((m) => ({ default: m.ProfileVault })));
 const CVVariantManager = lazy(() => import('./components/CVVariantManager').then((m) => ({ default: m.CVVariantManager })));
@@ -68,7 +69,7 @@ class TabErrorBoundary extends React.Component<
 }
 
 export const App: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<NavTab>('audit');
+  const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
   const [backendHealth, setBackendHealth] = useState<{ connected: boolean; model: string; mode: string } | null>(null);
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [isAuthChecking, setIsAuthChecking] = useState<boolean>(() =>
@@ -257,8 +258,9 @@ export const App: React.FC = () => {
       />
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-6 pb-24 lg:pb-10">
-        <TabErrorBoundary key={activeTab} onReset={() => setActiveTab('audit')}>
+        <TabErrorBoundary key={activeTab} onReset={() => setActiveTab('dashboard')}>
           <Suspense fallback={<LoadingSkeleton />}>
+            {activeTab === 'dashboard' && <DashboardHome user={currentUser} onNavigate={setActiveTab} />}
             {activeTab === 'tracker' && <ApplicationTracker />}
             {activeTab === 'audit' && <AuditPanel />}
             {activeTab === 'plans' && <ActionPlanView />}

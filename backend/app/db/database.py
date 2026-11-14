@@ -24,6 +24,9 @@ from .models import (
     SavedSearch,
     Notification,
     ScrapeTask,
+    CVVersion,
+    AIOperationLog,
+    AICacheEntry,
 )  # noqa: F401
 
 logger = logging.getLogger(__name__)

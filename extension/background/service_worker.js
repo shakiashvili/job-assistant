@@ -332,9 +332,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (type === "UPLOAD_SKILLS_MD") {
     (async () => {
+      const payload = {
+        filename: message.filename || "skills.md",
+      };
+      if (message.contentBase64) {
+        payload.content_base64 = message.contentBase64;
+      } else {
+        payload.content = message.content || "";
+      }
       const res = await apiRequest("/api/extension/upload-skills", {
         method: "POST",
-        body: { content: message.content || "", filename: message.filename || "skills.md" },
+        body: payload,
         requiresAuth: true,
       });
       if (res.ok && res.data?.user_email) {
@@ -394,7 +402,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             t.url &&
             (t.url.startsWith("http://localhost:5173") ||
               t.url.startsWith("http://127.0.0.1:5173") ||
-              t.url.includes("talentflow"))
+              t.url.includes("talentflow") ||
+              t.url.includes("vercel.app") ||
+              t.url.includes("pages.dev") ||
+              t.url.includes("onrender.com"))
         );
         if (!webTab || !webTab.id) {
           sendResponse({

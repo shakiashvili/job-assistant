@@ -16,7 +16,7 @@ import {
   GraduationCap,
   RefreshCw,
 } from 'lucide-react';
-import { fetchGroundTruth, saveGroundTruth, uploadSkillsMdFile } from '../services/api';
+import { fetchGroundTruth, saveGroundTruth, uploadSkillsMdFile, fetchCandidateAnalytics } from '../services/api';
 import { GroundTruth } from '../types';
 
 const DEFAULT_GROUND_TRUTH: GroundTruth = {
@@ -68,6 +68,7 @@ export const ProfileVault: React.FC = () => {
   const [newFaqTags, setNewFaqTags] = useState('');
   const [isDragging, setIsDragging] = useState(false);
   const [isUploadingSkills, setIsUploadingSkills] = useState(false);
+  const [completeness, setCompleteness] = useState<{ score: number; missing: string[] } | null>(null);
   const dropInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const handleSkillsFileDrop = async (file: File) => {
@@ -80,7 +81,7 @@ export const ProfileVault: React.FC = () => {
       setSuccessMsg(`Successfully parsed ${file.name} into CandidateProfile with ${res.extracted_skills.length} clean skills!`);
       setTimeout(() => setSuccessMsg(null), 4000);
     } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to upload and parse skills file');
+      setErrorMsg(err.message || 'Failed to upload and parse CV / skills file');
     } finally {
       setIsUploadingSkills(false);
     }
@@ -94,9 +95,18 @@ export const ProfileVault: React.FC = () => {
     setIsLoading(true);
     setErrorMsg(null);
     try {
-      const gt = await fetchGroundTruth();
+      const [gt, analytics] = await Promise.all([
+        fetchGroundTruth(),
+        fetchCandidateAnalytics().catch(() => null),
+      ]);
       if (gt && typeof gt === 'object') {
         setData({ ...DEFAULT_GROUND_TRUTH, ...gt });
+      }
+      if (analytics) {
+        setCompleteness({
+          score: analytics.completeness_score,
+          missing: analytics.missing_fields || [],
+        });
       }
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to load ground truth');
@@ -206,7 +216,7 @@ export const ProfileVault: React.FC = () => {
       <input
         ref={dropInputRef}
         type="file"
-        accept=".md,.txt,.markdown"
+        accept=".pdf,.docx,.doc,.md,.txt,.markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         className="hidden"
         onChange={(e) => {
           const file = e.target.files?.[0];
@@ -240,7 +250,7 @@ export const ProfileVault: React.FC = () => {
             className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-xs text-sky-300 bg-sky-950/60 hover:bg-sky-900/60 border border-sky-700/60 transition-all disabled:opacity-50"
           >
             <UploadCloud className={`w-4 h-4 ${isUploadingSkills ? 'animate-bounce' : ''}`} />
-            <span>{isUploadingSkills ? 'Uploading skills.md...' : 'Upload skills.md'}</span>
+            <span>{isUploadingSkills ? 'Parsing CV...' : 'Upload CV (.pdf / .docx / .md)'}</span>
           </button>
 
           <button
@@ -277,6 +287,36 @@ export const ProfileVault: React.FC = () => {
         <div className="p-3 bg-rose-950/40 border border-rose-800 text-xs text-rose-300 rounded-xl flex items-center gap-2">
           <AlertCircle className="w-4 h-4 text-rose-400" />
           <span>{errorMsg}</span>
+        </div>
+      )}
+
+      {completeness && (
+        <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 text-xs font-bold text-white">
+              <span>Vault Completeness: {completeness.score}%</span>
+              {completeness.missing.length === 0 && (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800">
+                  Ready
+                </span>
+              )}
+            </div>
+            {completeness.missing.length > 0 ? (
+              <p className="text-[11px] text-amber-300">
+                Missing fields (never guessed or fabricated): {completeness.missing.join(', ')}
+              </p>
+            ) : (
+              <p className="text-[11px] text-slate-400">
+                All core identity, skills, history, and education fields are verified in your vault.
+              </p>
+            )}
+          </div>
+          <div className="w-full sm:w-44 h-2 bg-slate-800 rounded-full overflow-hidden">
+            <div
+              className={`h-full ${completeness.score >= 80 ? 'bg-emerald-500' : 'bg-amber-500'}`}
+              style={{ width: `${Math.min(100, Math.max(5, completeness.score))}%` }}
+            />
+          </div>
         </div>
       )}
 

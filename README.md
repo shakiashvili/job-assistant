@@ -1,77 +1,58 @@
-# 🚀 TalentFlow AI — Universal Multi-Industry Job Application & Bilingual (EN / KA ქართული) CV Platform
+# TalentFlow AI — Autonomous Career Platform & Extension Copilot
 
-A production-ready, Human-in-the-Loop AI Job Application & CV Synthesis SaaS platform powered by **FastAPI**, **Google Gemini 2.5 Flash**, **Playwright**, **React + Vite + Tailwind CSS**, and a **Manifest V3 Chrome Extension**.
+Multi-user AI Job Seeker Platform combining FastAPI, SQLModel, Alembic, Gemini AI (with caching, routing, and telemetry), React/TypeScript/Tailwind CSS, Playwright form staging, and a Manifest V3 Chrome Extension Side Panel.
 
----
-
-## 🌟 Key Capabilities (B2B & Candidate Suite)
-
-### 1. Universal Multi-Industry Support
-Works across technical and non-technical professions out of the box with 1-click `.md` profile templates:
-- 💻 **QA Automation & Software Engineering** (Playwright, Cypress, Python, TypeScript, CI/CD, SDET)
-- 🏨 **Hotel Receptionist & Hospitality** (Front Desk Operations, Opera PMS, Fidelio, Booking.com/Expedia Extranet, VIP Guest Relations, POS Billing)
-- 🎧 **Customer Service & Client Care** (Omnichannel Support, Zendesk, Intercom, Salesforce CRM, Conflict De-escalation, CSAT/NPS)
-- 🏥 **Hospital & Healthcare Administration** (Patient Registration, Medical Reception, EMR/EHR Systems, Health Insurance Verification, Triage & Scheduling)
-
-### 2. Bilingual CV Generation: English (`🇬🇧 EN`) & Georgian (`🇬🇪 KA ქართული ენა`)
-- Upload or edit your `candidate_skills.md` in **English or Georgian**.
-- Click **🇬🇧 Audit & Generate English CV** or **🇬🇪 Audit & Generate ქართული CV** to synthesize a natural, human-tone PDF CV (`CV_<Company>_<Role>_EN.pdf` or `CV_<Company>_<Role>_KA.pdf`) plus a crisp printable HTML version rendered with full Georgian Unicode typography (`Sylfaen` / `Noto Sans Georgian`).
-
-### 3. 3-Dimensional Match Audit + Employer 3+ Reviews Gate
-- Returns **Skills Match (%)**, **ATS Match (%)**, **Recruiter Match (%)**, and **Identified Gaps + Bridge Strategy**.
-- Validates employer reputation across job portals (**3+ verified employee reviews gate**) before staging an application.
-
-### 4. Multi-Portal Vacancy Feed & Playwright Live Form Stager
-- Supports **Jobs.ge**, **HR.ge**, **HeadHunter.ge**, **DOU.ua** (with mandatory DOU Motivational Letter), **Djinni.co**, **JustJoin.it**, **Greenhouse**, and **Lever**.
-- Launches a live Chromium window to pre-fill contact info, **Applicant Summary**, **Motivational Letter**, **Salary Expectation**, **Default 1-Week Start Date** (`1 week after offer` / `1 კვირა შეთავაზებიდან`), attaches the tailored PDF CV, checks CAPTCHA, and pauses for human review.
+## Key Capabilities
+- **Dashboard Home & Analytics (`GET /api/analytics/candidate`)**: Profile completeness meter, missing-field diagnostics (never fabricated), job tier breakdowns, pipeline conversion metrics, and upcoming interview alerts.
+- **Universal CV Parsing (`.pdf`, `.docx`, `.md`, `.txt`)**: Parses resumes cleanly with `pypdf` and `python-docx` alongside structured Ground Truth editing.
+- **Multi-Portal Discovery & Strict Qualification Gates**: Scans and scores vacancies with explicit experience caps, remote/on-site verification, posting dates, and transparent salary provenance (`Verified` / `AI Estimated` / `Not Listed`).
+- **CV Studio & Dual Letter Generation**: Generates domain-agnostic ATS, Recruiter, and Job-Tailored `.docx` + `.pdf` + HTML editions with saved `CVVersion` snapshots, inline section editing + live re-rendering, and separate **Cover Letter** vs. **Motivational Letter** tabs.
+- **Centralized Gemini Pipeline & Admin AI Observability**: Shared `gemini_service` with `GEMINI_MODEL` / `GEMINI_FAST_MODEL` routing, SHA-256 DB response caching, deterministic offline fallback, and Admin cost/latency telemetry (`GET /api/admin/ai-metrics`).
+- **Human-in-the-Loop Chrome Extension (`extension/`)**: Side Panel copilot supporting `.pdf`/`.docx`/`.md` uploads, editable auto-fill answers, and DataTransfer PDF attachment without auto-submitting or bypassing CAPTCHAs.
 
 ---
 
-## 🛠️ Quick Start
+## Local Quickstart
 
-### 1. Start the FastAPI Backend (`:8000`)
-```powershell
+### 1. Environment Configuration
+```bash
+cp .env.example backend/.env
+# Edit backend/.env with SECRET_KEY and optional GEMINI_API_KEY
+```
+
+### 2. Backend Setup & Migrations
+```bash
 cd backend
 pip install -r requirements.txt
-playwright install chromium
-python run.py
+alembic upgrade head
+uvicorn app.main:app --reload --port 8000
 ```
-- Backend API & Swagger Docs: `http://localhost:8000/docs`
 
-### 2. Start the React Web Dashboard (`:5173`)
-```powershell
+### 3. Frontend Setup
+```bash
 cd frontend
 npm install
-npm run dev -- --host
+npm run dev
 ```
-- Web Dashboard: `http://localhost:5173`
+Open `http://localhost:5173`.
 
-### 3. Load the Chrome Extension (Optional)
-1. Open Chrome and navigate to `chrome://extensions/`.
-2. Enable **Developer mode** (top-right toggle).
-3. Click **Load unpacked** and select the `extension/` folder.
+### 4. Promote an Admin User (Optional)
+```bash
+python backend/scripts/create_admin.py --email admin@example.com
+```
+
+### 5. Run Verification Suites
+```bash
+# Backend unit, isolation, security & persistence tests
+cd backend && pytest tests -q
+
+# Frontend TypeScript & Vite production build
+cd frontend && npm run build
+```
 
 ---
 
-## 🤝 How to Share This Repository on GitHub
-
-Run the following commands from the project root (`C:\Users\giorg\.gemini\antigravity\scratch\job-application-assistant`):
-
-```powershell
-cd "C:\Users\giorg\.gemini\antigravity\scratch\job-application-assistant"
-git init
-git add .
-git commit -m "feat: TalentFlow AI - Multi-Industry & Bilingual EN/KA Job Assistant"
-git branch -M main
-
-# Create a new repository at https://github.com/new (do not initialize with README), then run:
-git remote add origin https://github.com/YOUR_GITHUB_USERNAME/talentflow-ai-job-assistant.git
-git push -u origin main
-```
-
-### Sharing a Live Demo Link with Businesses Instantly
-To share your running local app (`http://localhost:5173`) with clients, recruiters, or businesses over HTTPS without deploying:
-```powershell
-npx localtunnel --port 5173
-```
-*(Or click the **"Share Repo"** button in the top navigation bar of the web dashboard for 1-click copyable commands!)*
+## Documentation
+- [System Architecture](docs/ARCHITECTURE.md)
+- [Free-Tier Hosting & Persistence Guide](docs/DEPLOYMENT.md)
+- [Chrome Extension Copilot & CWS Guide](docs/EXTENSION.md)

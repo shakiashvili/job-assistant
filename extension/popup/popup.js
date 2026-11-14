@@ -197,8 +197,44 @@
       el("applicant-summary-preview").textContent = data.applicant_summary;
     }
 
-    el("cover-letter-preview").textContent = data.cover_letter || "";
+    el("cover-letter-preview").textContent = data.cover_letter || data.motivational_letter || "";
     el("btn-mark-applied").classList.remove("hidden");
+
+    const answersWrap = el("field-answers-wrap");
+    const answersList = el("field-answers-list");
+    if (answersWrap && answersList) {
+      const answers = Array.isArray(data.field_answers) ? data.field_answers : [];
+      answersList.innerHTML = "";
+      if (answers.length > 0) {
+        answersWrap.classList.remove("hidden");
+        answers.forEach((item, idx) => {
+          const row = document.createElement("div");
+          row.style.cssText = "background:#0f172a; padding:6px; border-radius:6px; border:1px solid #1e293b;";
+          const lbl = document.createElement("div");
+          lbl.style.cssText = "font-size:10px; color:#94a3b8; margin-bottom:3px; display:flex; justify-content:space-between;";
+          lbl.textContent = `${item.label || item.field_id} (${Math.round((item.confidence || 0.9) * 100)}%)`;
+          const isLong = String(item.value || "").length > 90 || item.field_type === "textarea";
+          const ctrl = document.createElement(isLong ? "textarea" : "input");
+          ctrl.className = "input-field";
+          ctrl.style.cssText = "width:100%; margin:0; font-size:11px; padding:4px 6px;";
+          if (isLong) ctrl.rows = 3;
+          else ctrl.type = "text";
+          ctrl.value = item.value || "";
+          ctrl.dataset.fieldId = item.field_id || `field-${idx}`;
+          ctrl.dataset.answerIndex = String(idx);
+          ctrl.addEventListener("input", () => {
+            if (state.preparedApp?.field_answers?.[idx]) {
+              state.preparedApp.field_answers[idx].value = ctrl.value;
+            }
+          });
+          row.appendChild(lbl);
+          row.appendChild(ctrl);
+          answersList.appendChild(row);
+        });
+      } else {
+        answersWrap.classList.add("hidden");
+      }
+    }
   }
 
   async function initPopup() {
@@ -357,33 +393,63 @@
       const fileInput = el("skills-file-input");
       const file = fileInput?.files?.[0];
       if (!file) {
-        showStatus("Select your skills.md or .txt file first.", "error");
+        showStatus("Select your .pdf, .docx, .md, or .txt CV file first.", "error");
         return;
       }
       const btn = el("btn-upload-skills");
       btn.disabled = true;
       btn.textContent = "⏳ Uploading...";
       try {
-        const content = await file.text();
-        const res = await sendBg({
-          type: "UPLOAD_SKILLS_MD",
-          content,
-          filename: file.name || "skills.md",
-        });
+        const lowerName = (file.name || "").toLowerCase();
+        let msgPayload;
+        if (lowerName.endsWith(".pdf") || lowerName.endsWith(".docx") || lowerName.endsWith(".doc")) {
+          const dataUrl = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result || ""));
+            reader.onerror = () => reject(reader.error || new Error("File read failed"));
+            reader.readAsDataURL(file);
+          });
+          msgPayload = {
+            type: "UPLOAD_SKILLS_MD",
+            contentBase64: dataUrl,
+            filename: file.name || "cv.pdf",
+          };
+        } else {
+          const content = await file.text();
+          msgPayload = {
+            type: "UPLOAD_SKILLS_MD",
+            content,
+            filename: file.name || "skills.md",
+          };
+        }
+        const res = await sendBg(msgPayload);
         if (!res?.ok) {
-          showStatus(res?.error || "Failed to upload skills.md.", "error");
+          showStatus(res?.error || "Failed to upload CV / skills profile.", "error");
           return;
         }
         state.profile = res.data;
         renderProfile(state.profile);
         fileInput.value = "";
-        showStatus(`Profile synced for ${res.data?.full_name || "candidate"} (${file.name}).`, "success");
+        const scoreNote = res.data?.completeness_score !== undefined ? ` · ${res.data.completeness_score}% complete` : "";
+        showStatus(`Profile synced for ${res.data?.full_name || "candidate"} (${file.name}${scoreNote}).`, "success");
       } catch (err) {
         showStatus(`Could not read file: ${err?.message || err}`, "error");
       } finally {
         btn.disabled = false;
-        btn.textContent = "⬆️ Upload & Sync skills.md";
+        btn.textContent = "⬆️ Upload & Sync Profile";
       }
+    });
+
+    el("btn-reapply-edited")?.addEventListener("click", async () => {
+      if (!state.activeTabId || !state.preparedApp?.field_answers?.length) return;
+      const fillRes = await new Promise((resolve) => {
+        chrome.tabs.sendMessage(
+          state.activeTabId,
+          { type: "APPLY_FIELD_ANSWERS", fieldAnswers: state.preparedApp.field_answers },
+          resolve
+        );
+      });
+      showStatus(`Re-applied ${fillRes?.filledCount || 0} edited answers to page.`, "success");
     });
 
     el("btn-save-api")?.addEventListener("click", async () => {

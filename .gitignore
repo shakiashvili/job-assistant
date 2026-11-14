@@ -31,6 +31,7 @@ Thumbs.db
 *.db-wal
 data/.fernet.key
 data/job_assistant.db
+data/backups/
 data/candidate_skills.md
 data/ground_truth.json
 data/applications.json

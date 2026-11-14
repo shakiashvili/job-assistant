@@ -119,18 +119,12 @@ class ProfileRepository:
             for prof in profiles:
                 ps = prof.parsed_skills or {}
                 owner = str(ps.get("owner_email") or "").strip().lower()
-                if not owner and prof.full_name and bool(ps.get("user_uploaded", False)):
+                if not owner and prof.user_id is None and (prof.full_name or prof.raw_markdown) and bool(ps.get("user_uploaded", False)):
                     return prof
             for prof in profiles:
                 ps = prof.parsed_skills or {}
-                if prof.full_name and bool(ps.get("user_uploaded", False)):
-                    return prof
-            for prof in profiles:
-                owner = str((prof.parsed_skills or {}).get("owner_email") or "").strip().lower()
-                if not owner and prof.full_name:
-                    return prof
-            for prof in profiles:
-                if prof.full_name:
+                owner = str(ps.get("owner_email") or "").strip().lower()
+                if not owner and prof.user_id is None and (prof.full_name or prof.raw_markdown):
                     return prof
 
         from ..services.profile_service import profile_service
@@ -573,37 +567,34 @@ class ProfileRepository:
             md_content, mark_uploaded=True, owner_email=owner_email, user_id=user_id
         )
         parsed = self.parse_profile_from_md(md_content)
-        if parsed.get("work_history") or parsed.get("education"):
-            with Session(engine, expire_on_commit=False) as session:
-                db_prof = session.get(CandidateProfile, profile.id)
-                if db_prof:
-                    skills_copy = dict(db_prof.parsed_skills)
-                    vault = dict(skills_copy.get("ground_truth_vault") or {})
-                    if parsed.get("work_history"):
-                        vault["work_history"] = parsed["work_history"]
-                        if db_prof.id is not None:
-                            session.exec(delete(CandidateExperience).where(CandidateExperience.profile_id == db_prof.id))
-                            for wh_item in parsed["work_history"]:
-                                if isinstance(wh_item, dict):
-                                    session.add(
-                                        CandidateExperience(
-                                            profile_id=db_prof.id,
-                                            user_id=db_prof.user_id,
-                                            company=str(wh_item.get("company") or "Experience"),
-                                            role_title=str(wh_item.get("role") or wh_item.get("title") or "Role"),
-                                            location=str(wh_item.get("location") or ""),
-                                            start_date=str(wh_item.get("dates") or wh_item.get("start_date") or ""),
-                                            highlights=list(wh_item.get("highlights") or []),
-                                        )
-                                    )
-                    if parsed.get("education"):
-                        vault["education"] = parsed["education"]
-                    skills_copy["ground_truth_vault"] = vault
-                    db_prof.parsed_skills = skills_copy
-                    session.add(db_prof)
-                    session.commit()
-                    session.refresh(db_prof)
-                    return db_prof
+        with Session(engine, expire_on_commit=False) as session:
+            db_prof = session.get(CandidateProfile, profile.id)
+            if db_prof:
+                skills_copy = dict(db_prof.parsed_skills or {})
+                vault = dict(skills_copy.get("ground_truth_vault") or {})
+                vault["work_history"] = list(parsed.get("work_history") or [])
+                if db_prof.id is not None:
+                    session.exec(delete(CandidateExperience).where(CandidateExperience.profile_id == db_prof.id))
+                    for wh_item in vault["work_history"]:
+                        if isinstance(wh_item, dict):
+                            session.add(
+                                CandidateExperience(
+                                    profile_id=db_prof.id,
+                                    user_id=db_prof.user_id,
+                                    company=str(wh_item.get("company") or "Experience"),
+                                    role_title=str(wh_item.get("role") or wh_item.get("title") or "Role"),
+                                    location=str(wh_item.get("location") or ""),
+                                    start_date=str(wh_item.get("dates") or wh_item.get("start_date") or ""),
+                                    highlights=list(wh_item.get("highlights") or []),
+                                )
+                            )
+                vault["education"] = list(parsed.get("education") or [])
+                skills_copy["ground_truth_vault"] = vault
+                db_prof.parsed_skills = skills_copy
+                session.add(db_prof)
+                session.commit()
+                session.refresh(db_prof)
+                profile = db_prof
         return profile
 
     def save_skills_md(
