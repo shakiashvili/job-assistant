@@ -128,13 +128,27 @@
       location = firstText([".location-text", ".job-additional-info--item"]);
       jobDescription = firstText([".job-post__description", ".profile-page-section", "main"]);
     } else {
-      jobTitle = firstText(["h1.job-title", "h1", ".vacancy-title", "h2"]);
+      jobTitle = firstText(["h1.job-title", "h1", ".vacancy-title", ".job-header h2", "h2"]);
+      if (!jobTitle) {
+        const ogTitle = (document.querySelector('meta[property="og:title"]')?.getAttribute("content") || "").trim();
+        jobTitle = ogTitle ? ogTitle.split(/\s[|\-–—]\s/)[0].trim() : (document.title || "").split(/\s[|\-–—]\s/)[0].trim();
+      }
       const metaSite = (document.querySelector('meta[property="og:site_name"]')?.getAttribute("content") || "").trim();
-      const genericPortalSites = new Set(["dou", "dou.ua", "djinni", "djinni.co", "jobs.ge", "hr.ge", "hr.gov.ge", "linkedin", "workday"]);
+      const genericPortalSites = new Set([
+        "dou", "dou.ua", "djinni", "djinni.co", "jobs.ge", "hr.ge", "hr.gov.ge",
+        "linkedin", "workday", "greenhouse", "lever", "ashby", "workable", "indeed", "glassdoor"
+      ]);
+      const hostParts = (window.location.hostname || "")
+        .replace(/^(www|careers|jobs|apply|boards|hire)\./i, "")
+        .split(".");
+      const hostCompany = hostParts[0] && hostParts[0].length > 1
+        ? hostParts[0].charAt(0).toUpperCase() + hostParts[0].slice(1)
+        : "";
       companyName =
         firstText([".company-name", ".employer-name", '[itemprop="hiringOrganization"]']) ||
-        (!genericPortalSites.has(metaSite.toLowerCase()) ? metaSite : "");
-      jobDescription = firstText(["main", "article", ".job-description", ".description"]);
+        (metaSite && !genericPortalSites.has(metaSite.toLowerCase()) ? metaSite : "") ||
+        (!genericPortalSites.has((hostCompany || "").toLowerCase()) ? hostCompany : "");
+      jobDescription = firstText(["main", "article", ".job-description", ".description", "#job-description", "[role='main']"]);
     }
 
     const rawPageText = (document.body?.innerText || "").replace(/\s+/g, " ").trim().slice(0, 6000);

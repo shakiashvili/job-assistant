@@ -108,7 +108,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
       {/* Header Banner */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900 border border-slate-800 p-6 rounded-2xl">
         <div className="flex items-center gap-3">
-          <div className="w-11 h-11 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
+          <div className="w-11 h-11 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
             <Shield className="w-6 h-6" />
           </div>
           <div>
@@ -147,7 +147,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
           <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-1">
             <div className="flex items-center justify-between text-slate-400">
               <span className="text-xs font-semibold uppercase">Total Users</span>
-              <Users className="w-4 h-4 text-sky-400" />
+              <Users className="w-4 h-4 text-emerald-400" />
             </div>
             <div className="text-2xl font-extrabold text-white">{metrics.total_users}</div>
             <div className="text-[11px] text-emerald-400 font-medium">
@@ -201,11 +201,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div>
               <h3 className="text-base font-bold text-white flex items-center gap-2">
-                <Activity className="w-4 h-4 text-sky-400" />
+                <Activity className="w-4 h-4 text-emerald-400" />
                 <span>Gemini AI Pipeline & Cost Observability</span>
               </h3>
               <p className="text-xs text-slate-400">
-                Primary model: <code className="text-sky-300">{aiMetrics.quality_model}</code> · Fast model:{' '}
+                Primary model: <code className="text-emerald-300">{aiMetrics.quality_model}</code> · Fast model:{' '}
                 <code className="text-emerald-300">{aiMetrics.fast_model}</code>
               </p>
             </div>
@@ -237,7 +237,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
             </div>
             <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
               <div className="text-[10px] uppercase text-slate-500 font-bold">Total Tokens</div>
-              <div className="text-lg font-extrabold text-sky-300">{aiMetrics.total_tokens.toLocaleString()}</div>
+              <div className="text-lg font-extrabold text-emerald-300">{aiMetrics.total_tokens.toLocaleString()}</div>
             </div>
             <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
               <div className="text-[10px] uppercase text-slate-500 font-bold">Est. Cost</div>
@@ -271,7 +271,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
                 <tbody className="divide-y divide-slate-800/60">
                   {Object.entries(aiMetrics.by_task).map(([taskName, t]) => (
                     <tr key={taskName}>
-                      <td className="py-2 px-3 font-mono text-sky-300">{taskName}</td>
+                      <td className="py-2 px-3 font-mono text-emerald-300">{taskName}</td>
                       <td className="py-2 px-3 text-slate-200">{t.count}</td>
                       <td className="py-2 px-3 text-emerald-300">{t.success}</td>
                       <td className="py-2 px-3 text-emerald-400">{t.cache_hits}</td>
@@ -303,7 +303,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search by name or email..."
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500"
+              className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
             />
           </div>
         </div>

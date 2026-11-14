@@ -266,23 +266,38 @@
       const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (activeTab?.id) {
         state.activeTabId = activeTab.id;
-        const scraped = await ensureContentScriptAndScrape(activeTab.id);
-        if (scraped?.ok) {
-          state.pageContext = scraped.context;
-          state.scannedFields = scraped.fields || [];
-          el("portal-badge").textContent = (scraped.context?.portal || "generic").toUpperCase();
-          el("job-title-input").value = scraped.context?.job_title || "";
-          el("company-input").value = scraped.context?.company_name || "";
+        state.activeTabUrl = activeTab.url || "";
+        el("site-access-banner")?.classList.add("hidden");
+        el("extraction-warn")?.classList.add("hidden");
+        el("captcha-warn")?.classList.add("hidden");
 
-          if (!scraped.context?.job_title || !scraped.context?.company_name) {
-            el("extraction-warn").classList.remove("hidden");
-          }
-          if (scraped.captcha?.detected) {
-            el("captcha-warn").textContent = scraped.captcha.reason;
-            el("captcha-warn").classList.remove("hidden");
-          }
+        const isHttpTab = !state.activeTabUrl || /^https?:\/\//i.test(state.activeTabUrl);
+        if (!isHttpTab) {
+          el("portal-badge").textContent = "BROWSER TAB";
         } else {
-          el("portal-badge").textContent = "PAGE RESTRICTED";
+          const scraped = await ensureContentScriptAndScrape(activeTab.id);
+          if (scraped?.ok) {
+            state.pageContext = scraped.context;
+            state.scannedFields = scraped.fields || [];
+            el("portal-badge").textContent = (scraped.context?.portal || "generic").toUpperCase();
+            if (!el("job-title-input").value.trim()) {
+              el("job-title-input").value = scraped.context?.job_title || "";
+            }
+            if (!el("company-input").value.trim()) {
+              el("company-input").value = scraped.context?.company_name || "";
+            }
+
+            if (!el("job-title-input").value.trim() || !el("company-input").value.trim()) {
+              el("extraction-warn")?.classList.remove("hidden");
+            }
+            if (scraped.captcha?.detected) {
+              el("captcha-warn").textContent = scraped.captcha.reason;
+              el("captcha-warn").classList.remove("hidden");
+            }
+          } else {
+            el("portal-badge").textContent = "GRANT ACCESS";
+            el("site-access-banner")?.classList.remove("hidden");
+          }
         }
       }
     } finally {
@@ -383,6 +398,45 @@
   function bindEventListenersOnce() {
     if (state.listenersBound) return;
     state.listenersBound = true;
+
+    el("btn-grant-site-access")?.addEventListener("click", async () => {
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab?.url || !/^https?:\/\//i.test(tab.url)) {
+          showStatus("Navigate to an http:// or https:// job posting page first.", "error");
+          return;
+        }
+        const originPattern = `${new URL(tab.url).origin}/*`;
+        const granted = await chrome.permissions.request({ origins: [originPattern] });
+        if (granted) {
+          el("site-access-banner")?.classList.add("hidden");
+          showStatus("Site access granted! Rescanning active vacancy page...", "success");
+          el("job-title-input").value = "";
+          el("company-input").value = "";
+          initPopup();
+        } else {
+          showStatus("Permission was dismissed. You can still type Job Title & Company manually below.", "error");
+        }
+      } catch (err) {
+        showStatus(`Could not request site access: ${err?.message || err}`, "error");
+      }
+    });
+
+    if (chrome.tabs?.onActivated && !state.tabListenersBound) {
+      state.tabListenersBound = true;
+      chrome.tabs.onActivated.addListener(() => {
+        el("job-title-input").value = "";
+        el("company-input").value = "";
+        initPopup();
+      });
+      chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+        if (tab?.active && changeInfo.status === "complete") {
+          el("job-title-input").value = "";
+          el("company-input").value = "";
+          initPopup();
+        }
+      });
+    }
 
     el("btn-toggle-token")?.addEventListener("click", () => el("token-box")?.classList.toggle("hidden"));
     el("btn-toggle-api")?.addEventListener("click", () => el("api-settings-card")?.classList.toggle("hidden"));

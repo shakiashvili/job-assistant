@@ -194,10 +194,10 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
     <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl space-y-4">
       {/* Dynamic Domain-Agnostic Role Header */}
       {profileUploaded && (
-        <div className="p-3.5 rounded-xl bg-slate-950/90 border border-sky-500/30 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
+        <div className="p-3.5 rounded-xl bg-slate-950/90 border border-emerald-500/30 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
           <div className="space-y-1">
             <div className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="inline-flex items-center gap-1 font-bold text-sky-300">
+              <span className="inline-flex items-center gap-1 font-bold text-emerald-300">
                 <Compass className="w-3.5 h-3.5" />
                 Candidate:
               </span>
@@ -263,7 +263,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
           <button
             type="button"
             onClick={onUploadClick}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-sky-600/20 hover:bg-sky-600/30 border border-sky-500/40 text-sky-300 text-xs font-bold transition-all"
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 text-xs font-bold transition-all"
             title="Upload or replace your CV (.pdf, .docx, .md, .txt)"
           >
             <Upload className="w-3.5 h-3.5" />
@@ -286,7 +286,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
               onClick={() => onSelectStatusFilter(st)}
               className={`text-[11px] px-2.5 py-1.5 rounded-lg font-semibold transition-colors ${
                 dbStatusFilter === st
-                  ? 'bg-sky-600 text-white'
+                  ? 'bg-emerald-600 text-white'
                   : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
               }`}
             >
@@ -359,7 +359,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 value={searchQuery}
                 onChange={(e) => onSearchQueryChange(e.target.value)}
                 placeholder="Search by role, company, or skill (e.g. QA, Python, API, TBC)..."
-                className="w-full pl-8 pr-8 py-1.5 rounded-xl bg-slate-950 border border-slate-800 focus:border-sky-500 focus:outline-none text-xs text-white placeholder-slate-500"
+                className="w-full pl-8 pr-8 py-1.5 rounded-xl bg-slate-950 border border-slate-800 focus:border-emerald-500 focus:outline-none text-xs text-white placeholder-slate-500"
               />
               {searchQuery && (
                 <button
@@ -430,7 +430,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
               onClick={() => onSelectPortalFilter(p)}
               className={`text-[11px] px-2.5 py-1 rounded-lg font-medium transition-colors ${
                 selectedPortalFilter === p
-                  ? 'bg-sky-600 text-white'
+                  ? 'bg-emerald-600 text-white'
                   : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
               }`}
             >
@@ -446,14 +446,14 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
           className={`p-4 rounded-xl border text-xs space-y-2.5 ${
             preparedEmailPkg.gmail_draft_saved
               ? 'bg-emerald-950/35 border-emerald-700/60'
-              : 'bg-sky-950/35 border-sky-700/60'
+              : 'bg-emerald-950/35 border-emerald-700/60'
           }`}
         >
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div>
               <span
                 className={`text-[10px] font-bold uppercase block ${
-                  preparedEmailPkg.gmail_draft_saved ? 'text-emerald-400' : 'text-sky-400'
+                  preparedEmailPkg.gmail_draft_saved ? 'text-emerald-400' : 'text-emerald-400'
                 }`}
               >
                 {preparedEmailPkg.gmail_draft_saved
@@ -462,7 +462,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
               </span>
               <span className="text-white font-semibold">
                 {preparedEmailPkg.title} ({preparedEmailPkg.company}) &mdash; Subject:{' '}
-                <code className="text-sky-300">{preparedEmailPkg.subject}</code>
+                <code className="text-emerald-300">{preparedEmailPkg.subject}</code>
               </span>
               {preparedEmailPkg.draft_error && !preparedEmailPkg.gmail_draft_saved && (
                 <p className="text-[11px] text-amber-300 mt-1">{preparedEmailPkg.draft_error}</p>
@@ -516,7 +516,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
           className={`text-xs px-3.5 py-2.5 rounded-xl border space-y-1.5 ${
             scrapeTaskInfo.status === 'FAILED'
               ? 'bg-rose-950/40 border-rose-800 text-rose-300'
-              : 'bg-sky-950/40 border-sky-800/70 text-sky-200'
+              : 'bg-emerald-950/40 border-emerald-800/70 text-emerald-200'
           }`}
         >
           <div className="flex items-center justify-between gap-2 font-semibold">
@@ -543,7 +543,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
         <div className="text-xs bg-emerald-950/30 border border-emerald-800/60 text-emerald-300 px-3.5 py-2 rounded-xl flex items-center justify-between flex-wrap gap-2">
           <span>
             ✅ Found <strong>{totalJobs ?? visibleJobs.length}</strong> suitable opportunities ({tierCounts?.DIRECT ?? directJobs.length} Direct • {tierCounts?.ADJACENT ?? adjacentJobs.length} Adjacent • {tierCounts?.PUBLIC_INTERNSHIP ?? publicJobs.length} Public/Intern)
-            <span className="text-sky-300 ml-1.5">(showing {visibleJobs.length} on page {page} of {totalPages})</span>
+            <span className="text-emerald-300 ml-1.5">(showing {visibleJobs.length} on page {page} of {totalPages})</span>
             {scrapeStats && scrapeStats.filteredOut > 0 && (
               <span className="text-slate-400 ml-1.5">
                 ({Math.max(0, scrapeStats.filteredOut)} filtered out by location/seniority gates)
@@ -565,11 +565,11 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 Upload your skills.md file to scan tailored live vacancies
               </h4>
               <p className="text-xs text-slate-400 max-w-md mx-auto">
-                Your discovery feed adapts automatically to any domain. Upload <code className="text-sky-300">skills.md</code> to discover Direct Matches, Adjacent Transferable Roles, and Public Sector Internships.
+                Your discovery feed adapts automatically to any domain. Upload <code className="text-emerald-300">skills.md</code> to discover Direct Matches, Adjacent Transferable Roles, and Public Sector Internships.
               </p>
               <button
                 onClick={onUploadClick}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold shadow-md transition-colors"
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-md transition-colors"
               >
                 <Upload className="w-3.5 h-3.5" />
                 <span>Upload skills.md Now</span>
@@ -591,7 +591,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 <button
                   type="button"
                   onClick={() => onSelectPortalFilter('ALL')}
-                  className="px-3.5 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold"
+                  className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold"
                 >
                   View All Portals
                 </button>
@@ -636,7 +636,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
             >
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between gap-1 flex-wrap">
-                  <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-slate-900 text-sky-400 border border-slate-700">
+                  <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-slate-900 text-emerald-400 border border-slate-700">
                     {job.portal} • {job.market}
                   </span>
                   <div className="flex items-center gap-1">
@@ -740,7 +740,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
 
               <div className="pt-2 mt-2 border-t border-slate-800/60 space-y-2 text-[10px]">
                 <div className="flex items-center justify-between">
-                  <span className="text-sky-400 font-semibold">Load into Auditor</span>
+                  <span className="text-emerald-400 font-semibold">Load into Auditor</span>
                   <span className="text-slate-500">Lang: {job.language_requirements.join(', ')}</span>
                 </div>
 
@@ -770,7 +770,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                           onSelectJob(job);
                         }
                       }}
-                      className="flex-1 flex items-center justify-center gap-1 py-1 px-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold transition-colors"
+                      className="flex-1 flex items-center justify-center gap-1 py-1 px-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold transition-colors"
                     >
                       <Play className="w-3 h-3" />
                       <span>Open &amp; Fill Form</span>
@@ -817,7 +817,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 onClick={() => onPageChange(pNum)}
                 className={`px-2.5 py-1.5 rounded-lg font-semibold ${
                   pNum === page
-                    ? 'bg-sky-600 text-white'
+                    ? 'bg-emerald-600 text-white'
                     : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
                 }`}
               >

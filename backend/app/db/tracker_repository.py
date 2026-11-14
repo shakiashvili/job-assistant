@@ -286,6 +286,26 @@ class TrackerRepository:
                 rec.recruiter_email = item_update.recruiter_email
             if item_update.follow_up_date is not None:
                 rec.follow_up_date = item_update.follow_up_date
+            if item_update.interview_date is not None:
+                raw_idt = str(item_update.interview_date).strip()
+                if raw_idt:
+                    from datetime import datetime, timezone
+                    parsed_idt = None
+                    try:
+                        parsed_idt = datetime.fromisoformat(raw_idt.replace("Z", "+00:00"))
+                    except ValueError:
+                        for fmt in ("%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+                            try:
+                                parsed_idt = datetime.strptime(raw_idt[:19], fmt)
+                                break
+                            except ValueError:
+                                continue
+                    if parsed_idt is not None:
+                        if parsed_idt.tzinfo is None:
+                            parsed_idt = parsed_idt.replace(tzinfo=timezone.utc)
+                        rec.interview_date = parsed_idt
+                else:
+                    rec.interview_date = None
             if item_update.outcome is not None:
                 rec.outcome = item_update.outcome
 

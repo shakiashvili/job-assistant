@@ -46,6 +46,15 @@ class UpdateInterviewNotesRequest(BaseModel):
     status: Optional[str] = None
 
 
+class CalendarEventRequest(BaseModel):
+    interview_date: Optional[str] = None
+    duration_minutes: int = Field(default=45, ge=15, le=240)
+    summary: Optional[str] = None
+    description: Optional[str] = None
+    location: Optional[str] = None
+    attendee_email: Optional[str] = None
+
+
 class CreateInterviewReflectionRequest(BaseModel):
     note_type: str = Field(default="reflection")
     content: str = ""
@@ -421,3 +430,61 @@ def list_interview_reflection_notes(
     if not _is_guest_user(current_user):
         stmt = stmt.where(InterviewNote.user_id == current_user.id)
     return session.exec(stmt.order_by(InterviewNote.created_at.desc())).all()
+
+
+@router.get("/calendar/status")
+def get_google_calendar_status(current_user: User = Depends(get_current_user)):
+    """Reports whether Google Calendar OAuth is connected and ready for one-click interview scheduling."""
+    token = getattr(current_user, "gmail_oauth_token", None) or {}
+    is_live = bool(token and not token.get("simulated") and token.get("access_token"))
+    return {
+        "connected": is_live,
+        "google_oauth_configured": gmail_service.is_configured(),
+        "email": token.get("email") or current_user.email,
+        "auth_url": "/api/auth/google/login",
+    }
+
+
+@router.post("/{app_id}/calendar-event")
+def create_interview_calendar_event(
+    app_id: str,
+    req: CalendarEventRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Saves interview_date on the application and creates a Google Calendar event
+    (or returns a pre-filled Google Calendar popup link if OAuth hasn't been granted yet).
+    """
+    try:
+        item = tracker_store.get_by_id(
+            app_id,
+            user_id=current_user.id,
+            is_guest=_is_guest_user(current_user),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Application {app_id} not found")
+
+    if req.interview_date:
+        tracker_store.update(
+            app_id,
+            ApplicationUpdate(interview_date=req.interview_date),
+            user_id=current_user.id,
+            is_guest=_is_guest_user(current_user),
+        )
+
+    event_summary = req.summary or f"Interview: {item.role} at {item.company}"
+    event_desc = req.description or (
+        f"Role: {item.role}\nCompany: {item.company}\nPortal: {item.portal}\n"
+        f"{f'Job URL: {item.url}' if item.url else ''}"
+    ).strip()
+    return gmail_service.create_calendar_event(
+        user=current_user,
+        summary=event_summary,
+        description=event_desc,
+        location=req.location or "",
+        start_iso=req.interview_date or item.interview_date,
+        duration_minutes=req.duration_minutes,
+        attendee_email=req.attendee_email or item.recruiter_email,
+    )

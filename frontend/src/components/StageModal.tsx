@@ -96,7 +96,7 @@ export const StageModal: React.FC<StageModalProps> = ({
         {/* Modal Header */}
         <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/60">
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-sky-500/20 text-sky-400 flex items-center justify-center font-bold text-lg">
+            <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-lg">
               ⚡
             </div>
             <div>
@@ -152,7 +152,7 @@ export const StageModal: React.FC<StageModalProps> = ({
                 href={urlInput}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-xs text-sky-400 hover:underline flex items-center gap-1 font-medium"
+                className="text-xs text-emerald-400 hover:underline flex items-center gap-1 font-medium"
               >
                 <span>Open Form in Browser Tab</span>
                 <ExternalLink className="w-3.5 h-3.5" />
@@ -162,7 +162,7 @@ export const StageModal: React.FC<StageModalProps> = ({
               type="text"
               value={urlInput}
               onChange={(e) => setUrlInput(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-sky-500 font-mono"
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 font-mono"
             />
             <div className="flex flex-wrap gap-1.5 mt-2">
               {portalPresets.map((p) => (
@@ -172,8 +172,8 @@ export const StageModal: React.FC<StageModalProps> = ({
                   onClick={() => setUrlInput(p.url)}
                   className={`text-[11px] px-2.5 py-1 rounded-md border transition-colors ${
                     urlInput === p.url
-                      ? 'bg-sky-600 text-white border-sky-500 font-semibold'
-                      : 'bg-slate-950 text-sky-400 border-slate-800 hover:border-sky-700'
+                      ? 'bg-emerald-600 text-white border-emerald-500 font-semibold'
+                      : 'bg-slate-950 text-emerald-400 border-slate-800 hover:border-emerald-700'
                   }`}
                 >
                   {p.label}
@@ -184,15 +184,15 @@ export const StageModal: React.FC<StageModalProps> = ({
 
           {/* Attached Per-Vacancy PDF CV */}
           {tailoredCv && (
-            <div className="p-3.5 bg-sky-950/25 border border-sky-800/50 rounded-xl flex items-center justify-between">
+            <div className="p-3.5 bg-emerald-950/25 border border-emerald-800/50 rounded-xl flex items-center justify-between">
               <div className="flex items-center gap-2.5 text-xs">
-                <FileCheck className="w-5 h-5 text-sky-400 flex-shrink-0" />
+                <FileCheck className="w-5 h-5 text-emerald-400 flex-shrink-0" />
                 <div>
                   <span className="font-semibold text-white">
                     Per-Vacancy Human-Tone PDF CV: {tailoredCv.pdf_filename}
                   </span>
                   <div className="text-[11px] text-slate-400">
-                    Generated from your attached <code className="text-sky-300">candidate_skills.md</code> • ATS Keywords injected
+                    Generated from your attached <code className="text-emerald-300">candidate_skills.md</code> • ATS Keywords injected
                   </div>
                 </div>
               </div>
@@ -200,7 +200,7 @@ export const StageModal: React.FC<StageModalProps> = ({
                 href={`${BACKEND_ORIGIN}${tailoredCv.pdf_url}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>View PDF</span>
@@ -269,7 +269,7 @@ export const StageModal: React.FC<StageModalProps> = ({
                 type="button"
                 onClick={() => setHeadless(!headless)}
                 className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                  !headless ? 'bg-sky-600' : 'bg-slate-700'
+                  !headless ? 'bg-emerald-600' : 'bg-slate-700'
                 }`}
               >
                 <span
@@ -334,7 +334,7 @@ export const StageModal: React.FC<StageModalProps> = ({
                   <span className="text-slate-400">{result.fields_filled.join(', ')}</span>
                 </div>
                 <div className="flex flex-wrap items-center gap-4 pt-1">
-                  <span className="flex items-center gap-1.5 text-sky-400 font-medium">
+                  <span className="flex items-center gap-1.5 text-emerald-400 font-medium">
                     <FileCheck className="w-4 h-4" />
                     CV PDF Attached: {result.file_uploaded ? 'Yes' : 'No'}
                   </span>
@@ -354,7 +354,7 @@ export const StageModal: React.FC<StageModalProps> = ({
             href={urlInput}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-xs text-slate-400 hover:text-sky-400 flex items-center gap-1"
+            className="text-xs text-slate-400 hover:text-emerald-400 flex items-center gap-1"
           >
             <ExternalLink className="w-3.5 h-3.5" />
             <span>Preview Portal Form in New Tab</span>
@@ -370,7 +370,7 @@ export const StageModal: React.FC<StageModalProps> = ({
             <button
               onClick={handleStage}
               disabled={isLoading || !urlInput}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 shadow-lg shadow-sky-600/30 disabled:opacity-50 transition-all"
+              className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 shadow-lg shadow-emerald-600/30 disabled:opacity-50 transition-all"
             >
               {isLoading ? (
                 <>

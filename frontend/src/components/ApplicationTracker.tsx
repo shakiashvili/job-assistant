@@ -5,6 +5,7 @@ import {
   ExternalLink,
   Trash2,
   Calendar,
+  CalendarPlus,
   Building2,
   Download,
   ChevronRight,
@@ -17,6 +18,8 @@ import {
   Sparkles,
   Mail,
   Send,
+  GripVertical,
+  CheckCircle2,
 } from 'lucide-react';
 import {
   fetchApplications,
@@ -24,9 +27,12 @@ import {
   updateApplication,
   deleteApplication,
   getExportApplicationsUrl,
+  fetchGoogleCalendarStatus,
+  fetchGoogleOAuthConsentUrl,
+  createApplicationCalendarEvent,
   BACKEND_ORIGIN,
 } from '../services/api';
-import { ApplicationItem } from '../types';
+import { ApplicationItem, GoogleCalendarEventResponse, GoogleCalendarStatus } from '../types';
 import { InterviewPrepModal } from './InterviewPrepModal';
 import { EmailDispatchModal } from './EmailDispatchModal';
 
@@ -35,8 +41,14 @@ export const KANBAN_STAGES = [
   'Applied',
   'HR Screening',
   'Technical Interview',
-  'Offer / Rejected',
+  'Offer',
+  'Rejected',
 ] as const;
+
+const INTERVIEW_STAGES: ReadonlySet<KanbanStage> = new Set([
+  'HR Screening',
+  'Technical Interview',
+]);
 
 export type KanbanStage = typeof KANBAN_STAGES[number];
 
@@ -49,10 +61,20 @@ export const ApplicationTracker: React.FC = () => {
   const [prepModalApp, setPrepModalApp] = useState<ApplicationItem | null>(null);
   const [emailModalApp, setEmailModalApp] = useState<ApplicationItem | null>(null);
 
-  // Interview Notes Modal State
+  // Interview Notes & Google Calendar Modal State
   const [editingApp, setEditingApp] = useState<ApplicationItem | null>(null);
   const [modalInterviewDate, setModalInterviewDate] = useState('');
+  const [modalDurationMins, setModalDurationMins] = useState(45);
   const [modalNotes, setModalNotes] = useState('');
+  const [calendarPrompted, setCalendarPrompted] = useState(false);
+  const [calendarStatus, setCalendarStatus] = useState<GoogleCalendarStatus | null>(null);
+  const [calendarResult, setCalendarResult] = useState<GoogleCalendarEventResponse | null>(null);
+  const [calendarBusy, setCalendarBusy] = useState(false);
+  const [calendarErr, setCalendarErr] = useState('');
+
+  // Drag-and-Drop State
+  const [draggingAppId, setDraggingAppId] = useState<string | null>(null);
+  const [dragOverStage, setDragOverStage] = useState<KanbanStage | null>(null);
 
   // New form state
   const [newCompany, setNewCompany] = useState('');
@@ -66,6 +88,9 @@ export const ApplicationTracker: React.FC = () => {
 
   useEffect(() => {
     loadApps();
+    fetchGoogleCalendarStatus()
+      .then((st) => setCalendarStatus(st))
+      .catch(() => setCalendarStatus(null));
   }, []);
 
   const loadApps = async () => {
@@ -84,22 +109,90 @@ export const ApplicationTracker: React.FC = () => {
     if (status === 'Saved' || status === 'STAGED' || status === 'Discovered') return 'Discovered';
     if (status === 'Applied' || status === 'SUBMITTED') return 'Applied';
     if (status === 'HR Screening' || status === 'HR_SCREEN' || status === 'Interviewing' || status === 'INTERVIEW') return 'HR Screening';
-    if (status === 'Technical Interview' || status === 'TECH_INTERVIEW') return 'Technical Interview';
-    if (status === 'Offer / Rejected' || status === 'Offer' || status === 'Rejected' || status === 'OFFER' || status === 'REJECTED') return 'Offer / Rejected';
+    if (status === 'Technical Interview' || status === 'TECH_INTERVIEW' || status === 'FINAL_INTERVIEW' || status === 'Final Interview') return 'Technical Interview';
+    if (status === 'Rejected' || status === 'REJECTED') return 'Rejected';
+    if (status === 'Offer' || status === 'OFFER' || status === 'Offer / Rejected') return 'Offer';
     return 'Discovered';
+  };
+
+  const getDefaultTomorrowDateTimeLocal = () => {
+    const dt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    dt.setHours(10, 0, 0, 0);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+  };
+
+  const toDateTimeLocalValue = (raw?: string | null) => {
+    if (!raw) return '';
+    return raw.trim().replace(' ', 'T').slice(0, 16);
+  };
+
+  const openInterviewModal = (app: ApplicationItem, suggestedFromStageMove = false) => {
+    setEditingApp(app);
+    const formatted = toDateTimeLocalValue(app.interview_date) || (suggestedFromStageMove ? getDefaultTomorrowDateTimeLocal() : '');
+    setModalInterviewDate(formatted);
+    setModalNotes(app.notes || '');
+    setCalendarPrompted(suggestedFromStageMove);
+    setCalendarResult(null);
+    setCalendarErr('');
+  };
+
+  const moveApplicationToStage = async (appId: string, targetStage: KanbanStage) => {
+    const currentApp = applications.find((a) => a.id === appId);
+    if (!currentApp) return;
+    const prevStage = normalizeStage(currentApp.status);
+    if (prevStage === targetStage) return;
+
+    const prevSnapshot = [...applications];
+    setApplications((prev) =>
+      prev.map((a) => (a.id === appId ? { ...a, status: targetStage } : a))
+    );
+
+    try {
+      const updated = await updateApplication(appId, { status: targetStage });
+      setApplications((prev) => prev.map((a) => (a.id === appId ? updated : a)));
+      if (INTERVIEW_STAGES.has(targetStage) && !INTERVIEW_STAGES.has(prevStage)) {
+        openInterviewModal(updated, true);
+      }
+    } catch (err) {
+      console.error(err);
+      setApplications(prevSnapshot);
+    }
   };
 
   const handleStageShift = async (appId: string, currentStage: KanbanStage, direction: 'forward' | 'backward') => {
     const idx = KANBAN_STAGES.indexOf(currentStage);
     const targetIdx = direction === 'forward' ? idx + 1 : idx - 1;
     if (targetIdx < 0 || targetIdx >= KANBAN_STAGES.length) return;
-    const targetStage = KANBAN_STAGES[targetIdx];
+    await moveApplicationToStage(appId, KANBAN_STAGES[targetIdx]);
+  };
 
-    try {
-      const updated = await updateApplication(appId, { status: targetStage });
-      setApplications(applications.map((a) => (a.id === appId ? updated : a)));
-    } catch (err) {
-      console.error(err);
+  const handleDragStartCard = (e: React.DragEvent, appId: string) => {
+    setDraggingAppId(appId);
+    e.dataTransfer.setData('text/plain', appId);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragEndCard = () => {
+    setDraggingAppId(null);
+    setDragOverStage(null);
+  };
+
+  const handleColumnDragOver = (e: React.DragEvent, stage: KanbanStage) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (dragOverStage !== stage) {
+      setDragOverStage(stage);
+    }
+  };
+
+  const handleColumnDrop = async (e: React.DragEvent, targetStage: KanbanStage) => {
+    e.preventDefault();
+    const droppedId = e.dataTransfer.getData('text/plain') || draggingAppId;
+    setDraggingAppId(null);
+    setDragOverStage(null);
+    if (droppedId) {
+      await moveApplicationToStage(droppedId, targetStage);
     }
   };
 
@@ -113,12 +206,6 @@ export const ApplicationTracker: React.FC = () => {
     }
   };
 
-  const openInterviewModal = (app: ApplicationItem) => {
-    setEditingApp(app);
-    setModalInterviewDate(app.interview_date || '');
-    setModalNotes(app.notes || '');
-  };
-
   const handleSaveInterviewModal = async () => {
     if (!editingApp) return;
     try {
@@ -126,10 +213,48 @@ export const ApplicationTracker: React.FC = () => {
         interview_date: modalInterviewDate,
         notes: modalNotes,
       });
-      setApplications(applications.map((a) => (a.id === editingApp.id ? updated : a)));
+      setApplications((prev) => prev.map((a) => (a.id === editingApp.id ? updated : a)));
       setEditingApp(null);
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const handleSyncToGoogleCalendar = async () => {
+    if (!editingApp) return;
+    setCalendarBusy(true);
+    setCalendarErr('');
+    try {
+      const dtToUse = modalInterviewDate || getDefaultTomorrowDateTimeLocal();
+      if (!modalInterviewDate) setModalInterviewDate(dtToUse);
+      const updated = await updateApplication(editingApp.id, {
+        interview_date: dtToUse,
+        notes: modalNotes,
+      });
+      setApplications((prev) => prev.map((a) => (a.id === editingApp.id ? updated : a)));
+
+      const resp = await createApplicationCalendarEvent(editingApp.id, {
+        interview_date: dtToUse,
+        duration_minutes: modalDurationMins,
+        summary: `Interview (${editingApp.status}): ${editingApp.role} at ${editingApp.company}`,
+        description: modalNotes || `Track stage: ${editingApp.status}\nRole: ${editingApp.role}\nCompany: ${editingApp.company}`,
+      });
+      setCalendarResult(resp);
+    } catch (err: any) {
+      setCalendarErr(err?.message || 'Could not schedule Google Calendar event.');
+    } finally {
+      setCalendarBusy(false);
+    }
+  };
+
+  const handleConnectGoogleAccount = async () => {
+    try {
+      const res = await fetchGoogleOAuthConsentUrl();
+      if (res?.authorization_url) {
+        window.open(res.authorization_url, '_blank', 'noopener,noreferrer');
+      }
+    } catch (err: any) {
+      setCalendarErr(err?.message || 'Failed to launch Google OAuth consent flow.');
     }
   };
 
@@ -163,29 +288,30 @@ export const ApplicationTracker: React.FC = () => {
   };
 
   const stageBadgeStyles: Record<KanbanStage, string> = {
-    'Discovered': 'border-sky-500/30 text-sky-400 bg-sky-950/20',
-    'Applied': 'border-blue-500/30 text-blue-400 bg-blue-950/20',
-    'HR Screening': 'border-amber-500/30 text-amber-400 bg-amber-950/20',
-    'Technical Interview': 'border-purple-500/30 text-purple-400 bg-purple-950/20',
-    'Offer / Rejected': 'border-emerald-500/30 text-emerald-400 bg-emerald-950/20',
+    'Discovered': 'border-cyan-500/35 text-cyan-300 bg-cyan-950/30',
+    'Applied': 'border-indigo-500/35 text-indigo-300 bg-indigo-950/30',
+    'HR Screening': 'border-amber-500/35 text-amber-300 bg-amber-950/30',
+    'Technical Interview': 'border-violet-500/35 text-violet-300 bg-violet-950/30',
+    'Offer': 'border-emerald-500/40 text-emerald-300 bg-emerald-950/35',
+    'Rejected': 'border-rose-500/40 text-rose-300 bg-rose-950/35',
   };
 
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-sm">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900/90 border border-slate-800 p-6 rounded-2xl shadow-sm">
         <div>
           <div className="flex items-center gap-2">
             <h2 className="text-lg sm:text-xl font-bold text-white flex items-center gap-2">
-              <LayoutDashboard className="w-5 h-5 text-sky-400" />
+              <LayoutDashboard className="w-5 h-5 text-emerald-400" />
               Visual Kanban Application Pipeline
             </h2>
-            <span className="hidden sm:inline-block text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-sky-950 text-sky-300 border border-sky-800">
-              Mobile Touch Ready
+            <span className="hidden sm:inline-block text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-emerald-950/70 text-emerald-300 border border-emerald-700/50">
+              Drag &amp; Drop + Google Calendar
             </span>
           </div>
           <p className="text-xs sm:text-sm text-slate-400 mt-1">
-            Track applications across <strong>Discovered &rarr; Applied &rarr; HR Screening &rarr; Technical Interview &rarr; Offer / Rejected</strong> with 1-click stage advancement, interview prep, and Gmail dispatch.
+            Drag cards across <strong>Discovered &rarr; Applied &rarr; HR Screening &rarr; Technical Interview &rarr; Offer</strong> or <strong>Rejected</strong>. Moving to an interview stage suggests syncing with Google Calendar.
           </p>
         </div>
 
@@ -197,12 +323,12 @@ export const ApplicationTracker: React.FC = () => {
             className="min-h-[44px] flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-slate-300 bg-slate-800 hover:bg-slate-700 border border-slate-700 transition-all"
             title="Export application pipeline to CSV"
           >
-            <Download className="w-3.5 h-3.5 text-sky-400" />
+            <Download className="w-3.5 h-3.5 text-emerald-400" />
             <span>Export CSV</span>
           </a>
           <button
             onClick={() => setIsAddModalOpen(true)}
-            className="min-h-[44px] flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold text-white bg-sky-600 hover:bg-sky-500 shadow-lg shadow-sky-600/20 transition-all"
+            className="min-h-[44px] flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-lg shadow-emerald-600/20 transition-all"
           >
             <Plus className="w-4 h-4" />
             <span>Add Application</span>
@@ -211,19 +337,34 @@ export const ApplicationTracker: React.FC = () => {
       </div>
 
       {/* Mobile Swipe Peek Hint (visible only on mobile viewports) */}
-      <div className="lg:hidden text-center text-[11px] text-slate-400 font-medium">
-        &larr; Swipe horizontally to navigate stages &rarr;
+      <div className="xl:hidden text-center text-[11px] text-slate-400 font-medium">
+        &larr; Swipe horizontally or drag cards between stages &rarr;
       </div>
 
-      {/* 5-Column Kanban Board with Mobile Horizontal Snap Scrolling */}
-      <div className="snap-x snap-mandatory flex overflow-x-auto space-x-4 pb-4 lg:grid lg:grid-cols-5 lg:gap-3.5 lg:space-x-0">
+      {/* 6-Column Kanban Board with Drag-and-Drop + Mobile Horizontal Snap Scrolling */}
+      <div className="snap-x snap-mandatory flex overflow-x-auto space-x-3.5 pb-4 xl:grid xl:grid-cols-6 xl:gap-3 xl:space-x-0">
         {KANBAN_STAGES.map((stage, stageIdx) => {
           const colApps = applications.filter((a) => normalizeStage(a.status) === stage);
+          const isDropTarget = dragOverStage === stage;
 
           return (
             <div
               key={stage}
-              className="snap-center w-[85vw] sm:w-80 lg:w-auto flex-shrink-0 bg-slate-900/60 border border-slate-800/80 rounded-2xl p-3.5 flex flex-col min-h-[540px]"
+              data-testid={`kanban-column-${stage}`}
+              data-stage={stage}
+              onDragOver={(e) => handleColumnDragOver(e, stage)}
+              onDragEnter={(e) => handleColumnDragOver(e, stage)}
+              onDragLeave={() => {
+                if (dragOverStage === stage) setDragOverStage(null);
+              }}
+              onDrop={(e) => handleColumnDrop(e, stage)}
+              className={`snap-center w-[82vw] sm:w-72 xl:w-auto flex-shrink-0 rounded-2xl p-3 flex flex-col min-h-[540px] transition-all border ${
+                isDropTarget
+                  ? 'bg-emerald-950/25 border-emerald-400 ring-2 ring-emerald-500/40 shadow-lg shadow-emerald-500/10'
+                  : stage === 'Rejected'
+                  ? 'bg-rose-950/15 border-rose-900/40'
+                  : 'bg-slate-900/65 border-slate-800/80'
+              }`}
             >
               {/* Column Header */}
               <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-800">
@@ -246,15 +387,29 @@ export const ApplicationTracker: React.FC = () => {
                       : `${BACKEND_ORIGIN}${app.cv_pdf_url}`
                     : null;
 
+                  const isDraggingThis = draggingAppId === app.id;
+
                   return (
                     <div
                       key={app.id}
-                      className="bg-slate-950 p-3.5 rounded-xl border border-slate-800/90 hover:border-slate-700 transition-all space-y-2.5 shadow-sm"
+                      draggable
+                      data-testid={`kanban-card-${app.id}`}
+                      data-app-id={app.id}
+                      onDragStart={(e) => handleDragStartCard(e, app.id)}
+                      onDragEnd={handleDragEndCard}
+                      className={`bg-slate-950 p-3.5 rounded-xl border transition-all space-y-2.5 shadow-sm cursor-grab active:cursor-grabbing ${
+                        isDraggingThis
+                          ? 'opacity-45 border-emerald-400 scale-[0.98]'
+                          : 'border-slate-800/90 hover:border-slate-600'
+                      }`}
                     >
                       <div className="flex items-start justify-between gap-1">
-                        <div className="min-w-0">
-                          <h4 className="text-xs font-bold text-white line-clamp-2 leading-snug">{app.role}</h4>
-                          <span className="text-[11px] text-sky-400 font-medium block truncate mt-0.5">{app.company}</span>
+                        <div className="flex items-start gap-1.5 min-w-0">
+                          <GripVertical className="w-3.5 h-3.5 text-slate-600 flex-shrink-0 mt-0.5" />
+                          <div className="min-w-0">
+                            <h4 className="text-xs font-bold text-white line-clamp-2 leading-snug">{app.role}</h4>
+                            <span className="text-[11px] text-emerald-400 font-medium block truncate mt-0.5">{app.company}</span>
+                          </div>
                         </div>
 
                         {app.match_score !== undefined && (
@@ -412,13 +567,16 @@ export const ApplicationTracker: React.FC = () => {
         />
       )}
 
-      {/* Interview Date & Notes Modal */}
+      {/* Interview Date, Notes & Google Calendar Modal */}
       {editingApp && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl">
+        <div
+          data-testid="interview-calendar-modal"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in"
+        >
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg p-6 space-y-4 shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div>
-                <h3 className="text-sm font-bold text-white">Interview Details & Technical Notes</h3>
+                <h3 className="text-sm font-bold text-white">Interview Details &amp; Google Calendar</h3>
                 <span className="text-xs text-slate-400">{editingApp.role} • {editingApp.company}</span>
               </div>
               <button onClick={() => setEditingApp(null)} className="text-slate-400 hover:text-white">
@@ -426,15 +584,42 @@ export const ApplicationTracker: React.FC = () => {
               </button>
             </div>
 
+            {calendarPrompted && (
+              <div className="bg-emerald-950/35 border border-emerald-700/50 rounded-xl p-3 flex items-start gap-2.5 text-xs text-emerald-200">
+                <CalendarPlus className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
+                <div>
+                  <div className="font-semibold text-emerald-300">Moved to Interview Stage — Add to Google Calendar?</div>
+                  <p className="text-[11px] text-emerald-200/80 mt-0.5">
+                    Pick your interview date/time below and sync directly to Google Calendar so you never miss a screen or technical round.
+                  </p>
+                </div>
+              </div>
+            )}
+
             <div className="space-y-3.5 text-xs">
-              <div>
-                <label className="block text-slate-400 uppercase font-semibold mb-1">Interview Date & Time</label>
-                <input
-                  type="datetime-local"
-                  value={modalInterviewDate}
-                  onChange={(e) => setModalInterviewDate(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-sky-500"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <div className="sm:col-span-2">
+                  <label className="block text-slate-400 uppercase font-semibold mb-1">Interview Date &amp; Time</label>
+                  <input
+                    type="datetime-local"
+                    value={modalInterviewDate}
+                    onChange={(e) => setModalInterviewDate(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-400 uppercase font-semibold mb-1">Duration</label>
+                  <select
+                    value={modalDurationMins}
+                    onChange={(e) => setModalDurationMins(Number(e.target.value))}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value={30}>30 min</option>
+                    <option value={45}>45 min</option>
+                    <option value={60}>60 min</option>
+                    <option value={90}>90 min</option>
+                  </select>
+                </div>
               </div>
 
               <div>
@@ -444,25 +629,81 @@ export const ApplicationTracker: React.FC = () => {
                   value={modalNotes}
                   onChange={(e) => setModalNotes(e.target.value)}
                   placeholder="Record interviewer names, questions asked, coding round feedback..."
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-sky-500"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-emerald-500"
                 />
               </div>
 
-              <div className="flex justify-end gap-2 pt-2 border-t border-slate-800">
+              {/* Google Calendar Integration Bar */}
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <span className={`w-2 h-2 rounded-full ${calendarStatus?.connected ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+                    <span className="text-slate-300 font-medium">
+                      {calendarStatus?.connected
+                        ? `Google Calendar connected (${calendarStatus.email})`
+                        : 'Google Calendar: Ready via one-click link or connect OAuth'}
+                    </span>
+                  </div>
+                  {!calendarStatus?.connected && (
+                    <button
+                      type="button"
+                      onClick={handleConnectGoogleAccount}
+                      className="text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 underline"
+                    >
+                      Connect Google Account
+                    </button>
+                  )}
+                </div>
+
+                {calendarErr && <p className="text-[11px] text-rose-400">{calendarErr}</p>}
+
+                {calendarResult && (
+                  <div className="text-[11px] text-emerald-300 bg-emerald-950/30 border border-emerald-800/50 rounded-lg p-2 flex flex-wrap items-center justify-between gap-2">
+                    <span className="flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                      {calendarResult.message}
+                    </span>
+                    <a
+                      href={calendarResult.html_link || calendarResult.google_calendar_template_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 font-semibold text-emerald-300 underline"
+                    >
+                      <span>Open Google Calendar</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800">
                 <button
                   type="button"
-                  onClick={() => setEditingApp(null)}
-                  className="px-4 py-2 rounded-lg text-slate-400 hover:text-white"
+                  onClick={handleSyncToGoogleCalendar}
+                  disabled={calendarBusy}
+                  data-testid="btn-add-google-calendar"
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 font-semibold transition-all disabled:opacity-50"
                 >
-                  Cancel
+                  <CalendarPlus className="w-4 h-4" />
+                  <span>{calendarBusy ? 'Syncing...' : 'Add to Google Calendar'}</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={handleSaveInterviewModal}
-                  className="px-5 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold"
-                >
-                  Save Notes
-                </button>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditingApp(null)}
+                    className="px-4 py-2 rounded-lg text-slate-400 hover:text-white"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveInterviewModal}
+                    className="px-5 py-2 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold"
+                  >
+                    Save Notes
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -492,7 +733,7 @@ export const ApplicationTracker: React.FC = () => {
                   value={newCompany}
                   onChange={(e) => setNewCompany(e.target.value)}
                   placeholder="e.g. MacPaw, Rooms Hotel, TBC"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-sky-500"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-emerald-500"
                 />
               </div>
 
@@ -504,7 +745,7 @@ export const ApplicationTracker: React.FC = () => {
                   value={newRole}
                   onChange={(e) => setNewRole(e.target.value)}
                   placeholder="e.g. Senior QA Automation Engineer (Playwright)"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-sky-500"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-emerald-500"
                 />
               </div>
 
@@ -515,7 +756,7 @@ export const ApplicationTracker: React.FC = () => {
                   value={newUrl}
                   onChange={(e) => setNewUrl(e.target.value)}
                   placeholder="https://..."
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-sky-500 font-mono text-[11px]"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-emerald-500 font-mono text-[11px]"
                 />
               </div>
 
@@ -593,7 +834,7 @@ export const ApplicationTracker: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold"
+                  className="px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold"
                 >
                   Save to Pipeline
                 </button>

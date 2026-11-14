@@ -24,6 +24,7 @@ class ExtractedSkillsTaxonomy(BaseModel):
     spoken_languages: List[str] = Field(default_factory=list)
     achievements: List[str] = Field(default_factory=list)
     education: List[Dict[str, Any]] = Field(default_factory=list)
+    projects: List[Dict[str, Any]] = Field(default_factory=list)
     courses_and_certifications: List[str] = Field(default_factory=list)
     all_skills: List[str] = Field(default_factory=list)
 
@@ -307,18 +308,26 @@ class ProfileService:
         if li_m:
             linkedin_url = li_m.group(0)
 
-        achievements: List[str] = []
-        education_entries: List[Dict[str, Any]] = []
-        courses_certs: List[str] = []
+        from ..db.profile_repository import profile_repository, filter_spoken_language_entries
 
+        md_parsed = profile_repository.parse_profile_from_md(text)
+        education_entries: List[Dict[str, Any]] = list(md_parsed.get("education") or [])
+        projects_entries: List[Dict[str, Any]] = list(md_parsed.get("projects") or [])
+        courses_certs: List[str] = list(md_parsed.get("certifications") or [])
+        spoken_lang_strs: List[str] = [
+            f"{l['language']} ({l['proficiency']})" if l.get("proficiency") else l["language"]
+            for l in filter_spoken_language_entries(
+                md_parsed.get("spoken_languages") or taxonomy_dict.get("spoken_languages") or []
+            )
+        ]
+
+        achievements: List[str] = []
         in_edu_sec = False
-        in_courses_sec = False
         for line in text.splitlines():
             s = line.strip()
             if s.startswith("## "):
                 lh = s.lower()
                 in_edu_sec = any(k in lh for k in ("education", "academic", "university", "განათლება"))
-                in_courses_sec = any(k in lh for k in ("course", "certif", "bootcamp", "training", "კურს", "სერტიფიკატ"))
                 continue
             if s.startswith(("- ", "* ")) and any(ch.isdigit() for ch in s) and not in_edu_sec:
                 achievements.append(re.sub(r"^[-*]\s*", "", s))
@@ -328,39 +337,13 @@ class ProfileService:
             if not clean_line:
                 continue
 
-            if in_courses_sec or re.search(
-                r"\b(?:istqb|aws\s+certified|coursera|udemy|bootcamp|certificate|certification|tbc\s+academy|it\s+academy|epam\s+lab|კურსი|სერტიფიკატ)\b",
+            if not courses_certs and re.search(
+                r"\b(?:istqb|aws\s+certified|coursera|udemy|bootcamp|certificate|certification|tbc\s+academy|it\s+academy|epam\s+lab|quantori|კურსი|სერტიფიკატ)\b",
                 clean_line,
                 re.I,
             ):
                 if len(clean_line) >= 4 and clean_line not in courses_certs and not clean_line.lower().startswith("http"):
                     courses_certs.append(clean_line[:140])
-
-            looks_like_edu = in_edu_sec or bool(
-                re.search(
-                    r"\b(?:b\.?s\.?c?|m\.?s\.?c?|b\.?a\.?|m\.?b\.?a\.?|bachelor|master|phd|university|institute|faculty|undergraduate|student|graduate|tsu|gtu|btu|freeuni|ilia|ბაკალავრ|მაგისტრ|უნივერსიტეტ|სტუდენტ)\b",
-                    clean_line,
-                    re.I,
-                )
-            )
-            if looks_like_edu and len(clean_line) >= 5 and not re.fullmatch(r"[-*_•–—.\s]+", clean_line):
-                yr_m = re.search(r"\b(19\d{2}|20[0-3]\d)\b", clean_line)
-                grad_year = int(yr_m.group(1)) if yr_m else None
-                parts_e = [p.strip() for p in re.split(r"[|•@—–-]", clean_line, maxsplit=2) if p.strip()]
-                degree = parts_e[0] if parts_e else clean_line
-                institution = parts_e[1] if len(parts_e) > 1 else ""
-                field_study = parts_e[2] if len(parts_e) > 2 else degree
-                is_recent = bool(
-                    re.search(r"\b(?:student|present|expected|202[4-9]|სტუდენტ)\b", clean_line, re.I)
-                    or (grad_year is not None and grad_year >= 2022)
-                )
-                education_entries.append({
-                    "degree": degree[:120],
-                    "field_of_study": field_study[:120],
-                    "institution": institution[:120],
-                    "graduation_year": grad_year,
-                    "is_student_or_recent_grad": is_recent,
-                })
 
         exp_years = float(taxonomy_dict.get("years_of_experience") or 1.5)
         max_allowed_years = min(exp_years + 0.5, 2.0) if exp_years <= 2.0 else round(exp_years + 0.5, 1)
@@ -391,7 +374,9 @@ CRITICAL INSTRUCTIONS:
 - `primary_role`: Candidate's exact primary target role.
 - `adjacent_roles`: Top 3-4 optimal adjacent/transferable roles where their skills transfer seamlessly.
 - `verified_skills`: All concrete tools, software, methodologies, and domain skills.
-- `parsed_skills.education`: List of education objects with `degree`, `field_of_study`, `institution`, `graduation_year` (int or null), `is_student_or_recent_grad` (bool).
+- `parsed_skills.education`: Group EACH university degree into ONE object (`institution`, `degree`, `dates`, `graduation_year` int or null, `gpa`, `modules` list of studying subjects/coursework, `field_of_study`, `is_student_or_recent_grad` bool). NEVER create separate education items for dates, concentrations, or GPAs, and NEVER invent Honors or Erasmus fellowships unless explicitly written in the document.
+- `parsed_skills.projects`: List of technical/domain projects (`title`, `organization`, `dates`, `highlights`).
+- `parsed_skills.spoken_languages`: Strictly HUMAN spoken languages (e.g. Georgian, English, German) with proficiency — NEVER programming languages like Python/TypeScript/SQL/CSS/XPath.
 - `parsed_skills.courses_and_certifications`: List of completed bootcamps, courses, and certificates.
 - `eligible_internships`: True if candidate is a student, recent grad, completed courses/bootcamps, or has <= 2.5 yrs experience.
 - `internship_tracks`: Specific internship / graduate trainee tracks suited to their degree + courses + skills.
@@ -431,8 +416,19 @@ CRITICAL INSTRUCTIONS:
                     existing_list = getattr(gem_parsed.parsed_skills, k)
                     merged = list(dict.fromkeys(existing_list + taxonomy_dict.get(k, [])))
                     setattr(gem_parsed.parsed_skills, k, merged)
-                if not gem_parsed.parsed_skills.education and education_entries:
+                # Keep deterministically grouped education when Gemini splits university/dates/modules across separate entries
+                if education_entries and (
+                    not gem_parsed.parsed_skills.education
+                    or len(gem_parsed.parsed_skills.education) > len(education_entries)
+                ):
                     gem_parsed.parsed_skills.education = education_entries
+                if projects_entries and not gem_parsed.parsed_skills.projects:
+                    gem_parsed.parsed_skills.projects = projects_entries
+                gem_spoken = [
+                    f"{l['language']} ({l['proficiency']})" if l.get("proficiency") else l["language"]
+                    for l in filter_spoken_language_entries(gem_parsed.parsed_skills.spoken_languages or [])
+                ]
+                gem_parsed.parsed_skills.spoken_languages = gem_spoken or spoken_lang_strs
                 if courses_certs:
                     gem_parsed.parsed_skills.courses_and_certifications = list(dict.fromkeys(gem_parsed.parsed_skills.courses_and_certifications + courses_certs))
                 if eligible_internships:
@@ -470,9 +466,10 @@ CRITICAL INSTRUCTIONS:
                 cicd_and_devops=taxonomy_dict.get("cicd_and_devops", []),
                 tools=taxonomy_dict.get("tools", []),
                 frameworks=taxonomy_dict.get("frameworks", []),
-                spoken_languages=taxonomy_dict.get("spoken_languages", ["English", "Georgian"]),
+                spoken_languages=spoken_lang_strs or ["English", "Georgian"],
                 achievements=achievements,
                 education=education_entries,
+                projects=projects_entries,
                 courses_and_certifications=courses_certs,
                 all_skills=taxonomy_dict.get("all_skills", []),
             ),
@@ -699,7 +696,9 @@ CRITICAL INSTRUCTIONS:
                     if isinstance(edu_entry, dict):
                         inst = str(edu_entry.get("institution") or edu_entry.get("school") or "").strip()
                         deg = str(edu_entry.get("degree") or edu_entry.get("field") or inst).strip()
-                        grad_yr = str(edu_entry.get("years") or edu_entry.get("graduation_year") or "").strip()
+                        grad_yr = str(edu_entry.get("dates") or edu_entry.get("years") or edu_entry.get("graduation_year") or "").strip()
+                        fos = str(edu_entry.get("field_of_study") or edu_entry.get("focus") or "").strip()
+                        mods = [str(m).strip() for m in (edu_entry.get("modules") or []) if str(m).strip()]
                         if inst or deg:
                             session.add(
                                 CandidateEducation(
@@ -707,7 +706,9 @@ CRITICAL INSTRUCTIONS:
                                     user_id=profile.user_id,
                                     institution=(inst or deg)[:120],
                                     degree=deg[:200],
+                                    field_of_study=fos[:250] or None,
                                     graduation_year=grad_yr[:32],
+                                    coursework=mods,
                                 )
                             )
                     else:

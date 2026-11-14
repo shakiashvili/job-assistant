@@ -291,19 +291,31 @@ export const CVVariantManager: React.FC = () => {
     setTimeout(() => setCopiedLetter(false), 2500);
   };
 
+  const isKa = cvLanguage === 'ka';
+
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="bg-slate-900/90 border border-slate-800 p-6 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-bold text-white flex items-center gap-2">
-            <FileText className="w-5 h-5 text-sky-400" />
-            My CVs &amp; Ready Word / PDF Editions
+            <FileText className="w-5 h-5 text-emerald-400" />
+            {isKa ? 'ჩემი რეზიუმეები და მზა Word / PDF ვერსიები' : 'My CVs & Ready Word / PDF Editions'}
           </h2>
           <p className="text-sm text-slate-400 mt-1">
-            Store your personal resumes and generate clean <strong className="text-white">Word (.docx)</strong> and{' '}
-            <strong className="text-white">PDF</strong> editions built specifically for <strong className="text-sky-300">ATS</strong>,{' '}
-            <strong className="text-emerald-300">Recruiters</strong>, and <strong className="text-amber-300">Specific Jobs</strong>.
+            {isKa ? (
+              <>
+                შექმენი, მოარგე და წარადგინე შენი პროფესიული რეზიუმე (<strong className="text-white">Word (.docx)</strong> — Sylfaen შრიფტით და{' '}
+                <strong className="text-white">PDF</strong>) სპეციალურად <strong className="text-cyan-300">ATS სკანერებისთვის</strong>,{' '}
+                <strong className="text-emerald-300">რეკრუტერებისთვის</strong> და <strong className="text-amber-300">კონკრეტული ვაკანსიებისთვის</strong>.
+              </>
+            ) : (
+              <>
+                Create, tailor, and present your personal resumes in clean <strong className="text-white">Word (.docx)</strong> and{' '}
+                <strong className="text-white">PDF</strong> editions built specifically for <strong className="text-cyan-300">ATS</strong>,{' '}
+                <strong className="text-emerald-300">Recruiters</strong>, and <strong className="text-amber-300">Specific Jobs</strong>.
+              </>
+            )}
           </p>
         </div>
 
@@ -314,7 +326,7 @@ export const CVVariantManager: React.FC = () => {
             type="button"
             onClick={() => setCvLanguage('en')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-              cvLanguage === 'en' ? 'bg-sky-600 text-white' : 'text-slate-400 hover:text-white'
+              cvLanguage === 'en' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
             }`}
           >
             English
@@ -351,7 +363,7 @@ export const CVVariantManager: React.FC = () => {
             <a
               href={`${BACKEND_ORIGIN}${generatedOutput.pdf_url}`}
               download={generatedOutput.pdf_filename}
-              className="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold"
+              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold"
             >
               Download PDF
             </a>
@@ -364,11 +376,13 @@ export const CVVariantManager: React.FC = () => {
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h3 className="text-base font-bold text-white flex items-center gap-2">
-              <UploadCloud className="w-4 h-4 text-sky-400" />
-              My Uploaded CVs ({myCvs.length})
+              <UploadCloud className="w-4 h-4 text-emerald-400" />
+              {isKa ? `ჩემი ატვირთული რეზიუმეები (${myCvs.length})` : `My Uploaded CVs (${myCvs.length})`}
             </h3>
             <p className="text-xs text-slate-400">
-              Keep your own master Word (<code>.docx</code>) or PDF resumes ready here (stored privately, never pushed to Git).
+              {isKa
+                ? <>შეინახე შენი ძირითადი Word (<code>.docx</code>) ან PDF რეზიუმეები უსაფრთხოდ პირად საცავში.</>
+                : <>Keep your own master Word (<code>.docx</code>) or PDF resumes ready here (stored privately, never pushed to Git).</>}
             </p>
           </div>
           <input
@@ -385,7 +399,7 @@ export const CVVariantManager: React.FC = () => {
             type="button"
             onClick={() => uploadRef.current?.click()}
             disabled={uploading}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold shadow-sm transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-sm transition-colors disabled:opacity-50"
           >
             <UploadCloud className="w-4 h-4" />
             <span>{uploading ? 'Uploading...' : 'Upload My CV (.docx / .pdf)'}</span>
@@ -405,7 +419,7 @@ export const CVVariantManager: React.FC = () => {
               >
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-sky-950 text-sky-300 border border-sky-800">
+                    <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800">
                       .{cv.ext}
                     </span>
                     <div className="text-xs font-semibold text-white truncate">{cv.filename}</div>
@@ -417,7 +431,7 @@ export const CVVariantManager: React.FC = () => {
                     href={`${BACKEND_ORIGIN}${cv.url}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="p-2 rounded-lg bg-slate-900 hover:bg-sky-600 text-slate-300 hover:text-white border border-slate-800 transition-colors"
+                    className="p-2 rounded-lg bg-slate-900 hover:bg-emerald-600 text-slate-300 hover:text-white border border-slate-800 transition-colors"
                     title="Download CV"
                   >
                     <Download className="w-3.5 h-3.5" />
@@ -442,23 +456,31 @@ export const CVVariantManager: React.FC = () => {
         {/* Card 1: ATS-Optimized */}
         <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl flex flex-col justify-between space-y-4">
           <div className="space-y-2">
-            <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase px-2.5 py-1 rounded-full bg-sky-950 text-sky-300 border border-sky-800">
+            <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase px-2.5 py-1 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-800">
               <ShieldCheck className="w-3.5 h-3.5" />
-              ATS-Optimized
+              {isKa ? 'ATS ოპტიმიზებული' : 'ATS-Optimized'}
             </span>
-            <h3 className="text-base font-bold text-white">ATS-Parser Clean CV</h3>
+            <h3 className="text-base font-bold text-white">
+              {isKa ? 'ATS-სკანერზე მორგებული სუფთა CV' : 'ATS-Parser Clean CV'}
+            </h3>
             <p className="text-xs text-slate-400 leading-relaxed">
-              Strict single-column structure with zero tables or columns so Greenhouse, Lever, and portal ATS scanners extract 100% of your skills.
+              {isKa
+                ? 'ერთსვეტიანი სუფთა სტრუქტურა ცხრილების გარეშე, რათა Greenhouse, Lever და ვაკანსიის ATS სისტემებმა 100%-ით ამოიცნონ შენი უნარები.'
+                : 'Strict single-column structure with zero tables or columns so Greenhouse, Lever, and portal ATS scanners extract 100% of your skills.'}
             </p>
           </div>
           <button
             type="button"
             onClick={() => handleGenerate('ats')}
             disabled={generatingKey !== null}
-            className="w-full py-2.5 px-4 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+            className="w-full py-2.5 px-4 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
           >
             <Sparkles className="w-4 h-4" />
-            <span>{generatingKey === 'ats' ? 'Generating Word & PDF...' : 'Build ATS Word (.docx) + PDF'}</span>
+            <span>
+              {generatingKey === 'ats'
+                ? isKa ? 'Word და PDF იქმნება...' : 'Generating Word & PDF...'
+                : isKa ? 'ATS Word (.docx) + PDF შექმნა' : 'Build ATS Word (.docx) + PDF'}
+            </span>
           </button>
         </div>
 
@@ -467,11 +489,15 @@ export const CVVariantManager: React.FC = () => {
           <div className="space-y-2">
             <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase px-2.5 py-1 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800">
               <UserCheck className="w-3.5 h-3.5" />
-              For Recruiters
+              {isKa ? 'რეკრუტერებისთვის' : 'For Recruiters'}
             </span>
-            <h3 className="text-base font-bold text-white">Recruiter Fast-Scan CV</h3>
+            <h3 className="text-base font-bold text-white">
+              {isKa ? 'რეკრუტერის სწრაფი გადახედვის CV' : 'Recruiter Fast-Scan CV'}
+            </h3>
             <p className="text-xs text-slate-400 leading-relaxed">
-              Highlights impact bullets, clear stack grouping, availability, and concise human-tone executive summary crafted for 10-second recruiter review.
+              {isKa
+                ? 'გამოკვეთს მიღწევებს, ტექნიკურ სტეკს, პროექტებსა და პროფესიულ მიმოხილვას, რომ რეკრუტერმა 10 წამში დაინახოს შენი ძლიერი მხარეები.'
+                : 'Highlights impact bullets, clear stack grouping, relevant projects, and executive summary crafted for 10-second recruiter review.'}
             </p>
           </div>
           <button
@@ -481,7 +507,11 @@ export const CVVariantManager: React.FC = () => {
             className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
           >
             <Sparkles className="w-4 h-4" />
-            <span>{generatingKey === 'recruiter' ? 'Generating Word & PDF...' : 'Build Recruiter Word (.docx) + PDF'}</span>
+            <span>
+              {generatingKey === 'recruiter'
+                ? isKa ? 'Word და PDF იქმნება...' : 'Generating Word & PDF...'
+                : isKa ? 'რეკრუტერის Word (.docx) + PDF შექმნა' : 'Build Recruiter Word (.docx) + PDF'}
+            </span>
           </button>
         </div>
 
@@ -490,9 +520,11 @@ export const CVVariantManager: React.FC = () => {
           <div className="space-y-3">
             <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase px-2.5 py-1 rounded-full bg-amber-950 text-amber-300 border border-amber-800">
               <Briefcase className="w-3.5 h-3.5" />
-              For Specific Jobs
+              {isKa ? 'კონკრეტული ვაკანსიისთვის' : 'For Specific Jobs'}
             </span>
-            <h3 className="text-base font-bold text-white">Job-Tailored CV &amp; Cover Letter</h3>
+            <h3 className="text-base font-bold text-white">
+              {isKa ? 'ვაკანსიაზე მორგებული CV და სამოტივაციო წერილი' : 'Job-Tailored CV & Cover Letter'}
+            </h3>
             {jobsList.length > 0 && (
               <div className="space-y-1.5">
                 <input
@@ -564,17 +596,21 @@ export const CVVariantManager: React.FC = () => {
             className="w-full py-2.5 px-4 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
           >
             <Sparkles className="w-4 h-4" />
-            <span>{generatingKey === 'tailored' ? 'Generating Package...' : 'Build Job Word (.docx) + Letter'}</span>
+            <span>
+              {generatingKey === 'tailored'
+                ? isKa ? 'Word, PDF და წერილი იქმნება...' : 'Generating Package...'
+                : isKa ? 'ვაკანსიაზე მორგებული Word (.docx) + წერილი' : 'Build Job Word (.docx) + Letter'}
+            </span>
           </button>
         </div>
       </div>
 
       {/* 3. Output Download & Cover Letter Preview Card */}
       {generatedOutput && (
-        <div ref={outputRef} className="bg-slate-900 border border-sky-700/60 p-6 rounded-2xl space-y-4 shadow-xl">
+        <div ref={outputRef} className="bg-slate-900 border border-emerald-700/60 p-6 rounded-2xl space-y-4 shadow-xl">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-sky-400">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">
                 Ready for Application ({generatedOutput.edition.toUpperCase()})
               </span>
               <h3 className="text-base font-bold text-white">
@@ -609,7 +645,7 @@ export const CVVariantManager: React.FC = () => {
                   onClick={() => setLetterTab('cover')}
                   className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors ${
                     letterTab === 'cover'
-                      ? 'bg-sky-600 text-white'
+                      ? 'bg-emerald-600 text-white'
                       : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
                   }`}
                 >
@@ -637,7 +673,7 @@ export const CVVariantManager: React.FC = () => {
               </button>
             </div>
             <div className="text-xs font-semibold text-slate-400">
-              Email Subject: <code className="text-sky-300">{generatedOutput.subject}</code>
+              Email Subject: <code className="text-emerald-300">{generatedOutput.subject}</code>
             </div>
             <pre className="text-xs text-slate-300 whitespace-pre-wrap font-sans leading-relaxed pt-2 border-t border-slate-800">
               {letterTab === 'motivational'
@@ -654,7 +690,7 @@ export const CVVariantManager: React.FC = () => {
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div>
               <h3 className="text-base font-bold text-white flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-sky-400" />
+                <Sparkles className="w-4 h-4 text-emerald-400" />
                 <span>CV Studio: Saved Versions &amp; Live Editor ({cvVersions.length})</span>
               </h3>
               <p className="text-xs text-slate-400">
@@ -670,7 +706,7 @@ export const CVVariantManager: React.FC = () => {
                 key={ver.id}
                 className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs border transition-all ${
                   activeVersion?.id === ver.id
-                    ? 'bg-sky-950 border-sky-500 text-white font-semibold'
+                    ? 'bg-emerald-950 border-emerald-500 text-white font-semibold'
                     : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
                 }`}
               >
@@ -701,7 +737,7 @@ export const CVVariantManager: React.FC = () => {
                     type="text"
                     value={editHeadline}
                     onChange={(e) => setEditHeadline(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
                   />
                 </div>
                 <div>
@@ -712,7 +748,7 @@ export const CVVariantManager: React.FC = () => {
                     rows={4}
                     value={editSummary}
                     onChange={(e) => setEditSummary(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
                   />
                 </div>
                 <div>
@@ -723,7 +759,7 @@ export const CVVariantManager: React.FC = () => {
                     type="text"
                     value={editSkillsText}
                     onChange={(e) => setEditSkillsText(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
                   />
                 </div>
                 <div>
@@ -734,7 +770,7 @@ export const CVVariantManager: React.FC = () => {
                     rows={6}
                     value={editWorkBulletsText}
                     onChange={(e) => setEditWorkBulletsText(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-sky-500"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-emerald-500"
                   />
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
@@ -742,7 +778,7 @@ export const CVVariantManager: React.FC = () => {
                     type="button"
                     onClick={handleSaveVersionEdits}
                     disabled={isSavingVersion}
-                    className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold disabled:opacity-50"
+                    className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold disabled:opacity-50"
                   >
                     {isSavingVersion ? 'Re-rendering...' : 'Save & Re-Render PDF + Word'}
                   </button>

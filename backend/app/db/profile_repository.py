@@ -9,6 +9,67 @@ from ..services.matcher_service import matcher_service, dedupe_skills_case_insen
 
 logger = logging.getLogger(__name__)
 
+_PROGRAMMING_LANG_NOISE = {
+    "typescript", "javascript", "python", "sql", "html", "html5", "css", "css3",
+    "java", "c#", "c++", "go", "golang", "rust", "php", "ruby", "bash", "shell",
+    "kotlin", "swift", "scala", "dom", "dom tree", "css selectors", "xpath",
+    "xpath locators", "json", "xml", "yaml", "graphql", "postgresql", "mysql",
+}
+
+_KNOWN_SPOKEN_LANGUAGES = {
+    "english", "georgian", "german", "french", "spanish", "italian", "russian",
+    "ukrainian", "polish", "portuguese", "dutch", "turkish", "arabic", "chinese",
+    "japanese", "korean", "hindi", "armenian", "azerbaijani", "hebrew", "greek",
+    "ქართული", "ინგლისური", "გერმანული", "რუსული", "ფრანგული", "ესპანური", "თურქული",
+}
+
+
+def is_programming_token(raw: str) -> bool:
+    s = re.sub(r"[*_`()\[\]:]+", " ", str(raw or "")).strip().lower()
+    if not s:
+        return True
+    if any(tok in s for tok in (
+        "typescript", "javascript", "python", "html5", "css3", "xpath", "dom tree",
+        "css selectors", "locators", "sql", "selenium", "playwright", "pytest",
+    )):
+        return True
+    first_word = re.split(r"[\s:/(,]+", s)[0]
+    return first_word in _PROGRAMMING_LANG_NOISE
+
+
+def filter_spoken_language_entries(items: List[Any]) -> List[Dict[str, str]]:
+    """Keeps strictly human spoken languages (rejecting TypeScript/Python/SQL/CSS/XPath)."""
+    result: List[Dict[str, str]] = []
+    seen = set()
+    for item in (items or []):
+        if isinstance(item, dict):
+            lang = str(item.get("language") or item.get("name") or "").strip()
+            prof = str(item.get("proficiency") or item.get("level") or "").strip()
+        else:
+            raw = str(item or "").strip()
+            if not raw:
+                continue
+            if ":" in raw:
+                lang, prof = [x.strip() for x in raw.split(":", 1)]
+            elif "(" in raw and raw.endswith(")"):
+                idx = raw.find("(")
+                lang = raw[:idx].strip()
+                prof = raw[idx + 1:-1].strip()
+            else:
+                lang, prof = raw, ""
+        lang = re.sub(r"[*_`]+", "", lang).strip(" :-–—•")
+        prof = re.sub(r"[*_`]+", "", prof).strip()
+        if not lang or is_programming_token(lang) or is_programming_token(f"{lang} {prof}"):
+            continue
+        low = lang.lower()
+        # Require either known spoken language or not obviously code/tooling
+        if low in seen:
+            continue
+        if any(k in low for k in _KNOWN_SPOKEN_LANGUAGES) or (len(lang.split()) <= 3 and not any(ch in lang for ch in "/+.#")):
+            seen.add(low)
+            result.append({"language": lang, "proficiency": prof})
+    return result
+
 # Minimal sample templates retained ONLY for automated backend test suites
 PROFESSION_MD_PRESETS: Dict[str, Dict[str, str]] = {
     "qa_tech": {
@@ -301,11 +362,14 @@ class ProfileRepository:
         comp.setdefault("notice_period", "")
         cand["compensation"] = comp
 
-        langs = cand.get("languages")
-        if not isinstance(langs, list) or not langs:
-            spoken = ps.get("spoken_languages") or []
-            langs = [{"language": str(l), "proficiency": ""} for l in spoken]
-        cand["languages"] = langs
+        raw_langs = cand.get("languages")
+        if not isinstance(raw_langs, list) or not raw_langs:
+            spoken = parsed_md.get("spoken_languages") or ps.get("spoken_languages") or []
+            raw_langs = spoken
+        filtered_langs = filter_spoken_language_entries(raw_langs)
+        if not filtered_langs and parsed_md.get("spoken_languages"):
+            filtered_langs = filter_spoken_language_entries(parsed_md["spoken_languages"])
+        cand["languages"] = filtered_langs
         data["candidate"] = cand
 
         skills = dict(data.get("skills") or {})
@@ -331,9 +395,35 @@ class ProfileRepository:
         data["work_history"] = cleaned_wh
 
         edu = data.get("education")
-        if not isinstance(edu, list) or not edu:
-            edu = ps.get("education") or parsed_md.get("education") or []
+        parsed_edu = parsed_md.get("education") or []
+        is_fragmented_edu = (
+            isinstance(edu, list)
+            and bool(edu)
+            and all(
+                isinstance(e, dict)
+                and (
+                    not e.get("institution")
+                    or e.get("institution") == e.get("degree")
+                    or e.get("degree") == e.get("focus")
+                    or any(bad in str(e.get("degree") or "") for bad in ("Concentration:", "Academic Standing:", "Core Analytical Modules:", "Selected for Erasmus"))
+                )
+                for e in edu
+            )
+        )
+        if is_fragmented_edu or not isinstance(edu, list) or not edu:
+            edu = parsed_edu or ps.get("education") or []
         data["education"] = edu
+
+        if parsed_md.get("projects"):
+            data["projects"] = parsed_md["projects"]
+        else:
+            data.setdefault("projects", [])
+        if parsed_md.get("certifications"):
+            data["certifications"] = parsed_md["certifications"]
+        elif ps.get("courses_and_certifications"):
+            data["certifications"] = ps.get("courses_and_certifications") or []
+        else:
+            data.setdefault("certifications", [])
 
         faq = data.get("faq_bank")
         if not isinstance(faq, list) or not faq:
@@ -475,20 +565,54 @@ class ProfileRepository:
         result["skills"] = self.extract_skills_from_md(md_content)
 
         work_history = []
+        projects_list = []
         education_items = []
+        certifications_list = []
+        spoken_langs = []
         in_exp = False
+        in_proj = False
         in_edu = False
+        in_cert = False
+        in_lang = False
         current_job = None
+        current_proj = None
+        current_edu = None
+
+        def _flush_edu() -> None:
+            nonlocal current_edu
+            if current_edu:
+                mods = [m for m in (current_edu.get("modules") or []) if m]
+                if mods and not current_edu.get("field_of_study"):
+                    current_edu["field_of_study"] = ", ".join(mods)
+                if current_edu.get("field_of_study"):
+                    current_edu["focus"] = current_edu["field_of_study"]
+                education_items.append(current_edu)
+                current_edu = None
+
+        def _flush_proj() -> None:
+            nonlocal current_proj
+            if current_proj:
+                projects_list.append(current_proj)
+                current_proj = None
+
         for line in lines:
             s = line.strip()
             if s.startswith("## ") and not s.startswith("### "):
                 low_h = s.lower()
                 in_exp = any(w in low_h for w in ["experience", "history", "work", "გამოცდილება", "სამუშაო"])
+                in_proj = any(w in low_h for w in ["project", "portfolio", "პროექტ"])
                 in_edu = any(w in low_h for w in ["education", "academic", "university", "განათლება", "სწავლა"])
+                in_cert = any(w in low_h for w in ["training", "certif", "course", "bootcamp", "სერტიფიკატ", "კურს"])
+                in_lang = any(w in low_h for w in ["language", "spoken", "ენებ"]) and "skill" not in low_h
                 if not in_exp and current_job:
                     work_history.append(current_job)
                     current_job = None
+                if not in_proj:
+                    _flush_proj()
+                if not in_edu:
+                    _flush_edu()
                 continue
+
             if in_exp:
                 if re.fullmatch(r"[-*_=\s]{2,}", s):
                     continue
@@ -533,24 +657,179 @@ class ProfileRepository:
                     bullet = re.sub(r"[*_`]+", "", bullet).strip()
                     if bullet and not re.fullmatch(r"[-*_•–—.\s]+", bullet):
                         current_job["highlights"].append(bullet)
-            elif in_edu and s and not s.startswith("#"):
-                clean_e = re.sub(r"^[-*]\s*", "", s)
-                clean_e = re.sub(r"[*_`]+", "", clean_e).strip()
-                if clean_e and not re.fullmatch(r"[-*_•–—.\s]+", clean_e):
-                    yr_m = re.search(r"\b(19\d{2}|20[0-3]\d)\b", clean_e)
-                    education_items.append({
-                        "degree": clean_e.split("|")[0].split("—")[0].strip(),
-                        "institution": clean_e.split("|")[1].strip() if "|" in clean_e else clean_e,
-                        "graduation_year": int(yr_m.group(1)) if yr_m else None,
-                        "focus": clean_e,
-                    })
+
+            elif in_proj:
+                if re.fullmatch(r"[-*_=\s]{2,}", s):
+                    continue
+                if s.startswith("### "):
+                    _flush_proj()
+                    current_proj = {
+                        "title": re.sub(r"[*_`]+", "", s[4:]).strip(),
+                        "organization": "",
+                        "dates": "",
+                        "highlights": [],
+                    }
+                elif current_proj and s.startswith("**") and not s.startswith("* "):
+                    meta = re.sub(r"[*_`]+", "", s).strip()
+                    if "•" in meta:
+                        org_p, dt_p = [x.strip() for x in meta.split("•", 1)]
+                        current_proj["organization"] = re.sub(r"^role\s*:\s*", "", org_p, flags=re.I)
+                        current_proj["dates"] = dt_p
+                    else:
+                        current_proj["organization"] = re.sub(r"^role\s*:\s*", "", meta, flags=re.I)
+                elif current_proj and s.startswith(("-", "*")):
+                    bullet = re.sub(r"^[-*]\s*", "", s).strip()
+                    bullet = re.sub(r"[*_`]+", "", bullet).strip()
+                    if bullet and not re.fullmatch(r"[-*_•–—.\s]+", bullet):
+                        current_proj["highlights"].append(bullet)
+
+            elif in_edu:
+                if re.fullmatch(r"[-*_=\s]{2,}", s) or not s:
+                    continue
+                if s.startswith("### "):
+                    _flush_edu()
+                    deg_header = re.sub(r"[*_`]+", "", s[4:]).strip()
+                    deg_parts = [p.strip() for p in re.split(r"\s+[|•—]\s+", deg_header, maxsplit=1)]
+                    current_edu = {
+                        "degree": deg_parts[0],
+                        "institution": deg_parts[1] if len(deg_parts) > 1 else "",
+                        "location": "",
+                        "dates": "",
+                        "start_year": None,
+                        "end_year": None,
+                        "graduation_year": None,
+                        "gpa": "",
+                        "modules": [],
+                        "field_of_study": "",
+                        "focus": "",
+                        "is_student_or_recent_grad": bool(re.search(r"present|202[4-9]|student|msc|bsc", deg_header, re.I)),
+                    }
+                elif current_edu is not None:
+                    clean_e = re.sub(r"^[-*]\s*", "", s)
+                    clean_e = re.sub(r"[*_`]+", "", clean_e).strip()
+                    if not clean_e or re.fullmatch(r"[-*_•–—.\s]+", clean_e):
+                        continue
+                    # Institution line e.g. "**Ivane Javakhishvili Tbilisi State University (TSU)** • *Tbilisi, Georgia*"
+                    if s.startswith("**") and not s.startswith("* "):
+                        if "•" in clean_e:
+                            inst_p, loc_p = [x.strip() for x in clean_e.split("•", 1)]
+                            current_edu["institution"] = inst_p
+                            current_edu["location"] = loc_p
+                        else:
+                            current_edu["institution"] = clean_e
+                    # Italic date range line e.g. "*2026 – Present*" or "*2022 – 2026*"
+                    elif (s.startswith("*") and s.endswith("*") and not s.startswith("* ")) or (
+                        re.match(r"^(?:19\d{2}|20\d{2})\s*[–-]\s*(?:19\d{2}|20\d{2}|present|current)$", clean_e, re.I)
+                    ):
+                        current_edu["dates"] = clean_e
+                        yrs = [int(y) for y in re.findall(r"\b(19\d{2}|20[0-3]\d)\b", clean_e)]
+                        if yrs:
+                            current_edu["start_year"] = yrs[0]
+                            if "present" in clean_e.lower() or "current" in clean_e.lower():
+                                current_edu["end_year"] = None
+                                current_edu["graduation_year"] = yrs[0]
+                                current_edu["is_student_or_recent_grad"] = True
+                            else:
+                                current_edu["end_year"] = yrs[-1]
+                                current_edu["graduation_year"] = yrs[-1]
+                                if yrs[-1] >= 2022:
+                                    current_edu["is_student_or_recent_grad"] = True
+                    # Bullets inside the degree block: GPA, Studying Subjects / Core Modules / Concentration
+                    else:
+                        gpa_m = re.search(r"gpa\s*:?\s*(\d(?:\.\d+)?\s*/\s*\d(?:\.\d+)?)", clean_e, re.I)
+                        if gpa_m:
+                            current_edu["gpa"] = gpa_m.group(1).strip()
+                        mod_m = re.match(
+                            r"^(?:studying\s+subjects\s*/\s*core\s+modules|studying\s+subjects|core\s+analytical\s+modules|core\s+modules|modules|subjects|coursework|concentration|academic\s+standing|საგნები|მოდულები)\s*:\s*(.+)$",
+                            clean_e,
+                            re.I,
+                        )
+                        if mod_m:
+                            lbl = clean_e.split(":", 1)[0].strip().lower()
+                            val = mod_m.group(1).strip().rstrip(".")
+                            if "academic standing" in lbl:
+                                if not current_edu["gpa"] and gpa_m:
+                                    current_edu["gpa"] = gpa_m.group(1).strip()
+                            else:
+                                split_mods = [
+                                    m.strip()
+                                    for m in re.split(r"\s*[,;/]\s*", val)
+                                    if m.strip()
+                                ]
+                                current_edu["modules"].extend(
+                                    m for m in split_mods if m not in current_edu["modules"]
+                                )
+                                current_edu["field_of_study"] = (
+                                    f"{current_edu['field_of_study']}; {val}".strip("; ")
+                                    if current_edu["field_of_study"]
+                                    else val
+                                )
+                        else:
+                            current_edu["modules"].append(clean_e.rstrip("."))
+                else:
+                    # Fallback for bullet-only Education sections without ### subheadings
+                    clean_e = re.sub(r"^[-*]\s*", "", s)
+                    clean_e = re.sub(r"[*_`]+", "", clean_e).strip()
+                    if clean_e and not re.fullmatch(r"[-*_•–—.\s]+", clean_e):
+                        yr_m = re.search(r"\b(19\d{2}|20[0-3]\d)\b", clean_e)
+                        parts_e = [p.strip() for p in re.split(r"\s*[|—]\s*", clean_e) if p.strip()]
+                        deg_txt = parts_e[0] if parts_e else clean_e
+                        inst_txt = parts_e[1] if len(parts_e) > 1 else ""
+                        education_items.append({
+                            "degree": deg_txt,
+                            "institution": inst_txt,
+                            "location": "",
+                            "dates": yr_m.group(1) if yr_m else "",
+                            "graduation_year": int(yr_m.group(1)) if yr_m else None,
+                            "gpa": "",
+                            "modules": [],
+                            "field_of_study": "",
+                            "focus": "",
+                            "is_student_or_recent_grad": bool(yr_m and int(yr_m.group(1)) >= 2022),
+                        })
+
+            elif in_cert:
+                if re.fullmatch(r"[-*_=\s]{2,}", s) or not s or s.startswith("#"):
+                    continue
+                indent = len(line) - len(line.lstrip())
+                if s.startswith(("- ", "* ")) and indent == 0:
+                    clean_c = re.sub(r"^[-*]\s+", "", s)
+                    clean_c = re.sub(r"[*_`]+", "", clean_c).strip()
+                    if clean_c:
+                        certifications_list.append(clean_c)
+                elif s.startswith(("- ", "* ")) and indent >= 2 and certifications_list:
+                    detail = re.sub(r"^[-*]\s+", "", s)
+                    detail = re.sub(r"[*_`]+", "", detail).strip()
+                    if detail and not detail.startswith(certifications_list[-1]):
+                        certifications_list[-1] = f"{certifications_list[-1]}: {detail}"
+                elif certifications_list and indent >= 2:
+                    detail = re.sub(r"[*_`]+", "", s).strip()
+                    if detail:
+                        certifications_list[-1] = f"{certifications_list[-1]} — {detail}"
+
+            elif in_lang:
+                if re.fullmatch(r"[-*_=\s]{2,}", s) or not s or s.startswith("#"):
+                    continue
+                clean_l = re.sub(r"^[-*]\s*", "", s)
+                clean_l = re.sub(r"[*_`]+", "", clean_l).strip()
+                if clean_l:
+                    spoken_langs.extend(filter_spoken_language_entries([clean_l]))
 
         if current_job:
             work_history.append(current_job)
+        _flush_proj()
+        _flush_edu()
+
         if work_history:
             result["work_history"] = work_history
+        if projects_list:
+            result["projects"] = projects_list
         if education_items:
             result["education"] = education_items
+        if certifications_list:
+            result["certifications"] = certifications_list
+        if spoken_langs:
+            result["spoken_languages"] = spoken_langs
 
         return result
 
@@ -561,7 +840,7 @@ class ProfileRepository:
         user_id: Optional[int] = None,
     ) -> CandidateProfile:
         from sqlmodel import delete
-        from .models import CandidateExperience
+        from .models import CandidateExperience, CandidateEducation
         from ..services.profile_service import profile_service
         profile = profile_service.upsert_candidate_profile(
             md_content, mark_uploaded=True, owner_email=owner_email, user_id=user_id
@@ -573,6 +852,20 @@ class ProfileRepository:
                 skills_copy = dict(db_prof.parsed_skills or {})
                 vault = dict(skills_copy.get("ground_truth_vault") or {})
                 vault["work_history"] = list(parsed.get("work_history") or [])
+                if parsed.get("projects"):
+                    vault["projects"] = list(parsed["projects"])
+                    skills_copy["projects"] = list(parsed["projects"])
+                if parsed.get("certifications"):
+                    vault["certifications"] = list(parsed["certifications"])
+                    skills_copy["courses_and_certifications"] = list(parsed["certifications"])
+                if parsed.get("spoken_languages"):
+                    cand_v = dict(vault.get("candidate") or {})
+                    cand_v["languages"] = list(parsed["spoken_languages"])
+                    vault["candidate"] = cand_v
+                    skills_copy["spoken_languages"] = [
+                        f"{l['language']} ({l['proficiency']})" if l.get("proficiency") else l["language"]
+                        for l in parsed["spoken_languages"]
+                    ]
                 if db_prof.id is not None:
                     session.exec(delete(CandidateExperience).where(CandidateExperience.profile_id == db_prof.id))
                     for wh_item in vault["work_history"]:
@@ -588,7 +881,24 @@ class ProfileRepository:
                                     highlights=list(wh_item.get("highlights") or []),
                                 )
                             )
-                vault["education"] = list(parsed.get("education") or [])
+                grouped_edu = list(parsed.get("education") or vault.get("education") or [])
+                vault["education"] = grouped_edu
+                skills_copy["education"] = grouped_edu
+                if db_prof.id is not None and grouped_edu:
+                    session.exec(delete(CandidateEducation).where(CandidateEducation.profile_id == db_prof.id))
+                    for edu_item in grouped_edu:
+                        if isinstance(edu_item, dict):
+                            session.add(
+                                CandidateEducation(
+                                    profile_id=db_prof.id,
+                                    user_id=db_prof.user_id,
+                                    institution=str(edu_item.get("institution") or "")[:120],
+                                    degree=str(edu_item.get("degree") or "")[:200],
+                                    field_of_study=str(edu_item.get("field_of_study") or edu_item.get("focus") or "")[:250],
+                                    graduation_year=str(edu_item.get("dates") or edu_item.get("graduation_year") or "")[:32],
+                                    coursework=list(edu_item.get("modules") or []),
+                                )
+                            )
                 skills_copy["ground_truth_vault"] = vault
                 db_prof.parsed_skills = skills_copy
                 session.add(db_prof)

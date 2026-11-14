@@ -539,6 +539,57 @@ export async function deleteApplication(id: string): Promise<void> {
   if (!res.ok) throw new Error('Failed to delete application');
 }
 
+export async function fetchGoogleCalendarStatus(): Promise<{
+  connected: boolean;
+  google_oauth_configured: boolean;
+  email: string;
+  auth_url: string;
+}> {
+  const res = await apiFetch(`${API_BASE}/applications/calendar/status`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to fetch Google Calendar status');
+  return res.json();
+}
+
+export async function fetchGoogleOAuthConsentUrl(): Promise<{ authorization_url: string }> {
+  const res = await apiFetch(`${API_BASE}/auth/google/login`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to obtain Google OAuth consent URL');
+  return res.json();
+}
+
+export async function createApplicationCalendarEvent(
+  appId: string,
+  payload: {
+    interview_date?: string;
+    duration_minutes?: number;
+    summary?: string;
+    description?: string;
+    location?: string;
+    attendee_email?: string;
+  }
+): Promise<{
+  created_in_google_calendar: boolean;
+  oauth_connected: boolean;
+  needs_oauth: boolean;
+  event_id?: string | null;
+  html_link: string;
+  google_calendar_template_url: string;
+  start_iso: string;
+  end_iso: string;
+  message: string;
+}> {
+  const res = await apiFetch(`${API_BASE}/applications/${appId}/calendar-event`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error('Failed to schedule interview in Google Calendar');
+  return res.json();
+}
+
 // --- Authentication & User API ---
 
 export async function loginUser(email: string, password: string): Promise<AuthResponse> {

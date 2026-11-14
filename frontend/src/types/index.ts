@@ -49,11 +49,22 @@ export interface WorkHistoryItem {
 export interface EducationItem {
   degree: string;
   institution: string;
+  location?: string;
+  dates?: string;
   graduation_year?: number;
+  gpa?: string;
+  modules?: string[];
   focus?: string;
   field_of_study?: string;
   start_year?: string;
   end_year?: string;
+}
+
+export interface ProjectItem {
+  title: string;
+  organization?: string;
+  dates?: string;
+  highlights: string[];
 }
 
 export interface CVVariant {
@@ -91,9 +102,30 @@ export interface GroundTruth {
   };
   work_history: WorkHistoryItem[];
   education: EducationItem[];
+  projects?: ProjectItem[];
+  certifications?: string[];
   cv_variants: Record<string, CVVariant>;
   faq_bank: FAQItem[];
   skills_md_raw?: string;
+}
+
+export interface GoogleCalendarStatus {
+  connected: boolean;
+  google_oauth_configured: boolean;
+  email: string;
+  auth_url: string;
+}
+
+export interface GoogleCalendarEventResponse {
+  created_in_google_calendar: boolean;
+  oauth_connected: boolean;
+  needs_oauth: boolean;
+  event_id?: string | null;
+  html_link: string;
+  google_calendar_template_url: string;
+  start_iso: string;
+  end_iso: string;
+  message: string;
 }
 
 export interface JobDetails {

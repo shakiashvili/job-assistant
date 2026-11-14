@@ -29,8 +29,10 @@ logger = logging.getLogger(__name__)
 GMAIL_SCOPES = [
     "https://www.googleapis.com/auth/gmail.compose",
     "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/calendar.events",
     "https://www.googleapis.com/auth/userinfo.email",
 ]
+GOOGLE_WORKSPACE_SCOPES = GMAIL_SCOPES
 
 
 class GmailService:
@@ -550,6 +552,155 @@ class GmailService:
             return {"delivered": False, "smtp_configured": False, "error": "Neither Google OAuth nor SMTP is configured"}
         ok, detail = self.send_email_smtp(to_email=to_email, subject=subject, body_text=body_text, pdf_path=pdf_path)
         return {"delivered": ok, "channel": "smtp", "smtp_configured": True, "error": None if ok else detail}
+
+    @staticmethod
+    def _parse_interview_window(start_iso: Optional[str], duration_minutes: int = 45):
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        start_dt = None
+        if start_iso:
+            raw = str(start_iso).strip()
+            for fmt in ("%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S"):
+                try:
+                    start_dt = datetime.strptime(raw[:19], fmt)
+                    break
+                except ValueError:
+                    continue
+            if start_dt is None:
+                try:
+                    start_dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                except ValueError:
+                    start_dt = None
+        if start_dt is None:
+            start_dt = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
+        end_dt = start_dt + timedelta(minutes=max(15, int(duration_minutes or 45)))
+        return start_dt, end_dt
+
+    def build_google_calendar_template_url(
+        self,
+        *,
+        summary: str,
+        description: str = "",
+        location: str = "",
+        start_iso: Optional[str] = None,
+        duration_minutes: int = 45,
+    ) -> str:
+        """Builds an instant one-click pre-filled Google Calendar event creation URL."""
+        start_dt, end_dt = self._parse_interview_window(start_iso, duration_minutes)
+        fmt = "%Y%m%dT%H%M%S"
+        start_str = start_dt.strftime(fmt)
+        end_str = end_dt.strftime(fmt)
+        params = {
+            "action": "TEMPLATE",
+            "text": summary,
+            "dates": f"{start_str}/{end_str}",
+            "details": description or "Scheduled via TalentFlow AI",
+        }
+        if location:
+            params["location"] = location
+        return f"https://calendar.google.com/calendar/render?{urlencode(params)}"
+
+    def create_calendar_event(
+        self,
+        *,
+        user: Optional[User],
+        summary: str,
+        description: str = "",
+        location: str = "",
+        start_iso: Optional[str] = None,
+        duration_minutes: int = 45,
+        attendee_email: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Creates a Google Calendar event using connected Google OAuth tokens (when calendar.events scope is authorized)
+        and always returns a pre-filled Google Calendar popup link as an instant universal fallback.
+        """
+        start_dt, end_dt = self._parse_interview_window(start_iso, duration_minutes)
+        template_url = self.build_google_calendar_template_url(
+            summary=summary,
+            description=description,
+            location=location,
+            start_iso=start_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+            duration_minutes=duration_minutes,
+        )
+
+        token_dict = (user.gmail_oauth_token if user else None) or {}
+        has_live_oauth = bool(
+            token_dict
+            and not token_dict.get("simulated")
+            and token_dict.get("access_token")
+            and self.is_configured()
+        )
+        if not has_live_oauth:
+            return {
+                "created_in_google_calendar": False,
+                "oauth_connected": False,
+                "needs_oauth": True,
+                "event_id": None,
+                "html_link": template_url,
+                "google_calendar_template_url": template_url,
+                "start_iso": start_dt.isoformat(),
+                "end_iso": end_dt.isoformat(),
+                "message": "Google OAuth is not connected yet — open the pre-filled Google Calendar link or connect your Google account in Settings.",
+            }
+
+        try:
+            from google.oauth2.credentials import Credentials
+            from google.auth.transport.requests import Request
+            from googleapiclient.discovery import build
+
+            creds = Credentials(
+                token=token_dict.get("access_token"),
+                refresh_token=token_dict.get("refresh_token"),
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=GOOGLE_CLIENT_ID,
+                client_secret=GOOGLE_CLIENT_SECRET,
+                scopes=GMAIL_SCOPES,
+            )
+            if creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+
+            service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+            start_rfc = start_dt.isoformat() + ("Z" if start_dt.tzinfo is None else "")
+            end_rfc = end_dt.isoformat() + ("Z" if end_dt.tzinfo is None else "")
+            event_body: Dict[str, Any] = {
+                "summary": summary,
+                "description": description or "Scheduled via TalentFlow AI",
+                "start": {"dateTime": start_rfc},
+                "end": {"dateTime": end_rfc},
+            }
+            if location:
+                event_body["location"] = location
+            if attendee_email and "@" in attendee_email:
+                event_body["attendees"] = [{"email": attendee_email}]
+
+            created = service.events().insert(calendarId="primary", body=event_body).execute()
+            return {
+                "created_in_google_calendar": True,
+                "oauth_connected": True,
+                "needs_oauth": False,
+                "event_id": created.get("id"),
+                "html_link": created.get("htmlLink") or template_url,
+                "google_calendar_template_url": template_url,
+                "start_iso": start_dt.isoformat(),
+                "end_iso": end_dt.isoformat(),
+                "message": "Interview added directly to your Google Calendar.",
+            }
+        except Exception as exc:
+            logger.warning("Google Calendar API insert fallback to template link: %s", exc)
+            return {
+                "created_in_google_calendar": False,
+                "oauth_connected": True,
+                "needs_oauth": "insufficient" in str(exc).lower() or "scope" in str(exc).lower(),
+                "event_id": None,
+                "html_link": template_url,
+                "google_calendar_template_url": template_url,
+                "start_iso": start_dt.isoformat(),
+                "end_iso": end_dt.isoformat(),
+                "error": str(exc),
+                "message": "Could not write via Calendar API automatically (re-authorize Google Calendar scope or use the quick Google Calendar link).",
+            }
 
 
 gmail_service = GmailService()

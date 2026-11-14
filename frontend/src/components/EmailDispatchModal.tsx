@@ -134,7 +134,7 @@ export const EmailDispatchModal: React.FC<EmailDispatchModalProps> = ({
               onClick={() => setMode('draft')}
               className={`py-2 text-xs font-semibold rounded-lg transition-all ${
                 mode === 'draft'
-                  ? 'bg-sky-600 text-white shadow'
+                  ? 'bg-emerald-600 text-white shadow'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
@@ -162,7 +162,7 @@ export const EmailDispatchModal: React.FC<EmailDispatchModalProps> = ({
               required
               value={recipient}
               onChange={(e) => setRecipient(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
+              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 font-mono"
             />
           </div>
 
@@ -175,7 +175,7 @@ export const EmailDispatchModal: React.FC<EmailDispatchModalProps> = ({
               required
               value={subject}
               onChange={(e) => setSubject(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-sky-500"
+              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
             />
           </div>
 
@@ -188,7 +188,7 @@ export const EmailDispatchModal: React.FC<EmailDispatchModalProps> = ({
               required
               value={body}
               onChange={(e) => setBody(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200 focus:outline-none focus:border-sky-500 leading-relaxed font-sans"
+              className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 leading-relaxed font-sans"
             />
           </div>
 
@@ -208,7 +208,7 @@ export const EmailDispatchModal: React.FC<EmailDispatchModalProps> = ({
             <button
               type="button"
               onClick={handleConnectGoogle}
-              className="text-xs text-sky-400 hover:text-sky-300 flex items-center gap-1"
+              className="text-xs text-emerald-400 hover:text-emerald-300 flex items-center gap-1"
             >
               <span>Connect / Re-auth Gmail OAuth</span>
               <ExternalLink className="w-3 h-3" />
@@ -225,7 +225,7 @@ export const EmailDispatchModal: React.FC<EmailDispatchModalProps> = ({
               <button
                 type="submit"
                 disabled={loading}
-                className="px-5 py-2 rounded-xl bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white font-semibold text-xs flex items-center gap-2 shadow-lg shadow-sky-600/25 disabled:opacity-50"
+                className="px-5 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-semibold text-xs flex items-center gap-2 shadow-lg shadow-emerald-600/25 disabled:opacity-50"
               >
                 <Send className="w-3.5 h-3.5" />
                 <span>{loading ? 'Processing...' : mode === 'draft' ? 'Create Gmail Draft' : 'Send Application'}</span>

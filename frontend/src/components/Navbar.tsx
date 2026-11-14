@@ -71,7 +71,7 @@ git push -u origin my-feature-branch`;
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between gap-3">
           {/* Brand */}
           <div className="flex items-center gap-3 min-w-0">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-sky-500 via-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-sky-500/25 flex-shrink-0">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-500 via-teal-500 to-cyan-500 flex items-center justify-center shadow-lg shadow-emerald-500/25 flex-shrink-0">
               <Bot className="w-5 h-5 text-white" />
             </div>
             <div className="min-w-0">
@@ -79,7 +79,7 @@ git push -u origin my-feature-branch`;
                 <span className="font-extrabold text-sm sm:text-base text-white tracking-tight whitespace-nowrap">
                   TalentFlow AI
                 </span>
-                <span className="text-[10px] font-bold uppercase tracking-wider bg-sky-950/90 text-sky-300 border border-sky-700/60 px-2 py-0.5 rounded-full whitespace-nowrap">
+                <span className="text-[10px] font-bold uppercase tracking-wider bg-emerald-950/90 text-emerald-300 border border-emerald-700/60 px-2 py-0.5 rounded-full whitespace-nowrap">
                   Mobile Pro v3.0
                 </span>
                 {currentUser?.is_admin && (
@@ -108,7 +108,7 @@ git push -u origin my-feature-branch`;
                     onClick={() => setActiveTab(item.id)}
                     className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
                       isActive
-                        ? 'bg-gradient-to-r from-sky-600 to-blue-600 text-white shadow-sm'
+                        ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-md shadow-emerald-500/25'
                         : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/70'
                     }`}
                   >
@@ -133,7 +133,7 @@ git push -u origin my-feature-branch`;
             {currentUser ? (
               <div className="flex items-center gap-2">
                 <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-xs">
-                  <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-sky-500 to-blue-600 flex items-center justify-center text-[10px] font-bold text-white uppercase">
+                  <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-emerald-500 to-teal-600 flex items-center justify-center text-[10px] font-bold text-white uppercase">
                     {currentUser.full_name[0] || 'U'}
                   </div>
                   <span className="font-semibold text-white max-w-[100px] truncate hidden sm:inline">
@@ -151,7 +151,7 @@ git push -u origin my-feature-branch`;
             ) : (
               <button
                 onClick={onOpenAuth}
-                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold shadow-md shadow-sky-600/20"
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-md shadow-emerald-600/20"
               >
                 <LogIn className="w-3.5 h-3.5" />
                 <span>Sign In</span>
@@ -234,7 +234,7 @@ git push -u origin my-feature-branch`;
                 key={item.id}
                 onClick={() => setActiveTab(item.id)}
                 className={`min-h-[44px] min-w-[44px] flex-1 flex flex-col items-center justify-center py-1 px-1.5 rounded-xl transition-all ${
-                  isActive ? 'text-sky-400 font-bold bg-sky-950/30' : 'text-slate-400 hover:text-slate-200'
+                  isActive ? 'text-emerald-400 font-bold bg-emerald-950/30' : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
                 <Icon className={`w-4 h-4 mb-0.5 ${isActive ? 'scale-110' : ''}`} />
@@ -269,7 +269,7 @@ git push -u origin my-feature-branch`;
             <div className="space-y-4 text-xs text-slate-300">
               <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
                 <div className="flex items-center justify-between">
-                  <span className="font-bold text-sky-400 uppercase tracking-wider text-[11px]">
+                  <span className="font-bold text-emerald-400 uppercase tracking-wider text-[11px]">
                     1. Push Monorepo to GitHub (1-Click Commands)
                   </span>
                   <button
@@ -314,7 +314,7 @@ git push -u origin my-feature-branch`;
             <div className="flex justify-end pt-2 border-t border-slate-800">
               <button
                 onClick={() => setIsShareOpen(false)}
-                className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold"
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold"
               >
                 Got It
               </button>

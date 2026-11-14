@@ -7,33 +7,12 @@
     "activeTab",
     "scripting",
     "storage",
-    "sidePanel"
+    "sidePanel",
+    "tabs"
   ],
   "host_permissions": [
-    "*://*.linkedin.com/*",
-    "*://*.myworkdayjobs.com/*",
-    "*://boards.greenhouse.io/*",
-    "*://job-boards.greenhouse.io/*",
-    "*://jobs.lever.co/*",
-    "*://djinni.co/*",
-    "*://jobs.dou.ua/*",
-    "*://jobs.ge/*",
-    "*://www.jobs.ge/*",
-    "*://hr.ge/*",
-    "*://www.hr.ge/*",
-    "*://vacancy.hr.gov.ge/*",
-    "*://hr.gov.ge/*",
-    "*://*.headhunter.ge/*",
-    "*://justjoin.it/*",
-    "*://mail.google.com/*",
-    "http://localhost:8000/*",
-    "http://127.0.0.1:8000/*",
-    "http://localhost:5173/*",
-    "https://*.onrender.com/*",
-    "https://*.up.railway.app/*",
-    "https://*.vercel.app/*",
-    "https://*.pages.dev/*",
-    "https://*.fly.dev/*"
+    "https://*/*",
+    "http://*/*"
   ],
   "background": {
     "service_worker": "background/service_worker.js"
@@ -62,6 +41,13 @@
         "*://hr.gov.ge/*",
         "*://*.headhunter.ge/*",
         "*://justjoin.it/job-offers/*",
+        "*://*.ashbyhq.com/*",
+        "*://*.workable.com/*",
+        "*://*.smartrecruiters.com/*",
+        "*://*.bamboohr.com/*",
+        "*://*.breezy.hr/*",
+        "*://*.recruitee.com/*",
+        "*://*.teamtailor.com/*",
         "http://localhost:8000/mock-portals/*"
       ],
       "js": [
