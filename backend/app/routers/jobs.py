@@ -55,8 +55,9 @@ def _is_profile_uploaded_for_user(profile: Optional[CandidateProfile], user_emai
     ps = profile.parsed_skills or {}
     if not bool(ps.get("user_uploaded", False)):
         return False
-    owner = ps.get("owner_email")
-    if owner and user_email != "guest@talentflow.local" and owner != user_email:
+    owner = str(ps.get("owner_email") or "").strip().lower()
+    clean_user = (user_email or "").strip().lower()
+    if owner and clean_user and clean_user != "guest@talentflow.local" and owner != clean_user:
         return False
     return True
 
@@ -65,13 +66,13 @@ def _is_profile_uploaded_for_user(profile: Optional[CandidateProfile], user_emai
 async def upload_skills_profile(
     file: Optional[UploadFile] = File(None),
     content: Optional[str] = Form(None),
-    run_live_scrape: bool = Form(True),
+    run_live_scrape: bool = Form(False),
     current_user: User = Depends(get_current_user),
 ):
     """
     Accepts a .md or .txt file upload (e.g., skills.md) or markdown form content,
     validates upload size, extracts role & technical capabilities into the user's CandidateProfile,
-    purges stale unapplied matches for this user, and scrapes live role-matching vacancies.
+    rescores existing jobs immediately, and optionally scrapes live role-matching vacancies.
     """
     md_text = ""
     filename = "skills.md"
@@ -92,10 +93,11 @@ async def upload_skills_profile(
 
     try:
         owner = current_user.email if current_user.email != "guest@talentflow.local" else None
+        uid = current_user.id if owner else None
         profile: CandidateProfile = ground_truth_store.ingest_skills_markdown(
             md_text,
             owner_email=owner,
-            user_id=current_user.id,
+            user_id=uid,
         )
 
         with Session(engine) as session:
@@ -105,16 +107,18 @@ async def upload_skills_profile(
                 skills_copy["user_uploaded"] = True
                 if owner:
                     skills_copy["owner_email"] = owner
-                if current_user.id is not None:
-                    skills_copy["user_id"] = current_user.id
-                    db_prof.user_id = current_user.id
+                    if uid is not None:
+                        skills_copy["user_id"] = uid
+                        db_prof.user_id = uid
+                else:
+                    skills_copy.pop("owner_email", None)
+                    skills_copy.pop("user_id", None)
+                    db_prof.user_id = None
                 db_prof.parsed_skills = skills_copy
                 session.add(db_prof)
                 session.commit()
                 session.refresh(db_prof)
                 profile = db_prof
-
-        _purge_stale_unapplied_jobs(user=current_user)
 
         scrape_summary: Optional[Dict[str, Any]] = None
         if run_live_scrape:
@@ -122,10 +126,18 @@ async def upload_skills_profile(
                 scrape_summary = await scraper_orchestrator.run_scrapers(
                     allow_network=True,
                     owner_email=owner,
-                    user_id=current_user.id,
+                    user_id=uid,
                 )
             except Exception as sc_err:
                 logger.warning(f"Post-upload live scrape skipped/partial: {sc_err}")
+        else:
+            try:
+                scrape_summary = scraper_orchestrator.rescore_existing_jobs(
+                    owner_email=owner,
+                    user_id=uid,
+                )
+            except Exception as rs_err:
+                logger.debug(f"Post-upload rescore skipped: {rs_err}")
 
         clean_taxonomy = {
             k: v for k, v in (profile.parsed_skills or {}).items() if k != "ground_truth_vault"

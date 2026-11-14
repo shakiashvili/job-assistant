@@ -40,6 +40,7 @@
       <input type="password" id="login-password" class="input-field" placeholder="Password" autocomplete="current-password" />
       <div class="actions">
         <button id="btn-login" class="btn btn-primary">🔐 Sign In</button>
+        <button id="btn-sync-web-session" class="btn btn-secondary" type="button">🔄 Sync Session from Web Portal</button>
       </div>
       <div style="margin-top: 8px; display: flex; justify-content: space-between; align-items: center;">
         <button id="btn-toggle-token" class="btn-link" type="button">Use JWT Token</button>
@@ -115,6 +116,7 @@
         <div class="actions">
           <button id="btn-prepare-fill" class="btn btn-primary">⚡ Analyze, Build CV & Auto-Fill</button>
           <button id="btn-fill-step" class="btn btn-secondary">🪜 Fill Current Modal Step</button>
+          <button id="btn-save-job-later" class="btn btn-secondary" type="button">🔖 Save Job for Later (Tracker)</button>
           <button id="btn-mark-applied" class="btn btn-success hidden">✅ Mark as Applied & Save to Tracker</button>
         </div>
       </div>
@@ -125,9 +127,25 @@
         <div id="company-intel-text" style="font-size:11px; color:#e2e8f0; line-height:1.4;"></div>
         <ul id="talking-points-list" class="intel-list"></ul>
 
-        <div id="cv-download-bar" class="cv-download-bar hidden">
-          <span id="cv-filename-label" style="color:#cbd5e1;">Tailored Resume</span>
-          <a id="cv-download-link" href="#" target="_blank" rel="noopener noreferrer">Download PDF ↗</a>
+        <div id="matched-skills-section" class="hidden" style="margin-top:6px;">
+          <span class="section-label">Matched Skills vs. Gaps</span>
+          <div id="matched-skills-box" class="skills-row" style="margin-top:3px;"></div>
+        </div>
+
+        <div id="cv-download-bar" class="cv-download-bar hidden" style="display:flex; justify-content:space-between; align-items:center; gap:6px; flex-wrap:wrap;">
+          <span id="cv-filename-label" style="color:#cbd5e1; font-size:10px;">Tailored Resume</span>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <a id="cv-download-link" href="#" target="_blank" rel="noopener noreferrer">PDF ↗</a>
+            <a id="cv-docx-download-link" href="#" target="_blank" rel="noopener noreferrer" class="hidden">Word (.docx) ↗</a>
+          </div>
+        </div>
+
+        <div id="summary-box-wrap" class="hidden" style="margin-top:8px;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <span class="section-label" style="margin-bottom:2px;">Tailored Applicant Pitch</span>
+            <button id="btn-copy-summary" class="btn-link" type="button">Copy Pitch</button>
+          </div>
+          <div id="applicant-summary-preview" style="font-size:11px; color:#cbd5e1; max-height:65px; overflow-y:auto; background:#0f172a; padding:6px; border-radius:6px; white-space:pre-wrap;"></div>
         </div>
 
         <div style="margin-top:8px;">

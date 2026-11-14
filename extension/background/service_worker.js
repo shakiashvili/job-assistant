@@ -385,6 +385,66 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (type === "SYNC_FROM_OPEN_WEB_TAB") {
+    (async () => {
+      try {
+        const tabs = await chrome.tabs.query({});
+        const webTab = tabs.find(
+          (t) =>
+            t.url &&
+            (t.url.startsWith("http://localhost:5173") ||
+              t.url.startsWith("http://127.0.0.1:5173") ||
+              t.url.includes("talentflow"))
+        );
+        if (!webTab || !webTab.id) {
+          sendResponse({
+            ok: false,
+            error: "Open the TalentFlow Web Portal (http://localhost:5173) in a tab first, or sign in with email & password.",
+          });
+          return;
+        }
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: webTab.id },
+          func: () => ({
+            token: localStorage.getItem("talentflow_token") || "",
+            refreshToken: localStorage.getItem("talentflow_refresh_token") || "",
+            userRaw: localStorage.getItem("talentflow_user") || "",
+          }),
+        });
+        const extracted = results?.[0]?.result;
+        if (!extracted || !extracted.token) {
+          sendResponse({
+            ok: false,
+            error: "No active login token found in the open Web Portal tab. Please sign in on the web portal first.",
+          });
+          return;
+        }
+        let parsedUser = {};
+        try {
+          parsedUser = extracted.userRaw ? JSON.parse(extracted.userRaw) : {};
+        } catch (_e) {}
+        await chrome.storage.local.set({
+          jwtToken: extracted.token,
+          refreshToken: extracted.refreshToken || "",
+          userEmail: parsedUser.email || "",
+          userName: parsedUser.full_name || "",
+        });
+        const prof = await apiRequest("/api/extension/profile", { method: "GET", requiresAuth: true });
+        sendResponse({
+          ok: true,
+          authenticated: true,
+          profile: prof.ok ? prof.data : null,
+        });
+      } catch (err) {
+        sendResponse({
+          ok: false,
+          error: `Could not sync from web tab: ${err?.message || String(err)}`,
+        });
+      }
+    })();
+    return true;
+  }
+
   sendResponse({ ok: false, error: `Unknown message type: ${type}` });
   return false;
 });

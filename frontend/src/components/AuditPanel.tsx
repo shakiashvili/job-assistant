@@ -35,6 +35,9 @@ import {
   fetchDbProfile,
   triggerMultiPortalScrape,
   prepareJobEmailPackage,
+  saveJob,
+  unsaveJob,
+  fetchSavedJobs,
   BACKEND_ORIGIN
 } from '../services/api';
 import { JobAuditResponse, ScreeningAnswer, PortalVacancyItem, DbJobPosting } from '../types';
@@ -50,6 +53,10 @@ export const AuditPanel: React.FC = () => {
   const [scrapedJobs, setScrapedJobs] = useState<DbJobPosting[]>([]);
   const [dbStatusFilter, setDbStatusFilter] = useState<string>('ALL');
   const [tierTab, setTierTab] = useState<'ALL' | 'DIRECT' | 'ADJACENT' | 'PUBLIC_INTERNSHIP'>('ALL');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [remoteTypeFilter, setRemoteTypeFilter] = useState<string>('ALL');
+  const [onlySavedFilter, setOnlySavedFilter] = useState<boolean>(false);
+  const [savedJobIds, setSavedJobIds] = useState<Set<number>>(new Set());
   const [page, setPage] = useState<number>(1);
   const [totalPages, setTotalPages] = useState<number>(1);
   const [totalJobs, setTotalJobs] = useState<number>(0);
@@ -200,7 +207,10 @@ export const AuditPanel: React.FC = () => {
     nextPage = page,
     nextPortal = selectedPortalFilter,
     nextStatus = dbStatusFilter,
-    nextTier = tierTab
+    nextTier = tierTab,
+    nextSearch = searchQuery,
+    nextRemoteType = remoteTypeFilter,
+    nextOnlySaved = onlySavedFilter
   ) => {
     const res = await fetchScrapedJobs({
       page: nextPage,
@@ -209,6 +219,9 @@ export const AuditPanel: React.FC = () => {
       status: nextStatus,
       min_score: 60,
       tier: nextTier === 'PUBLIC_INTERNSHIP' ? 'internship' : nextTier,
+      search: nextSearch,
+      remote_type: nextRemoteType,
+      only_saved: nextOnlySaved,
     });
     setScrapedJobs(res.items || []);
     setPage(res.page || 1);
@@ -219,12 +232,35 @@ export const AuditPanel: React.FC = () => {
     return res;
   };
 
+  const handleToggleSaveJob = async (job: DbJobPosting) => {
+    try {
+      const next = new Set(savedJobIds);
+      if (next.has(job.id)) {
+        await unsaveJob(job.id);
+        next.delete(job.id);
+      } else {
+        await saveJob(job.id);
+        next.add(job.id);
+      }
+      setSavedJobIds(next);
+      if (onlySavedFilter) {
+        await loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab, searchQuery, remoteTypeFilter, true);
+      }
+    } catch (err) {
+      console.error('Could not toggle saved job:', err);
+    }
+  };
+
   const loadInitialData = async () => {
     const uploaded = await refreshProfileData();
     try {
-      const mdData = await fetchSkillsMd();
+      const [mdData, savedRes] = await Promise.all([
+        fetchSkillsMd(),
+        fetchSavedJobs().catch(() => ({ items: [] })),
+      ]);
       setSkillsMdContent(mdData.content);
       setSkillsFilename(mdData.filename);
+      setSavedJobIds(new Set((savedRes.items || []).map((it) => it.job.id)));
 
       if (!uploaded) {
         setVacancies([]);
@@ -291,6 +327,7 @@ export const AuditPanel: React.FC = () => {
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
     setIsScraping(true);
     setError(null);
@@ -300,6 +337,8 @@ export const AuditPanel: React.FC = () => {
       setSkillsMdContent(res.content);
       setSkillsFilename(res.filename);
       setExtractedSkillsCount(res.extracted_skills.length);
+      await refreshProfileData();
+
       const [paged, vacs] = await Promise.all([
         loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab),
         fetchVacancies(),
@@ -310,9 +349,15 @@ export const AuditPanel: React.FC = () => {
         setJobUrl(validJobs[0].url);
         setJobText(validJobs[0].description_raw);
       }
-      await refreshProfileData();
-      setSkillsStatusMsg(`✅ ${res.message} Found ${paged.total || validJobs.length} live verified vacancies.`);
-      setTimeout(() => setSkillsStatusMsg(null), 5000);
+      setSkillsStatusMsg(`✅ ${res.message} Matched ${paged.total || validJobs.length} vacancies! Scanning live portals for fresh listings...`);
+
+      // Trigger live portal refresh after profile & initial matches are already displayed
+      try {
+        await triggerMultiPortalScrape(true);
+        const freshPaged = await loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab);
+        setSkillsStatusMsg(`✅ ${res.message} Found ${freshPaged.total || validJobs.length} live verified vacancies.`);
+      } catch {}
+      setTimeout(() => setSkillsStatusMsg(null), 6000);
     } catch (err: any) {
       setError(err.message || 'Failed to upload .md file');
     } finally {
@@ -632,24 +677,41 @@ export const AuditPanel: React.FC = () => {
         selectedPortalFilter={selectedPortalFilter}
         onSelectPortalFilter={(p) => {
           setSelectedPortalFilter(p);
-          loadPagedJobs(1, p, dbStatusFilter, tierTab);
+          loadPagedJobs(1, p, dbStatusFilter, tierTab, searchQuery, remoteTypeFilter, onlySavedFilter);
         }}
         dbStatusFilter={dbStatusFilter}
         onSelectStatusFilter={(s) => {
           setDbStatusFilter(s);
-          loadPagedJobs(1, selectedPortalFilter, s, tierTab);
+          loadPagedJobs(1, selectedPortalFilter, s, tierTab, searchQuery, remoteTypeFilter, onlySavedFilter);
         }}
         tierTab={tierTab}
         onSelectTierTab={(t) => {
           setTierTab(t);
-          loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, t);
+          loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, t, searchQuery, remoteTypeFilter, onlySavedFilter);
         }}
+        searchQuery={searchQuery}
+        onSearchQueryChange={(q) => {
+          setSearchQuery(q);
+          loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab, q, remoteTypeFilter, onlySavedFilter);
+        }}
+        remoteTypeFilter={remoteTypeFilter}
+        onRemoteTypeFilterChange={(rt) => {
+          setRemoteTypeFilter(rt);
+          loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab, searchQuery, rt, onlySavedFilter);
+        }}
+        onlySavedFilter={onlySavedFilter}
+        onOnlySavedFilterChange={(savedOnly) => {
+          setOnlySavedFilter(savedOnly);
+          loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab, searchQuery, remoteTypeFilter, savedOnly);
+        }}
+        savedJobIds={savedJobIds}
+        onToggleSaveJob={handleToggleSaveJob}
         tierCounts={tierCounts}
         statusCounts={statusCounts}
         page={page}
         totalPages={totalPages}
         totalJobs={totalJobs}
-        onPageChange={(nextP) => loadPagedJobs(nextP, selectedPortalFilter, dbStatusFilter, tierTab)}
+        onPageChange={(nextP) => loadPagedJobs(nextP, selectedPortalFilter, dbStatusFilter, tierTab, searchQuery, remoteTypeFilter, onlySavedFilter)}
         scrapeStats={scrapeStats}
         preparedEmailPkg={preparedEmailPkg}
         onDismissEmailPkg={() => setPreparedEmailPkg(null)}

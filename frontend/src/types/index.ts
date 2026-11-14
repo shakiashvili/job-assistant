@@ -49,8 +49,11 @@ export interface WorkHistoryItem {
 export interface EducationItem {
   degree: string;
   institution: string;
-  graduation_year: number;
-  focus: string;
+  graduation_year?: number;
+  focus?: string;
+  field_of_study?: string;
+  start_year?: string;
+  end_year?: string;
 }
 
 export interface CVVariant {

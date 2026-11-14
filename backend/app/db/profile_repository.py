@@ -117,11 +117,21 @@ class ProfileRepository:
                 select(CandidateProfile).order_by(CandidateProfile.updated_at.desc())
             ).all()
             for prof in profiles:
+                ps = prof.parsed_skills or {}
+                owner = str(ps.get("owner_email") or "").strip().lower()
+                if not owner and prof.full_name and bool(ps.get("user_uploaded", False)):
+                    return prof
+            for prof in profiles:
+                ps = prof.parsed_skills or {}
+                if prof.full_name and bool(ps.get("user_uploaded", False)):
+                    return prof
+            for prof in profiles:
                 owner = str((prof.parsed_skills or {}).get("owner_email") or "").strip().lower()
                 if not owner and prof.full_name:
                     return prof
-            if profiles and profiles[0].full_name:
-                return profiles[0]
+            for prof in profiles:
+                if prof.full_name:
+                    return prof
 
         from ..services.profile_service import profile_service
         raw_md = ""
@@ -137,45 +147,54 @@ class ProfileRepository:
         from .models import User
 
         target = owner_email.strip().lower() if owner_email else ""
-        is_explicit_user = bool(
-            (target and target != "guest@talentflow.local")
-            or (user_id is not None)
-        )
-        if is_explicit_user:
-            with Session(engine, expire_on_commit=False) as session:
-                resolved_uid = user_id
-                if resolved_uid is None and target:
-                    u_row = session.exec(select(User).where(User.email == target)).first()
-                    if u_row:
-                        resolved_uid = u_row.id
-                        if u_row.email == "guest@talentflow.local" and not target:
-                            is_explicit_user = False
+        if target == "guest@talentflow.local":
+            target = ""
 
+        with Session(engine, expire_on_commit=False) as session:
+            resolved_uid = user_id
+            if resolved_uid is not None and not target:
+                u_row = session.get(User, resolved_uid)
+                if u_row:
+                    if (u_row.email or "").strip().lower() == "guest@talentflow.local":
+                        resolved_uid = None
+                    else:
+                        target = (u_row.email or "").strip().lower()
+            elif resolved_uid is None and target:
+                u_row = session.exec(select(User).where(User.email == target)).first()
+                if u_row:
+                    if (u_row.email or "").strip().lower() == "guest@talentflow.local":
+                        target = ""
+                    else:
+                        resolved_uid = u_row.id
+
+            is_explicit_user = bool(target or (resolved_uid is not None))
+            if is_explicit_user:
                 if resolved_uid is not None:
                     prof_by_uid = session.exec(
                         select(CandidateProfile)
                         .where(CandidateProfile.user_id == resolved_uid)
                         .order_by(CandidateProfile.updated_at.desc())
                     ).first()
-                    if prof_by_uid:
+                    if prof_by_uid and (prof_by_uid.full_name or prof_by_uid.raw_markdown):
                         return prof_by_uid
 
-                if target and target != "guest@talentflow.local":
+                if target:
                     profiles = session.exec(
                         select(CandidateProfile).order_by(CandidateProfile.updated_at.desc())
                     ).all()
                     for prof in profiles:
                         if str((prof.parsed_skills or {}).get("owner_email") or "").strip().lower() == target:
-                            if resolved_uid is not None and prof.user_id is None:
-                                prof.user_id = resolved_uid
-                                session.add(prof)
-                                session.commit()
-                                session.refresh(prof)
-                            return prof
+                            if prof.full_name or prof.raw_markdown:
+                                if resolved_uid is not None and prof.user_id is None:
+                                    prof.user_id = resolved_uid
+                                    session.add(prof)
+                                    session.commit()
+                                    session.refresh(prof)
+                                return prof
 
-                    # Authenticated user has no uploaded profile yet -> return an isolated blank profile for this user
-                    # (never leak another user's CandidateProfile!)
-                    blank_profile = CandidateProfile(
+                    # Authenticated user has no uploaded profile yet -> return an in-memory blank profile
+                    # (never persist blank rows to DB and never leak another user's CandidateProfile!)
+                    return CandidateProfile(
                         user_id=resolved_uid,
                         full_name="",
                         email=target,
@@ -194,10 +213,6 @@ class ProfileRepository:
                         },
                         experience_years=0.0,
                     )
-                    session.add(blank_profile)
-                    session.commit()
-                    session.refresh(blank_profile)
-                    return blank_profile
 
         return self._ensure_seeded()
 

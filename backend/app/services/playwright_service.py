@@ -272,7 +272,7 @@ class PlaywrightStagerService:
                 re.compile(r"current\s*company|organization|employer", re.I),
                 re.compile(r"company|organization", re.I),
                 "input[name='org'], input[name*='company']",
-                ground_truth.get("work_history", [{}])[0].get("company", "TechNova Cloud Solutions"),
+                (ground_truth.get("work_history") or [{}])[0].get("company") or "Independent Specialist",
                 "current_company",
             )
             await fill_semantic_cascade(

@@ -508,7 +508,7 @@ def log_extension_application(
 ) -> Dict[str, Any]:
     """Records a completed human-reviewed external/Easy-Apply submission in the user's Kanban tracker."""
     init_db()
-    allowed_statuses = {"STAGED", "APPLIED", "HR_SCREEN", "TECH_INTERVIEW", "FINAL_ROUND", "OFFER", "REJECTED"}
+    allowed_statuses = {"SAVED", "STAGED", "APPLIED", "HR_SCREEN", "TECH_INTERVIEW", "FINAL_ROUND", "OFFER", "REJECTED"}
     target_status = req.status.upper() if req.status and req.status.upper() in allowed_statuses else "APPLIED"
 
     with Session(engine) as session:

@@ -291,12 +291,15 @@ def save_skills_md_text(
     if len(payload.content.encode("utf-8")) > MAX_UPLOAD_SIZE_BYTES:
         raise HTTPException(status_code=413, detail="Markdown payload exceeds 10 MB limit.")
     try:
+        from ..services.scrapers.scraper_orchestrator import scraper_orchestrator
+        owner = current_user.email if not _is_guest(current_user) else None
+        uid = current_user.id if not _is_guest(current_user) else None
         updated_gt = ground_truth_store.save_skills_md(
             payload.content,
-            owner_email=current_user.email,
-            user_id=current_user.id,
+            owner_email=owner,
+            user_id=uid,
         )
-        _purge_stale_unapplied_jobs(user=current_user)
+        scraper_orchestrator.rescore_existing_jobs(owner_email=owner, user_id=uid)
         extracted = ground_truth_store.extract_skills_from_md(payload.content)
         return {
             "status": "success",
@@ -321,13 +324,16 @@ async def upload_skills_md_file(
     if len(raw_bytes) > MAX_UPLOAD_SIZE_BYTES:
         raise HTTPException(status_code=413, detail="Uploaded file exceeds 10 MB maximum size limit.")
     try:
+        from ..services.scrapers.scraper_orchestrator import scraper_orchestrator
+        owner = current_user.email if not _is_guest(current_user) else None
+        uid = current_user.id if not _is_guest(current_user) else None
         md_text = raw_bytes.decode("utf-8", errors="replace")
         updated_gt = ground_truth_store.save_skills_md(
             md_text,
-            owner_email=current_user.email,
-            user_id=current_user.id,
+            owner_email=owner,
+            user_id=uid,
         )
-        _purge_stale_unapplied_jobs(user=current_user)
+        scraper_orchestrator.rescore_existing_jobs(owner_email=owner, user_id=uid)
         extracted = ground_truth_store.extract_skills_from_md(md_text)
         return {
             "status": "success",

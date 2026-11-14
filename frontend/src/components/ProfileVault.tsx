@@ -12,14 +12,51 @@ import {
   CheckCircle2,
   AlertCircle,
   UploadCloud,
-  FileText
+  FileText,
+  GraduationCap,
+  RefreshCw,
 } from 'lucide-react';
 import { fetchGroundTruth, saveGroundTruth, uploadSkillsMdFile } from '../services/api';
 import { GroundTruth } from '../types';
 
+const DEFAULT_GROUND_TRUTH: GroundTruth = {
+  candidate: {
+    first_name: '',
+    last_name: '',
+    full_name: '',
+    email: '',
+    phone: '',
+    headline: '',
+    location: { city: '', country: '', open_to_relocation: false, remote_preference: 'Remote' },
+    links: { linkedin: '', github: '', portfolio: '' },
+    work_authorization: {
+      citizenship: [],
+      eu_work_permit: false,
+      requires_eu_visa: false,
+      us_work_authorization: '',
+      requires_us_visa_sponsorship: false,
+      uk_work_authorization: '',
+      security_clearance: false,
+    },
+    languages: [],
+    compensation: {
+      expected_salary_eur: 0,
+      min_salary_eur: 0,
+      expected_salary_usd: 0,
+      notice_period: '',
+    },
+  },
+  skills: { core: [], secondary: [] },
+  work_history: [],
+  education: [],
+  cv_variants: {},
+  faq_bank: [],
+};
+
 export const ProfileVault: React.FC = () => {
-  const [data, setData] = useState<GroundTruth | null>(null);
-  const [activeTab, setActiveTab] = useState<'personal' | 'auth' | 'skills' | 'history' | 'faq'>('personal');
+  const [data, setData] = useState<GroundTruth>(DEFAULT_GROUND_TRUTH);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [activeTab, setActiveTab] = useState<'personal' | 'auth' | 'skills' | 'history' | 'education' | 'faq'>('personal');
   const [isSaving, setIsSaving] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -54,11 +91,17 @@ export const ProfileVault: React.FC = () => {
   }, []);
 
   const loadData = async () => {
+    setIsLoading(true);
+    setErrorMsg(null);
     try {
       const gt = await fetchGroundTruth();
-      setData(gt);
+      if (gt && typeof gt === 'object') {
+        setData({ ...DEFAULT_GROUND_TRUTH, ...gt });
+      }
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to load ground truth');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -133,14 +176,6 @@ export const ProfileVault: React.FC = () => {
     });
   };
 
-  if (!data) {
-    return (
-      <div className="p-12 text-center text-slate-400">
-        Loading Candidate Profile Vault...
-      </div>
-    );
-  }
-
   const candidate = data.candidate || ({} as GroundTruth['candidate']);
   const links = candidate.links || { linkedin: '', github: '', portfolio: '' };
   const workAuth = candidate.work_authorization || {
@@ -160,30 +195,75 @@ export const ProfileVault: React.FC = () => {
   };
   const skillsCore = data.skills?.core || [];
   const work_history = Array.isArray(data.work_history) ? data.work_history : [];
+  const educationList = Array.isArray(data.education) ? data.education : [];
+  const certifications = Array.isArray((data as any).parsed_skills_taxonomy?.courses_and_certifications)
+    ? (data as any).parsed_skills_taxonomy.courses_and_certifications
+    : [];
   const faq_bank = Array.isArray(data.faq_bank) ? data.faq_bank : [];
 
   return (
     <div className="space-y-6">
+      <input
+        ref={dropInputRef}
+        type="file"
+        accept=".md,.txt,.markdown"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = '';
+          if (file) handleSkillsFileDrop(file);
+        }}
+      />
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900 border border-slate-800 p-6 rounded-2xl">
         <div>
           <h2 className="text-xl font-bold text-white flex items-center gap-2">
             <User className="w-5 h-5 text-sky-400" />
             Candidate Profile Vault (Ground Truth)
+            {isLoading && (
+              <span className="inline-flex items-center gap-1 text-xs font-normal text-sky-400 ml-2">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Syncing...
+              </span>
+            )}
           </h2>
           <p className="text-sm text-slate-400 mt-1">
             Single Source of Truth for all automated screening answers and resume tailoring.
           </p>
         </div>
 
-        <button
-          onClick={handleSave}
-          disabled={isSaving}
-          className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-xs text-white bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 shadow-lg shadow-sky-600/25 transition-all disabled:opacity-50"
-        >
-          <Save className="w-4 h-4" />
-          <span>{isSaving ? 'Saving...' : 'Save Ground Truth'}</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => dropInputRef.current?.click()}
+            disabled={isUploadingSkills}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-xs text-sky-300 bg-sky-950/60 hover:bg-sky-900/60 border border-sky-700/60 transition-all disabled:opacity-50"
+          >
+            <UploadCloud className={`w-4 h-4 ${isUploadingSkills ? 'animate-bounce' : ''}`} />
+            <span>{isUploadingSkills ? 'Uploading skills.md...' : 'Upload skills.md'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={loadData}
+            disabled={isLoading}
+            className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl font-semibold text-xs text-slate-300 bg-slate-950 hover:bg-slate-800 border border-slate-800 transition-all disabled:opacity-50"
+            title="Reload Ground Truth from database"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+            <span>Reload</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={isSaving}
+            className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-xs text-white bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 shadow-lg shadow-sky-600/25 transition-all disabled:opacity-50"
+          >
+            <Save className="w-4 h-4" />
+            <span>{isSaving ? 'Saving...' : 'Save Ground Truth'}</span>
+          </button>
+        </div>
       </div>
 
       {successMsg && (
@@ -205,9 +285,10 @@ export const ProfileVault: React.FC = () => {
         {[
           { id: 'personal', label: 'Personal & Contact', icon: User },
           { id: 'auth', label: 'Visas & Work Auth', icon: Shield },
-          { id: 'skills', label: 'Verified Skills', icon: Code },
-          { id: 'history', label: 'Work History', icon: Briefcase },
-          { id: 'faq', label: 'FAQ Bank', icon: MessageSquare },
+          { id: 'skills', label: `Verified Skills (${skillsCore.length})`, icon: Code },
+          { id: 'history', label: `Work History (${work_history.length})`, icon: Briefcase },
+          { id: 'education', label: `Education & Certs (${educationList.length + certifications.length})`, icon: GraduationCap },
+          { id: 'faq', label: `FAQ Bank (${faq_bank.length})`, icon: MessageSquare },
         ].map((tab) => {
           const Icon = tab.icon;
           return (
@@ -473,16 +554,6 @@ export const ProfileVault: React.FC = () => {
                 : 'border-slate-800 hover:border-slate-700 bg-slate-950/50'
             }`}
           >
-            <input
-              ref={dropInputRef}
-              type="file"
-              accept=".md,.txt,.markdown"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) handleSkillsFileDrop(file);
-              }}
-            />
             <div className="flex flex-col items-center justify-center space-y-2">
               <div className="w-10 h-10 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
                 <UploadCloud className={`w-5 h-5 ${isUploadingSkills ? 'animate-bounce' : ''}`} />
@@ -568,6 +639,65 @@ export const ProfileVault: React.FC = () => {
                   </ul>
                 </div>
               ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Tab 4.5: Education & Certifications */}
+      {activeTab === 'education' && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-6">
+          <div>
+            <h3 className="text-base font-semibold text-white">Academic Degrees &amp; Education</h3>
+            <p className="text-xs text-slate-400 mt-1">
+              Automatically parsed from your uploaded <code>skills.md</code> and used to unlock graduate &amp; adjacent roles.
+            </p>
+          </div>
+          {educationList.length === 0 ? (
+            <div className="text-xs text-slate-400 py-6 text-center bg-slate-950 rounded-xl border border-slate-800">
+              No education entries parsed yet. Upload your skills.md with an Education section.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {educationList.map((edu, idx) => (
+                <div key={idx} className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-1.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <h4 className="text-sm font-semibold text-white">
+                      {edu.degree || edu.field_of_study || edu.focus || 'Academic Program'}
+                    </h4>
+                    {(edu.graduation_year || edu.start_year || edu.end_year) && (
+                      <span className="text-[11px] text-slate-400 font-mono bg-slate-900 px-2 py-0.5 rounded">
+                        {edu.graduation_year
+                          ? String(edu.graduation_year)
+                          : [edu.start_year, edu.end_year].filter(Boolean).join(' – ')}
+                      </span>
+                    )}
+                  </div>
+                  {edu.institution && (
+                    <div className="text-xs text-sky-400 font-medium">{edu.institution}</div>
+                  )}
+                  {(edu.field_of_study || edu.focus) &&
+                    (edu.field_of_study || edu.focus) !== edu.degree && (
+                      <div className="text-xs text-slate-400">{edu.field_of_study || edu.focus}</div>
+                    )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {certifications.length > 0 && (
+            <div className="pt-4 border-t border-slate-800 space-y-3">
+              <h4 className="text-sm font-semibold text-white">Courses, Bootcamps &amp; Certifications</h4>
+              <div className="flex flex-wrap gap-2">
+                {certifications.map((cert: string, i: number) => (
+                  <span
+                    key={i}
+                    className="px-3 py-1.5 rounded-xl bg-cyan-950/60 border border-cyan-800/60 text-cyan-200 text-xs font-medium"
+                  >
+                    🎓 {cert}
+                  </span>
+                ))}
+              </div>
             </div>
           )}
         </div>

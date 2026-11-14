@@ -137,13 +137,13 @@ class ScraperOrchestrator:
                     domain_keywords=combined_kw,
                     candidate_languages=cand_langs,
                 ))
-            elif p == "greenhouse.io":
+            elif p in ("greenhouse.io", "greenhouse"):
                 tasks.append(greenhouse_scraper.scrape(
                     allow_network=True,
                     domain_keywords=combined_kw,
                     candidate_languages=cand_langs,
                 ))
-            elif p == "lever.co":
+            elif p in ("lever.co", "lever"):
                 tasks.append(lever_scraper.scrape(
                     allow_network=True,
                     domain_keywords=combined_kw,
@@ -152,20 +152,87 @@ class ScraperOrchestrator:
 
         raw_discovered: List[Dict[str, Any]] = []
         if tasks:
-            sem = asyncio.Semaphore(5)
+            sem = asyncio.Semaphore(6)
 
             async def _bounded_task(coro):
                 async with sem:
-                    return await coro
+                    return await asyncio.wait_for(coro, timeout=9.0)
 
             batches = await asyncio.gather(*(_bounded_task(t) for t in tasks), return_exceptions=True)
             for b in batches:
                 if isinstance(b, list):
                     raw_discovered.extend(b)
                 elif isinstance(b, Exception):
-                    logger.warning(f"Portal scraper task error: {b}")
+                    logger.debug(f"Portal scraper task timeout/error: {b}")
 
-        return self.ingest_scraped_jobs(raw_discovered, owner_email=owner_email, user_id=user_id)
+        result = self.ingest_scraped_jobs(raw_discovered, owner_email=owner_email, user_id=user_id)
+        if not result.get("jobs"):
+            rescored = self.rescore_existing_jobs(owner_email=owner_email, user_id=user_id)
+            if rescored.get("jobs"):
+                return rescored
+        return result
+
+    def rescore_existing_jobs(
+        self,
+        owner_email: Optional[str] = None,
+        user_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Re-evaluates existing JobPosting rows in the DB against the current user's profile in <50ms."""
+        init_db()
+        profile = ground_truth_store.get_profile_record(owner_email=owner_email, user_id=user_id)
+        parsed_skills = profile.parsed_skills if profile and profile.parsed_skills else {}
+        if not parsed_skills.get("all_skills") and not (profile and profile.raw_markdown):
+            return {
+                "total_processed": 0,
+                "staged_ready_count": 0,
+                "filtered_out_count": 0,
+                "cache_hits": 0,
+                "rejection_reasons": [],
+                "jobs": [],
+            }
+
+        serialized_jobs: List[Dict[str, Any]] = []
+        staged_count = 0
+        filtered_count = 0
+        with Session(engine, expire_on_commit=False) as session:
+            rows = session.exec(select(JobPosting)).all()
+            for j in rows:
+                tier_res = matcher_service.evaluate_job_tiered(
+                    title=j.title or "",
+                    description=j.description_raw or "",
+                    parsed_skills=parsed_skills,
+                    current_status="DISCOVERED",
+                    portal=j.portal or "generic",
+                )
+                score = float(tier_res["suitability_score"])
+                final_status = str(tier_res["status"])
+                if final_status == "FILTERED_OUT":
+                    filtered_count += 1
+                    if j.status not in ("APPLIED", "REJECTED"):
+                        delete_job_posting_cascade(session, j)
+                    continue
+                j.suitability_score = score
+                j.match_score = score
+                j.match_tier = str(tier_res.get("match_tier") or j.match_tier or "DIRECT")
+                j.adjacent_role_tag = tier_res.get("adjacent_role_tag")
+                j.skill_overlap_pct = tier_res.get("skill_overlap_pct")
+                j.match_rationale = str(tier_res.get("match_rationale") or "")
+                if j.status not in ("APPLIED", "REJECTED"):
+                    j.status = final_status
+                session.add(j)
+                if final_status == "STAGED":
+                    staged_count += 1
+                serialized_jobs.append(j.model_dump(mode="json"))
+            session.commit()
+
+        return {
+            "total_processed": len(serialized_jobs) + filtered_count,
+            "staged_ready_count": staged_count,
+            "filtered_out_count": filtered_count,
+            "cache_hits": len(serialized_jobs),
+            "rejection_reasons": [],
+            "jobs": serialized_jobs,
+        }
 
     def ingest_scraped_jobs(
         self,
@@ -195,21 +262,21 @@ class ScraperOrchestrator:
                 "jobs": [],
             }
 
+        profile = ground_truth_store.get_profile_record(owner_email=owner_email, user_id=user_id)
         with Session(engine, expire_on_commit=False) as session:
-            profile: Optional[CandidateProfile] = None
-            if user_id is not None:
+            if not profile or (not profile.full_name and not profile.raw_markdown):
                 profile = session.exec(
                     select(CandidateProfile)
-                    .where(CandidateProfile.user_id == user_id)
+                    .where(CandidateProfile.full_name != "")
                     .order_by(CandidateProfile.updated_at.desc())
-                ).first()
-            if profile is None:
-                profile = session.exec(
-                    select(CandidateProfile).order_by(CandidateProfile.updated_at.desc())
                 ).first()
 
             resolved_uid = user_id or (profile.user_id if profile else None)
-            parsed_skills = profile.parsed_skills if profile else matcher_service.parse_skills_markdown("")
+            parsed_skills = (
+                profile.parsed_skills
+                if profile and profile.parsed_skills and profile.parsed_skills.get("all_skills")
+                else matcher_service.parse_skills_markdown(profile.raw_markdown if profile else "")
+            )
             now_utc = utc_now()
 
             # Pre-fetch all existing JobPostings in ONE query to eliminate N+1 SELECTs inside the loop

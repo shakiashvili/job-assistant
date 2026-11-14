@@ -422,6 +422,14 @@ def _sync_otp_email_hash(mapper, connection, target: UserOTP) -> None:
     target.email_hash = blind_index(target.email)
 
 
+@event.listens_for(CandidateProfile, "before_delete")
+def _cascade_delete_profile_children(mapper, connection, target: CandidateProfile) -> None:
+    if target.id is not None:
+        connection.execute(CandidateSkill.__table__.delete().where(CandidateSkill.profile_id == target.id))
+        connection.execute(CandidateExperience.__table__.delete().where(CandidateExperience.profile_id == target.id))
+        connection.execute(CandidateEducation.__table__.delete().where(CandidateEducation.profile_id == target.id))
+
+
 @event.listens_for(ApplicationTracker, "before_delete")
 def _cascade_delete_tracker_children(mapper, connection, target: ApplicationTracker) -> None:
     if target.id is not None:

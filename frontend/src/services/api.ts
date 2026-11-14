@@ -175,15 +175,24 @@ export async function uploadSkillsMdFile(file: File): Promise<{
   content: string;
   extracted_skills: string[];
   parsed_skills?: ParsedSkillsTaxonomy;
+  scrape_summary?: any;
   message: string;
 }> {
   const formData = new FormData();
   formData.append('file', file);
+  formData.append('run_live_scrape', 'false');
   const res = await apiFetch(`${API_BASE}/profile/upload-skills`, {
     method: 'POST',
     body: formData,
   });
-  if (!res.ok) throw new Error('Failed to upload .md file');
+  if (!res.ok) {
+    let errMsg = 'Failed to upload .md file';
+    try {
+      const errData = await res.json();
+      if (errData?.detail) errMsg = errData.detail;
+    } catch {}
+    throw new Error(errMsg);
+  }
   const data = await res.json();
   const allSkills: string[] = data.parsed_skills?.all_skills || [];
   return {
@@ -192,6 +201,7 @@ export async function uploadSkillsMdFile(file: File): Promise<{
     content: data.raw_markdown || '',
     extracted_skills: allSkills,
     parsed_skills: data.parsed_skills,
+    scrape_summary: data.scrape_summary,
     message: `Uploaded ${file.name} into SQLite CandidateProfile (${allSkills.length} skills indexed)!`,
   };
 }
@@ -734,6 +744,59 @@ export async function toggleMilestone(planId: number, milestoneIndex: number): P
   if (!res.ok) throw new Error('Failed to toggle milestone');
   return res.json();
 }
+
+export async function saveJob(jobId: number, notes: string = ''): Promise<{ status: string; saved_id: number; job_posting_id: number }> {
+  const res = await apiFetch(`${API_BASE}/jobs/${jobId}/save`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ notes }),
+  });
+  if (!res.ok) throw new Error('Failed to bookmark job');
+  return res.json();
+}
+
+export async function unsaveJob(jobId: number): Promise<{ status: string; job_posting_id: number }> {
+  const res = await apiFetch(`${API_BASE}/jobs/${jobId}/save`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to remove job bookmark');
+  return res.json();
+}
+
+export async function fetchSavedJobs(): Promise<{ items: Array<{ saved_id: number; notes: string; saved_at: string; job: DbJobPosting }> }> {
+  const res = await apiFetch(`${API_BASE}/jobs/saved`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) return { items: [] };
+  return res.json();
+}
+
+export async function fetchSavedSearches(): Promise<{ items: Array<{ id: number; name: string; filters: Record<string, any>; notify_on_new: boolean }> }> {
+  const res = await apiFetch(`${API_BASE}/saved-searches`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) return { items: [] };
+  return res.json();
+}
+
+export async function createSavedSearch(name: string, filters: Record<string, any>, notify_on_new: boolean = true): Promise<any> {
+  const res = await apiFetch(`${API_BASE}/saved-searches`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ name, filters, notify_on_new }),
+  });
+  if (!res.ok) throw new Error('Failed to save search preset');
+  return res.json();
+}
+
+export async function deleteSavedSearch(searchId: number): Promise<void> {
+  await apiFetch(`${API_BASE}/saved-searches/${searchId}`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+}
+
 
 export async function deleteActionPlan(planId: number): Promise<void> {
   const res = await apiFetch(`${API_BASE}/action-plans/${planId}`, {

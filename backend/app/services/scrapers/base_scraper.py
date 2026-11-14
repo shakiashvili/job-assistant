@@ -475,8 +475,8 @@ class BasePortalScraper:
         "Accept-Language": "en-US,en;q=0.9,ka;q=0.8",
     }
 
-    async def fetch_html(self, url: str, timeout: float = 4.5) -> Optional[str]:
-        """Fetches HTML from a URL with polite concurrency rate limiting and retry logic."""
+    async def fetch_html(self, url: str, timeout: float = 4.0) -> Optional[str]:
+        """Fetches HTML from a URL with polite concurrency rate limiting and fast-fail on anti-bot/404 statuses."""
         for attempt in range(1, self.max_retries + 1):
             try:
                 await asyncio.sleep(self.rate_limit_delay_sec)
@@ -488,6 +488,11 @@ class BasePortalScraper:
                     response = await client.get(url)
                     if response.status_code == 200 and response.text:
                         return response.text
+                    if response.status_code in (401, 403, 404, 429, 503):
+                        logger.debug(
+                            f"[{self.portal_name}] HTTP {response.status_code} on {url} — skipping retry"
+                        )
+                        return None
                     logger.warning(
                         f"[{self.portal_name}] HTTP {response.status_code} on {url} (attempt {attempt})"
                     )

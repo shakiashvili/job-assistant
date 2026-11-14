@@ -162,6 +162,41 @@
       el("cv-download-link").href = fullPdfUrl;
     }
 
+    if (data.tailored_cv?.docx_url && el("cv-docx-download-link")) {
+      const fullDocxUrl = data.tailored_cv.docx_url.startsWith("http")
+        ? data.tailored_cv.docx_url
+        : `${state.apiBaseUrl}${data.tailored_cv.docx_url}`;
+      el("cv-docx-download-link").href = fullDocxUrl;
+      el("cv-docx-download-link").classList.remove("hidden");
+    }
+
+    const matchedSkills = data.matched_skills || [];
+    const missingSkills = data.missing_skills || [];
+    if ((matchedSkills.length > 0 || missingSkills.length > 0) && el("matched-skills-box")) {
+      el("matched-skills-section")?.classList.remove("hidden");
+      const box = el("matched-skills-box");
+      box.innerHTML = "";
+      matchedSkills.slice(0, 6).forEach((sk) => {
+        const chip = document.createElement("span");
+        chip.className = "skill-chip";
+        chip.textContent = `✓ ${sk}`;
+        box.appendChild(chip);
+      });
+      missingSkills.slice(0, 3).forEach((sk) => {
+        const chip = document.createElement("span");
+        chip.className = "skill-chip";
+        chip.style.borderColor = "#f59e0b";
+        chip.style.color = "#fcd34d";
+        chip.textContent = `△ ${sk}`;
+        box.appendChild(chip);
+      });
+    }
+
+    if (data.applicant_summary && el("applicant-summary-preview")) {
+      el("summary-box-wrap")?.classList.remove("hidden");
+      el("applicant-summary-preview").textContent = data.applicant_summary;
+    }
+
     el("cover-letter-preview").textContent = data.cover_letter || "";
     el("btn-mark-applied").classList.remove("hidden");
   }
@@ -395,6 +430,22 @@
     renderAuthView();
   });
 
+  el("btn-sync-web-session")?.addEventListener("click", async () => {
+    const btn = el("btn-sync-web-session");
+    if (btn) btn.disabled = true;
+    const res = await sendBg({ type: "SYNC_FROM_OPEN_WEB_TAB" });
+    if (btn) btn.disabled = false;
+    if (!res?.ok) {
+      showStatus(res?.error || "Could not sync session from Web Portal tab.", "error");
+      return;
+    }
+    state.authenticated = true;
+    state.profile = res.profile;
+    hideStatus();
+    renderAuthView();
+    showStatus("Synced active session from TalentFlow Web Portal!", "success");
+  });
+
   el("btn-logout")?.addEventListener("click", async () => {
     await sendBg({ type: "LOGOUT" });
     state.authenticated = false;
@@ -433,6 +484,34 @@
     if (!txt) return;
     await navigator.clipboard.writeText(txt);
     showStatus("Copied cover letter to clipboard.", "success");
+  });
+
+  el("btn-copy-summary")?.addEventListener("click", async () => {
+    const txt = el("applicant-summary-preview")?.textContent || "";
+    if (!txt) return;
+    await navigator.clipboard.writeText(txt);
+    showStatus("Copied applicant pitch to clipboard.", "success");
+  });
+
+  el("btn-save-job-later")?.addEventListener("click", async () => {
+    const app = state.preparedApp || {};
+    const jobUrl = state.pageContext?.url || window.location.href;
+    const payload = {
+      company_name: el("company-input").value.trim() || app.company_name || "Unknown Company",
+      job_title: el("job-title-input").value.trim() || app.job_title || "Saved Role",
+      job_url: jobUrl,
+      portal: state.pageContext?.portal || app.portal || "custom",
+      salary_offered: app.salary_info?.display || null,
+      cv_pdf_path: app.tailored_cv?.pdf_filename || null,
+      cover_letter_text: app.cover_letter || null,
+      status: "SAVED",
+    };
+    const res = await sendBg({ type: "LOG_APPLICATION", payload });
+    if (res?.ok) {
+      showStatus(`Bookmarked "${payload.job_title}" at "${payload.company_name}" as SAVED in your Tracker!`, "success");
+    } else {
+      showStatus(res?.error || "Could not bookmark job in Kanban tracker.", "error");
+    }
   });
   }
 

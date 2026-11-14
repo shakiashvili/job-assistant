@@ -11,6 +11,10 @@ import {
   Sparkles,
   Landmark,
   Target,
+  Search,
+  Star,
+  Globe,
+  X,
 } from 'lucide-react';
 import { DbJobPosting } from '../types';
 import { BACKEND_ORIGIN } from '../services/api';
@@ -80,6 +84,14 @@ interface DiscoveryFeedProps {
   onSelectJob: (job: DbJobPosting) => void;
   onOpenFillForm?: (job: DbJobPosting) => void;
   onDraftInGmail: (job: DbJobPosting) => void;
+  searchQuery?: string;
+  onSearchQueryChange?: (q: string) => void;
+  remoteTypeFilter?: string;
+  onRemoteTypeFilterChange?: (mode: string) => void;
+  onlySavedFilter?: boolean;
+  onOnlySavedFilterChange?: (val: boolean) => void;
+  savedJobIds?: Set<number>;
+  onToggleSaveJob?: (job: DbJobPosting) => void;
 }
 
 function formatSalaryDisplay(job: DbJobPosting): string | null {
@@ -125,6 +137,14 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
   onSelectJob,
   onOpenFillForm,
   onDraftInGmail,
+  searchQuery = '',
+  onSearchQueryChange,
+  remoteTypeFilter = 'ALL',
+  onRemoteTypeFilterChange,
+  onlySavedFilter = false,
+  onOnlySavedFilterChange,
+  savedJobIds,
+  onToggleSaveJob,
 }) => {
   const [localTierTab, setLocalTierTab] = useState<'ALL' | 'DIRECT' | 'ADJACENT' | 'PUBLIC_INTERNSHIP'>('ALL');
   const tierTab = controlledTierTab ?? localTierTab;
@@ -154,7 +174,19 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
   const adjacentRoles = candidateProfile?.adjacent_roles || [];
   const eduList = candidateProfile?.education || [];
 
-  const portals = ['ALL', 'jobs.ge', 'hr.ge', 'headhunter.ge', 'hr.gov.ge', 'linkedin.com', 'djinni.co', 'dou.ua', 'justjoin.it'];
+  const portals = [
+    'ALL',
+    'jobs.ge',
+    'hr.ge',
+    'headhunter.ge',
+    'hr.gov.ge',
+    'linkedin.com',
+    'djinni.co',
+    'dou.ua',
+    'justjoin.it',
+    'greenhouse.io',
+    'lever.co',
+  ];
 
   return (
     <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl space-y-4">
@@ -227,8 +259,19 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
 
         <div className="flex flex-wrap items-center gap-2">
           <button
+            type="button"
+            onClick={onUploadClick}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-sky-600/20 hover:bg-sky-600/30 border border-sky-500/40 text-sky-300 text-xs font-bold transition-all"
+            title="Upload or replace your skills.md profile"
+          >
+            <Upload className="w-3.5 h-3.5" />
+            <span>{profileUploaded ? 'Update skills.md' : 'Upload skills.md'}</span>
+          </button>
+
+          <button
+            type="button"
             onClick={onRunScrapers}
-            disabled={isScraping || !profileUploaded}
+            disabled={isScraping}
             className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-md shadow-emerald-600/20 transition-all disabled:opacity-50"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isScraping ? 'animate-spin' : ''}`} />
@@ -302,13 +345,86 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
         </button>
       </div>
 
-      {/* Portal Filter Chips */}
-      {visibleJobs.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-slate-800/60">
+      {/* Portal Filter Chips + Search & Work Mode Bar */}
+      <div className="space-y-2.5 pt-2 border-t border-slate-800/60">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5">
+          {/* Live Keyword Search Input */}
+          {onSearchQueryChange && (
+            <div className="relative flex-1 max-w-md">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => onSearchQueryChange(e.target.value)}
+                placeholder="Search by role, company, or skill (e.g. QA, Python, API, TBC)..."
+                className="w-full pl-8 pr-8 py-1.5 rounded-xl bg-slate-950 border border-slate-800 focus:border-sky-500 focus:outline-none text-xs text-white placeholder-slate-500"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => onSearchQueryChange('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                  title="Clear search"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Work Mode & Saved Jobs Filter Pills */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {onRemoteTypeFilterChange && (
+              <>
+                <span className="text-[10px] font-bold uppercase text-slate-500 mr-1 inline-flex items-center gap-1">
+                  <Globe className="w-3 h-3" /> Mode:
+                </span>
+                {[
+                  { id: 'ALL', label: 'All Modes' },
+                  { id: 'REMOTE', label: '🌍 Remote' },
+                  { id: 'HYBRID', label: '🏢 Hybrid' },
+                  { id: 'ONSITE', label: '📍 On-Site' },
+                ].map((mode) => (
+                  <button
+                    key={mode.id}
+                    type="button"
+                    onClick={() => onRemoteTypeFilterChange(mode.id)}
+                    className={`text-[11px] px-2.5 py-1 rounded-lg font-medium transition-colors ${
+                      remoteTypeFilter === mode.id
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                    }`}
+                  >
+                    {mode.label}
+                  </button>
+                ))}
+              </>
+            )}
+
+            {onOnlySavedFilterChange && (
+              <button
+                type="button"
+                onClick={() => onOnlySavedFilterChange(!onlySavedFilter)}
+                className={`inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg font-semibold transition-colors ${
+                  onlySavedFilter
+                    ? 'bg-amber-500/20 border border-amber-500/60 text-amber-300'
+                    : 'bg-slate-950 text-slate-400 hover:text-amber-300 border border-slate-800'
+                }`}
+              >
+                <Star className={`w-3 h-3 ${onlySavedFilter ? 'fill-amber-400 text-amber-400' : ''}`} />
+                <span>Saved ({savedJobIds ? savedJobIds.size : 0})</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Portal Filter Chips */}
+        <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-[10px] font-bold uppercase text-slate-500 mr-1">Portals:</span>
           {portals.map((p) => (
             <button
               key={p}
+              type="button"
               onClick={() => onSelectPortalFilter(p)}
               className={`text-[11px] px-2.5 py-1 rounded-lg font-medium transition-colors ${
                 selectedPortalFilter === p
@@ -320,7 +436,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
             </button>
           ))}
         </div>
-      )}
+      </div>
 
       {/* Prepared Gmail Package Banner */}
       {preparedEmailPkg && (
@@ -493,15 +609,38 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                   <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-slate-900 text-sky-400 border border-slate-700">
                     {job.portal} • {job.market}
                   </span>
-                  <span
-                    className={`text-[10px] font-bold px-2 py-0.5 rounded ${
-                      isStaged
-                        ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
-                        : 'bg-amber-950 text-amber-300 border border-amber-800'
-                    }`}
-                  >
-                    {job.status} ({job.suitability_score}%)
-                  </span>
+                  <div className="flex items-center gap-1">
+                    {onToggleSaveJob && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onToggleSaveJob(job);
+                        }}
+                        className={`p-1 rounded-md border transition-colors ${
+                          savedJobIds?.has(job.id)
+                            ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
+                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-amber-300'
+                        }`}
+                        title={savedJobIds?.has(job.id) ? 'Remove from Saved Jobs' : 'Bookmark / Save Job for later'}
+                      >
+                        <Star
+                          className={`w-3 h-3 ${
+                            savedJobIds?.has(job.id) ? 'fill-amber-400 text-amber-400' : ''
+                          }`}
+                        />
+                      </button>
+                    )}
+                    <span
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                        isStaged
+                          ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                          : 'bg-amber-950 text-amber-300 border border-amber-800'
+                      }`}
+                    >
+                      {job.status} ({job.suitability_score}%)
+                    </span>
+                  </div>
                 </div>
 
                 {tier === 'ADJACENT' && (
