@@ -386,13 +386,22 @@ def _format_candidate_location(loc_val: Any) -> str:
 
 def _format_candidate_languages(candidate: Dict[str, Any], skills_md: str, is_ka: bool) -> str:
     """
-    Extracts strictly HUMAN spoken languages from `## Languages` section or CandidateProfile,
-    rejecting programming languages such as TypeScript/Python/SQL/CSS/XPath.
+    Extracts strictly HUMAN spoken languages from CandidateProfile first (reflecting UI edits)
+    and falls back to `## Languages` section in `skills_md`, rejecting programming tokens.
     """
     lang_entries: List[Dict[str, str]] = []
 
-    if skills_md:
-        # 1. Check dedicated `## Languages` / `## Spoken Languages` / `## ენები` section first
+    raw_langs = candidate.get("languages")
+    if isinstance(raw_langs, dict):
+        raw_list = [{"language": k, "proficiency": v} for k, v in raw_langs.items() if k]
+        lang_entries = filter_spoken_language_entries(raw_list)
+    elif isinstance(raw_langs, list) and raw_langs:
+        lang_entries = filter_spoken_language_entries(raw_langs)
+    elif isinstance(raw_langs, str) and raw_langs.strip():
+        lang_entries = filter_spoken_language_entries([p.strip() for p in re.split(r"[|,;]", raw_langs)])
+
+    if not lang_entries and skills_md:
+        # Fallback: Check dedicated `## Languages` / `## Spoken Languages` / `## ენები` section
         sec_m = re.search(
             r"(?ims)^#{1,3}\s*(?:languages|spoken\s+languages|ენები)[^\n]*\n(.*?)(?=^#{1,3}\s|\Z)",
             skills_md,
@@ -405,23 +414,12 @@ def _format_candidate_languages(candidate: Dict[str, Any], skills_md: str, is_ka
             ]
             lang_entries = filter_spoken_language_entries(lines)
         else:
-            # 2. Only fall back to inline `Spoken Languages:` (or filtered `Languages:`) if no dedicated section exists
             inline_m = re.search(
                 r"(?im)^\s*(?:[-*]\s*)?(?:\*\*)?(?:spoken\s+languages|languages|ენები)(?:\*\*)?\s*:\s*\**\s*(.+)$",
                 skills_md,
             )
             if inline_m:
                 lang_entries = filter_spoken_language_entries([inline_m.group(1).strip()])
-
-    if not lang_entries:
-        raw_langs = candidate.get("languages")
-        if isinstance(raw_langs, dict):
-            raw_list = [{"language": k, "proficiency": v} for k, v in raw_langs.items() if k]
-            lang_entries = filter_spoken_language_entries(raw_list)
-        elif isinstance(raw_langs, list):
-            lang_entries = filter_spoken_language_entries(raw_langs)
-        elif isinstance(raw_langs, str) and raw_langs.strip():
-            lang_entries = filter_spoken_language_entries([p.strip() for p in re.split(r"[|,;]", raw_langs)])
 
     if not lang_entries:
         return ""
@@ -527,19 +525,22 @@ class CVGeneratorService:
     ) -> Dict[str, Any]:
         gt = vault_override if vault_override else ground_truth_store.get_data(owner_email=owner_email)
         ps = dict(gt.get("_parsed_skills") or {})
-        skills_md = skills_md_override or gt.get("skills_md_raw") or ground_truth_store.get_skills_md(owner_email=owner_email)
+        raw_vault_md = str(gt.get("skills_md_raw") or "")
+        has_explicit_md_override = bool(
+            skills_md_override
+            and str(skills_md_override).strip()
+            and str(skills_md_override).strip() != raw_vault_md.strip()
+        )
+        skills_md = skills_md_override or raw_vault_md or ground_truth_store.get_skills_md(owner_email=owner_email)
         parsed_md = ground_truth_store.parse_profile_from_md(skills_md) if skills_md else {}
 
         candidate = dict(gt.get("candidate", {}))
-        if parsed_md.get("full_name"):
-            candidate["full_name"] = parsed_md["full_name"]
-        if parsed_md.get("headline"):
-            candidate["headline"] = parsed_md["headline"]
-        if parsed_md.get("email"):
-            candidate["email"] = parsed_md["email"]
-        if parsed_md.get("phone"):
-            candidate["phone"] = parsed_md["phone"]
-        if parsed_md.get("location") and not _format_candidate_location(candidate.get("location")):
+        for fld in ("full_name", "headline", "email", "phone"):
+            if has_explicit_md_override and parsed_md.get(fld):
+                candidate[fld] = parsed_md[fld]
+            elif not candidate.get(fld) and parsed_md.get(fld):
+                candidate[fld] = parsed_md[fld]
+        if parsed_md.get("location") and (has_explicit_md_override or not _format_candidate_location(candidate.get("location"))):
             loc_parts = [p.strip() for p in str(parsed_md["location"]).split(",", 1)]
             candidate["location"] = {
                 "city": loc_parts[0],
@@ -550,17 +551,24 @@ class CVGeneratorService:
         if skills_md:
             gh_m = re.search(r"(https?://(?:www\.)?github\.com/[A-Za-z0-9._-]+/?)", skills_md, re.I)
             li_m = re.search(r"(https?://(?:www\.)?linkedin\.com/in/[A-Za-z0-9._-]+/?)", skills_md, re.I)
-            if gh_m and not cand_links.get("github"):
+            if gh_m and (has_explicit_md_override or not cand_links.get("github")):
                 cand_links["github"] = gh_m.group(1).rstrip("/")
-            if li_m and not cand_links.get("linkedin"):
+            if li_m and (has_explicit_md_override or not cand_links.get("linkedin")):
                 cand_links["linkedin"] = li_m.group(1).rstrip("/")
         candidate["links"] = cand_links
 
-        core_skills = parsed_md.get("skills") or gt.get("skills", {}).get("core", []) or []
-        raw_work_history = parsed_md.get("work_history") or gt.get("work_history", [])
-        education = parsed_md.get("education") or gt.get("education", [])
-        projects = parsed_md.get("projects") or gt.get("projects", [])
-        certifications = parsed_md.get("certifications") or gt.get("certifications") or ps.get("courses_and_certifications") or []
+        if has_explicit_md_override:
+            core_skills = parsed_md.get("skills") or (gt.get("skills", {}) or {}).get("core", []) or []
+            raw_work_history = parsed_md.get("work_history") or gt.get("work_history", [])
+            education = parsed_md.get("education") or gt.get("education", [])
+            projects = parsed_md.get("projects") or gt.get("projects", [])
+            certifications = parsed_md.get("certifications") or gt.get("certifications") or ps.get("courses_and_certifications") or []
+        else:
+            core_skills = (gt.get("skills", {}) or {}).get("core") or parsed_md.get("skills") or []
+            raw_work_history = gt.get("work_history") if gt.get("work_history") else (parsed_md.get("work_history") or [])
+            education = gt.get("education") if gt.get("education") else (parsed_md.get("education") or [])
+            projects = gt.get("projects") if gt.get("projects") else (parsed_md.get("projects") or [])
+            certifications = gt.get("certifications") or parsed_md.get("certifications") or ps.get("courses_and_certifications") or []
 
         # Sanitize target role, company & summary strictly into the target CV language
         clean_job_title = _clean_foreign_script_text(job_title, cv_language) or "Specialist"
@@ -618,7 +626,11 @@ class CVGeneratorService:
         lang_suffix = "_KA" if cv_language == "ka" else ""
         role_tag = "QA_Engineer" if (ps.get("target_industry", "qa_tech") == "qa_tech") else ascii_filename_slug(candidate_headline.split("|")[0], default="Specialist", max_len=18)
         job_role_slug = ascii_filename_slug(job_title, default="Role", max_len=20)
-        languages_line = _format_candidate_languages(candidate, skills_md, cv_language == "ka")
+        languages_line = (
+            _format_candidate_languages({}, skills_md, cv_language == "ka")
+            if has_explicit_md_override
+            else ""
+        ) or _format_candidate_languages(candidate, skills_md, cv_language == "ka")
 
         if cv_style in ("ats", "recruiter"):
             base_name = f"{cand_slug}_{role_tag}_{cv_style.upper()}{lang_suffix}"
@@ -753,14 +765,22 @@ class CVGeneratorService:
     ) -> Dict[str, Any]:
         """Re-renders HTML, PDF, and DOCX cleanly from user-edited structured CV JSON sections."""
         cand = dict(sections.get("candidate") or {})
-        headline = str(cand.get("headline") or sections.get("target_role") or "Specialist").strip()
+        headline = str(sections.get("headline") or cand.get("headline") or sections.get("target_role") or "Specialist").strip()
         target_role = str(sections.get("target_role") or headline).strip()
         target_company = str(sections.get("target_company") or "Tailored").strip()
         cv_language = str(sections.get("cv_language") or "en").strip() or "en"
         cv_style = str(sections.get("cv_style") or "tailored").strip() or "tailored"
         human_summary = str(sections.get("summary") or "").strip()
         display_skills = [str(s).strip() for s in (sections.get("skills") or []) if str(s).strip()]
-        work_history = list(sections.get("work_history") or [])
+        work_history = []
+        for raw_w in (sections.get("work_history") or []):
+            if not isinstance(raw_w, dict):
+                continue
+            w_copy = dict(raw_w)
+            w_bullets = w_copy.get("highlights") or w_copy.get("bullets") or []
+            w_copy["highlights"] = list(w_bullets)
+            w_copy["bullets"] = list(w_bullets)
+            work_history.append(w_copy)
         education = list(sections.get("education") or [])
         projects = list(sections.get("projects") or [])
         certifications = list(sections.get("certifications") or [])
@@ -841,6 +861,85 @@ class CVGeneratorService:
             "html_preview_url": f"/api/resumes/generated/{html_filename}",
             "rendered_html": html_content,
         }
+
+    def sync_user_cv_versions(
+        self,
+        user_id: Optional[int] = None,
+        owner_email: Optional[str] = None,
+    ) -> int:
+        """
+        Propagates Candidate Profile Vault updates (contact info, headline, skills,
+        work history, education, projects, certifications, spoken languages) into
+        all saved CVVersion snapshots and re-renders their DOCX, PDF, and HTML files.
+        """
+        if user_id is None:
+            return 0
+
+        from sqlmodel import Session, select
+        from ..db.database import engine
+        from ..db.models import CVVersion, utc_now
+
+        gt = ground_truth_store.get_data(owner_email=owner_email, user_id=user_id)
+        updated_cand = dict(gt.get("candidate") or {})
+        core_skills = [str(s).strip() for s in ((gt.get("skills") or {}).get("core") or []) if str(s).strip()]
+        core_lower = {s.lower() for s in core_skills}
+        skills_md_raw = str(gt.get("skills_md_raw") or "")
+
+        synced_count = 0
+        with Session(engine) as session:
+            versions = session.exec(
+                select(CVVersion).where(CVVersion.user_id == user_id)
+            ).all()
+            for ver in versions:
+                try:
+                    sections = dict(ver.structured_content or {})
+                    merged_cand = {**dict(sections.get("candidate") or {}), **updated_cand}
+                    sections["candidate"] = merged_cand
+                    if updated_cand.get("headline"):
+                        sections["headline"] = updated_cand["headline"]
+
+                    ver_edition = (ver.edition or sections.get("cv_style") or "ats").lower()
+                    if ver_edition in ("ats", "recruiter"):
+                        sections["skills"] = list(core_skills)
+                        if updated_cand.get("headline"):
+                            ver.target_role = updated_cand["headline"]
+                            sections["target_role"] = updated_cand["headline"]
+                            comp_label = ver.target_company or (
+                                "ATS Edition" if ver_edition == "ats" else "Recruiter Edition"
+                            )
+                            ver.title = f"{ver.target_role} — {comp_label} ({ver_edition.upper()})"
+                    else:
+                        existing_skills = [str(s).strip() for s in (sections.get("skills") or []) if str(s).strip()]
+                        kept = [s for s in existing_skills if not core_lower or s.lower() in core_lower]
+                        kept_lower = {s.lower() for s in kept}
+                        sections["skills"] = kept + [s for s in core_skills if s.lower() not in kept_lower]
+
+                    sections["work_history"] = list(gt.get("work_history") or [])
+                    sections["education"] = list(gt.get("education") or [])
+                    sections["projects"] = list(gt.get("projects") or [])
+                    sections["certifications"] = list(gt.get("certifications") or [])
+                    is_ka = (ver.cv_language or sections.get("cv_language") or "en") == "ka"
+                    sections["languages_line"] = _format_candidate_languages(merged_cand, skills_md_raw, is_ka)
+
+                    rendered = self.render_cv_from_sections(
+                        sections,
+                        base_name_override=ver.pdf_filename,
+                    )
+                    ver.structured_content = sections
+                    ver.rendered_html = rendered.get("rendered_html") or ver.rendered_html
+                    ver.pdf_filename = rendered.get("pdf_filename") or ver.pdf_filename
+                    ver.docx_filename = rendered.get("docx_filename") or ver.docx_filename
+                    ver.version_number = (ver.version_number or 1) + 1
+                    ver.updated_at = utc_now()
+                    session.add(ver)
+                    synced_count += 1
+                except Exception as sync_err:
+                    logger.warning("Failed to sync CVVersion id=%s on profile update: %s", ver.id, sync_err)
+
+            if synced_count > 0:
+                session.commit()
+
+        return synced_count
 
     def _build_docx_cv(
         self,
@@ -965,7 +1064,7 @@ class CVGeneratorService:
             _apply_docx_run_font(r, font_family)
 
         add_section_heading(lbl_skills)
-        grouped = group_skills_into_ats_buckets(display_skills[:30], cv_language=cv_language)
+        grouped = group_skills_into_ats_buckets(display_skills[:60], cv_language=cv_language)
         if grouped:
             for bucket_title, bucket_items in grouped:
                 p_sk = doc.add_paragraph(style="List Bullet")
@@ -1220,7 +1319,7 @@ class CVGeneratorService:
         # 3. Technical Skills Matrix (grouped by ATS domains)
         story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#cbd5e1"), spaceBefore=4, spaceAfter=4))
         story.append(Paragraph(f"<b>{lbl_skills}</b>", sec_title_style))
-        grouped_pdf = group_skills_into_ats_buckets(display_skills[:30], cv_language=cv_language)
+        grouped_pdf = group_skills_into_ats_buckets(display_skills[:60], cv_language=cv_language)
         if grouped_pdf:
             for b_title, b_items in grouped_pdf:
                 items_esc = ", ".join(escape(x) for x in b_items)
@@ -1344,7 +1443,7 @@ class CVGeneratorService:
         lbl_edu = "განათლება და სპეციალიზებული ტრენინგები" if is_ka else "EDUCATION & SPECIALIZED TRAINING"
         lbl_lang = "ენები" if is_ka else "LANGUAGES"
 
-        grouped_html = group_skills_into_ats_buckets(display_skills[:30], cv_language=cv_language)
+        grouped_html = group_skills_into_ats_buckets(display_skills[:60], cv_language=cv_language)
         if grouped_html:
             skills_badges = "".join(
                 f'<div style="font-size:11.5px; margin-bottom:4px;"><strong>{esc(b_t)}:</strong> '

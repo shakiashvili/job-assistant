@@ -131,6 +131,13 @@ export async function saveGroundTruth(data: GroundTruth): Promise<GroundTruth> {
   });
   if (!res.ok) throw new Error('Failed to update ground truth');
   const json = await res.json();
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('talentflow:profile-updated', {
+        detail: { syncedCvVersions: json.synced_cv_versions || 0 },
+      })
+    );
+  }
   return json.data;
 }
 

@@ -253,3 +253,74 @@ def test_kanban_rejected_status_and_google_calendar_api():
     assert analytics.status_code == 200
     assert analytics.json()["by_status"].get("Rejected", 0) >= 1
     assert analytics.json()["rejections"] >= 1
+
+
+def test_profile_updates_automatically_sync_to_saved_and_generated_cvs():
+    """Updating fields on Profile Vault must automatically update both existing CV Studio versions (.docx/.pdf/.html) and newly generated CVs."""
+    from app.config import GENERATED_RESUMES_DIR
+
+    headers = _auth_headers("profile_cv_sync")
+
+    # 1. Initial skills.md upload
+    initial_md = Path(__file__).resolve().parents[2].joinpath("data", "candidate_skills.md").read_text(encoding="utf-8")
+    up_res = client.post("/api/skills-md", headers=headers, json={"content": initial_md})
+    assert up_res.status_code == 200
+
+    # 2. Generate an ATS CV edition (creates CVVersion + .docx + .pdf + .html)
+    gen1 = client.post(
+        "/api/resumes/generate-edition",
+        headers=headers,
+        json={"edition": "ats", "cv_language": "en"},
+    )
+    assert gen1.status_code == 200
+    ver_id = gen1.json()["cv_version_id"]
+    assert ver_id is not None
+
+    # 3. Edit Profile Vault via PUT /api/ground-truth (new phone, headline, skill, language, education module)
+    gt = client.get("/api/ground-truth", headers=headers).json()
+    gt["candidate"]["phone"] = "+995 599 88 77 66"
+    gt["candidate"]["headline"] = "Lead QA Automation Engineer (Playwright & FastAPI)"
+    gt["candidate"]["languages"] = [
+        {"language": "Georgian", "proficiency": "Native"},
+        {"language": "English", "proficiency": "C1"},
+        {"language": "French", "proficiency": "B1"},
+    ]
+    gt["skills"]["core"] = list(gt["skills"]["core"]) + ["Cypress E2E"]
+    if gt.get("education"):
+        gt["education"][0]["modules"] = list(gt["education"][0].get("modules") or []) + ["Economic Data Engineering"]
+
+    save_res = client.put("/api/ground-truth", headers=headers, json=gt)
+    assert save_res.status_code == 200
+    assert save_res.json().get("synced_cv_versions", 0) >= 1
+
+    # 4. Existing CVVersion + rendered Word (.docx) & HTML must reflect Profile edits immediately
+    versions_res = client.get("/api/cv-versions", headers=headers)
+    assert versions_res.status_code == 200
+    versions = versions_res.json()["items"]
+    matched = [v for v in versions if v["id"] == ver_id][0]
+    assert matched["structured_json"]["candidate"]["phone"] == "+995 599 88 77 66"
+    assert "Cypress E2E" in matched["structured_json"]["skills"]
+    assert "French" in matched["structured_json"]["languages_line"]
+    assert "+995 599 88 77 66" in matched["rendered_html"]
+    assert "Cypress E2E" in matched["rendered_html"]
+    assert "Lead QA Automation Engineer" in matched["rendered_html"]
+
+    docx_path = GENERATED_RESUMES_DIR / matched["docx_filename"]
+    assert docx_path.exists()
+    docx_text = "\n".join(p.text for p in Document(str(docx_path)).paragraphs)
+    assert "+995 599 88 77 66" in docx_text
+    assert "Cypress E2E" in docx_text
+    assert "French" in docx_text
+
+    # 5. Brand-new CV generation after Profile edit must ALSO use updated Profile (not stale raw_markdown)
+    gen2 = client.post(
+        "/api/resumes/generate-edition",
+        headers=headers,
+        json={"edition": "recruiter", "cv_language": "en"},
+    )
+    assert gen2.status_code == 200
+    docx2 = GENERATED_RESUMES_DIR / gen2.json()["docx_filename"]
+    docx2_text = "\n".join(p.text for p in Document(str(docx2)).paragraphs)
+    assert "+995 599 88 77 66" in docx2_text
+    assert "Cypress E2E" in docx2_text
+    assert "French" in docx2_text

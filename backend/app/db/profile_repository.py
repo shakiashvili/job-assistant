@@ -414,16 +414,14 @@ class ProfileRepository:
             edu = parsed_edu or ps.get("education") or []
         data["education"] = edu
 
-        if parsed_md.get("projects"):
-            data["projects"] = parsed_md["projects"]
-        else:
-            data.setdefault("projects", [])
-        if parsed_md.get("certifications"):
-            data["certifications"] = parsed_md["certifications"]
-        elif ps.get("courses_and_certifications"):
-            data["certifications"] = ps.get("courses_and_certifications") or []
-        else:
-            data.setdefault("certifications", [])
+        if not isinstance(data.get("projects"), list) or not data.get("projects"):
+            data["projects"] = parsed_md.get("projects") or []
+        if not isinstance(data.get("certifications"), list) or not data.get("certifications"):
+            data["certifications"] = (
+                parsed_md.get("certifications")
+                or ps.get("courses_and_certifications")
+                or []
+            )
 
         faq = data.get("faq_bank")
         if not isinstance(faq, list) or not faq:
@@ -450,6 +448,9 @@ class ProfileRepository:
         owner_email: Optional[str] = None,
         user_id: Optional[int] = None,
     ) -> Dict[str, Any]:
+        from sqlmodel import delete
+        from .models import CandidateExperience, CandidateEducation
+
         save_copy = dict(data)
         raw_md = save_copy.pop("skills_md_raw", None)
         save_copy.pop("parsed_skills_taxonomy", None)
@@ -471,16 +472,29 @@ class ProfileRepository:
             cand_in = save_copy.get("candidate")
             if isinstance(cand_in, dict):
                 if cand_in.get("full_name"):
-                    profile.full_name = str(cand_in["full_name"])
+                    profile.full_name = str(cand_in["full_name"]).strip()
                 elif cand_in.get("first_name") or cand_in.get("last_name"):
                     profile.full_name = f"{cand_in.get('first_name', '')} {cand_in.get('last_name', '')}".strip()
-                if cand_in.get("email"):
-                    profile.email = str(cand_in["email"])
-                if cand_in.get("phone"):
-                    profile.phone = str(cand_in["phone"])
+                if "email" in cand_in and cand_in.get("email") is not None:
+                    profile.email = str(cand_in["email"]).strip()
+                if "phone" in cand_in and cand_in.get("phone") is not None:
+                    profile.phone = str(cand_in["phone"]).strip()
+                loc_in = cand_in.get("location")
+                if isinstance(loc_in, dict):
+                    loc_str = ", ".join(p for p in [str(loc_in.get("city") or "").strip(), str(loc_in.get("country") or "").strip()] if p)
+                    if loc_str:
+                        profile.location = loc_str
+                links_in = cand_in.get("links")
+                if isinstance(links_in, dict):
+                    if "linkedin" in links_in:
+                        profile.linkedin_url = str(links_in.get("linkedin") or "").strip()
+                    if "github" in links_in:
+                        profile.github_url = str(links_in.get("github") or "").strip()
 
             existing_ps = dict(profile.parsed_skills or {})
             taxonomy = matcher_service.parse_skills_markdown(profile.raw_markdown)
+            if isinstance(cand_in, dict) and cand_in.get("headline") is not None:
+                taxonomy["headline"] = str(cand_in["headline"]).strip()
             if isinstance(save_copy.get("skills"), dict) and isinstance(save_copy["skills"].get("core"), list):
                 cleaned_core = dedupe_skills_case_insensitive([str(x) for x in save_copy["skills"]["core"]])
                 save_copy["skills"]["core"] = cleaned_core
@@ -488,6 +502,21 @@ class ProfileRepository:
             for preserve_key in ("user_uploaded", "owner_email", "user_id", "education", "courses_and_certifications", "eligible_internships"):
                 if preserve_key in existing_ps:
                     taxonomy[preserve_key] = existing_ps[preserve_key]
+
+            if isinstance(save_copy.get("education"), list):
+                taxonomy["education"] = save_copy["education"]
+            if isinstance(save_copy.get("projects"), list):
+                taxonomy["projects"] = save_copy["projects"]
+            if isinstance(save_copy.get("certifications"), list):
+                taxonomy["courses_and_certifications"] = save_copy["certifications"]
+            if isinstance(cand_in, dict) and isinstance(cand_in.get("languages"), list):
+                cleaned_langs = filter_spoken_language_entries(cand_in["languages"])
+                cand_in["languages"] = cleaned_langs
+                taxonomy["spoken_languages"] = [
+                    f"{l['language']} ({l['proficiency']})" if l.get("proficiency") else l["language"]
+                    for l in cleaned_langs
+                ]
+
             if owner_email and owner_email != "guest@talentflow.local":
                 taxonomy["owner_email"] = owner_email.strip().lower()
             if user_id is not None:
@@ -496,6 +525,38 @@ class ProfileRepository:
             profile.parsed_skills = taxonomy
             profile.updated_at = utc_now()
             session.add(profile)
+
+            if profile.id is not None and isinstance(save_copy.get("work_history"), list):
+                session.exec(delete(CandidateExperience).where(CandidateExperience.profile_id == profile.id))
+                for wh_item in save_copy["work_history"]:
+                    if isinstance(wh_item, dict):
+                        session.add(
+                            CandidateExperience(
+                                profile_id=profile.id,
+                                user_id=profile.user_id,
+                                company=str(wh_item.get("company") or "Experience"),
+                                role_title=str(wh_item.get("role") or wh_item.get("title") or "Role"),
+                                location=str(wh_item.get("location") or ""),
+                                start_date=str(wh_item.get("dates") or wh_item.get("start_date") or ""),
+                                highlights=list(wh_item.get("highlights") or []),
+                            )
+                        )
+            if profile.id is not None and isinstance(save_copy.get("education"), list):
+                session.exec(delete(CandidateEducation).where(CandidateEducation.profile_id == profile.id))
+                for edu_item in save_copy["education"]:
+                    if isinstance(edu_item, dict):
+                        session.add(
+                            CandidateEducation(
+                                profile_id=profile.id,
+                                user_id=profile.user_id,
+                                institution=str(edu_item.get("institution") or "")[:120],
+                                degree=str(edu_item.get("degree") or "")[:200],
+                                field_of_study=str(edu_item.get("field_of_study") or edu_item.get("focus") or "")[:250],
+                                graduation_year=str(edu_item.get("dates") or edu_item.get("graduation_year") or "")[:32],
+                                coursework=list(edu_item.get("modules") or []),
+                            )
+                        )
+
             session.commit()
 
         return self.get_data(owner_email=owner_email, user_id=user_id)

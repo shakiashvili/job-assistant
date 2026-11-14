@@ -63,13 +63,20 @@ export const CVVariantManager: React.FC = () => {
   const [downloadBanner, setDownloadBanner] = useState<string | null>(null);
   const uploadRef = useRef<HTMLInputElement | null>(null);
   const outputRef = useRef<HTMLDivElement | null>(null);
+  const activeVersionIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     loadInitial();
+    const onProfileUpdated = () => {
+      void loadInitial(true);
+    };
+    window.addEventListener('talentflow:profile-updated', onProfileUpdated);
+    return () => window.removeEventListener('talentflow:profile-updated', onProfileUpdated);
   }, []);
 
   const syncEditorFromVersion = (ver: CVVersionItem | null) => {
     setActiveVersion(ver);
+    activeVersionIdRef.current = ver?.id ?? null;
     if (!ver) return;
     const sec = ver.structured_json || {};
     setEditSummary(String(sec.summary || ''));
@@ -79,15 +86,17 @@ export const CVVariantManager: React.FC = () => {
     const wh = Array.isArray(sec.work_history) ? sec.work_history : [];
     const formattedWork = wh
       .map((w: any) => {
-        const hdr = `${w.role || ''} | ${w.company || ''} | ${w.dates || ''}`.trim();
-        const bullets = Array.isArray(w.bullets) ? w.bullets.map((b: string) => `- ${b}`).join('\n') : '';
+        const dt = w.dates || [w.start_date, w.end_date].filter(Boolean).join(' – ');
+        const hdr = `${w.role || ''} | ${w.company || ''} | ${dt}`.trim();
+        const bulletArr = Array.isArray(w.highlights) ? w.highlights : (Array.isArray(w.bullets) ? w.bullets : []);
+        const bullets = bulletArr.map((b: string) => `- ${b}`).join('\n');
         return bullets ? `${hdr}\n${bullets}` : hdr;
       })
       .join('\n\n');
     setEditWorkBulletsText(formattedWork);
   };
 
-  const loadInitial = async () => {
+  const loadInitial = async (forceResyncEditor = false) => {
     const [cvs, firstPage, versionsRes] = await Promise.all([
       fetchMyCvs().catch(() => []),
       fetchScrapedJobs({ page: 1, limit: 100, min_score: 0 }).catch(() => ({ items: [], total: 0, page: 1, limit: 100, total_pages: 1 })),
@@ -96,8 +105,13 @@ export const CVVariantManager: React.FC = () => {
     setMyCvs(cvs);
     const loadedVersions = versionsRes.items || [];
     setCvVersions(loadedVersions);
-    if (loadedVersions.length > 0 && !activeVersion) {
-      syncEditorFromVersion(loadedVersions[0]);
+    if (loadedVersions.length > 0) {
+      if (forceResyncEditor && activeVersionIdRef.current !== null) {
+        const updatedActive = loadedVersions.find((v) => v.id === activeVersionIdRef.current) || loadedVersions[0];
+        syncEditorFromVersion(updatedActive);
+      } else if (!activeVersionIdRef.current) {
+        syncEditorFromVersion(loadedVersions[0]);
+      }
     }
     let combined: DbJobPosting[] = firstPage.items || [];
     const totalPages = Math.min(firstPage.total_pages || 1, 10);
@@ -243,6 +257,7 @@ export const CVVariantManager: React.FC = () => {
           role: hdrParts[0] || '',
           company: hdrParts[1] || '',
           dates: hdrParts[2] || '',
+          highlights: bullets,
           bullets,
         };
       });

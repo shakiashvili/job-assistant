@@ -78,7 +78,8 @@ export const ProfileVault: React.FC = () => {
     try {
       const res = await uploadSkillsMdFile(file);
       await loadData();
-      setSuccessMsg(`Successfully parsed ${file.name} into CandidateProfile with ${res.extracted_skills.length} clean skills!`);
+      window.dispatchEvent(new CustomEvent('talentflow:profile-updated'));
+      setSuccessMsg(`Successfully parsed ${file.name} into CandidateProfile (${res.extracted_skills.length} skills) & synced saved CVs!`);
       setTimeout(() => setSuccessMsg(null), 4000);
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to upload and parse CV / skills file');
@@ -124,8 +125,8 @@ export const ProfileVault: React.FC = () => {
     try {
       const updated = await saveGroundTruth(data);
       setData(updated);
-      setSuccessMsg('Candidate Ground Truth saved successfully to disk!');
-      setTimeout(() => setSuccessMsg(null), 3500);
+      setSuccessMsg('Profile saved & synced automatically across all generated Word/PDF CVs!');
+      setTimeout(() => setSuccessMsg(null), 4000);
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to save');
     } finally {

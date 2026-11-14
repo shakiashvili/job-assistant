@@ -243,7 +243,16 @@ async def extension_upload_skills(
             detail="Please provide a non-empty .pdf, .docx, .md, or .txt CV/skills profile.",
         )
 
-    profile = ground_truth_store.ingest_skills_markdown(md_text, owner_email=current_user.email)
+    profile = ground_truth_store.ingest_skills_markdown(
+        md_text,
+        owner_email=current_user.email,
+        user_id=current_user.id,
+    )
+    from ..services.cv_generator_service import cv_generator_service
+    synced_cv_versions = cv_generator_service.sync_user_cv_versions(
+        user_id=current_user.id,
+        owner_email=current_user.email,
+    )
     gt = ground_truth_store.get_data(owner_email=current_user.email, user_id=current_user.id)
     completeness_score, missing_fields = cv_parser_service.compute_missing_fields(gt)
     ps = dict(profile.parsed_skills or {})
@@ -251,6 +260,7 @@ async def extension_upload_skills(
         "status": "success",
         "user_email": current_user.email,
         "full_name": profile.full_name,
+        "synced_cv_versions": synced_cv_versions,
         "primary_role": ps.get("primary_role") or ps.get("headline") or "Specialist",
         "detected_industry": ps.get("detected_industry") or "General Professional",
         "target_industry": ps.get("target_industry") or "qa_tech",

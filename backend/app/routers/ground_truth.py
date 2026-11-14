@@ -171,14 +171,25 @@ def update_ground_truth(
     payload: Dict[str, Any],
     current_user: User = Depends(get_current_user),
 ):
-    """Updates and persists candidate profile vault for the current user."""
+    """Updates candidate profile vault and automatically syncs all saved CVs & Word/PDF editions."""
+    from ..services.cv_generator_service import cv_generator_service
+
     try:
         updated = ground_truth_store.update_data(
             payload,
             owner_email=current_user.email,
             user_id=current_user.id,
         )
-        return {"status": "success", "message": "Ground truth updated successfully", "data": updated}
+        synced_cv_versions = cv_generator_service.sync_user_cv_versions(
+            user_id=current_user.id,
+            owner_email=current_user.email,
+        )
+        return {
+            "status": "success",
+            "message": "Ground truth updated successfully",
+            "synced_cv_versions": synced_cv_versions,
+            "data": updated,
+        }
     except Exception as e:
         logger.error(f"Error updating ground truth: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -269,12 +280,18 @@ def apply_skills_md_preset(
             )
 
         _purge_stale_unapplied_jobs(user=current_user)
+        from ..services.cv_generator_service import cv_generator_service
+        synced_cv_versions = cv_generator_service.sync_user_cv_versions(
+            user_id=current_user.id,
+            owner_email=current_user.email,
+        )
         extracted = ground_truth_store.extract_skills_from_md(md_content)
         return {
             "status": "success",
             "preset_id": preset_id,
             "content": md_content,
             "extracted_skills": extracted,
+            "synced_cv_versions": synced_cv_versions,
             "ground_truth": updated_gt,
             "message": f"Loaded '{preset_id}' profile template ({len(extracted)} skills synced).",
         }
@@ -301,11 +318,17 @@ def save_skills_md_text(
             user_id=uid,
         )
         scraper_orchestrator.rescore_existing_jobs(owner_email=owner, user_id=uid)
+        from ..services.cv_generator_service import cv_generator_service
+        synced_cv_versions = cv_generator_service.sync_user_cv_versions(
+            user_id=current_user.id,
+            owner_email=current_user.email,
+        )
         extracted = ground_truth_store.extract_skills_from_md(payload.content)
         return {
             "status": "success",
             "message": f"Saved candidate_skills.md ({len(extracted)} skills synced).",
             "extracted_skills": extracted,
+            "synced_cv_versions": synced_cv_versions,
             "ground_truth": updated_gt,
         }
     except Exception as e:
@@ -341,6 +364,11 @@ async def upload_skills_md_file(
             user_id=uid,
         )
         scraper_orchestrator.rescore_existing_jobs(owner_email=owner, user_id=uid)
+        from ..services.cv_generator_service import cv_generator_service
+        synced_cv_versions = cv_generator_service.sync_user_cv_versions(
+            user_id=current_user.id,
+            owner_email=current_user.email,
+        )
         extracted = ground_truth_store.extract_skills_from_md(md_text)
         completeness_score, missing_fields = cv_parser_service.compute_missing_fields(updated_gt)
         return {
@@ -348,6 +376,7 @@ async def upload_skills_md_file(
             "filename": filename,
             "content": md_text,
             "extracted_skills": extracted,
+            "synced_cv_versions": synced_cv_versions,
             "completeness_score": completeness_score,
             "missing_fields": missing_fields,
             "ground_truth": updated_gt,
@@ -424,11 +453,17 @@ async def upload_personal_cv(
                 owner_email=owner,
                 user_id=uid,
             )
+            from ..services.cv_generator_service import cv_generator_service
+            synced_cv_versions = cv_generator_service.sync_user_cv_versions(
+                user_id=current_user.id,
+                owner_email=current_user.email,
+            )
             completeness_score, missing_fields = cv_parser_service.compute_missing_fields(updated_gt)
             parsed_summary = {
                 "completeness_score": completeness_score,
                 "missing_fields": missing_fields,
                 "extracted_skills_count": len((updated_gt.get("skills") or {}).get("core") or []),
+                "synced_cv_versions": synced_cv_versions,
             }
         except ValueError as parse_err:
             # File passed header validation; preserve upload in My CVs vault and surface non-fatal warning
