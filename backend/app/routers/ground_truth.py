@@ -275,6 +275,7 @@ def generate_cv_edition(
         company=company,
         description=desc,
         skills_md_override=live.get("skills_markdown") or None,
+        owner_email=current_user.email,
         cv_language=req.cv_language or "en",
         cv_style=req.edition or "ats",
     )
@@ -301,7 +302,7 @@ def list_generated_resumes():
 
 @router.get("/resumes/generated/{filename}")
 def get_generated_resume_file(filename: str):
-    """Downloads or previews a generated PDF, Word (.docx), or HTML resume."""
+    """Downloads or previews a generated PDF, Word (.docx), or HTML resume with explicit attachment headers."""
     safe_name = Path(filename).name
     file_path = GENERATED_RESUMES_DIR / safe_name
     if not file_path.exists():
@@ -309,24 +310,45 @@ def get_generated_resume_file(filename: str):
     lower = safe_name.lower()
     if lower.endswith(".html"):
         return FileResponse(path=file_path, media_type="text/html; charset=utf-8")
+    dl_headers = {"Content-Disposition": f'attachment; filename="{safe_name}"'}
     if lower.endswith(".docx"):
         return FileResponse(
             path=file_path,
             filename=safe_name,
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers=dl_headers,
         )
-    return FileResponse(path=file_path, filename=safe_name, media_type="application/pdf")
+    return FileResponse(
+        path=file_path,
+        filename=safe_name,
+        media_type="application/pdf",
+        headers=dl_headers,
+    )
 
 
 @router.get("/resumes/{filename}")
 def get_resume_pdf(filename: str):
-    """Downloads or previews a base variant PDF resume."""
-    file_path = RESUMES_DIR / filename
+    """Downloads or previews a base or generated PDF/DOCX/HTML resume."""
+    safe_name = Path(filename).name
+    file_path = RESUMES_DIR / safe_name
     if not file_path.exists():
-        gen_path = GENERATED_RESUMES_DIR / filename
-        if gen_path.exists():
-            if filename.lower().endswith(".html"):
-                return FileResponse(path=gen_path, media_type="text/html; charset=utf-8")
-            return FileResponse(path=gen_path, filename=filename, media_type="application/pdf")
-        raise HTTPException(status_code=404, detail="Resume PDF not found")
-    return FileResponse(path=file_path, filename=filename, media_type="application/pdf")
+        file_path = GENERATED_RESUMES_DIR / safe_name
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail="Resume file not found")
+    lower = safe_name.lower()
+    if lower.endswith(".html"):
+        return FileResponse(path=file_path, media_type="text/html; charset=utf-8")
+    dl_headers = {"Content-Disposition": f'attachment; filename="{safe_name}"'}
+    if lower.endswith(".docx"):
+        return FileResponse(
+            path=file_path,
+            filename=safe_name,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers=dl_headers,
+        )
+    return FileResponse(
+        path=file_path,
+        filename=safe_name,
+        media_type="application/pdf",
+        headers=dl_headers,
+    )

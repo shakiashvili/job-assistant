@@ -13,6 +13,7 @@ from typing import Optional, Dict, Any, Tuple, List
 from urllib.parse import urlencode
 
 from ..config import (
+    BACKEND_URL,
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
     GOOGLE_REDIRECT_URI,
@@ -43,13 +44,14 @@ class GmailService:
     def get_authorization_url(self, state: str) -> str:
         """Returns the Google OAuth consent URL or a simulated local auth link if credentials are unset."""
         if not self.is_configured():
-            # Return local simulated callback for sandbox testing
+            # Return local simulated callback using configured callback origin
             query = urlencode({
                 "state": state,
                 "code": "simulated_local_google_oauth_code",
                 "simulated": "true",
             })
-            return f"http://localhost:8000/api/auth/google/callback?{query}"
+            callback_url = GOOGLE_REDIRECT_URI or f"{BACKEND_URL}/api/auth/google/callback"
+            return f"{callback_url}?{query}"
 
         params = {
             "client_id": GOOGLE_CLIENT_ID,
@@ -325,7 +327,9 @@ class GmailService:
                     return {
                         "status": "success",
                         "mode": "send",
+                        "channel": "gmail_oauth",
                         "message_id": sent.get("id"),
+                        "thread_id": sent.get("threadId"),
                         "recipient": recipient_email,
                         "subject": subject,
                         "pdf_attached": bool(pdf_path),
@@ -519,13 +523,33 @@ class GmailService:
         subject: str,
         body_text: str,
         pdf_path: Optional[str] = None,
+        user: Optional[User] = None,
     ) -> Dict[str, Any]:
-        """Direct email dispatch helper for transactional or application messages."""
+        """Direct email dispatch helper: prefers the user's connected Google OAuth token, falling back to SMTP."""
+        if user and user.gmail_oauth_token and not user.gmail_oauth_token.get("simulated") and self.is_configured():
+            dispatched = self.dispatch_email(
+                user=user,
+                recipient_email=to_email,
+                subject=subject,
+                body_text=body_text,
+                pdf_path=pdf_path,
+                mode="send",
+            )
+            if dispatched.get("channel") == "gmail_oauth":
+                return {
+                    "delivered": True,
+                    "channel": "gmail_oauth",
+                    "smtp_configured": get_smtp_config()["configured"],
+                    "message_id": dispatched.get("message_id"),
+                    "thread_id": dispatched.get("thread_id"),
+                    "error": None,
+                }
+
         cfg = get_smtp_config()
         if not cfg["configured"]:
-            return {"delivered": False, "smtp_configured": False, "error": "SMTP not configured"}
+            return {"delivered": False, "smtp_configured": False, "error": "Neither Google OAuth nor SMTP is configured"}
         ok, detail = self.send_email_smtp(to_email=to_email, subject=subject, body_text=body_text, pdf_path=pdf_path)
-        return {"delivered": ok, "smtp_configured": True, "error": None if ok else detail}
+        return {"delivered": ok, "channel": "smtp", "smtp_configured": True, "error": None if ok else detail}
 
 
 gmail_service = GmailService()

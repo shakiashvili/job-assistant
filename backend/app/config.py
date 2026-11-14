@@ -79,8 +79,11 @@ _is_prod = (
 if not _raw_secret or _raw_secret == _DEV_FALLBACK_SECRET:
     if _is_prod:
         logger.critical(
-            "SECURITY WARNING: SECRET_KEY is missing or uses the insecure default in production! "
+            "FATAL SECURITY ERROR: SECRET_KEY is missing or uses the insecure default in production! "
             "Set a strong random SECRET_KEY in your environment variables / .env file."
+        )
+        raise RuntimeError(
+            "SECRET_KEY environment variable must be set to a strong secret in production."
         )
     else:
         logger.warning(
@@ -95,9 +98,10 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60")
 REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "14"))  # 14 days
 
 # Google OAuth2 Credentials & URLs
+BACKEND_URL = (os.getenv("BACKEND_URL") or os.getenv("API_BASE_URL") or "http://localhost:8000").strip().rstrip("/")
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
-GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8000/api/auth/google/callback")
+GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", f"{BACKEND_URL}/api/auth/google/callback")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
 

@@ -304,3 +304,138 @@ Tbilisi, Georgia • +995 571-15-68-07 • [giorgishakiashvili21@gmail.com](mail
         assert "1 week after offer" not in rendered.lower()
         assert "notice period" not in rendered.lower()
         assert "(None)" not in rendered
+
+
+def test_cv_filename_uniqueness_html_escape_languages_and_download_headers():
+    """Verifies role-specific CV filenames, HTML XSS escaping, dynamic Languages from skills.md, ATS header, and Content-Disposition."""
+    import uuid
+    from pathlib import Path
+    from docx import Document
+    from app.config import GENERATED_RESUMES_DIR
+    from app.services.cv_generator_service import cv_generator_service, UNICODE_FONT_NAME
+    from reportlab.pdfbase import pdfmetrics
+
+    # Bold/Italic family registered on Unicode font (if not Helvetica)
+    if UNICODE_FONT_NAME != "Helvetica":
+        assert f"{UNICODE_FONT_NAME}-Bold" in pdfmetrics.getRegisteredFontNames()
+
+    skills_custom = """# Test User (<script>alert(1)</script>)
+Headline: Backend Engineer
+Email: test.lang@example.com
+Location: Batumi, Georgia
+Languages: English (C2), German (B2), Georgian (Native)
+
+## Core Skills
+Python, FastAPI, PostgreSQL
+"""
+    pkg1 = cv_generator_service.prepare_email_application_package(
+        job_title="QA Engineer",
+        company="TBC Bank",
+        description="Python Playwright",
+        skills_md_override=skills_custom,
+        cv_language="en",
+    )
+    pkg2 = cv_generator_service.prepare_email_application_package(
+        job_title="Automation SDET",
+        company="TBC Bank",
+        description="Python Playwright",
+        skills_md_override=skills_custom,
+        cv_language="en",
+    )
+    assert pkg1["pdf_filename"] != pkg2["pdf_filename"]
+    assert pkg1["docx_filename"] != pkg2["docx_filename"]
+
+    html_raw = (GENERATED_RESUMES_DIR / pkg1["pdf_filename"]).with_suffix(".html").read_text(encoding="utf-8")
+    assert "<script>alert(1)</script>" not in html_raw
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html_raw
+    assert "German (B2)" in html_raw
+
+    docx_raw = "\n".join(p.text for p in Document(str(GENERATED_RESUMES_DIR / pkg1["docx_filename"])).paragraphs)
+    assert "German (B2)" in docx_raw
+
+    # ATS Edition must NOT say "TAILORED FOR ATS EDITION"
+    ats_pkg = cv_generator_service.prepare_email_application_package(
+        job_title="Backend Engineer",
+        company="ATS Edition",
+        description="",
+        skills_md_override=skills_custom,
+        cv_language="en",
+        cv_style="ats",
+    )
+    ats_html = (GENERATED_RESUMES_DIR / ats_pkg["pdf_filename"]).with_suffix(".html").read_text(encoding="utf-8")
+    assert "TAILORED FOR ATS EDITION" not in ats_html
+
+    # Explicit Content-Disposition: attachment header on PDF and DOCX downloads
+    client = TestClient(app)
+    for url_key in ("pdf_url", "docx_url"):
+        resp = client.get(pkg1[url_key])
+        assert resp.status_code == 200
+        cd = resp.headers.get("content-disposition", "")
+        assert "attachment" in cd.lower()
+
+
+def test_prod_secret_key_enforced_gmail_oauth_and_tracker_blank_recipient(monkeypatch):
+    """Verifies production SECRET_KEY guard, OAuth-first email dispatch, BACKEND_URL callback, and blank recipient rejection."""
+    import os
+    import subprocess
+    import sys
+    import uuid
+    from pathlib import Path
+    from app.db.models import User
+    from app.services.gmail_service import gmail_service
+
+    # 1. Production environment without custom SECRET_KEY must raise RuntimeError
+    env_copy = dict(os.environ)
+    env_copy["ENVIRONMENT"] = "production"
+    env_copy["SECRET_KEY"] = ""
+    proc = subprocess.run(
+        [sys.executable, "-c", "import app.config"],
+        cwd=str(Path(__file__).resolve().parent.parent),
+        env=env_copy,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode != 0
+    assert "RuntimeError" in proc.stderr or "SECRET_KEY" in proc.stderr
+
+    # 2. Simulated Google auth callback URL uses GOOGLE_REDIRECT_URI rather than hardcoded localhost:8000
+    monkeypatch.setattr("app.services.gmail_service.GOOGLE_CLIENT_ID", "")
+    monkeypatch.setattr("app.services.gmail_service.GOOGLE_CLIENT_SECRET", "")
+    monkeypatch.setattr("app.services.gmail_service.GOOGLE_REDIRECT_URI", "https://api.example.com/api/auth/google/callback")
+    auth_url = gmail_service.get_authorization_url("state123")
+    assert auth_url.startswith("https://api.example.com/api/auth/google/callback?")
+
+    # 3. send_application_email uses connected Google OAuth before SMTP
+    fake_user = User(
+        email="oauth@example.com",
+        hashed_password="x",
+        full_name="OAuth User",
+        gmail_oauth_token={"access_token": "tok", "refresh_token": "ref", "simulated": False},
+    )
+    monkeypatch.setattr(gmail_service, "is_configured", lambda: True)
+    called = {}
+
+    def fake_dispatch(**kwargs):
+        called.update(kwargs)
+        return {"status": "success", "mode": "send", "channel": "gmail_oauth", "message_id": "m1", "thread_id": "t1"}
+
+    monkeypatch.setattr(gmail_service, "dispatch_email", fake_dispatch)
+    res = gmail_service.send_application_email("hr@real.com", "Subj", "Body", user=fake_user)
+    assert res["delivered"] is True
+    assert res["channel"] == "gmail_oauth"
+    assert res["thread_id"] == "t1"
+    assert called["recipient_email"] == "hr@real.com"
+
+    # 4. /api/applications/{app_id}/send-email rejects blank recipient instead of guessing hr@company.com
+    client = TestClient(app)
+    u_email = f"tracker_{uuid.uuid4().hex[:8]}@example.com"
+    reg = client.post("/api/auth/register", json={"email": u_email, "password": "StrongPassword123!", "full_name": "Test User"})
+    assert reg.status_code == 201
+    hdr = {"Authorization": f"Bearer {reg.json()['access_token']}"}
+    bad_send = client.post(
+        "/api/applications/999999/send-email",
+        headers=hdr,
+        json={"recipient_email": "", "subject": "Hello", "body_text": "World", "mode": "draft"},
+    )
+    assert bad_send.status_code == 400
+

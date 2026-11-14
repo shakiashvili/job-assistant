@@ -56,12 +56,46 @@ export const CVVariantManager: React.FC = () => {
   }, []);
 
   const loadInitial = async () => {
-    const [cvs, jobsRes] = await Promise.all([
+    const [cvs, firstPage] = await Promise.all([
       fetchMyCvs().catch(() => []),
       fetchScrapedJobs({ page: 1, limit: 100, min_score: 0 }).catch(() => ({ items: [], total: 0, page: 1, limit: 100, total_pages: 1 })),
     ]);
     setMyCvs(cvs);
-    setJobsList(jobsRes.items || []);
+    let combined: DbJobPosting[] = firstPage.items || [];
+    const totalPages = Math.min(firstPage.total_pages || 1, 10);
+    if (totalPages > 1) {
+      const rest = await Promise.all(
+        Array.from({ length: totalPages - 1 }, (_, i) =>
+          fetchScrapedJobs({ page: i + 2, limit: 100, min_score: 0 }).catch(() => ({ items: [] as DbJobPosting[] }))
+        )
+      );
+      for (const pg of rest) {
+        combined = combined.concat(pg.items || []);
+      }
+    }
+    setJobsList(combined);
+  };
+
+  const triggerCrossOriginDownload = async (relativeOrFullUrl: string, filename: string) => {
+    const targetUrl = relativeOrFullUrl.startsWith('http') ? relativeOrFullUrl : `${BACKEND_ORIGIN}${relativeOrFullUrl}`;
+    try {
+      const token = localStorage.getItem('talentflow_token');
+      const res = await fetch(targetUrl, {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+    } catch {
+      window.open(targetUrl, '_blank', 'noopener,noreferrer');
+    }
   };
 
   const handleUploadFile = async (file: File) => {
@@ -126,12 +160,7 @@ export const CVVariantManager: React.FC = () => {
       });
 
       // Immediately download ready Word (.docx) file and notify user
-      const dlLink = document.createElement('a');
-      dlLink.href = `${BACKEND_ORIGIN}${res.docx_url}`;
-      dlLink.download = res.docx_filename;
-      document.body.appendChild(dlLink);
-      dlLink.click();
-      document.body.removeChild(dlLink);
+      void triggerCrossOriginDownload(res.docx_url, res.docx_filename);
 
       setDownloadBanner(`Downloaded ${res.docx_filename}! Both Word (.docx) and PDF links are ready below.`);
       setTimeout(() => {
@@ -442,23 +471,22 @@ export const CVVariantManager: React.FC = () => {
               </h3>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
-              <a
-                href={`${BACKEND_ORIGIN}${generatedOutput.docx_url}`}
-                download={generatedOutput.docx_filename}
+              <button
+                type="button"
+                onClick={() => triggerCrossOriginDownload(generatedOutput.docx_url, generatedOutput.docx_filename)}
                 className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-sm"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>Download Word (.docx)</span>
-              </a>
-              <a
-                href={`${BACKEND_ORIGIN}${generatedOutput.pdf_url}`}
-                target="_blank"
-                rel="noopener noreferrer"
+              </button>
+              <button
+                type="button"
+                onClick={() => triggerCrossOriginDownload(generatedOutput.pdf_url, generatedOutput.pdf_filename)}
                 className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>Download PDF</span>
-              </a>
+              </button>
             </div>
           </div>
 

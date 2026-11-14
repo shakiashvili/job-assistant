@@ -540,7 +540,11 @@ export async function fetchCurrentUser(): Promise<UserProfile> {
   const res = await apiFetch(`${API_BASE}/auth/me`, {
     headers: { 'Content-Type': 'application/json' },
   });
-  if (!res.ok) throw new Error('Unauthorized');
+  if (!res.ok) {
+    const err = new Error(res.status === 401 ? 'Unauthorized' : `Auth check failed (${res.status})`) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
+  }
   return res.json();
 }
 

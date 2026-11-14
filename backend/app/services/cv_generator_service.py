@@ -1,4 +1,5 @@
 import hashlib
+import html as html_lib
 import logging
 import os
 import re
@@ -179,39 +180,120 @@ STRICT CONSTRAINTS (ZERO TOLERANCE FOR FABRICATION):
 
 def _register_unicode_font() -> str:
     """
-    Registers a Unicode TrueType font in ReportLab with cross-platform support:
-    Checks repository assets/fonts, standard Linux paths, macOS paths, and Windows paths.
+    Registers a Unicode TrueType font family (Normal, Bold, Italic, BoldItalic) in ReportLab
+    with cross-platform support and verified Georgian + Latin glyph coverage so <b>/<i> tags
+    never break Georgian scripts or fall back to square boxes.
     """
-    font_candidates = []
+    family_candidates: List[tuple[str, str, Optional[str], Optional[str], Optional[str]]] = []
 
     # 1. Check project assets/fonts directory for bundled fonts (Linux/Docker/Windows)
     if FONTS_DIR.exists():
-        for f in FONTS_DIR.glob("*.ttf"):
-            font_candidates.append((f.stem, str(f)))
+        for f in sorted(FONTS_DIR.glob("*.ttf")):
+            if any(tag in f.stem.lower() for tag in ("-bold", "-italic", "-oblique", "bold", "italic")):
+                continue
+            stem_base = f.stem.replace("-Regular", "")
+            bold_c = next(
+                (p for p in [f.with_name(f"{stem_base}-Bold.ttf"), f.with_name(f"{stem_base}Bold.ttf")] if p.exists()),
+                None,
+            )
+            italic_c = next(
+                (p for p in [f.with_name(f"{stem_base}-Italic.ttf"), f.with_name(f"{stem_base}-Oblique.ttf")] if p.exists()),
+                None,
+            )
+            bi_c = next(
+                (p for p in [f.with_name(f"{stem_base}-BoldItalic.ttf"), f.with_name(f"{stem_base}-BoldOblique.ttf")] if p.exists()),
+                None,
+            )
+            family_candidates.append((f.stem, str(f), str(bold_c) if bold_c else None, str(italic_c) if italic_c else None, str(bi_c) if bi_c else None))
 
-    # 2. Cross-platform OS paths
-    font_candidates.extend([
-        # Windows
-        ("Sylfaen", "C:/Windows/Fonts/sylfaen.ttf"),
-        ("SegoeUI", "C:/Windows/Fonts/segoeui.ttf"),
-        ("ArialUnicode", "C:/Windows/Fonts/arial.ttf"),
+    # 2. Cross-platform OS font families (Segoe UI & NotoSansGeorgian prioritized first for Georgian glyphs + full bold/italic)
+    family_candidates.extend([
+        # Windows (Segoe UI supports full Georgian Unicode + native Bold/Italic/BoldItalic; Sylfaen as fallback)
+        (
+            "SegoeUI",
+            "C:/Windows/Fonts/segoeui.ttf",
+            "C:/Windows/Fonts/segoeuib.ttf",
+            "C:/Windows/Fonts/segoeuii.ttf",
+            "C:/Windows/Fonts/segoeuiz.ttf",
+        ),
+        (
+            "Sylfaen",
+            "C:/Windows/Fonts/sylfaen.ttf",
+            None,
+            None,
+            None,
+        ),
+        (
+            "ArialUnicode",
+            "C:/Windows/Fonts/arial.ttf",
+            "C:/Windows/Fonts/arialbd.ttf",
+            "C:/Windows/Fonts/ariali.ttf",
+            "C:/Windows/Fonts/arialbi.ttf",
+        ),
         # Linux / Docker
-        ("NotoSansGeorgian", "/usr/share/fonts/truetype/noto/NotoSansGeorgian-Regular.ttf"),
-        ("DejaVuSans", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-        ("LiberationSans", "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
+        (
+            "NotoSansGeorgian",
+            "/usr/share/fonts/truetype/noto/NotoSansGeorgian-Regular.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSansGeorgian-Bold.ttf",
+            None,
+            None,
+        ),
+        (
+            "DejaVuSans",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf",
+        ),
+        (
+            "LiberationSans",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-BoldItalic.ttf",
+        ),
         # macOS
-        ("ArialUnicodeMac", "/Library/Fonts/Arial Unicode.ttf"),
-        ("ArialMac", "/System/Library/Fonts/Supplemental/Arial.ttf"),
+        (
+            "ArialUnicodeMac",
+            "/Library/Fonts/Arial Unicode.ttf",
+            None,
+            None,
+            None,
+        ),
+        (
+            "ArialMac",
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+            "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+            "/System/Library/Fonts/Supplemental/Arial Italic.ttf",
+            "/System/Library/Fonts/Supplemental/Arial Bold Italic.ttf",
+        ),
     ])
 
-    for font_name, font_path in font_candidates:
-        if Path(font_path).exists():
-            try:
-                if font_name not in pdfmetrics.getRegisteredFontNames():
-                    pdfmetrics.registerFont(TTFont(font_name, font_path))
-                return font_name
-            except Exception as e:
-                logger.debug(f"Could not register TTF {font_path}: {e}")
+    for font_name, normal_path, bold_path, italic_path, bi_path in family_candidates:
+        if not Path(normal_path).exists():
+            continue
+        try:
+            if font_name not in pdfmetrics.getRegisteredFontNames():
+                pdfmetrics.registerFont(TTFont(font_name, normal_path))
+            bold_name = f"{font_name}-Bold"
+            italic_name = f"{font_name}-Italic"
+            bi_name = f"{font_name}-BoldItalic"
+            b_file = bold_path if (bold_path and Path(bold_path).exists()) else normal_path
+            i_file = italic_path if (italic_path and Path(italic_path).exists()) else normal_path
+            bi_file = bi_path if (bi_path and Path(bi_path).exists()) else b_file
+            for sub_name, sub_path in [(bold_name, b_file), (italic_name, i_file), (bi_name, bi_file)]:
+                if sub_name not in pdfmetrics.getRegisteredFontNames():
+                    pdfmetrics.registerFont(TTFont(sub_name, sub_path))
+            pdfmetrics.registerFontFamily(
+                font_name,
+                normal=font_name,
+                bold=bold_name,
+                italic=italic_name,
+                boldItalic=bi_name,
+            )
+            return font_name
+        except Exception as e:
+            logger.debug(f"Could not register TTF family {font_name} ({normal_path}): {e}")
     return "Helvetica"
 
 
@@ -239,6 +321,55 @@ def _format_candidate_location(loc_val: Any) -> str:
         country = str(loc_val.get("country") or "").strip()
         return ", ".join(p for p in (city, country) if p)
     return str(loc_val or "").strip()
+
+
+def _format_candidate_languages(candidate: Dict[str, Any], skills_md: str, is_ka: bool) -> str:
+    """Extracts spoken languages from live skills.md first, then CandidateProfile, instead of hardcoding values."""
+    lang_text = ""
+
+    if skills_md:
+        # Check inline `Languages: ...` / `**Languages:** ...` or markdown section `## Languages`
+        inline_m = re.search(
+            r"(?im)^\s*(?:[-*]\s*)?(?:\*\*)?(?:languages|spoken languages|ენები)(?:\*\*)?\s*:\s*\**\s*(.+)$",
+            skills_md,
+        )
+        if inline_m:
+            lang_text = inline_m.group(1).strip().strip("*")
+        else:
+            sec_m = re.search(
+                r"(?ims)^#{1,4}\s*(?:languages|spoken languages|ენები)[^\n]*\n(.*?)(?=^#{1,4}\s|\Z)",
+                skills_md,
+            )
+            if sec_m:
+                lines = [
+                    re.sub(r"^[-*•]\s*", "", ln).strip()
+                    for ln in sec_m.group(1).splitlines()
+                    if ln.strip()
+                ]
+                lang_text = ", ".join(lines[:5])
+
+    if not lang_text:
+        raw_langs = candidate.get("languages")
+        if isinstance(raw_langs, dict):
+            parts = [f"{k} ({v})" if v else str(k) for k, v in raw_langs.items() if k]
+            lang_text = ", ".join(parts)
+        elif isinstance(raw_langs, list):
+            parts = []
+            for item in raw_langs:
+                if isinstance(item, dict):
+                    name = str(item.get("name") or item.get("language") or "").strip()
+                    lvl = str(item.get("level") or item.get("proficiency") or "").strip()
+                    if name:
+                        parts.append(f"{name} ({lvl})" if lvl else name)
+                elif str(item or "").strip():
+                    parts.append(str(item).strip())
+            lang_text = ", ".join(parts)
+        elif isinstance(raw_langs, str) and raw_langs.strip():
+            lang_text = raw_langs.strip()
+
+    if lang_text:
+        return f"ენები: {lang_text}" if is_ka else f"Languages: {lang_text}"
+    return "ენები: ქართული (მშობლიური), ინგლისური (თავისუფლად)" if is_ka else "Languages: English, Georgian"
 
 
 def _prioritize_job_highlights(
@@ -363,14 +494,19 @@ class CVGeneratorService:
 
         lang_suffix = "_KA" if cv_language == "ka" else ""
         role_tag = "QA_Engineer" if (ps.get("target_industry", "qa_tech") == "qa_tech") else ascii_filename_slug(candidate_headline.split("|")[0], default="Specialist", max_len=18)
+        job_role_slug = ascii_filename_slug(job_title, default="Role", max_len=20)
+        languages_line = _format_candidate_languages(candidate, skills_md, cv_language == "ka")
 
         if cv_style in ("ats", "recruiter"):
             base_name = f"{cand_slug}_{role_tag}_{cv_style.upper()}{lang_suffix}"
         elif safe_company and safe_company.lower() not in ("ats edition", "recruiter edition", "target company", "hiring company"):
             comp_slug = ascii_filename_slug(safe_company, default="Role", max_len=20)
-            base_name = f"{cand_slug}_{comp_slug}_CV{lang_suffix}"
+            if job_role_slug and job_role_slug.lower() != comp_slug.lower():
+                base_name = f"{cand_slug}_{comp_slug}_{job_role_slug}_CV{lang_suffix}"
+            else:
+                base_name = f"{cand_slug}_{comp_slug}_CV{lang_suffix}"
         else:
-            base_name = f"{cand_slug}_{role_tag}_CV{lang_suffix}"
+            base_name = f"{cand_slug}_{job_role_slug or role_tag}_CV{lang_suffix}"
 
         pdf_filename = f"{base_name}.pdf"
         docx_filename = f"{base_name}.docx"
@@ -395,6 +531,8 @@ class CVGeneratorService:
             work_history=work_history,
             education=education,
             cv_language=cv_language,
+            cv_style=cv_style,
+            languages_line=languages_line,
         )
         html_path.write_text(html_content, encoding="utf-8")
 
@@ -410,6 +548,8 @@ class CVGeneratorService:
             work_history=work_history,
             education=education,
             cv_language=cv_language,
+            cv_style=cv_style,
+            languages_line=languages_line,
         )
 
         # 3. Build Ready Microsoft Word (.docx) CV via python-docx
@@ -425,6 +565,7 @@ class CVGeneratorService:
             education=education,
             cv_language=cv_language,
             cv_style=cv_style,
+            languages_line=languages_line,
         )
 
         start_date_str = "1 კვირა შეთავაზებიდან (1 week after offer)" if cv_language == "ka" else "1 week after offer"
@@ -463,6 +604,7 @@ class CVGeneratorService:
         cv_language: str = "en",
         cv_style: str = "tailored",
         candidate_headline: Optional[str] = None,
+        languages_line: Optional[str] = None,
     ) -> None:
         """Builds a clean, editable Microsoft Word (.docx) CV in ATS, Recruiter, or Job-Tailored edition."""
         from docx import Document
@@ -604,11 +746,7 @@ class CVGeneratorService:
                 p_e.paragraph_format.space_after = Pt(2)
                 for r in p_e.runs:
                     r.font.size = Pt(9.5)
-        langs_line = (
-            "ენები: ქართული (მშობლიური), ინგლისური (თავისუფლად)"
-            if is_ka
-            else "Languages: English (Fluent), Georgian (Native)"
-        )
+        langs_line = languages_line or _format_candidate_languages(candidate, "", is_ka)
         p_lang = doc.add_paragraph(langs_line)
         for r in p_lang.runs:
             r.font.size = Pt(9.5)
@@ -627,6 +765,8 @@ class CVGeneratorService:
         education: List[Dict[str, Any]],
         cv_language: str = "en",
         candidate_headline: Optional[str] = None,
+        cv_style: str = "tailored",
+        languages_line: Optional[str] = None,
     ) -> None:
         """
         Generates a clean, ATS-compliant single-column PDF resume using ReportLab:
@@ -732,11 +872,18 @@ class CVGeneratorService:
                 f'<link href="{escape(normalize_contact_href(raw_portfolio))}" color="#0369a1"><u>{escape(raw_portfolio)}</u></link>'
             )
 
-        lbl_summary = (
-            f"პროფესიული მიმოხილვა ({escape(target_company)})"
-            if is_ka
-            else f"PROFESSIONAL SUMMARY — TAILORED FOR {escape(target_company.upper())}"
-        )
+        if cv_style in ("ats", "recruiter"):
+            lbl_summary = (
+                "პროფესიული მიმოხილვა"
+                if is_ka
+                else ("EXECUTIVE PROFILE" if cv_style == "recruiter" else "PROFESSIONAL SUMMARY")
+            )
+        else:
+            lbl_summary = (
+                f"პროფესიული მიმოხილვა ({escape(target_company)})"
+                if is_ka
+                else f"PROFESSIONAL SUMMARY — TAILORED FOR {escape(target_company.upper())}"
+            )
         lbl_skills = "ტექნიკური კომპეტენციების მატრიცა" if is_ka else "TECHNICAL SKILLS MATRIX"
         lbl_exp = "სამუშაო გამოცდილება" if is_ka else "WORK EXPERIENCE"
         lbl_edu = "განათლება და სერტიფიკატები" if is_ka else "EDUCATION & CERTIFICATIONS"
@@ -745,6 +892,8 @@ class CVGeneratorService:
 
         # 1. Header (ALWAYS showcase true candidate persona headline, never degrade to intern title)
         role_display = candidate_headline or str(candidate.get("headline") or "QA Automation Engineer & SDET | Playwright • Python • API • CI/CD")
+        if cv_style == "ats":
+            role_display = f"{role_display} (ATS Edition)"
         story.append(Paragraph(f"<b>{full_name}</b>", header_style))
         story.append(Paragraph(escape(role_display), role_style))
         if pdf_links:
@@ -789,12 +938,8 @@ class CVGeneratorService:
             yr_suffix = f" ({escape(str(raw_yr))})" if raw_yr else ""
             story.append(Paragraph(f"<b>{deg}</b> — {inst}{yr_suffix}", body_style))
 
-        lang_line = (
-            "ენები: ქართული (მშობლიური), ინგლისური (თავისუფლად C1/C2)"
-            if is_ka
-            else "Languages: English (Fluent C1/C2), Georgian (Native)"
-        )
-        story.append(Paragraph(lang_line, body_style))
+        lang_line = languages_line or _format_candidate_languages(candidate, "", is_ka)
+        story.append(Paragraph(escape(lang_line), body_style))
 
         doc.build(story)
 
@@ -809,9 +954,12 @@ class CVGeneratorService:
         education: List[Dict[str, Any]],
         cv_language: str = "en",
         candidate_headline: Optional[str] = None,
+        cv_style: str = "tailored",
+        languages_line: Optional[str] = None,
     ) -> str:
         is_ka = cv_language == "ka"
-        full_name = candidate.get("full_name", "Candidate")
+        esc = lambda v: html_lib.escape(str(v or ""), quote=True)
+        full_name = str(candidate.get("full_name", "Candidate"))
         raw_email = str(candidate.get("email") or "").strip()
         email = "" if raw_email == "candidate@example.com" else raw_email
         raw_phone = str(candidate.get("phone") or "").strip()
@@ -825,27 +973,38 @@ class CVGeneratorService:
         html_contact_parts = []
         if email:
             html_contact_parts.append(
-                f'<a href="{escape(normalize_contact_href(email, is_email=True))}" style="color:#0369a1;">{escape(email)}</a>'
+                f'<a href="{esc(normalize_contact_href(email, is_email=True))}" style="color:#0369a1;">{esc(email)}</a>'
             )
         if phone:
-            html_contact_parts.append(escape(phone))
+            html_contact_parts.append(esc(phone))
         if loc:
-            html_contact_parts.append(escape(loc))
+            html_contact_parts.append(esc(loc))
         if linkedin:
             html_contact_parts.append(
-                f'<a href="{escape(normalize_contact_href(linkedin))}" target="_blank" style="color:#0369a1;">{escape(linkedin)}</a>'
+                f'<a href="{esc(normalize_contact_href(linkedin))}" target="_blank" style="color:#0369a1;">{esc(linkedin)}</a>'
             )
         if github:
             html_contact_parts.append(
-                f'<a href="{escape(normalize_contact_href(github))}" target="_blank" style="color:#0369a1;">{escape(github)}</a>'
+                f'<a href="{esc(normalize_contact_href(github))}" target="_blank" style="color:#0369a1;">{esc(github)}</a>'
             )
         if portfolio:
             html_contact_parts.append(
-                f'<a href="{escape(normalize_contact_href(portfolio))}" target="_blank" style="color:#0369a1;">{escape(portfolio)}</a>'
+                f'<a href="{esc(normalize_contact_href(portfolio))}" target="_blank" style="color:#0369a1;">{esc(portfolio)}</a>'
             )
         html_contact_line = " &nbsp;•&nbsp; ".join(x for x in html_contact_parts if x)
 
-        lbl_summary = f"პროფესიული მიმოხილვა ({target_company})" if is_ka else f"PROFESSIONAL SUMMARY (TAILORED FOR {target_company.upper()})"
+        if cv_style in ("ats", "recruiter"):
+            lbl_summary = (
+                "პროფესიული მიმოხილვა"
+                if is_ka
+                else ("EXECUTIVE PROFILE" if cv_style == "recruiter" else "PROFESSIONAL SUMMARY")
+            )
+        else:
+            lbl_summary = (
+                f"პროფესიული მიმოხილვა ({esc(target_company)})"
+                if is_ka
+                else f"PROFESSIONAL SUMMARY (TAILORED FOR {esc(target_company.upper())})"
+            )
         lbl_skills = "ტექნიკური კომპეტენციების მატრიცა" if is_ka else "TECHNICAL SKILLS MATRIX"
         lbl_exp = "სამუშაო გამოცდილება" if is_ka else "WORK EXPERIENCE"
         lbl_edu = "განათლება და სერტიფიკატები" if is_ka else "EDUCATION & CERTIFICATIONS"
@@ -853,26 +1012,26 @@ class CVGeneratorService:
         grouped_html = group_skills_into_ats_buckets(display_skills[:30], cv_language=cv_language)
         if grouped_html:
             skills_badges = "".join(
-                f'<div style="font-size:11.5px; margin-bottom:4px;"><strong>{escape(b_t)}:</strong> '
-                + ", ".join(escape(s) for s in b_vals)
+                f'<div style="font-size:11.5px; margin-bottom:4px;"><strong>{esc(b_t)}:</strong> '
+                + ", ".join(esc(s) for s in b_vals)
                 + "</div>"
                 for b_t, b_vals in grouped_html
             )
         else:
             skills_badges = "".join(
-                f'<span style="display:inline-block; background:#f1f5f9; color:#0f172a; border:1px solid #cbd5e1; padding:4px 10px; border-radius:6px; font-size:11px; font-weight:600; margin:0 6px 6px 0;">{s}</span>'
+                f'<span style="display:inline-block; background:#f1f5f9; color:#0f172a; border:1px solid #cbd5e1; padding:4px 10px; border-radius:6px; font-size:11px; font-weight:600; margin:0 6px 6px 0;">{esc(s)}</span>'
                 for s in display_skills[:20]
             )
 
         exp_blocks = ""
         for job in work_history[:4]:
-            bullets = "".join(f"<li style='margin-bottom:4px;'>{escape(str(b))}</li>" for b in clean_bullets(job.get("highlights"))[:4])
+            bullets = "".join(f"<li style='margin-bottom:4px;'>{esc(b)}</li>" for b in clean_bullets(job.get("highlights"))[:4])
             dates = f"{job.get('start_date', '')} – {job.get('end_date', '')}".strip(" –")
             exp_blocks += f"""
             <div style="margin-bottom:14px;">
               <div style="display:flex; justify-content:space-between; align-items:baseline;">
-                <strong style="font-size:13px; color:#0f172a;">{job.get('role', '')} — <span style="color:#0284c7;">{job.get('company', '')}</span></strong>
-                <span style="font-size:11px; color:#64748b;">{dates}</span>
+                <strong style="font-size:13px; color:#0f172a;">{esc(job.get('role', ''))} — <span style="color:#0284c7;">{esc(job.get('company', ''))}</span></strong>
+                <span style="font-size:11px; color:#64748b;">{esc(dates)}</span>
               </div>
               <ul style="margin:6px 0 0 18px; padding:0; font-size:12px; color:#334155; line-height:1.5;">
                 {bullets}
@@ -883,14 +1042,19 @@ class CVGeneratorService:
         edu_blocks = ""
         for edu in education:
             yr_val = edu.get("graduation_year")
-            yr_suffix = f" ({escape(str(yr_val))})" if yr_val else ""
-            edu_blocks += f"<div style='font-size:12px; color:#334155;'><strong>{escape(str(edu.get('degree', '')))}</strong> — {escape(str(edu.get('institution', '')))}{yr_suffix}</div>"
+            yr_suffix = f" ({esc(yr_val)})" if yr_val else ""
+            edu_blocks += f"<div style='font-size:12px; color:#334155;'><strong>{esc(edu.get('degree', ''))}</strong> — {esc(edu.get('institution', ''))}{yr_suffix}</div>"
+
+        role_display_html = candidate_headline or str(candidate.get('headline') or 'QA Automation Engineer & SDET | Playwright • Python • API • CI/CD')
+        if cv_style == "ats":
+            role_display_html = f"{role_display_html} (ATS Edition)"
+        lang_line_html = languages_line or _format_candidate_languages(candidate, "", is_ka)
 
         return f"""<!DOCTYPE html>
-<html lang="{cv_language}">
+<html lang="{esc(cv_language)}">
 <head>
   <meta charset="UTF-8" />
-  <title>{full_name} — {target_role} CV</title>
+  <title>{esc(full_name)} — {esc(target_role)} CV</title>
   <style>
     body {{
       font-family: 'Sylfaen', 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
@@ -921,15 +1085,15 @@ class CVGeneratorService:
 <body>
   <div class="cv-container">
     <div class="header">
-      <h1 class="name">{full_name}</h1>
-      <div class="role">{escape(candidate_headline or str(candidate.get('headline') or 'QA Automation Engineer & SDET | Playwright • Python • API • CI/CD'))}</div>
+      <h1 class="name">{esc(full_name)}</h1>
+      <div class="role">{esc(role_display_html)}</div>
       <div class="contact">
         {html_contact_line}
       </div>
     </div>
 
     <div class="section-title">{lbl_summary}</div>
-    <p class="summary">{human_summary}</p>
+    <p class="summary">{esc(human_summary)}</p>
 
     <div class="section-title">{lbl_skills}</div>
     <div>{skills_badges}</div>
@@ -940,7 +1104,7 @@ class CVGeneratorService:
     <div class="section-title">{lbl_edu}</div>
     {edu_blocks}
     <div style="font-size:12px; color:#475569; margin-top:6px;">
-      {"ენები: ქართული (მშობლიური), ინგლისური (თავისუფლად C1/C2)" if is_ka else "Languages: English (Fluent), Georgian (Native)"}
+      {esc(lang_line_html)}
     </div>
   </div>
 </body>

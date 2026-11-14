@@ -32,9 +32,7 @@ export const EmailDispatchModal: React.FC<EmailDispatchModalProps> = ({
   cvPdfPath,
   onEmailSent,
 }) => {
-  const [recipient, setRecipient] = useState(
-    defaultEmail || `hr@${companyName.toLowerCase().replace(/[^a-z0-9]/g, '')}.com`
-  );
+  const [recipient, setRecipient] = useState(defaultEmail || '');
   const [subject, setSubject] = useState(`Application: ${jobTitle}`);
   const [body, setBody] = useState(
     `Dear ${companyName} Hiring Team,\n\n` +
@@ -200,7 +198,7 @@ export const EmailDispatchModal: React.FC<EmailDispatchModalProps> = ({
               <FileText className="w-4 h-4 text-rose-400" />
               <span>Tailored Resume Attached:</span>
               <span className="font-mono text-emerald-400 text-[11px]">
-                {cvPdfPath ? cvPdfPath.split('/').pop() : 'resume_qa_automation.pdf'}
+                {cvPdfPath ? cvPdfPath.split('/').pop() : 'No CV attached yet — generate one in CV Studio'}
               </span>
             </div>
             <span className="text-[10px] text-slate-500 font-medium">application/pdf</span>

@@ -113,7 +113,12 @@ def send_or_draft_application_email(
     """
     app_tracker = get_or_create_app_tracker(app_id, session)
 
-    recipient = req.recipient_email or f"hr@{app_tracker.company_name.lower().replace(' ', '')}.com"
+    recipient = (req.recipient_email or "").strip()
+    if not recipient or "@" not in recipient:
+        raise HTTPException(
+            status_code=400,
+            detail="A valid recipient HR email address is required.",
+        )
     subject = req.subject or f"Application: {app_tracker.job_title} - {current_user.full_name}"
     body = req.body_text or (
         f"Dear {app_tracker.company_name} Hiring Team,\n\n"

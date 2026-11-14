@@ -600,7 +600,28 @@
     __domObserver.observe(document.body, { childList: true, subtree: true });
   }
 
+  function initWebAuthBridge() {
+    window.addEventListener("message", (event) => {
+      if (event.source !== window || event.origin !== window.location.origin) return;
+      const data = event.data;
+      if (!data || typeof data !== "object") return;
+      if (data.type === "TALENTFLOW_AUTH_SYNC") {
+        chrome.runtime.sendMessage({
+          type: "SYNC_WEB_AUTH",
+          token: data.token || "",
+          refreshToken: data.refreshToken || "",
+          apiBaseUrl: data.apiBaseUrl || "",
+          userEmail: data.userEmail || "",
+          userName: data.userName || "",
+        });
+      } else if (data.type === "TALENTFLOW_AUTH_LOGOUT") {
+        chrome.runtime.sendMessage({ type: "SYNC_WEB_LOGOUT" });
+      }
+    });
+  }
+
   function bootstrapContentScript() {
+    initWebAuthBridge();
     injectFloatingHud();
     initDebouncedDomObserver();
   }

@@ -2,7 +2,7 @@ import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { Bot } from 'lucide-react';
 import { Navbar, NavTab } from './components/Navbar';
 import { AuthModal } from './components/AuthModal';
-import { fetchHealth, fetchCurrentUser, logoutUser } from './services/api';
+import { BACKEND_ORIGIN, fetchHealth, fetchCurrentUser, logoutUser } from './services/api';
 import { UserProfile } from './types';
 
 const AuditPanel = lazy(() => import('./components/AuditPanel').then((m) => ({ default: m.AuditPanel })));
@@ -111,6 +111,7 @@ export const App: React.FC = () => {
     };
 
     const handleAuthExpired = () => {
+      syncAuthToExtension(null);
       setCurrentUser(null);
       setIsAuthChecking(false);
     };
@@ -139,6 +140,31 @@ export const App: React.FC = () => {
     }
   };
 
+  const syncAuthToExtension = (user: UserProfile | null) => {
+    try {
+      if (user) {
+        const token = localStorage.getItem('talentflow_token') || '';
+        const refreshToken = localStorage.getItem('talentflow_refresh_token') || '';
+        if (!token && !refreshToken) return;
+        window.postMessage(
+          {
+            type: 'TALENTFLOW_AUTH_SYNC',
+            token,
+            refreshToken,
+            apiBaseUrl: BACKEND_ORIGIN || window.location.origin,
+            userEmail: user.email,
+            userName: user.full_name,
+          },
+          window.location.origin
+        );
+      } else {
+        window.postMessage({ type: 'TALENTFLOW_AUTH_LOGOUT' }, window.location.origin);
+      }
+    } catch {
+      // Non-fatal if messaging unavailable
+    }
+  };
+
   const checkCurrentUser = async () => {
     const token = localStorage.getItem('talentflow_token');
     const refreshToken = localStorage.getItem('talentflow_refresh_token');
@@ -150,8 +176,14 @@ export const App: React.FC = () => {
     try {
       const user = await fetchCurrentUser();
       setCurrentUser(user);
-    } catch {
-      logoutUser();
+      syncAuthToExtension(user);
+    } catch (err: any) {
+      const status = err?.status;
+      // Preserve tokens on transient 5xx / cold-start network errors; only clear on confirmed 401/403
+      if (status === 401 || status === 403) {
+        logoutUser();
+        syncAuthToExtension(null);
+      }
       setCurrentUser(null);
     } finally {
       setIsAuthChecking(false);
@@ -160,6 +192,7 @@ export const App: React.FC = () => {
 
   const handleLogout = () => {
     logoutUser();
+    syncAuthToExtension(null);
     setCurrentUser(null);
     if (activeTab === 'admin') {
       setActiveTab('tracker');
@@ -202,6 +235,7 @@ export const App: React.FC = () => {
           isGate={true}
           onAuthSuccess={(user) => {
             setCurrentUser(user);
+            syncAuthToExtension(user);
             if (user.is_admin) {
               setActiveTab('admin');
             }
@@ -253,6 +287,7 @@ export const App: React.FC = () => {
         onClose={() => setIsAuthModalOpen(false)}
         onAuthSuccess={(user) => {
           setCurrentUser(user);
+          syncAuthToExtension(user);
           if (user.is_admin) {
             setActiveTab('admin');
           }

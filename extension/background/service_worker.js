@@ -78,7 +78,11 @@ async function tryRefreshSession(cfg) {
 
 async function apiRequest(path, { method = "GET", body = null, requiresAuth = true } = {}) {
   const cfg = await getConfig();
-  if (requiresAuth && !cfg.jwtToken) {
+  let activeToken = cfg.jwtToken;
+  if (requiresAuth && !activeToken && cfg.refreshToken) {
+    activeToken = await tryRefreshSession(cfg);
+  }
+  if (requiresAuth && !activeToken) {
     return {
       ok: false,
       status: 401,
@@ -99,7 +103,7 @@ async function apiRequest(path, { method = "GET", body = null, requiresAuth = tr
   };
 
   try {
-    let resp = await execute(cfg.jwtToken);
+    let resp = await execute(activeToken);
 
     if (resp.status === 401 && requiresAuth && path !== "/api/auth/refresh") {
       const nextToken = await tryRefreshSession(cfg);
@@ -280,7 +284,31 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
-  if (type === "LOGOUT") {
+  if (type === "SYNC_WEB_AUTH") {
+    (async () => {
+      const token = (message.token || "").trim();
+      const refreshToken = (message.refreshToken || "").trim();
+      if (!token && !refreshToken) {
+        sendResponse({ ok: false });
+        return;
+      }
+      const updates = {
+        jwtToken: token,
+        refreshToken: refreshToken,
+        userEmail: message.userEmail || "",
+        userName: message.userName || "Candidate",
+      };
+      await chrome.storage.local.set(updates);
+      const rawBase = (message.apiBaseUrl || "").trim().replace(/\/+$/, "");
+      if (rawBase && /^https?:\/\//i.test(rawBase)) {
+        await chrome.storage.sync.set({ apiBaseUrl: rawBase });
+      }
+      sendResponse({ ok: true, synced: true });
+    })();
+    return true;
+  }
+
+  if (type === "LOGOUT" || type === "SYNC_WEB_LOGOUT") {
     chrome.storage.local.remove(["jwtToken", "refreshToken", "userEmail", "userName", "lastPreparedApp"], () => {
       sendResponse({ ok: true, authenticated: false });
     });
