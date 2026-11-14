@@ -1,9 +1,32 @@
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel
 from sqlmodel import SQLModel, Field, Column, Relationship
 from sqlalchemy import JSON, Text, UniqueConstraint, Index, event
 from ..services.crypto_service import EncryptedString, EncryptedText, EncryptedJSON, blind_index
+from ..schemas.api_schemas import (  # noqa: F401
+    JobDetails,
+    GapItem,
+    CompanyValidation,
+    TailoredCVResult,
+    Blocker,
+    JobAuditRequest,
+    ScoreBreakdown,
+    JobAuditResponse,
+    ScreeningQuestion,
+    GenerateAnswersRequest,
+    ScreeningAnswer,
+    GenerateAnswersResponse,
+    StageApplicationRequest,
+    StageApplicationResponse,
+    PortalVacancyItem,
+    ApplicationItem,
+    ApplicationCreate,
+    ApplicationUpdate,
+    TrackerAnalyticsResponse,
+    SavedSearchCreate,
+    SavedSearchOut,
+    NotificationOut,
+)
 
 
 def utc_now() -> datetime:
@@ -40,61 +63,11 @@ class UserOTP(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
 
-class ApplicationTracker(SQLModel, table=True):
-    __tablename__ = "application_tracker"
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    user_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
-    company_name: str = Field(index=True)
-    job_title: str
-    job_url: Optional[str] = None
-    portal: str = Field(default="custom")
-    status: str = Field(default="STAGED", index=True)  # STAGED, APPLIED, HR_SCREEN, TECH_INTERVIEW, FINAL_ROUND, OFFER, REJECTED
-    salary_offered: Optional[str] = None
-    cv_pdf_path: Optional[str] = None
-    cover_letter_text: Optional[str] = None
-    applied_at: datetime = Field(default_factory=utc_now)
-    updated_at: datetime = Field(default_factory=utc_now)
-    is_deleted: bool = Field(default=False, index=True)
-
-    user: Optional[User] = Relationship(back_populates="applications")
-    interviews: List["InterviewRound"] = Relationship(back_populates="application")
-
-
-class InterviewRound(SQLModel, table=True):
-    __tablename__ = "interview_rounds"
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    application_id: int = Field(foreign_key="application_tracker.id", index=True)
-    round_type: str = Field(default="HR_SCREEN")  # HR_SCREEN, TECH_INTERVIEW, FINAL_ROUND, SYSTEM_DESIGN
-    scheduled_at: Optional[datetime] = None
-    company_intel_summary: Optional[str] = None
-    predicted_questions: Optional[List[Dict[str, Any]]] = Field(default=[], sa_column=Column(JSON))
-    candidate_notes: Optional[str] = None
-    status: str = Field(default="SCHEDULED")  # SCHEDULED, COMPLETED, CANCELLED
-
-    application: Optional[ApplicationTracker] = Relationship(back_populates="interviews")
-
-
-class SkillActionPlan(SQLModel, table=True):
-    __tablename__ = "skill_action_plans"
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    user_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
-    skill_name: str = Field(index=True)  # e.g. "Docker", "k6 Performance Testing"
-    category: str = Field(default="AUTOMATION")  # AUTOMATION, API, DEVOPS, CODING
-    days_to_learn: int = Field(default=7)
-    milestones: List[Dict[str, Any]] = Field(default=[], sa_column=Column(JSON))
-    is_completed: bool = Field(default=False)
-    created_at: datetime = Field(default_factory=utc_now)
-
-    user: Optional[User] = Relationship(back_populates="action_plans")
-
-
 class CandidateProfile(SQLModel, table=True):
     __tablename__ = "candidate_profiles"
 
     id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
     raw_markdown: str = Field(default="", sa_column=Column(EncryptedText, nullable=False))
     full_name: str = Field(default="Candidate", sa_column=Column(EncryptedString, nullable=False))
     email: str = Field(default="candidate@example.com", sa_column=Column(EncryptedString, nullable=False))
@@ -107,23 +80,98 @@ class CandidateProfile(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utc_now, index=True)
 
 
+class CandidateSkill(SQLModel, table=True):
+    __tablename__ = "candidate_skills"
+    __table_args__ = (
+        Index("ix_candidate_skills_user_cat", "user_id", "category"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
+    profile_id: Optional[int] = Field(default=None, foreign_key="candidate_profiles.id", index=True)
+    skill_name: str = Field(index=True)
+    category: str = Field(default="core")  # core, secondary, language, tool
+    proficiency: Optional[str] = Field(default=None)
+    years_used: Optional[float] = Field(default=None)
+    is_verified: bool = Field(default=True)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class CandidateExperience(SQLModel, table=True):
+    __tablename__ = "candidate_experiences"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
+    profile_id: Optional[int] = Field(default=None, foreign_key="candidate_profiles.id", index=True)
+    company: str = Field(default="")
+    role_title: str = Field(default="")
+    location: Optional[str] = Field(default=None)
+    start_date: Optional[str] = Field(default=None)
+    end_date: Optional[str] = Field(default=None)
+    is_current: bool = Field(default=False)
+    highlights: List[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class CandidateEducation(SQLModel, table=True):
+    __tablename__ = "candidate_educations"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
+    profile_id: Optional[int] = Field(default=None, foreign_key="candidate_profiles.id", index=True)
+    institution: str = Field(default="")
+    degree: str = Field(default="")
+    field_of_study: Optional[str] = Field(default=None)
+    graduation_year: Optional[str] = Field(default=None)
+    coursework: List[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class CandidateDocument(SQLModel, table=True):
+    __tablename__ = "candidate_documents"
+    __table_args__ = (
+        Index("ix_candidate_documents_user_type", "user_id", "doc_type"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
+    job_posting_id: Optional[int] = Field(default=None, foreign_key="job_postings.id", index=True)
+    filename: str = Field(index=True)
+    original_filename: str = Field(default="")
+    storage_path: str = Field(default="")
+    doc_type: str = Field(default="generated_pdf", index=True)  # uploaded_cv, generated_pdf, generated_docx, generated_html
+    cv_style: str = Field(default="tailored")  # ats, recruiter, tailored, base
+    cv_language: str = Field(default="en")
+    version_number: int = Field(default=1)
+    size_bytes: int = Field(default=0)
+    sha256_hash: Optional[str] = Field(default=None)
+    created_at: datetime = Field(default_factory=utc_now, index=True)
+
+
 class JobPosting(SQLModel, table=True):
     __tablename__ = "job_postings"
     __table_args__ = (
         UniqueConstraint("portal", "external_id", name="uq_portal_external_id"),
         Index("ix_job_postings_user_status_score", "user_id", "status", "suitability_score"),
+        Index("ix_job_postings_portal_status_score", "portal", "status", "suitability_score"),
     )
 
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
     portal: str = Field(index=True)  # "jobs.ge", "hr.ge", "dou.ua", "djinni.co", "lever", "greenhouse", "linkedin.com", "custom"
-    external_id: str = Field(index=True)  # unique index per portal
+    external_id: str = Field(index=True)
     title: str = Field(index=True)
     company: str = Field(index=True)
     url: str = Field(unique=True, index=True)
-    market: str = Field(default="GLOBAL_REMOTE", index=True)  # "GE_DOMESTIC", "UA_REMOTE", "GLOBAL_REMOTE"
+    market: str = Field(default="GLOBAL_REMOTE", index=True)
     is_remote: bool = Field(default=True)
-    channel: str = Field(default="WEB_FORM")  # "WEB_FORM", "EMAIL", "EXTERNAL_LINK"
+    remote_type: str = Field(default="REMOTE")  # REMOTE, HYBRID, ONSITE
+    employment_type: str = Field(default="FULL_TIME")  # FULL_TIME, CONTRACT_B2B, INTERNSHIP, PART_TIME
+    experience_min_years: Optional[float] = Field(default=None)
+    seniority_level: Optional[str] = Field(default=None)
+    country: Optional[str] = Field(default=None)
+    city: Optional[str] = Field(default=None)
+    channel: str = Field(default="WEB_FORM")
     delivery_channel: str = Field(default="WEB_FORM")
     target_email: Optional[str] = Field(default=None)
     email_subject: Optional[str] = Field(default=None)
@@ -133,7 +181,7 @@ class JobPosting(SQLModel, table=True):
     language_requirements: List[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
     salary_min: Optional[float] = Field(default=None)
     salary_max: Optional[float] = Field(default=None)
-    salary_currency: Optional[str] = Field(default=None)  # "GEL", "USD", "EUR"
+    salary_currency: Optional[str] = Field(default=None)
     salary_is_estimated: bool = Field(default=False)
     salary_estimated_by_ai: bool = Field(default=False)
     suitability_score: float = Field(default=0.0, index=True)
@@ -142,35 +190,222 @@ class JobPosting(SQLModel, table=True):
     adjacent_role_tag: Optional[str] = Field(default=None)
     skill_overlap_pct: Optional[int] = Field(default=None)
     match_breakdown: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
-    status: str = Field(default="DISCOVERED", index=True)  # "DISCOVERED", "FILTERED_OUT", "READY", "AUDITED", "STAGED", "APPLIED", "REJECTED"
+    status: str = Field(default="DISCOVERED", index=True)
     filter_out_reason: Optional[str] = Field(default=None)
     match_rationale: str = Field(default="", sa_column=Column(Text, nullable=False))
+    posting_date: Optional[str] = Field(default=None)
     deadline_text: Optional[str] = Field(default=None)
+    is_expired: bool = Field(default=False)
     is_link_live: bool = Field(default=True)
     scraped_at: datetime = Field(default_factory=utc_now, index=True)
 
 
-class ApplicationRecord(SQLModel, table=True):
-    __tablename__ = "application_records"
+class UserJobMatch(SQLModel, table=True):
+    """Per-candidate evaluation of a shared JobPosting, preventing multi-user match overwrites."""
+    __tablename__ = "user_job_matches"
+    __table_args__ = (
+        UniqueConstraint("user_id", "job_posting_id", name="uq_user_job_match"),
+        Index("ix_user_job_matches_user_status_score", "user_id", "status", "suitability_score"),
+    )
 
     id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    job_posting_id: int = Field(foreign_key="job_postings.id", index=True)
+    suitability_score: float = Field(default=0.0, index=True)
+    match_score: float = Field(default=0.0)
+    match_tier: str = Field(default="DIRECT", index=True)
+    adjacent_role_tag: Optional[str] = Field(default=None)
+    skill_overlap_pct: Optional[int] = Field(default=None)
+    matched_skills: List[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    missing_skills: List[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    match_breakdown: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
+    status: str = Field(default="STAGED", index=True)  # DISCOVERED, STAGED, AUDITED, FILTERED_OUT, APPLIED, IGNORED
+    filter_out_reason: Optional[str] = Field(default=None)
+    match_rationale: str = Field(default="", sa_column=Column(Text, nullable=False))
+    is_saved: bool = Field(default=False, index=True)
+    is_ignored: bool = Field(default=False)
+    is_new: bool = Field(default=True, index=True)
+    evaluated_at: datetime = Field(default_factory=utc_now, index=True)
+
+
+class SavedJob(SQLModel, table=True):
+    __tablename__ = "saved_jobs"
+    __table_args__ = (
+        UniqueConstraint("user_id", "job_posting_id", name="uq_user_saved_job"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    job_posting_id: int = Field(foreign_key="job_postings.id", index=True)
+    notes: Optional[str] = Field(default=None)
+    created_at: datetime = Field(default_factory=utc_now, index=True)
+
+
+class ApplicationTracker(SQLModel, table=True):
+    __tablename__ = "application_tracker"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
+    job_posting_id: Optional[int] = Field(default=None, foreign_key="job_postings.id", index=True)
+    company_name: str = Field(index=True)
+    job_title: str
+    job_url: Optional[str] = None
+    portal: str = Field(default="custom")
+    status: str = Field(default="STAGED", index=True)
+    salary_expected: Optional[str] = None
+    salary_offered: Optional[str] = None
+    recruiter_name: Optional[str] = None
+    recruiter_email: Optional[str] = None
+    follow_up_date: Optional[str] = None
+    cv_pdf_path: Optional[str] = None
+    cv_version_id: Optional[int] = Field(default=None, foreign_key="candidate_documents.id")
+    cover_letter_text: Optional[str] = None
+    outcome: Optional[str] = None
+    applied_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    is_deleted: bool = Field(default=False, index=True)
+
+    user: Optional[User] = Relationship(back_populates="applications")
+    interviews: List["InterviewRound"] = Relationship(back_populates="application")
+
+
+class ApplicationRecord(SQLModel, table=True):
+    __tablename__ = "application_records"
+    __table_args__ = (
+        Index("ix_application_records_user_status", "user_id", "submission_status"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
     vacancy_id: Optional[int] = Field(default=None, foreign_key="job_postings.id", index=True)
     job_id: Optional[int] = Field(default=None, foreign_key="job_postings.id", index=True)
     job_posting_id: Optional[int] = Field(default=None, foreign_key="job_postings.id", index=True)
     cv_pdf_path: str = Field(default="")
     custom_cv_path: str = Field(default="")
+    cv_version_id: Optional[int] = Field(default=None, foreign_key="candidate_documents.id")
     cover_letter: str = Field(default="", sa_column=Column(Text, nullable=False))
     cover_letter_text: str = Field(default="", sa_column=Column(Text, nullable=False))
     submitted_salary: Optional[str] = Field(default=None)
+    salary_offered: Optional[str] = Field(default=None)
+    recruiter_name: Optional[str] = Field(default=None)
+    recruiter_email: Optional[str] = Field(default=None)
+    follow_up_date: Optional[str] = Field(default=None)
+    outcome: Optional[str] = Field(default=None)
     screening_answers: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
-    submission_status: str = Field(default="STAGED", index=True)  # "STAGED", "APPLIED", "HR_SCREEN", "TECH_INTERVIEW", "OFFER", "REJECTED"
+    submission_status: str = Field(default="STAGED", index=True)
     interview_date: Optional[datetime] = Field(default=None)
     interview_notes: Optional[str] = Field(default=None, sa_column=Column(Text, nullable=True))
     applied_at: datetime = Field(default_factory=utc_now, index=True)
     updated_at: datetime = Field(default_factory=utc_now, index=True)
 
 
-# Backwards compatibility and master prompt aliases
+class ApplicationEvent(SQLModel, table=True):
+    __tablename__ = "application_events"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    application_id: int = Field(index=True)
+    user_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
+    from_status: Optional[str] = Field(default=None)
+    to_status: str = Field(default="STAGED")
+    event_type: str = Field(default="status_change")
+    note: Optional[str] = Field(default=None)
+    created_at: datetime = Field(default_factory=utc_now, index=True)
+
+
+class InterviewRound(SQLModel, table=True):
+    __tablename__ = "interview_rounds"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    application_id: int = Field(foreign_key="application_tracker.id", index=True)
+    user_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
+    round_type: str = Field(default="HR_SCREEN")  # HR_SCREEN, TECH_INTERVIEW, FINAL_ROUND, SYSTEM_DESIGN
+    scheduled_at: Optional[datetime] = None
+    company_intel_summary: Optional[str] = None
+    predicted_questions: Optional[List[Dict[str, Any]]] = Field(default=[], sa_column=Column(JSON))
+    technical_glossary: Optional[List[Dict[str, Any]]] = Field(default=[], sa_column=Column(JSON))
+    follow_up_questions: Optional[List[str]] = Field(default=[], sa_column=Column(JSON))
+    candidate_notes: Optional[str] = None
+    reflection_notes: Optional[str] = None
+    status: str = Field(default="SCHEDULED")  # SCHEDULED, COMPLETED, CANCELLED
+
+    application: Optional[ApplicationTracker] = Relationship(back_populates="interviews")
+
+
+class InterviewNote(SQLModel, table=True):
+    __tablename__ = "interview_notes"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    interview_round_id: Optional[int] = Field(default=None, foreign_key="interview_rounds.id", index=True)
+    application_id: Optional[int] = Field(default=None, index=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    note_type: str = Field(default="reflection")  # preparation, reflection, question_note
+    content: str = Field(default="", sa_column=Column(Text, nullable=False))
+    created_at: datetime = Field(default_factory=utc_now, index=True)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class SkillActionPlan(SQLModel, table=True):
+    __tablename__ = "skill_action_plans"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
+    skill_name: str = Field(index=True)
+    category: str = Field(default="AUTOMATION")
+    days_to_learn: int = Field(default=7)
+    milestones: List[Dict[str, Any]] = Field(default=[], sa_column=Column(JSON))
+    is_completed: bool = Field(default=False)
+    created_at: datetime = Field(default_factory=utc_now)
+
+    user: Optional[User] = Relationship(back_populates="action_plans")
+
+
+class SavedSearch(SQLModel, table=True):
+    __tablename__ = "saved_searches"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    name: str = Field(index=True)
+    filters: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
+    notify_on_new: bool = Field(default=True)
+    last_run_at: Optional[datetime] = Field(default=None)
+    created_at: datetime = Field(default_factory=utc_now, index=True)
+
+
+class Notification(SQLModel, table=True):
+    __tablename__ = "notifications"
+    __table_args__ = (
+        Index("ix_notifications_user_read_created", "user_id", "is_read", "created_at"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    job_posting_id: Optional[int] = Field(default=None, foreign_key="job_postings.id", index=True)
+    saved_search_id: Optional[int] = Field(default=None, foreign_key="saved_searches.id")
+    title: str
+    message: str = Field(default="", sa_column=Column(Text, nullable=False))
+    notification_type: str = Field(default="new_match", index=True)  # new_match, follow_up_due, system
+    is_read: bool = Field(default=False, index=True)
+    created_at: datetime = Field(default_factory=utc_now, index=True)
+
+
+class ScrapeTask(SQLModel, table=True):
+    __tablename__ = "scrape_tasks"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    task_id: str = Field(unique=True, index=True)
+    user_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
+    status: str = Field(default="RUNNING", index=True)  # PENDING, RUNNING, COMPLETED, FAILED
+    portals: List[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    progress_pct: int = Field(default=0)
+    current_portal: Optional[str] = Field(default=None)
+    result_summary: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
+    error_message: Optional[str] = Field(default=None)
+    created_at: datetime = Field(default_factory=utc_now, index=True)
+    completed_at: Optional[datetime] = Field(default=None)
+
+
+# Canonical and backwards-compatible aliases
+Application = ApplicationTracker
 JobVacancy = JobPosting
 LiveJobVacancy = JobPosting
 
@@ -187,247 +422,46 @@ def _sync_otp_email_hash(mapper, connection, target: UserOTP) -> None:
     target.email_hash = blind_index(target.email)
 
 
-# --- Audit & Validation Schemas ---
-
-class JobDetails(BaseModel):
-    title: str = Field(..., description="Detected job title")
-    company: str = Field("Unknown Company", description="Company offering the position")
-    portal: str = Field("generic", description="Detected job portal (djinni, dou.ua, jobs.ge, hr.ge, headhunter.ge, justjoin.it, greenhouse, lever)")
-    industry: str = Field("general", description="Detected industry: qa_tech, hospitality_reception, customer_service, healthcare_hospital, general")
-    market: str = Field("INT_REMOTE", description="GE, UA_REMOTE, or INT_REMOTE")
-    experience_years_required: Optional[int] = Field(None, description="Minimum years of experience required")
-    required_skills: List[str] = Field(default_factory=list, description="Must-have skills / qualifications")
-    nice_to_have_skills: List[str] = Field(default_factory=list, description="Nice-to-have or preferred skills")
-    visa_requirements: Optional[str] = Field(None, description="Visa sponsorship / work authorization policy")
-    language_requirements: List[str] = Field(default_factory=list, description="Languages required")
-    location: str = Field("Tbilisi / Remote", description="Location or remote / abroad market policy")
-    remote_policy: str = Field("Flexible / On-site / Remote", description="Remote, Hybrid, Abroad, or On-site")
-    salary_range: Optional[str] = Field(None, description="Detected or AI-estimated salary range")
-    salary_min: Optional[float] = Field(None, description="Extracted or AI-estimated min salary")
-    salary_max: Optional[float] = Field(None, description="Extracted or AI-estimated max salary")
-    salary_currency: Optional[str] = Field(None, description="Salary currency: USD, EUR, GEL, GBP")
-    salary_estimated_by_ai: bool = Field(False, description="True if predicted by AI, False if extracted from posting")
-    extraction_failed: bool = Field(False, description="True if company or title could not be reliably extracted")
-    summary: str = Field("", description="Executive summary of the job description")
+@event.listens_for(ApplicationTracker, "before_delete")
+def _cascade_delete_tracker_children(mapper, connection, target: ApplicationTracker) -> None:
+    if target.id is not None:
+        from sqlalchemy import select as sa_select
+        round_ids_subq = sa_select(InterviewRound.id).where(InterviewRound.application_id == target.id)
+        connection.execute(
+            InterviewNote.__table__.delete().where(
+                (InterviewNote.application_id == target.id)
+                | (InterviewNote.interview_round_id.in_(round_ids_subq))
+            )
+        )
+        connection.execute(InterviewRound.__table__.delete().where(InterviewRound.application_id == target.id))
+        connection.execute(ApplicationEvent.__table__.delete().where(ApplicationEvent.application_id == target.id))
 
 
-class GapItem(BaseModel):
-    skill_or_area: str
-    severity: str = Field("moderate", description="high, moderate, low")
-    gap_description: str
-    bridge_strategy: str = Field(..., description="How our human-tone CV bridges this gap honestly")
+@event.listens_for(JobPosting, "before_delete")
+def _cascade_delete_job_posting_children(mapper, connection, target: JobPosting) -> None:
+    if target.id is not None:
+        from sqlalchemy import select as sa_select
+        tracker_ids_subq = sa_select(ApplicationTracker.id).where(ApplicationTracker.job_posting_id == target.id)
+        round_ids_subq = sa_select(InterviewRound.id).where(InterviewRound.application_id.in_(tracker_ids_subq))
+        connection.execute(
+            InterviewNote.__table__.delete().where(
+                (InterviewNote.application_id.in_(tracker_ids_subq))
+                | (InterviewNote.interview_round_id.in_(round_ids_subq))
+            )
+        )
+        connection.execute(InterviewRound.__table__.delete().where(InterviewRound.application_id.in_(tracker_ids_subq)))
+        connection.execute(ApplicationEvent.__table__.delete().where(ApplicationEvent.application_id.in_(tracker_ids_subq)))
+        connection.execute(UserJobMatch.__table__.delete().where(UserJobMatch.job_posting_id == target.id))
+        connection.execute(SavedJob.__table__.delete().where(SavedJob.job_posting_id == target.id))
+        connection.execute(Notification.__table__.delete().where(Notification.job_posting_id == target.id))
+        connection.execute(CandidateDocument.__table__.delete().where(CandidateDocument.job_posting_id == target.id))
+        connection.execute(
+            ApplicationRecord.__table__.delete().where(
+                (ApplicationRecord.job_id == target.id)
+                | (ApplicationRecord.job_posting_id == target.id)
+                | (ApplicationRecord.vacancy_id == target.id)
+            )
+        )
+        connection.execute(ApplicationTracker.__table__.delete().where(ApplicationTracker.job_posting_id == target.id))
 
-
-class CompanyValidation(BaseModel):
-    company_name: str
-    reputation: str = Field("UNVERIFIED", description="VERIFIED, UNVERIFIED, or BLACKLISTED")
-    review_count: int = Field(0, description="Total reviews found across job portals")
-    reviews_count: int = Field(0, description="Total reviews count (canonical field)")
-    rating: Optional[float] = Field(None, description="Average star rating out of 5.0, or None if UNVERIFIED")
-    is_blacklisted: bool = Field(False, description="True if blacklisted or <3 reviews")
-    passed_gate: bool = Field(True, description="True if not blacklisted")
-    portals_checked: List[str] = Field(default_factory=list)
-    verdict: str
-    pros: List[str] = Field(default_factory=list)
-    cons: List[str] = Field(default_factory=list)
-
-
-class TailoredCVResult(BaseModel):
-    pdf_filename: str
-    pdf_url: str
-    docx_filename: Optional[str] = None
-    docx_url: Optional[str] = None
-    html_preview_url: Optional[str] = None
-    cv_language: str = "en"  # "en" or "ka" (Georgian)
-    candidate_name: str = "Candidate"
-    target_role: str = ""
-    human_tone_summary: str
-    applicant_summary: str
-    motivation_statement: str
-    dou_motivational_letter: str
-    tailored_highlights: List[str]
-    ats_keywords_covered: List[str]
-    start_date_default: str = "1 week after offer"
-    expected_salary: str = "Negotiable / Market Rate"
-
-
-class Blocker(BaseModel):
-    category: str = Field(..., description="visa, experience, language, skill, company_reviews")
-    severity: str = Field(..., description="critical, warning, or info")
-    description: str = Field(..., description="Reason for concern or blocker")
-    candidate_status: str = Field(..., description="Candidate's current reality from skills.md / ground_truth")
-
-
-class JobAuditRequest(BaseModel):
-    raw_text: Optional[str] = Field(None, description="Pasted job description text")
-    job_url: Optional[str] = Field(None, description="Direct URL to job posting")
-    variant: Optional[str] = Field("qa_automation", description="Selected CV variant")
-    cv_language: Optional[str] = Field("en", description="'en' (English) or 'ka' (Georgian / ქართული)")
-    skills_md_override: Optional[str] = Field(None, description="Optional live markdown skills override")
-
-
-class ScoreBreakdown(BaseModel):
-    skills_match: int = Field(..., ge=0, le=100)
-    ats_match: int = Field(..., ge=0, le=100)
-    recruiter_match: int = Field(..., ge=0, le=100)
-    experience_match: int = Field(..., ge=0, le=100)
-    visa_match: int = Field(..., ge=0, le=100)
-    language_match: int = Field(..., ge=0, le=100)
-
-
-class JobAuditResponse(BaseModel):
-    job_details: JobDetails
-    match_score: int = Field(..., ge=0, le=100, description="Overall weighted match score 0-100")
-    score_breakdown: ScoreBreakdown
-    matched_skills: List[str]
-    missing_skills: List[str]
-    gaps: List[GapItem]
-    company_validation: CompanyValidation
-    tailored_cv: TailoredCVResult
-    blockers: List[Blocker]
-    recommended_variant: str
-    recommendation_notes: str
-
-
-# --- Screening Answers Schemas ---
-
-class ScreeningQuestion(BaseModel):
-    id: Optional[str] = None
-    question: str
-    field_type: Optional[str] = "text"
-    options: Optional[List[str]] = None
-
-
-class GenerateAnswersRequest(BaseModel):
-    questions: List[ScreeningQuestion]
-    job_title: Optional[str] = None
-    company: Optional[str] = None
-    job_description: Optional[str] = None
-    portal: Optional[str] = None
-    variant: Optional[str] = "qa_automation"
-    cv_language: Optional[str] = "en"
-
-
-class ScreeningAnswer(BaseModel):
-    question: str
-    field_type: str = "text"
-    answer: str
-    confidence: float = Field(1.0, ge=0.0, le=1.0)
-    source_ground_truth_field: Optional[str] = None
-
-
-class GenerateAnswersResponse(BaseModel):
-    answers: List[ScreeningAnswer]
-    variant_used: str
-    candidate_name: str
-    applicant_summary: str
-    motivation_letter: str
-    dou_motivational_letter: str
-    default_start_date: str = "1 week after offer"
-
-
-# --- Stage Application Schemas ---
-
-class StageApplicationRequest(BaseModel):
-    job_url: str
-    variant: Optional[str] = "qa_automation"
-    cv_language: Optional[str] = "en"
-    custom_pdf_filename: Optional[str] = None
-    custom_answers: Optional[Dict[str, str]] = None
-    applicant_summary: Optional[str] = None
-    motivation_letter: Optional[str] = None
-    expected_salary: Optional[str] = None
-    start_date: Optional[str] = "1 week after offer"
-    bypass_company_gate: Optional[bool] = False
-    auto_submit: Optional[bool] = False
-    headless: Optional[bool] = False
-    timeout_seconds: Optional[int] = 45
-
-
-class StageApplicationResponse(BaseModel):
-    status: str  # staged, submitted, blocked_by_reviews, error
-    portal_detected: str
-    fields_filled: List[str]
-    captcha_status: str = "none_detected"
-    file_uploaded: bool
-    resume_file_path: Optional[str] = None
-    company_validation: Optional[CompanyValidation] = None
-    message: str
-    manual_review_needed: bool = True
-    page_title: Optional[str] = None
-
-
-# --- Vacancy Feed Schema ---
-
-class PortalVacancyItem(BaseModel):
-    id: str
-    title: str
-    company: str
-    portal: str
-    industry: str = "qa_tech"  # qa_tech, hospitality_reception, customer_service, healthcare_hospital
-    location: str
-    salary: str
-    url: str
-    mock_url: str
-    company_reviews_count: int
-    company_rating: float
-    requires_motivational_letter: bool = False
-    description: str
-
-
-# --- Tracker Schemas ---
-
-class ApplicationItem(BaseModel):
-    id: str
-    company: str
-    role: str
-    portal: Optional[str] = "generic"
-    url: str
-    status: str = "Discovered"
-    match_score: Optional[int] = None
-    ats_score: Optional[int] = None
-    recruiter_score: Optional[int] = None
-    salary_estimate: Optional[str] = None
-    interview_date: Optional[str] = None
-    company_reviews: Optional[int] = None
-    cv_pdf_url: Optional[str] = None
-    variant_used: Optional[str] = "qa_automation"
-    applied_date: Optional[str] = None
-    notes: Optional[str] = None
-
-
-class ApplicationCreate(BaseModel):
-    company: str
-    role: str
-    portal: Optional[str] = "generic"
-    url: Optional[str] = None
-    status: Optional[str] = "Discovered"
-    match_score: Optional[int] = None
-    ats_score: Optional[int] = None
-    recruiter_score: Optional[int] = None
-    salary_estimate: Optional[str] = None
-    interview_date: Optional[str] = None
-    company_reviews: Optional[int] = None
-    cv_pdf_url: Optional[str] = None
-    variant_used: Optional[str] = "qa_automation"
-    applied_date: Optional[str] = None
-    notes: Optional[str] = None
-
-
-class ApplicationUpdate(BaseModel):
-    company: Optional[str] = None
-    role: Optional[str] = None
-    portal: Optional[str] = None
-    url: Optional[str] = None
-    status: Optional[str] = None
-    match_score: Optional[int] = None
-    ats_score: Optional[int] = None
-    recruiter_score: Optional[int] = None
-    salary_estimate: Optional[str] = None
-    interview_date: Optional[str] = None
-    company_reviews: Optional[int] = None
-    cv_pdf_url: Optional[str] = None
-    variant_used: Optional[str] = None
-    applied_date: Optional[str] = None
-    notes: Optional[str] = None
 

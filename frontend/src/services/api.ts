@@ -115,15 +115,15 @@ export async function fetchVacancies(): Promise<PortalVacancyItem[]> {
 }
 
 export async function fetchGroundTruth(): Promise<GroundTruth> {
-  const res = await fetch(`${API_BASE}/ground-truth`);
+  const res = await apiFetch(`${API_BASE}/ground-truth`, { headers: getAuthHeaders() });
   if (!res.ok) throw new Error('Failed to fetch ground truth');
   return res.json();
 }
 
 export async function saveGroundTruth(data: GroundTruth): Promise<GroundTruth> {
-  const res = await fetch(`${API_BASE}/ground-truth`, {
+  const res = await apiFetch(`${API_BASE}/ground-truth`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify(data),
   });
   if (!res.ok) throw new Error('Failed to update ground truth');
@@ -132,7 +132,7 @@ export async function saveGroundTruth(data: GroundTruth): Promise<GroundTruth> {
 }
 
 export async function fetchSkillsMd(): Promise<{ filename: string; content: string; extracted_skills: string[] }> {
-  const res = await fetch(`${API_BASE}/skills-md`);
+  const res = await apiFetch(`${API_BASE}/skills-md`, { headers: getAuthHeaders() });
   if (!res.ok) throw new Error('Failed to load skills.md');
   return res.json();
 }
@@ -217,6 +217,10 @@ export async function fetchScrapedJobs(params?: {
   status?: string;
   min_score?: number;
   tier?: string;
+  search?: string;
+  remote_type?: string;
+  only_new?: boolean;
+  only_saved?: boolean;
 } | string): Promise<PaginatedJobsResponse> {
   const qs = new URLSearchParams();
   if (typeof params === 'string') {
@@ -228,6 +232,10 @@ export async function fetchScrapedJobs(params?: {
     if (params.status && params.status !== 'ALL') qs.set('status', params.status);
     if (params.min_score !== undefined) qs.set('min_score', String(params.min_score));
     if (params.tier && params.tier !== 'ALL') qs.set('tier', params.tier);
+    if (params.search && params.search.trim()) qs.set('search', params.search.trim());
+    if (params.remote_type && params.remote_type !== 'ALL') qs.set('remote_type', params.remote_type);
+    if (params.only_new) qs.set('only_new', 'true');
+    if (params.only_saved) qs.set('only_saved', 'true');
   }
   const queryStr = qs.toString() ? `?${qs.toString()}` : '';
   const res = await apiFetch(`${API_BASE}/jobs${queryStr}`, {
@@ -258,8 +266,40 @@ export async function triggerMultiPortalScrape(allowNetwork = true): Promise<{
   return res.json();
 }
 
+export async function triggerAsyncScrape(allowNetwork = true): Promise<{
+  task_id: string;
+  status: string;
+  deduplicated?: boolean;
+}> {
+  const res = await apiFetch(`${API_BASE}/jobs/scrape/async`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ allow_network: allowNetwork }),
+  });
+  if (!res.ok) throw new Error('Failed to start background scraper');
+  return res.json();
+}
+
+export async function fetchScrapeTaskStatus(taskId: string): Promise<{
+  task_id: string;
+  status: string;
+  progress_pct?: number;
+  total_processed: number;
+  staged_count: number;
+  filtered_out_count: number;
+  error_message?: string | null;
+}> {
+  const res = await apiFetch(`${API_BASE}/jobs/scrape/status/${encodeURIComponent(taskId)}`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to check scrape task status');
+  return res.json();
+}
+
 export async function fetchGeneratedResumes(): Promise<Array<{ filename: string; url: string; docx_url?: string | null; html_url?: string | null; size_kb: number }>> {
-  const res = await fetch(`${API_BASE}/resumes/generated`);
+  const res = await apiFetch(`${API_BASE}/resumes/generated`, {
+    headers: getAuthHeaders(),
+  });
   if (!res.ok) return [];
   return res.json();
 }
@@ -365,9 +405,9 @@ export async function auditJob(params: {
   skills_md_override?: string;
   cv_language?: 'en' | 'ka';
 }): Promise<JobAuditResponse> {
-  const res = await fetch(`${API_BASE}/audit-job`, {
+  const res = await apiFetch(`${API_BASE}/audit-job`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify(params),
   });
   if (!res.ok) {
@@ -386,9 +426,9 @@ export async function generateAnswers(params: {
   variant?: string;
   cv_language?: 'en' | 'ka';
 }): Promise<GenerateAnswersResponse> {
-  const res = await fetch(`${API_BASE}/generate-answers`, {
+  const res = await apiFetch(`${API_BASE}/generate-answers`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify(params),
   });
   if (!res.ok) throw new Error('Failed to generate screening answers');
@@ -408,9 +448,9 @@ export async function stageApplication(params: {
   auto_submit?: boolean;
   headless?: boolean;
 }): Promise<StageApplicationResponse> {
-  const res = await fetch(`${API_BASE}/stage-application`, {
+  const res = await apiFetch(`${API_BASE}/stage-application`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify(params),
   });
   if (!res.ok) {
@@ -421,15 +461,41 @@ export async function stageApplication(params: {
 }
 
 export async function fetchApplications(): Promise<ApplicationItem[]> {
-  const res = await fetch(`${API_BASE}/applications`);
+  const res = await apiFetch(`${API_BASE}/applications`, {
+    headers: getAuthHeaders(),
+  });
   if (!res.ok) throw new Error('Failed to fetch applications');
   return res.json();
 }
 
+export async function fetchApplicationAnalytics(): Promise<{
+  total_tracked: number;
+  applications_submitted: number;
+  awaiting_response: number;
+  interviews_received: number;
+  offers_received: number;
+  rejections: number;
+  withdrawn: number;
+  response_rate_pct: number;
+  interview_conversion_rate_pct: number;
+  offer_rate_pct: number;
+  by_status: Record<string, number>;
+}> {
+  const res = await apiFetch(`${API_BASE}/applications/analytics`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to fetch tracker analytics');
+  return res.json();
+}
+
+export function getExportApplicationsUrl(format: 'json' | 'csv' = 'csv'): string {
+  return `${API_BASE}/applications/export?format=${format}`;
+}
+
 export async function createApplication(app: Partial<ApplicationItem>): Promise<ApplicationItem> {
-  const res = await fetch(`${API_BASE}/applications`, {
+  const res = await apiFetch(`${API_BASE}/applications`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify(app),
   });
   if (!res.ok) throw new Error('Failed to create application');
@@ -437,9 +503,9 @@ export async function createApplication(app: Partial<ApplicationItem>): Promise<
 }
 
 export async function updateApplication(id: string, update: Partial<ApplicationItem>): Promise<ApplicationItem> {
-  const res = await fetch(`${API_BASE}/applications/${id}`, {
+  const res = await apiFetch(`${API_BASE}/applications/${id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify(update),
   });
   if (!res.ok) throw new Error('Failed to update application');

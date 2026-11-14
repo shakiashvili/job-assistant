@@ -113,11 +113,15 @@ class ProfileRepository:
 
     def _ensure_seeded(self) -> CandidateProfile:
         with Session(engine) as session:
-            profile = session.exec(
+            profiles = session.exec(
                 select(CandidateProfile).order_by(CandidateProfile.updated_at.desc())
-            ).first()
-            if profile and profile.full_name:
-                return profile
+            ).all()
+            for prof in profiles:
+                owner = str((prof.parsed_skills or {}).get("owner_email") or "").strip().lower()
+                if not owner and prof.full_name:
+                    return prof
+            if profiles and profiles[0].full_name:
+                return profiles[0]
 
         from ..services.profile_service import profile_service
         raw_md = ""
@@ -125,16 +129,76 @@ class ProfileRepository:
             raw_md = self.skills_md_path.read_text(encoding="utf-8")
         return profile_service.upsert_candidate_profile(raw_md, mark_uploaded=False)
 
-    def get_profile_record(self, owner_email: Optional[str] = None) -> CandidateProfile:
+    def get_profile_record(
+        self,
+        owner_email: Optional[str] = None,
+        user_id: Optional[int] = None,
+    ) -> CandidateProfile:
+        from .models import User
+
         target = owner_email.strip().lower() if owner_email else ""
-        if target and target != "guest@talentflow.local":
-            with Session(engine) as session:
-                profiles = session.exec(
-                    select(CandidateProfile).order_by(CandidateProfile.updated_at.desc())
-                ).all()
-                for prof in profiles:
-                    if str((prof.parsed_skills or {}).get("owner_email") or "").strip().lower() == target:
-                        return prof
+        is_explicit_user = bool(
+            (target and target != "guest@talentflow.local")
+            or (user_id is not None)
+        )
+        if is_explicit_user:
+            with Session(engine, expire_on_commit=False) as session:
+                resolved_uid = user_id
+                if resolved_uid is None and target:
+                    u_row = session.exec(select(User).where(User.email == target)).first()
+                    if u_row:
+                        resolved_uid = u_row.id
+                        if u_row.email == "guest@talentflow.local" and not target:
+                            is_explicit_user = False
+
+                if resolved_uid is not None:
+                    prof_by_uid = session.exec(
+                        select(CandidateProfile)
+                        .where(CandidateProfile.user_id == resolved_uid)
+                        .order_by(CandidateProfile.updated_at.desc())
+                    ).first()
+                    if prof_by_uid:
+                        return prof_by_uid
+
+                if target and target != "guest@talentflow.local":
+                    profiles = session.exec(
+                        select(CandidateProfile).order_by(CandidateProfile.updated_at.desc())
+                    ).all()
+                    for prof in profiles:
+                        if str((prof.parsed_skills or {}).get("owner_email") or "").strip().lower() == target:
+                            if resolved_uid is not None and prof.user_id is None:
+                                prof.user_id = resolved_uid
+                                session.add(prof)
+                                session.commit()
+                                session.refresh(prof)
+                            return prof
+
+                    # Authenticated user has no uploaded profile yet -> return an isolated blank profile for this user
+                    # (never leak another user's CandidateProfile!)
+                    blank_profile = CandidateProfile(
+                        user_id=resolved_uid,
+                        full_name="",
+                        email=target,
+                        raw_markdown="",
+                        parsed_skills={
+                            "user_uploaded": False,
+                            "owner_email": target,
+                            "user_id": resolved_uid,
+                            "all_skills": [],
+                            "ground_truth_vault": {
+                                "candidate": {"full_name": "", "email": target},
+                                "skills": {"core": [], "secondary": []},
+                                "work_history": [],
+                                "education": [],
+                            },
+                        },
+                        experience_years=0.0,
+                    )
+                    session.add(blank_profile)
+                    session.commit()
+                    session.refresh(blank_profile)
+                    return blank_profile
+
         return self._ensure_seeded()
 
     def get_profession_presets(self) -> Dict[str, Dict[str, str]]:
@@ -272,23 +336,35 @@ class ProfileRepository:
         data["parsed_skills_taxonomy"] = {k: v for k, v in ps.items() if k != "ground_truth_vault"}
         return data
 
-    def get_data(self, owner_email: Optional[str] = None) -> Dict[str, Any]:
-        profile = self.get_profile_record(owner_email=owner_email)
+    def get_data(
+        self,
+        owner_email: Optional[str] = None,
+        user_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        profile = self.get_profile_record(owner_email=owner_email, user_id=user_id)
         raw_vault = dict((profile.parsed_skills or {}).get("ground_truth_vault") or {})
         return self._normalize_vault(raw_vault, profile)
 
-    def update_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def update_data(
+        self,
+        data: Dict[str, Any],
+        owner_email: Optional[str] = None,
+        user_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
         save_copy = dict(data)
         raw_md = save_copy.pop("skills_md_raw", None)
         save_copy.pop("parsed_skills_taxonomy", None)
 
+        target_prof = self.get_profile_record(owner_email=owner_email, user_id=user_id)
+
         with Session(engine) as session:
-            profile = session.exec(
-                select(CandidateProfile).order_by(CandidateProfile.updated_at.desc())
-            ).first()
+            profile = session.get(CandidateProfile, target_prof.id) if target_prof and target_prof.id else None
             if not profile:
                 profile = self._ensure_seeded()
                 profile = session.get(CandidateProfile, profile.id)
+
+            if user_id is not None and profile.user_id is None:
+                profile.user_id = user_id
 
             if raw_md is not None:
                 profile.raw_markdown = raw_md
@@ -310,19 +386,27 @@ class ProfileRepository:
                 cleaned_core = dedupe_skills_case_insensitive([str(x) for x in save_copy["skills"]["core"]])
                 save_copy["skills"]["core"] = cleaned_core
                 taxonomy["all_skills"] = cleaned_core
-            for preserve_key in ("user_uploaded", "owner_email", "education", "courses_and_certifications", "eligible_internships"):
+            for preserve_key in ("user_uploaded", "owner_email", "user_id", "education", "courses_and_certifications", "eligible_internships"):
                 if preserve_key in existing_ps:
                     taxonomy[preserve_key] = existing_ps[preserve_key]
+            if owner_email and owner_email != "guest@talentflow.local":
+                taxonomy["owner_email"] = owner_email.strip().lower()
+            if user_id is not None:
+                taxonomy["user_id"] = user_id
             taxonomy["ground_truth_vault"] = save_copy
             profile.parsed_skills = taxonomy
             profile.updated_at = utc_now()
             session.add(profile)
             session.commit()
 
-        return self.get_data()
+        return self.get_data(owner_email=owner_email, user_id=user_id)
 
-    def get_skills_md(self, owner_email: Optional[str] = None) -> str:
-        profile = self.get_profile_record(owner_email=owner_email)
+    def get_skills_md(
+        self,
+        owner_email: Optional[str] = None,
+        user_id: Optional[int] = None,
+    ) -> str:
+        profile = self.get_profile_record(owner_email=owner_email, user_id=user_id)
         return profile.raw_markdown or ""
 
     def parse_profile_from_md(self, md_content: str) -> Dict[str, Any]:
@@ -461,10 +545,17 @@ class ProfileRepository:
 
         return result
 
-    def ingest_skills_markdown(self, md_content: str, owner_email: Optional[str] = None) -> CandidateProfile:
+    def ingest_skills_markdown(
+        self,
+        md_content: str,
+        owner_email: Optional[str] = None,
+        user_id: Optional[int] = None,
+    ) -> CandidateProfile:
+        from sqlmodel import delete
+        from .models import CandidateExperience
         from ..services.profile_service import profile_service
         profile = profile_service.upsert_candidate_profile(
-            md_content, mark_uploaded=True, owner_email=owner_email
+            md_content, mark_uploaded=True, owner_email=owner_email, user_id=user_id
         )
         parsed = self.parse_profile_from_md(md_content)
         if parsed.get("work_history") or parsed.get("education"):
@@ -475,6 +566,21 @@ class ProfileRepository:
                     vault = dict(skills_copy.get("ground_truth_vault") or {})
                     if parsed.get("work_history"):
                         vault["work_history"] = parsed["work_history"]
+                        if db_prof.id is not None:
+                            session.exec(delete(CandidateExperience).where(CandidateExperience.profile_id == db_prof.id))
+                            for wh_item in parsed["work_history"]:
+                                if isinstance(wh_item, dict):
+                                    session.add(
+                                        CandidateExperience(
+                                            profile_id=db_prof.id,
+                                            user_id=db_prof.user_id,
+                                            company=str(wh_item.get("company") or "Experience"),
+                                            role_title=str(wh_item.get("role") or wh_item.get("title") or "Role"),
+                                            location=str(wh_item.get("location") or ""),
+                                            start_date=str(wh_item.get("dates") or wh_item.get("start_date") or ""),
+                                            highlights=list(wh_item.get("highlights") or []),
+                                        )
+                                    )
                     if parsed.get("education"):
                         vault["education"] = parsed["education"]
                     skills_copy["ground_truth_vault"] = vault
@@ -485,9 +591,14 @@ class ProfileRepository:
                     return db_prof
         return profile
 
-    def save_skills_md(self, md_content: str, owner_email: Optional[str] = None) -> Dict[str, Any]:
-        self.ingest_skills_markdown(md_content, owner_email=owner_email)
-        return self.get_data(owner_email=owner_email)
+    def save_skills_md(
+        self,
+        md_content: str,
+        owner_email: Optional[str] = None,
+        user_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        self.ingest_skills_markdown(md_content, owner_email=owner_email, user_id=user_id)
+        return self.get_data(owner_email=owner_email, user_id=user_id)
 
     def extract_skills_from_md(self, md_content: str) -> List[str]:
         if not md_content:

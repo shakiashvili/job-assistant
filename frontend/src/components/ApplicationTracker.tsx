@@ -23,6 +23,7 @@ import {
   createApplication,
   updateApplication,
   deleteApplication,
+  getExportApplicationsUrl,
   BACKEND_ORIGIN,
 } from '../services/api';
 import { ApplicationItem } from '../types';
@@ -188,13 +189,25 @@ export const ApplicationTracker: React.FC = () => {
           </p>
         </div>
 
-        <button
-          onClick={() => setIsAddModalOpen(true)}
-          className="min-h-[44px] flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold text-white bg-sky-600 hover:bg-sky-500 shadow-lg shadow-sky-600/20 transition-all self-start sm:self-auto"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Add Application</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+          <a
+            href={getExportApplicationsUrl('csv')}
+            target="_blank"
+            rel="noreferrer"
+            className="min-h-[44px] flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-slate-300 bg-slate-800 hover:bg-slate-700 border border-slate-700 transition-all"
+            title="Export application pipeline to CSV"
+          >
+            <Download className="w-3.5 h-3.5 text-sky-400" />
+            <span>Export CSV</span>
+          </a>
+          <button
+            onClick={() => setIsAddModalOpen(true)}
+            className="min-h-[44px] flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold text-white bg-sky-600 hover:bg-sky-500 shadow-lg shadow-sky-600/20 transition-all"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Add Application</span>
+          </button>
+        </div>
       </div>
 
       {/* Mobile Swipe Peek Hint (visible only on mobile viewports) */}

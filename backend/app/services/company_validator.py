@@ -134,6 +134,8 @@ class CompanyValidatorService:
     """
 
     def validate_company(self, company_name: str, raw_text: str = "") -> CompanyValidation:
+        import datetime
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
         clean_name = (company_name or "Unknown Company").strip()
         lower_name = clean_name.lower()
         lower_text = (raw_text or "").lower()
@@ -149,6 +151,9 @@ class CompanyValidatorService:
                 is_blacklisted=True,
                 passed_gate=False,
                 portals_checked=["Glassdoor", "Jobs.ge / HR.ge", "DOU.ua"],
+                source_urls=[],
+                retrieved_at=now_iso,
+                verification_status="flagged_low_reviews",
                 verdict=f"⚠️ Blocked: {clean_name} has fewer than 3 verified reviews on job portals.",
                 pros=[],
                 cons=["Fewer than 3 public employee reviews", "Unverified work culture"]
@@ -169,6 +174,9 @@ class CompanyValidatorService:
                     is_blacklisted=not passed,
                     passed_gate=passed,
                     portals_checked=info["portals_checked"],
+                    source_urls=[f"cache://known_companies/{key}"],
+                    retrieved_at=now_iso,
+                    verification_status="verified_cached_entity",
                     verdict=f"✅ Verified ({cnt} reviews, {rt}★) — Passes 3+ Reviews Gate",
                     pros=info["pros"],
                     cons=info["cons"]
@@ -184,6 +192,9 @@ class CompanyValidatorService:
             is_blacklisted=False,
             passed_gate=True,
             portals_checked=["Local Verified Cache"],
+            source_urls=[],
+            retrieved_at=now_iso,
+            verification_status="unverified",
             verdict=f"ℹ️ Neutral (UNVERIFIED): {clean_name} is not in the local verified cache (0 cached reviews, not blacklisted).",
             pros=["Not blacklisted"],
             cons=["No cached third-party review metrics"]

@@ -478,11 +478,21 @@ Markdown:
         raw_markdown: str,
         mark_uploaded: bool = True,
         owner_email: Optional[str] = None,
+        user_id: Optional[int] = None,
     ) -> CandidateProfile:
         """
         Extracts structured profile data from raw_markdown and upserts it into CandidateProfile in SQLite/PostgreSQL.
-        Scopes records per owner_email when provided so separate accounts keep isolated uploaded profiles.
+        Scopes records per user_id / owner_email when provided so separate accounts keep isolated uploaded profiles,
+        and synchronizes normalized CandidateSkill, CandidateExperience, and CandidateEducation rows.
         """
+        from sqlmodel import delete
+        from ..db.models import (
+            User,
+            CandidateSkill,
+            CandidateExperience,
+            CandidateEducation,
+        )
+
         init_db()
 
         clean_owner = owner_email.strip().lower() if owner_email and owner_email.strip() else ""
@@ -510,38 +520,62 @@ Markdown:
             skills_payload["owner_email"] = clean_owner
 
         with Session(engine, expire_on_commit=False) as session:
-            all_profiles = session.exec(
-                select(CandidateProfile).order_by(CandidateProfile.updated_at.desc())
-            ).all()
-            profile = None
-            if clean_owner:
-                for cand_prof in all_profiles:
-                    ps_row = cand_prof.parsed_skills or {}
-                    if str(ps_row.get("owner_email") or "").strip().lower() == clean_owner:
-                        profile = cand_prof
-                        break
-                if profile is None:
+            resolved_user_id = user_id
+            if resolved_user_id is None and clean_owner:
+                u_row = session.exec(select(User).where(User.email == clean_owner)).first()
+                if u_row:
+                    resolved_user_id = u_row.id
+            if resolved_user_id is not None:
+                skills_payload["user_id"] = resolved_user_id
+
+            profile: Optional[CandidateProfile] = None
+            if resolved_user_id is not None:
+                profile = session.exec(
+                    select(CandidateProfile)
+                    .where(CandidateProfile.user_id == resolved_user_id)
+                    .order_by(CandidateProfile.updated_at.desc())
+                ).first()
+
+            if profile is None:
+                all_profiles = session.exec(
+                    select(CandidateProfile).order_by(CandidateProfile.updated_at.desc())
+                ).all()
+                if clean_owner:
                     for cand_prof in all_profiles:
                         ps_row = cand_prof.parsed_skills or {}
-                        if not str(ps_row.get("owner_email") or "").strip() and not bool(ps_row.get("user_uploaded", False)):
+                        if str(ps_row.get("owner_email") or "").strip().lower() == clean_owner:
                             profile = cand_prof
                             break
-            else:
-                for cand_prof in all_profiles:
-                    ps_row = cand_prof.parsed_skills or {}
-                    row_owner = str(ps_row.get("owner_email") or "").strip().lower()
-                    if not row_owner or cand_prof.email == "candidate@example.com":
-                        profile = cand_prof
-                        break
-                if profile is None and all_profiles and mark_uploaded:
-                    profile = all_profiles[0]
+                    if profile is None:
+                        for cand_prof in all_profiles:
+                            ps_row = cand_prof.parsed_skills or {}
+                            if (
+                                cand_prof.user_id is None
+                                and not str(ps_row.get("owner_email") or "").strip()
+                                and not bool(ps_row.get("user_uploaded", False))
+                            ):
+                                profile = cand_prof
+                                break
+                elif resolved_user_id is None:
+                    for cand_prof in all_profiles:
+                        ps_row = cand_prof.parsed_skills or {}
+                        row_owner = str(ps_row.get("owner_email") or "").strip().lower()
+                        if (not row_owner and cand_prof.user_id is None) or cand_prof.email == "candidate@example.com":
+                            profile = cand_prof
+                            break
+                    if profile is None and all_profiles and mark_uploaded:
+                        profile = all_profiles[0]
 
             existing_vault: Dict[str, Any] = {}
             same_owner = bool(
                 profile
                 and isinstance(profile.parsed_skills, dict)
                 and (
-                    not clean_owner
+                    (resolved_user_id is not None and profile.user_id == resolved_user_id)
+                    or (
+                        not clean_owner
+                        and resolved_user_id is None
+                    )
                     or str(profile.parsed_skills.get("owner_email") or "").strip().lower() == clean_owner
                 )
             )
@@ -571,12 +605,14 @@ Markdown:
                 cand["location"] = loc_dict
             cand.setdefault("links", {})["github"] = extracted.github_url
             cand.setdefault("links", {})["linkedin"] = extracted.linkedin_url
-            cand.setdefault("compensation", {})["notice_period"] = "1 week after offer"
+            cand.setdefault("compensation", {}).setdefault("notice_period", "")
             existing_vault.setdefault("skills", {})["core"] = skills_payload.get("all_skills", [])
 
             skills_payload["ground_truth_vault"] = existing_vault
 
             if profile:
+                if resolved_user_id is not None:
+                    profile.user_id = resolved_user_id
                 profile.raw_markdown = raw_markdown
                 profile.full_name = extracted.full_name
                 profile.email = extracted.email
@@ -589,6 +625,7 @@ Markdown:
                 profile.updated_at = utc_now()
             else:
                 profile = CandidateProfile(
+                    user_id=resolved_user_id,
                     raw_markdown=raw_markdown,
                     full_name=extracted.full_name,
                     email=extracted.email,
@@ -602,6 +639,79 @@ Markdown:
                 )
 
             session.add(profile)
+            session.flush()
+
+            # Sync relational CandidateSkill, CandidateExperience, CandidateEducation rows
+            if profile.id is not None:
+                session.exec(delete(CandidateSkill).where(CandidateSkill.profile_id == profile.id))
+                session.exec(delete(CandidateExperience).where(CandidateExperience.profile_id == profile.id))
+                session.exec(delete(CandidateEducation).where(CandidateEducation.profile_id == profile.id))
+
+                seen_skills = set()
+                category_buckets = [
+                    ("qa_automation", skills_payload.get("qa_automation", [])),
+                    ("manual_qa", skills_payload.get("manual_qa", [])),
+                    ("languages", skills_payload.get("languages", [])),
+                    ("api_and_performance", skills_payload.get("api_and_performance", [])),
+                    ("cicd_and_devops", skills_payload.get("cicd_and_devops", [])),
+                    ("tools", skills_payload.get("tools", [])),
+                    ("frameworks", skills_payload.get("frameworks", [])),
+                    ("general", skills_payload.get("all_skills", [])),
+                ]
+                for cat_name, items in category_buckets:
+                    for sk in (items or []):
+                        sk_clean = str(sk).strip()
+                        if not sk_clean or sk_clean.lower() in seen_skills:
+                            continue
+                        seen_skills.add(sk_clean.lower())
+                        session.add(
+                            CandidateSkill(
+                                profile_id=profile.id,
+                                user_id=profile.user_id,
+                                skill_name=sk_clean,
+                                category=cat_name,
+                                is_verified=True,
+                            )
+                        )
+
+                for edu_entry in (skills_payload.get("education", []) or []):
+                    edu_str = str(edu_entry).strip()
+                    if edu_str:
+                        session.add(
+                            CandidateEducation(
+                                profile_id=profile.id,
+                                user_id=profile.user_id,
+                                institution=edu_str[:120],
+                                degree=edu_str,
+                            )
+                        )
+
+                exp_list = existing_vault.get("experience", [])
+                if isinstance(exp_list, list) and exp_list:
+                    for exp_item in exp_list:
+                        if isinstance(exp_item, dict):
+                            session.add(
+                                CandidateExperience(
+                                    profile_id=profile.id,
+                                    user_id=profile.user_id,
+                                    company=str(exp_item.get("company") or "Experience"),
+                                    role_title=str(exp_item.get("role") or exp_item.get("title") or extracted.primary_role),
+                                    location=str(exp_item.get("location") or ""),
+                                    start_date=str(exp_item.get("dates") or exp_item.get("start_date") or ""),
+                                    highlights=list(exp_item.get("highlights") or exp_item.get("bullets") or []),
+                                )
+                            )
+                elif skills_payload.get("achievements"):
+                    session.add(
+                        CandidateExperience(
+                            profile_id=profile.id,
+                            user_id=profile.user_id,
+                            company="Professional Experience",
+                            role_title=str(extracted.primary_role or extracted.headline or "Specialist"),
+                            highlights=list(skills_payload.get("achievements", [])[:10]),
+                        )
+                    )
+
             session.commit()
             session.refresh(profile)
             return profile
