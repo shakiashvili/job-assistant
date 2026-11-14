@@ -6,15 +6,22 @@ import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Pattern, Any
 
-from playwright.async_api import (
-    async_playwright,
-    TimeoutError as PlaywrightTimeoutError,
-    Browser,
-    BrowserContext,
-    Page,
-)
+try:
+    from playwright.async_api import (
+        async_playwright,
+        TimeoutError as PlaywrightTimeoutError,
+        Browser,
+        BrowserContext,
+        Page,
+    )
+except ImportError:  # pragma: no cover - slim cloud deploys with ENABLE_PLAYWRIGHT=false
+    async_playwright = None
+    PlaywrightTimeoutError = TimeoutError
+    Browser = Any
+    BrowserContext = Any
+    Page = Any
 
-from ..config import RESUMES_DIR, GENERATED_RESUMES_DIR
+from ..config import RESUMES_DIR, GENERATED_RESUMES_DIR, ENABLE_PLAYWRIGHT
 from ..db.profile_repository import ground_truth_store
 from ..services.portal_detector import detect_portal_from_url, detect_portal_from_html
 from ..services.company_validator import company_validator
@@ -85,6 +92,27 @@ class PlaywrightStagerService:
         captcha_status = "none_detected"
         resume_path: Optional[Path] = None
         page_title: Optional[str] = None
+
+        if not ENABLE_PLAYWRIGHT or async_playwright is None:
+            logger.info(
+                "Skipping server-side Chromium launch for %s because ENABLE_PLAYWRIGHT=%s",
+                job_url,
+                ENABLE_PLAYWRIGHT,
+            )
+            return StageApplicationResponse(
+                status="playwright_disabled",
+                portal_detected=portal_type,
+                fields_filled=[],
+                captcha_status="none_detected",
+                file_uploaded=False,
+                resume_file_path=None,
+                message=(
+                    "Server-side headless Chromium staging is disabled (ENABLE_PLAYWRIGHT=false). "
+                    "Use the Chrome Extension in your local browser to fill this form."
+                ),
+                manual_review_needed=True,
+                page_title=None,
+            )
 
         pw_instance = await async_playwright().start()
         browser: Optional[Browser] = None

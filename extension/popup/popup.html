@@ -16,10 +16,19 @@
           <span class="subtext">Universal Form & ATS Assistant</span>
         </div>
       </div>
-      <div id="conn-badge" class="connection-badge">
-        <span class="dot"></span>
-        <span id="conn-text">Offline</span>
+      <div style="display:flex; align-items:center; gap:6px;">
+        <button id="btn-toggle-settings" class="btn-link" type="button" title="Backend API URL Settings">⚙️ API</button>
+        <div id="conn-badge" class="connection-badge">
+          <span class="dot"></span>
+          <span id="conn-text">Offline</span>
+        </div>
       </div>
+    </div>
+
+    <div id="api-settings-card" class="panel-card hidden">
+      <label class="section-label" for="api-base-url">Backend API URL (Synced)</label>
+      <input type="text" id="api-base-url" class="input-field" value="http://localhost:8000" placeholder="https://your-backend.onrender.com" />
+      <button id="btn-save-api" class="btn btn-secondary" style="width:100%;">Save Backend URL</button>
     </div>
 
     <div id="status-banner" class="status-banner hidden"></div>
@@ -39,10 +48,6 @@
       <div id="token-box" class="hidden" style="margin-top: 8px;">
         <input type="text" id="manual-jwt" class="input-field" placeholder="Paste Bearer JWT token" />
         <button id="btn-save-token" class="btn btn-secondary" style="width:100%;">Save Token</button>
-      </div>
-      <div id="api-box" class="hidden" style="margin-top: 8px;">
-        <input type="text" id="api-base-url" class="input-field" value="http://127.0.0.1:8000" />
-        <button id="btn-save-api" class="btn btn-secondary" style="width:100%;">Update API URL</button>
       </div>
     </div>
 

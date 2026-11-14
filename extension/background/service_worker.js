@@ -1,4 +1,5 @@
-const DEFAULT_API_BASE = "http://127.0.0.1:8000";
+const DEFAULT_API_BASE = "http://localhost:8000";
+const REQUEST_TIMEOUT_MS = 15000;
 
 // Configure Chrome Side Panel to dock beside web pages (LinkedIn Easy Apply, Workday, etc.)
 if (chrome.sidePanel && typeof chrome.sidePanel.setPanelBehavior === "function") {
@@ -20,20 +21,59 @@ if (chrome.action && chrome.action.onClicked) {
 }
 
 async function getConfig() {
-  const data = await chrome.storage.local.get([
-    "apiBaseUrl",
-    "jwtToken",
-    "userEmail",
-    "userName",
-    "lastPreparedApp",
+  const [syncData, localData] = await Promise.all([
+    chrome.storage.sync.get(["apiBaseUrl"]),
+    chrome.storage.local.get([
+      "apiBaseUrl",
+      "jwtToken",
+      "refreshToken",
+      "userEmail",
+      "userName",
+      "lastPreparedApp",
+    ]),
   ]);
+  const rawUrl = syncData.apiBaseUrl || localData.apiBaseUrl || DEFAULT_API_BASE;
   return {
-    apiBaseUrl: (data.apiBaseUrl || DEFAULT_API_BASE).replace(/\/+$/, ""),
-    jwtToken: data.jwtToken || "",
-    userEmail: data.userEmail || "",
-    userName: data.userName || "",
-    lastPreparedApp: data.lastPreparedApp || null,
+    apiBaseUrl: rawUrl.replace(/\/+$/, ""),
+    jwtToken: localData.jwtToken || "",
+    refreshToken: localData.refreshToken || "",
+    userEmail: localData.userEmail || "",
+    userName: localData.userName || "",
+    lastPreparedApp: localData.lastPreparedApp || null,
   };
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timerId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timerId);
+  }
+}
+
+async function tryRefreshSession(cfg) {
+  if (!cfg.refreshToken) return null;
+  try {
+    const resp = await fetchWithTimeout(`${cfg.apiBaseUrl}/api/auth/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: cfg.refreshToken }),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if (data?.access_token) {
+      await chrome.storage.local.set({
+        jwtToken: data.access_token,
+        refreshToken: data.refresh_token || cfg.refreshToken,
+      });
+      return data.access_token;
+    }
+  } catch {
+    return null;
+  }
+  return null;
 }
 
 async function apiRequest(path, { method = "GET", body = null, requiresAuth = true } = {}) {
@@ -46,17 +86,28 @@ async function apiRequest(path, { method = "GET", body = null, requiresAuth = tr
     };
   }
 
-  const headers = { "Content-Type": "application/json" };
-  if (cfg.jwtToken) {
-    headers["Authorization"] = `Bearer ${cfg.jwtToken}`;
-  }
-
-  try {
-    const resp = await fetch(`${cfg.apiBaseUrl}${path}`, {
+  const execute = (token) => {
+    const headers = { "Content-Type": "application/json" };
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+    return fetchWithTimeout(`${cfg.apiBaseUrl}${path}`, {
       method,
       headers,
       body: body ? JSON.stringify(body) : undefined,
     });
+  };
+
+  try {
+    let resp = await execute(cfg.jwtToken);
+
+    if (resp.status === 401 && requiresAuth && path !== "/api/auth/refresh") {
+      const nextToken = await tryRefreshSession(cfg);
+      if (nextToken) {
+        resp = await execute(nextToken);
+      }
+    }
+
     const text = await resp.text();
     let parsed = null;
     try {
@@ -66,7 +117,7 @@ async function apiRequest(path, { method = "GET", body = null, requiresAuth = tr
     }
 
     if (resp.status === 401 && requiresAuth) {
-      await chrome.storage.local.remove(["jwtToken", "userEmail", "userName"]);
+      await chrome.storage.local.remove(["jwtToken", "refreshToken", "userEmail", "userName"]);
       return {
         ok: false,
         status: 401,
@@ -84,10 +135,19 @@ async function apiRequest(path, { method = "GET", body = null, requiresAuth = tr
     }
     return { ok: true, status: resp.status, data: parsed };
   } catch (err) {
+    if (err?.name === "AbortError") {
+      return {
+        ok: false,
+        status: 504,
+        code: "BACKEND_TIMEOUT",
+        error: `Backend timed out after ${REQUEST_TIMEOUT_MS / 1000}s (${cfg.apiBaseUrl}). Free-tier hosts may be waking up—wait a few seconds and retry.`,
+      };
+    }
     return {
       ok: false,
       status: 0,
-      error: `Cannot reach backend at ${cfg.apiBaseUrl}: ${err.message}`,
+      code: "BACKEND_UNREACHABLE",
+      error: `Backend unreachable at ${cfg.apiBaseUrl}. Verify the server is running or update Backend URL in settings.`,
     };
   }
 }
@@ -96,7 +156,7 @@ async function fetchPdfBase64(pdfUrl) {
   const cfg = await getConfig();
   const fullUrl = pdfUrl.startsWith("http") ? pdfUrl : `${cfg.apiBaseUrl}${pdfUrl}`;
   try {
-    const resp = await fetch(fullUrl);
+    const resp = await fetchWithTimeout(fullUrl);
     if (!resp.ok) {
       return { ok: false, error: `Failed to download tailored PDF (HTTP ${resp.status})` };
     }
@@ -111,14 +171,17 @@ async function fetchPdfBase64(pdfUrl) {
     const filename = fullUrl.split("/").pop().split("?")[0] || "Tailored_Resume.pdf";
     return { ok: true, base64, filename, fullUrl, mimeType: "application/pdf" };
   } catch (err) {
+    if (err?.name === "AbortError") {
+      return { ok: false, error: "PDF download timed out after 15s. Please try again." };
+    }
     return { ok: false, error: `PDF fetch error: ${err.message}` };
   }
 }
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.get(["apiBaseUrl"], (res) => {
+  chrome.storage.sync.get(["apiBaseUrl"], (res) => {
     if (!res.apiBaseUrl) {
-      chrome.storage.local.set({ apiBaseUrl: DEFAULT_API_BASE });
+      chrome.storage.sync.set({ apiBaseUrl: DEFAULT_API_BASE });
     }
   });
 });
@@ -156,8 +219,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (type === "SET_API_BASE") {
     const cleanUrl = (message.apiBaseUrl || DEFAULT_API_BASE).replace(/\/+$/, "");
-    chrome.storage.local.set({ apiBaseUrl: cleanUrl }, () => {
-      sendResponse({ ok: true, apiBaseUrl: cleanUrl });
+    chrome.storage.sync.set({ apiBaseUrl: cleanUrl }, () => {
+      chrome.storage.local.set({ apiBaseUrl: cleanUrl }, () => {
+        sendResponse({ ok: true, apiBaseUrl: cleanUrl });
+      });
     });
     return true;
   }
@@ -174,9 +239,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         return;
       }
       const token = res.data?.access_token;
+      const refreshToken = res.data?.refresh_token || "";
       const user = res.data?.user || {};
       await chrome.storage.local.set({
         jwtToken: token,
+        refreshToken,
         userEmail: user.email || message.email,
         userName: user.full_name || "Candidate",
       });
@@ -214,7 +281,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (type === "LOGOUT") {
-    chrome.storage.local.remove(["jwtToken", "userEmail", "userName", "lastPreparedApp"], () => {
+    chrome.storage.local.remove(["jwtToken", "refreshToken", "userEmail", "userName", "lastPreparedApp"], () => {
       sendResponse({ ok: true, authenticated: false });
     });
     return true;

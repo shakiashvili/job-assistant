@@ -17,8 +17,20 @@ from .models import (
 logger = logging.getLogger(__name__)
 
 is_sqlite = DATABASE_URL.startswith("sqlite")
-connect_args = {"check_same_thread": False} if is_sqlite else {}
-engine = create_engine(DATABASE_URL, echo=False, connect_args=connect_args)
+if is_sqlite:
+    engine = create_engine(
+        DATABASE_URL,
+        echo=False,
+        connect_args={"check_same_thread": False},
+        pool_pre_ping=True,
+    )
+else:
+    engine = create_engine(
+        DATABASE_URL,
+        echo=False,
+        pool_pre_ping=True,
+        pool_recycle=300,
+    )
 
 if is_sqlite:
     @event.listens_for(engine, "connect")

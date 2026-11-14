@@ -164,8 +164,9 @@ git push -u origin main`;
             {/* Mobile Menu Hamburger Toggle */}
             <button
               onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="lg:hidden p-2 rounded-xl text-slate-400 hover:text-white bg-slate-900 border border-slate-800"
+              className="lg:hidden min-h-[44px] min-w-[44px] flex items-center justify-center p-2 rounded-xl text-slate-300 hover:text-white bg-slate-900 border border-slate-800"
               aria-label="Toggle navigation menu"
+              aria-expanded={isMobileMenuOpen}
             >
               {isMobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
             </button>
@@ -174,7 +175,7 @@ git push -u origin main`;
 
         {/* Mobile Dropdown Menu (on toggle) */}
         {isMobileMenuOpen && (
-          <div className="lg:hidden border-t border-slate-800/80 bg-slate-950 px-4 py-3 space-y-1 animate-in fade-in slide-in-from-top-2">
+          <div className="lg:hidden border-t border-slate-800/80 bg-slate-950/95 backdrop-blur-xl px-4 py-3 space-y-1.5">
             {navItems
               .filter((item) => !item.adminOnly || currentUser?.is_admin)
               .map((item) => {
@@ -187,10 +188,10 @@ git push -u origin main`;
                       setActiveTab(item.id);
                       setIsMobileMenuOpen(false);
                     }}
-                    className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                    className={`w-full min-h-[44px] flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
                       isActive
-                        ? 'bg-sky-600 text-white'
-                        : 'text-slate-400 hover:text-white hover:bg-slate-900'
+                        ? 'bg-gradient-to-r from-sky-600 to-indigo-600 text-white shadow-md shadow-indigo-500/20'
+                        : 'text-slate-300 hover:text-white hover:bg-slate-900'
                     }`}
                   >
                     <Icon className="w-4 h-4" />
@@ -205,7 +206,7 @@ git push -u origin main`;
                   setIsShareOpen(true);
                   setIsMobileMenuOpen(false);
                 }}
-                className="flex items-center gap-1.5 text-indigo-400 py-1"
+                className="min-h-[44px] flex items-center gap-1.5 text-indigo-400 py-1 px-2"
               >
                 <Share2 className="w-3.5 h-3.5" />
                 <span>Share Repository</span>
@@ -220,8 +221,11 @@ git push -u origin main`;
         )}
       </header>
 
-      {/* Mobile Bottom Navigation Bar (1-Thumb Touch Ready) */}
-      <div className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-950/95 border-t border-slate-800 backdrop-blur-xl px-2 py-1.5 flex items-center justify-around shadow-2xl">
+      {/* Mobile Bottom Navigation Bar (1-Thumb Touch Ready, >=44px targets) */}
+      <nav
+        aria-label="Mobile bottom navigation"
+        className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-950/95 border-t border-slate-800 backdrop-blur-xl px-1.5 py-1 flex items-center justify-around shadow-2xl"
+      >
         {navItems
           .filter((item) => !item.adminOnly || currentUser?.is_admin)
           .slice(0, 5)
@@ -232,8 +236,8 @@ git push -u origin main`;
               <button
                 key={item.id}
                 onClick={() => setActiveTab(item.id)}
-                className={`flex flex-col items-center justify-center py-1 px-2 rounded-xl transition-all ${
-                  isActive ? 'text-sky-400 font-bold' : 'text-slate-400 hover:text-slate-200'
+                className={`min-h-[44px] min-w-[44px] flex-1 flex flex-col items-center justify-center py-1 px-1.5 rounded-xl transition-all ${
+                  isActive ? 'text-sky-400 font-bold bg-sky-950/30' : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
                 <Icon className={`w-4 h-4 mb-0.5 ${isActive ? 'scale-110' : ''}`} />
@@ -241,7 +245,7 @@ git push -u origin main`;
               </button>
             );
           })}
-      </div>
+      </nav>
 
       {/* Share Repository & B2B SaaS Modal */}
       {isShareOpen && (

@@ -1,15 +1,38 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { Bot } from 'lucide-react';
 import { Navbar, NavTab } from './components/Navbar';
-import { AuditPanel } from './components/AuditPanel';
-import { ProfileVault } from './components/ProfileVault';
-import { CVVariantManager } from './components/CVVariantManager';
-import { ApplicationTracker } from './components/ApplicationTracker';
-import { ActionPlanView } from './components/ActionPlanView';
-import { AdminDashboard } from './components/AdminDashboard';
 import { AuthModal } from './components/AuthModal';
 import { fetchHealth, fetchCurrentUser, logoutUser } from './services/api';
 import { UserProfile } from './types';
+
+const AuditPanel = lazy(() => import('./components/AuditPanel').then((m) => ({ default: m.AuditPanel })));
+const ProfileVault = lazy(() => import('./components/ProfileVault').then((m) => ({ default: m.ProfileVault })));
+const CVVariantManager = lazy(() => import('./components/CVVariantManager').then((m) => ({ default: m.CVVariantManager })));
+const ApplicationTracker = lazy(() => import('./components/ApplicationTracker').then((m) => ({ default: m.ApplicationTracker })));
+const ActionPlanView = lazy(() => import('./components/ActionPlanView').then((m) => ({ default: m.ActionPlanView })));
+const AdminDashboard = lazy(() => import('./components/AdminDashboard').then((m) => ({ default: m.AdminDashboard })));
+
+const LoadingSkeleton: React.FC<{ fullScreen?: boolean }> = ({ fullScreen = false }) => (
+  <div
+    className={
+      fullScreen
+        ? 'min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-6'
+        : 'w-full space-y-4 animate-pulse'
+    }
+    aria-busy="true"
+    aria-label="Loading workspace"
+  >
+    <div className={fullScreen ? 'w-full max-w-md space-y-4 animate-pulse' : 'w-full space-y-4'}>
+      <div className="h-10 rounded-2xl bg-slate-900/90 border border-slate-800/80" />
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="h-28 rounded-2xl bg-slate-900/80 border border-slate-800/70" />
+        <div className="h-28 rounded-2xl bg-slate-900/80 border border-slate-800/70" />
+        <div className="h-28 rounded-2xl bg-slate-900/80 border border-slate-800/70" />
+      </div>
+      <div className="h-56 rounded-2xl bg-slate-900/70 border border-slate-800/60" />
+    </div>
+  </div>
+);
 
 class TabErrorBoundary extends React.Component<
   { children: React.ReactNode; onReset: () => void },
@@ -48,10 +71,15 @@ export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<NavTab>('audit');
   const [backendHealth, setBackendHealth] = useState<{ connected: boolean; model: string; mode: string } | null>(null);
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
+  const [isAuthChecking, setIsAuthChecking] = useState<boolean>(() =>
+    Boolean(localStorage.getItem('talentflow_token') || localStorage.getItem('talentflow_refresh_token'))
+  );
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
 
   useEffect(() => {
-    checkHealth();
+    if (!document.hidden) {
+      checkHealth();
+    }
     checkCurrentUser();
 
     let timer: ReturnType<typeof setInterval> | null = null;
@@ -62,7 +90,7 @@ export const App: React.FC = () => {
           if (!document.hidden) {
             checkHealth();
           }
-        }, 8000);
+        }, 30000);
       }
     };
 
@@ -82,12 +110,19 @@ export const App: React.FC = () => {
       }
     };
 
+    const handleAuthExpired = () => {
+      setCurrentUser(null);
+      setIsAuthChecking(false);
+    };
+
     startPolling();
     document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('talentflow:auth-expired', handleAuthExpired);
 
     return () => {
       stopPolling();
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('talentflow:auth-expired', handleAuthExpired);
     };
   }, []);
 
@@ -106,13 +141,20 @@ export const App: React.FC = () => {
 
   const checkCurrentUser = async () => {
     const token = localStorage.getItem('talentflow_token');
-    if (!token) return;
+    const refreshToken = localStorage.getItem('talentflow_refresh_token');
+    if (!token && !refreshToken) {
+      setIsAuthChecking(false);
+      return;
+    }
+    setIsAuthChecking(true);
     try {
       const user = await fetchCurrentUser();
       setCurrentUser(user);
     } catch {
       logoutUser();
       setCurrentUser(null);
+    } finally {
+      setIsAuthChecking(false);
     }
   };
 
@@ -123,6 +165,10 @@ export const App: React.FC = () => {
       setActiveTab('tracker');
     }
   };
+
+  if (isAuthChecking) {
+    return <LoadingSkeleton fullScreen />;
+  }
 
   // Zero-Data Gate: Unauthenticated users see ONLY the login / OTP authentication screen.
   // No vacancies, no application cards, and no profiles can render before authentication.
@@ -178,12 +224,14 @@ export const App: React.FC = () => {
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-6 pb-24 lg:pb-10">
         <TabErrorBoundary key={activeTab} onReset={() => setActiveTab('audit')}>
-          {activeTab === 'tracker' && <ApplicationTracker />}
-          {activeTab === 'audit' && <AuditPanel />}
-          {activeTab === 'plans' && <ActionPlanView />}
-          {activeTab === 'vault' && <ProfileVault />}
-          {activeTab === 'variants' && <CVVariantManager />}
-          {activeTab === 'admin' && <AdminDashboard currentUser={currentUser} />}
+          <Suspense fallback={<LoadingSkeleton />}>
+            {activeTab === 'tracker' && <ApplicationTracker />}
+            {activeTab === 'audit' && <AuditPanel />}
+            {activeTab === 'plans' && <ActionPlanView />}
+            {activeTab === 'vault' && <ProfileVault />}
+            {activeTab === 'variants' && <CVVariantManager />}
+            {activeTab === 'admin' && <AdminDashboard currentUser={currentUser} />}
+          </Suspense>
         </TabErrorBoundary>
       </main>
 

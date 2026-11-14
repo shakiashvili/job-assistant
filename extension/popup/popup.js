@@ -1,14 +1,20 @@
 (() => {
+  if (window.__talentFlowPopupInitialized) return;
+  window.__talentFlowPopupInitialized = true;
+
   const el = (id) => document.getElementById(id);
 
   let state = {
-    apiBaseUrl: "http://127.0.0.1:8000",
+    apiBaseUrl: "http://localhost:8000",
     authenticated: false,
     profile: null,
     activeTabId: null,
     pageContext: null,
     scannedFields: [],
     preparedApp: null,
+    isInitializing: false,
+    isPreparing: false,
+    listenersBound: false,
   };
 
   function showStatus(msg, kind = "info") {
@@ -147,144 +153,163 @@
   }
 
   async function initPopup() {
-    const health = await sendBg({ type: "CHECK_HEALTH" });
-    const badge = el("conn-badge");
-    if (health?.ok) {
-      badge.classList.add("online");
-      el("conn-text").textContent = "Backend Online";
-    } else {
-      badge.classList.remove("online");
-      el("conn-text").textContent = "Offline";
-    }
-
-    const auth = await sendBg({ type: "GET_AUTH_STATE" });
-    if (auth?.apiBaseUrl) {
-      state.apiBaseUrl = auth.apiBaseUrl;
-      el("api-base-url").value = auth.apiBaseUrl;
-    }
-    state.authenticated = Boolean(auth?.authenticated);
-    state.profile = auth?.profile || null;
-    renderAuthView();
-
-    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (activeTab?.id) {
-      state.activeTabId = activeTab.id;
-      const scraped = await ensureContentScriptAndScrape(activeTab.id);
-      if (scraped?.ok) {
-        state.pageContext = scraped.context;
-        state.scannedFields = scraped.fields || [];
-        el("portal-badge").textContent = (scraped.context?.portal || "generic").toUpperCase();
-        el("job-title-input").value = scraped.context?.job_title || "";
-        el("company-input").value = scraped.context?.company_name || "";
-
-        if (!scraped.context?.job_title || !scraped.context?.company_name) {
-          el("extraction-warn").classList.remove("hidden");
-        }
-        if (scraped.captcha?.detected) {
-          el("captcha-warn").textContent = scraped.captcha.reason;
-          el("captcha-warn").classList.remove("hidden");
-        }
+    if (state.isInitializing) return;
+    state.isInitializing = true;
+    try {
+      const health = await sendBg({ type: "CHECK_HEALTH" });
+      const badge = el("conn-badge");
+      if (health?.ok) {
+        badge.classList.add("online");
+        el("conn-text").textContent = "Backend Online";
       } else {
-        el("portal-badge").textContent = "PAGE RESTRICTED";
+        badge.classList.remove("online");
+        el("conn-text").textContent = health?.status === 504 ? "Waking / Timeout" : "Offline";
+        if (health?.error) {
+          showStatus(health.error, "error");
+        }
       }
+
+      const auth = await sendBg({ type: "GET_AUTH_STATE" });
+      if (auth?.apiBaseUrl) {
+        state.apiBaseUrl = auth.apiBaseUrl;
+        el("api-base-url").value = auth.apiBaseUrl;
+      }
+      state.authenticated = Boolean(auth?.authenticated);
+      state.profile = auth?.profile || null;
+      renderAuthView();
+
+      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (activeTab?.id) {
+        state.activeTabId = activeTab.id;
+        const scraped = await ensureContentScriptAndScrape(activeTab.id);
+        if (scraped?.ok) {
+          state.pageContext = scraped.context;
+          state.scannedFields = scraped.fields || [];
+          el("portal-badge").textContent = (scraped.context?.portal || "generic").toUpperCase();
+          el("job-title-input").value = scraped.context?.job_title || "";
+          el("company-input").value = scraped.context?.company_name || "";
+
+          if (!scraped.context?.job_title || !scraped.context?.company_name) {
+            el("extraction-warn").classList.remove("hidden");
+          }
+          if (scraped.captcha?.detected) {
+            el("captcha-warn").textContent = scraped.captcha.reason;
+            el("captcha-warn").classList.remove("hidden");
+          }
+        } else {
+          el("portal-badge").textContent = "PAGE RESTRICTED";
+        }
+      }
+    } finally {
+      state.isInitializing = false;
     }
   }
 
   async function runPrepareAndFill(attachCv) {
+    if (state.isPreparing) return;
     if (!state.activeTabId) {
       showStatus("No active browser tab found.", "error");
       return;
     }
-    hideStatus();
-    const scraped = await ensureContentScriptAndScrape(state.activeTabId);
-    if (!scraped?.ok) {
-      showStatus("Cannot inspect this page tab. Navigate to a job portal and try again.", "error");
-      return;
-    }
-    if (scraped.captcha?.detected) {
-      el("captcha-warn").textContent = scraped.captcha.reason;
-      el("captcha-warn").classList.remove("hidden");
-      showStatus("CAPTCHA detected — auto-fill paused for manual human action.", "error");
-      return;
-    }
-
-    const payload = {
-      url: scraped.context?.url || "",
-      portal: scraped.context?.portal || "generic",
-      job_title: el("job-title-input").value.trim() || scraped.context?.job_title || "",
-      company_name: el("company-input").value.trim() || scraped.context?.company_name || "",
-      location: scraped.context?.location || "",
-      job_description: scraped.context?.job_description || "",
-      raw_page_text: scraped.context?.raw_page_text || "",
-      cv_language: el("lang-select").value || null,
-      fields: scraped.fields || [],
-    };
-
+    state.isPreparing = true;
     const btn = attachCv ? el("btn-prepare-fill") : el("btn-fill-step");
     const origText = btn.textContent;
     btn.disabled = true;
     btn.textContent = "⏳ Working...";
-
-    const res = await sendBg({ type: "PREPARE_APPLICATION", payload });
-    btn.disabled = false;
-    btn.textContent = origText;
-
-    if (!res?.ok) {
-      if (res?.status === 401) {
-        state.authenticated = false;
-        renderAuthView();
+    try {
+      hideStatus();
+      const scraped = await ensureContentScriptAndScrape(state.activeTabId);
+      if (!scraped?.ok) {
+        showStatus("Cannot inspect this page tab. Navigate to a job portal and try again.", "error");
+        return;
       }
-      showStatus(res?.error || "Failed to prepare application.", "error");
-      return;
-    }
+      if (scraped.captcha?.detected) {
+        el("captcha-warn").textContent = scraped.captcha.reason;
+        el("captcha-warn").classList.remove("hidden");
+        showStatus("CAPTCHA detected — auto-fill paused for manual human action.", "error");
+        return;
+      }
 
-    const data = res.data;
-    renderPreparedResult(data);
+      const payload = {
+        url: scraped.context?.url || "",
+        portal: scraped.context?.portal || "generic",
+        job_title: el("job-title-input").value.trim() || scraped.context?.job_title || "",
+        company_name: el("company-input").value.trim() || scraped.context?.company_name || "",
+        location: scraped.context?.location || "",
+        job_description: scraped.context?.job_description || "",
+        raw_page_text: scraped.context?.raw_page_text || "",
+        cv_language: el("lang-select").value || null,
+        fields: scraped.fields || [],
+      };
 
-    const fillRes = await new Promise((resolve) => {
-      chrome.tabs.sendMessage(
-        state.activeTabId,
-        { type: "APPLY_FIELD_ANSWERS", fieldAnswers: data.field_answers || [] },
-        resolve
+      const res = await sendBg({ type: "PREPARE_APPLICATION", payload });
+
+      if (!res?.ok) {
+        if (res?.status === 401) {
+          state.authenticated = false;
+          renderAuthView();
+        }
+        showStatus(res?.error || "Failed to prepare application.", "error");
+        return;
+      }
+
+      const data = res.data;
+      renderPreparedResult(data);
+
+      const fillRes = await new Promise((resolve) => {
+        chrome.tabs.sendMessage(
+          state.activeTabId,
+          { type: "APPLY_FIELD_ANSWERS", fieldAnswers: data.field_answers || [] },
+          resolve
+        );
+      });
+
+      if (attachCv && data.tailored_cv?.pdf_url) {
+        const pdfRes = await sendBg({ type: "FETCH_CV_BLOB", pdfUrl: data.tailored_cv.pdf_url });
+        if (pdfRes?.ok && pdfRes.base64) {
+          await new Promise((resolve) => {
+            chrome.tabs.sendMessage(
+              state.activeTabId,
+              {
+                type: "ATTACH_PDF",
+                base64: pdfRes.base64,
+                filename: data.tailored_cv.pdf_filename || pdfRes.filename,
+              },
+              resolve
+            );
+          });
+        }
+      }
+
+      showStatus(
+        `Ready: Filled ${fillRes?.filledCount || 0} fields cleanly. Verify everything before clicking Next or Submit.`,
+        "success"
       );
-    });
-
-    if (attachCv && data.tailored_cv?.pdf_url) {
-      const pdfRes = await sendBg({ type: "FETCH_CV_BLOB", pdfUrl: data.tailored_cv.pdf_url });
-      if (pdfRes?.ok && pdfRes.base64) {
-        await new Promise((resolve) => {
-          chrome.tabs.sendMessage(
-            state.activeTabId,
-            {
-              type: "ATTACH_PDF",
-              base64: pdfRes.base64,
-              filename: data.tailored_cv.pdf_filename || pdfRes.filename,
-            },
-            resolve
-          );
-        });
-      }
+    } finally {
+      state.isPreparing = false;
+      btn.disabled = false;
+      btn.textContent = origText;
     }
-
-    showStatus(
-      `Ready: Filled ${fillRes?.filledCount || 0} fields cleanly. Verify everything before clicking Next or Submit.`,
-      "success"
-    );
   }
 
-  // Event bindings
-  el("btn-toggle-token")?.addEventListener("click", () => el("token-box").classList.toggle("hidden"));
-  el("btn-toggle-api")?.addEventListener("click", () => el("api-box").classList.toggle("hidden"));
+  function bindEventListenersOnce() {
+    if (state.listenersBound) return;
+    state.listenersBound = true;
 
-  el("btn-save-api")?.addEventListener("click", async () => {
-    const url = el("api-base-url").value.trim();
-    const res = await sendBg({ type: "SET_API_BASE", apiBaseUrl: url });
-    if (res?.ok) {
-      state.apiBaseUrl = res.apiBaseUrl;
-      showStatus(`Updated backend URL to ${res.apiBaseUrl}`, "success");
-      initPopup();
-    }
-  });
+    el("btn-toggle-token")?.addEventListener("click", () => el("token-box")?.classList.toggle("hidden"));
+    el("btn-toggle-api")?.addEventListener("click", () => el("api-settings-card")?.classList.toggle("hidden"));
+    el("btn-toggle-settings")?.addEventListener("click", () => el("api-settings-card")?.classList.toggle("hidden"));
+
+    el("btn-save-api")?.addEventListener("click", async () => {
+      const url = el("api-base-url").value.trim();
+      const res = await sendBg({ type: "SET_API_BASE", apiBaseUrl: url });
+      if (res?.ok) {
+        state.apiBaseUrl = res.apiBaseUrl;
+        el("api-settings-card")?.classList.add("hidden");
+        showStatus(`Synced backend URL to ${res.apiBaseUrl}`, "success");
+        initPopup();
+      }
+    });
 
   el("btn-login")?.addEventListener("click", async () => {
     const email = el("login-email").value.trim();
@@ -358,6 +383,16 @@
     await navigator.clipboard.writeText(txt);
     showStatus("Copied cover letter to clipboard.", "success");
   });
+  }
 
-  document.addEventListener("DOMContentLoaded", initPopup);
+  function startPopup() {
+    bindEventListenersOnce();
+    initPopup();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", startPopup, { once: true });
+  } else {
+    startPopup();
+  }
 })();

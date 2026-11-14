@@ -3,6 +3,7 @@ import logging
 import httpx
 from bs4 import BeautifulSoup
 from typing import List, Optional
+from ..config import ENABLE_PLAYWRIGHT
 from ..db.profile_repository import ground_truth_store
 from ..services.gemini_service import gemini_service
 from ..services.portal_detector import detect_portal_from_html, detect_portal_from_url
@@ -60,11 +61,17 @@ class AuditService:
         body_text = (soup.body.get_text(" ", strip=True) if soup.body else soup.get_text(" ", strip=True)).strip()
 
         if len(body_text) < 150 and url.startswith(("http://", "https://", "file://")):
-            logger.info(f"Body text length ({len(body_text)} < 150 chars) on {url}; falling back to headless Playwright SPA hydration.")
-            try:
-                html_text = await asyncio.to_thread(_fetch_spa_html_with_playwright, url)
-            except Exception as pw_err:
-                logger.warning(f"Headless Playwright SPA hydration fallback failed for {url}: {pw_err}")
+            if not ENABLE_PLAYWRIGHT:
+                logger.info(
+                    f"Body text length ({len(body_text)} < 150 chars) on {url}, "
+                    "but ENABLE_PLAYWRIGHT=false; skipping headless Chromium SPA hydration and using httpx HTML."
+                )
+            else:
+                logger.info(f"Body text length ({len(body_text)} < 150 chars) on {url}; falling back to headless Playwright SPA hydration.")
+                try:
+                    html_text = await asyncio.to_thread(_fetch_spa_html_with_playwright, url)
+                except Exception as pw_err:
+                    logger.warning(f"Headless Playwright SPA hydration fallback failed for {url}: {pw_err}")
 
         return html_text
 

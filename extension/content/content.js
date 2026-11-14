@@ -541,9 +541,52 @@
     return false;
   });
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", injectFloatingHud);
-  } else {
+  function debounce(fn, waitMs = 350) {
+    let timerId = null;
+    return (...args) => {
+      if (timerId) clearTimeout(timerId);
+      timerId = setTimeout(() => {
+        timerId = null;
+        fn(...args);
+      }, waitMs);
+    };
+  }
+
+  let __domObserver = null;
+
+  function initDebouncedDomObserver() {
+    if (__domObserver || !document.body) return;
+
+    const handleDomChange = debounce(() => {
+      const portal = detectPortal();
+      const fields = scanFormFields();
+      const metaEl = document.getElementById("tf-hud-meta");
+      if (metaEl && !metaEl.dataset.locked) {
+        metaEl.innerHTML = `Portal: <b>${portal.toUpperCase()}</b> · ${fields.length} controls ready`;
+      }
+    }, 350);
+
+    __domObserver = new MutationObserver((mutations) => {
+      const relevant = mutations.some((m) => {
+        const targetEl = m.target instanceof Element ? m.target : m.target?.parentElement;
+        return !targetEl?.closest("#ai-job-assistant-hud, #tf-ai-toast");
+      });
+      if (relevant) {
+        handleDomChange();
+      }
+    });
+
+    __domObserver.observe(document.body, { childList: true, subtree: true });
+  }
+
+  function bootstrapContentScript() {
     injectFloatingHud();
+    initDebouncedDomObserver();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", bootstrapContentScript);
+  } else {
+    bootstrapContentScript();
   }
 })();

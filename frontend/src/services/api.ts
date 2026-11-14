@@ -22,13 +22,84 @@ import {
 export const BACKEND_ORIGIN = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 const API_BASE = `${BACKEND_ORIGIN}/api`;
 
+const ACCESS_TOKEN_KEY = 'talentflow_token';
+const REFRESH_TOKEN_KEY = 'talentflow_refresh_token';
+
+function saveAuthTokens(data: AuthResponse): void {
+  if (data.access_token) {
+    localStorage.setItem(ACCESS_TOKEN_KEY, data.access_token);
+  }
+  if (data.refresh_token) {
+    localStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token);
+  }
+}
+
 export function getAuthHeaders(): HeadersInit {
-  const token = localStorage.getItem('talentflow_token');
+  const token = localStorage.getItem(ACCESS_TOKEN_KEY);
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
   return headers;
+}
+
+let inFlightRefresh: Promise<boolean> | null = null;
+
+export async function refreshAccessToken(): Promise<boolean> {
+  if (inFlightRefresh) return inFlightRefresh;
+
+  const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
+  if (!refreshToken) return false;
+
+  inFlightRefresh = (async () => {
+    try {
+      const res = await fetch(`${API_BASE}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      });
+      if (!res.ok) return false;
+      const data: AuthResponse = await res.json();
+      saveAuthTokens(data);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      inFlightRefresh = null;
+    }
+  })();
+
+  return inFlightRefresh;
+}
+
+/**
+ * Fetch wrapper with automatic Bearer injection and single-flight 401 refresh retry.
+ * Only clears stored tokens and notifies the UI if refresh also fails.
+ */
+export async function apiFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const buildHeaders = (withToken: string | null): Headers => {
+    const headers = new Headers(init.headers || {});
+    if (withToken) {
+      headers.set('Authorization', `Bearer ${withToken}`);
+    }
+    return headers;
+  };
+
+  const token = localStorage.getItem(ACCESS_TOKEN_KEY);
+  let res = await fetch(url, { ...init, headers: buildHeaders(token) });
+
+  if (res.status === 401 && !url.includes('/auth/refresh') && !url.includes('/auth/login')) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      const nextToken = localStorage.getItem(ACCESS_TOKEN_KEY);
+      res = await fetch(url, { ...init, headers: buildHeaders(nextToken) });
+    } else {
+      logoutUser();
+      window.dispatchEvent(new Event('talentflow:auth-expired'));
+    }
+  }
+
+  return res;
 }
 
 export async function fetchHealth(): Promise<{ status: string; gemini: { connected: boolean; model: string; mode: string } }> {
@@ -38,7 +109,7 @@ export async function fetchHealth(): Promise<{ status: string; gemini: { connect
 }
 
 export async function fetchVacancies(): Promise<PortalVacancyItem[]> {
-  const res = await fetch(`${API_BASE}/vacancies`, { headers: getAuthHeaders() });
+  const res = await apiFetch(`${API_BASE}/vacancies`, { headers: getAuthHeaders() });
   if (!res.ok) throw new Error('Failed to fetch portal vacancies');
   return res.json();
 }
@@ -80,7 +151,7 @@ export async function applySkillsPreset(presetId: string): Promise<{
   ground_truth: GroundTruth;
   message: string;
 }> {
-  const res = await fetch(`${API_BASE}/skills-md/preset/${presetId}`, {
+  const res = await apiFetch(`${API_BASE}/skills-md/preset/${presetId}`, {
     method: 'POST',
     headers: getAuthHeaders(),
   });
@@ -89,7 +160,7 @@ export async function applySkillsPreset(presetId: string): Promise<{
 }
 
 export async function saveSkillsMdText(content: string): Promise<{ status: string; message: string; extracted_skills: string[]; ground_truth: GroundTruth }> {
-  const res = await fetch(`${API_BASE}/skills-md`, {
+  const res = await apiFetch(`${API_BASE}/skills-md`, {
     method: 'POST',
     headers: getAuthHeaders(),
     body: JSON.stringify({ content }),
@@ -108,12 +179,8 @@ export async function uploadSkillsMdFile(file: File): Promise<{
 }> {
   const formData = new FormData();
   formData.append('file', file);
-  const token = localStorage.getItem('talentflow_token');
-  const headers: Record<string, string> = {};
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  const res = await fetch(`${API_BASE}/profile/upload-skills`, {
+  const res = await apiFetch(`${API_BASE}/profile/upload-skills`, {
     method: 'POST',
-    headers,
     body: formData,
   });
   if (!res.ok) throw new Error('Failed to upload .md file');
@@ -136,7 +203,7 @@ export async function fetchDbProfile(): Promise<{
   parsed_skills: ParsedSkillsTaxonomy;
   updated_at: string;
 }> {
-  const res = await fetch(`${API_BASE}/profile`, {
+  const res = await apiFetch(`${API_BASE}/profile`, {
     headers: getAuthHeaders(),
   });
   if (!res.ok) throw new Error('Failed to load CandidateProfile from DB');
@@ -163,7 +230,7 @@ export async function fetchScrapedJobs(params?: {
     if (params.tier && params.tier !== 'ALL') qs.set('tier', params.tier);
   }
   const queryStr = qs.toString() ? `?${qs.toString()}` : '';
-  const res = await fetch(`${API_BASE}/jobs${queryStr}`, {
+  const res = await apiFetch(`${API_BASE}/jobs${queryStr}`, {
     headers: getAuthHeaders(),
   });
   if (!res.ok) return { items: [], total: 0, page: 1, limit: 12, total_pages: 1 };
@@ -182,7 +249,7 @@ export async function triggerMultiPortalScrape(allowNetwork = true): Promise<{
   rejection_reasons?: Array<{ portal: string; title: string; company: string; reason: string }>;
   jobs: DbJobPosting[];
 }> {
-  const res = await fetch(`${API_BASE}/jobs/scrape`, {
+  const res = await apiFetch(`${API_BASE}/jobs/scrape`, {
     method: 'POST',
     headers: getAuthHeaders(),
     body: JSON.stringify({ allow_network: allowNetwork }),
@@ -198,7 +265,7 @@ export async function fetchGeneratedResumes(): Promise<Array<{ filename: string;
 }
 
 export async function fetchMyCvs(): Promise<Array<{ filename: string; url: string; ext: string; size_kb: number }>> {
-  const res = await fetch(`${API_BASE}/resumes/my-cvs`, {
+  const res = await apiFetch(`${API_BASE}/resumes/my-cvs`, {
     headers: getAuthHeaders(),
   });
   if (!res.ok) return [];
@@ -208,12 +275,8 @@ export async function fetchMyCvs(): Promise<Array<{ filename: string; url: strin
 export async function uploadPersonalCv(file: File): Promise<{ status: string; filename: string; url: string; ext: string; size_kb: number }> {
   const formData = new FormData();
   formData.append('file', file);
-  const token = localStorage.getItem('talentflow_token');
-  const headers: Record<string, string> = {};
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  const res = await fetch(`${API_BASE}/resumes/my-cvs/upload`, {
+  const res = await apiFetch(`${API_BASE}/resumes/my-cvs/upload`, {
     method: 'POST',
-    headers,
     body: formData,
   });
   if (!res.ok) {
@@ -224,7 +287,7 @@ export async function uploadPersonalCv(file: File): Promise<{ status: string; fi
 }
 
 export async function deletePersonalCv(filename: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/resumes/my-cvs/${encodeURIComponent(filename)}`, {
+  const res = await apiFetch(`${API_BASE}/resumes/my-cvs/${encodeURIComponent(filename)}`, {
     method: 'DELETE',
     headers: getAuthHeaders(),
   });
@@ -251,7 +314,7 @@ export async function generateCvEdition(params: {
   pdf_filename: string;
   pdf_url: string;
 }> {
-  const res = await fetch(`${API_BASE}/resumes/generate-edition`, {
+  const res = await apiFetch(`${API_BASE}/resumes/generate-edition`, {
     method: 'POST',
     headers: getAuthHeaders(),
     body: JSON.stringify(params),
@@ -284,7 +347,7 @@ export async function prepareJobEmailPackage(
   draft_mode_used?: string;
   draft_error?: string | null;
 }> {
-  const res = await fetch(`${API_BASE}/jobs/${jobId}/prepare-email-package?cv_language=${encodeURIComponent(cvLanguage)}`, {
+  const res = await apiFetch(`${API_BASE}/jobs/${jobId}/prepare-email-package?cv_language=${encodeURIComponent(cvLanguage)}`, {
     method: 'POST',
     headers: getAuthHeaders(),
   });
@@ -384,7 +447,7 @@ export async function updateApplication(id: string, update: Partial<ApplicationI
 }
 
 export async function deleteApplication(id: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/applications/${id}`, {
+  const res = await apiFetch(`${API_BASE}/applications/${id}`, {
     method: 'DELETE',
     headers: getAuthHeaders(),
   });
@@ -404,7 +467,7 @@ export async function loginUser(email: string, password: string): Promise<AuthRe
     throw new Error(err.detail || 'Invalid email or password');
   }
   const data: AuthResponse = await res.json();
-  localStorage.setItem('talentflow_token', data.access_token);
+  saveAuthTokens(data);
   return data;
 }
 
@@ -419,7 +482,7 @@ export async function registerUser(email: string, password: string, full_name: s
     throw new Error(err.detail || 'Registration failed');
   }
   const data: AuthResponse = await res.json();
-  localStorage.setItem('talentflow_token', data.access_token);
+  saveAuthTokens(data);
   return data;
 }
 
@@ -447,7 +510,7 @@ export async function verifyOtp(email: string, otp_code: string): Promise<AuthRe
     throw new Error(err.detail || 'Invalid or expired OTP code');
   }
   const data: AuthResponse = await res.json();
-  localStorage.setItem('talentflow_token', data.access_token);
+  saveAuthTokens(data);
   return data;
 }
 
@@ -461,7 +524,7 @@ export async function configureSmtp(
   gmail_user: string,
   gmail_app_password: string
 ): Promise<{ status: string; smtp_configured: boolean; sender_masked: string; message: string }> {
-  const res = await fetch(`${API_BASE}/auth/configure-smtp`, {
+  const res = await apiFetch(`${API_BASE}/auth/configure-smtp`, {
     method: 'POST',
     headers: getAuthHeaders(),
     body: JSON.stringify({ gmail_user, gmail_app_password }),
@@ -474,39 +537,40 @@ export async function configureSmtp(
 }
 
 export async function fetchCurrentUser(): Promise<UserProfile> {
-  const res = await fetch(`${API_BASE}/auth/me`, {
-    headers: getAuthHeaders(),
+  const res = await apiFetch(`${API_BASE}/auth/me`, {
+    headers: { 'Content-Type': 'application/json' },
   });
   if (!res.ok) throw new Error('Unauthorized');
   return res.json();
 }
 
 export function logoutUser(): void {
-  localStorage.removeItem('talentflow_token');
+  localStorage.removeItem(ACCESS_TOKEN_KEY);
+  localStorage.removeItem(REFRESH_TOKEN_KEY);
 }
 
 // --- Dedicated Admin API ---
 
 export async function fetchAdminUsers(): Promise<AdminUser[]> {
-  const res = await fetch(`${API_BASE}/admin/users`, {
-    headers: getAuthHeaders(),
+  const res = await apiFetch(`${API_BASE}/admin/users`, {
+    headers: { 'Content-Type': 'application/json' },
   });
   if (!res.ok) throw new Error('Failed to load admin user list');
   return res.json();
 }
 
 export async function fetchAdminMetrics(): Promise<PlatformMetrics> {
-  const res = await fetch(`${API_BASE}/admin/metrics`, {
-    headers: getAuthHeaders(),
+  const res = await apiFetch(`${API_BASE}/admin/metrics`, {
+    headers: { 'Content-Type': 'application/json' },
   });
   if (!res.ok) throw new Error('Failed to load admin metrics');
   return res.json();
 }
 
 export async function updateAdminUser(userId: number, updates: { is_active?: boolean; is_admin?: boolean }): Promise<AdminUser> {
-  const res = await fetch(`${API_BASE}/admin/users/${userId}`, {
+  const res = await apiFetch(`${API_BASE}/admin/users/${userId}`, {
     method: 'PATCH',
-    headers: getAuthHeaders(),
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(updates),
   });
   if (!res.ok) throw new Error('Failed to update user');
@@ -514,9 +578,9 @@ export async function updateAdminUser(userId: number, updates: { is_active?: boo
 }
 
 export async function deactivateAdminUser(userId: number): Promise<void> {
-  const res = await fetch(`${API_BASE}/admin/users/${userId}`, {
+  const res = await apiFetch(`${API_BASE}/admin/users/${userId}`, {
     method: 'DELETE',
-    headers: getAuthHeaders(),
+    headers: { 'Content-Type': 'application/json' },
   });
   if (!res.ok) throw new Error('Failed to deactivate user');
 }
@@ -534,7 +598,7 @@ export async function dispatchApplicationEmail(
   appId: string,
   params: { recipient_email?: string; subject?: string; body_text?: string; mode: 'draft' | 'send' }
 ): Promise<any> {
-  const res = await fetch(`${API_BASE}/applications/${appId}/send-email`, {
+  const res = await apiFetch(`${API_BASE}/applications/${appId}/send-email`, {
     method: 'POST',
     headers: getAuthHeaders(),
     body: JSON.stringify(params),
@@ -546,7 +610,7 @@ export async function dispatchApplicationEmail(
 // --- Interview Preparation Copilot API ---
 
 export async function prepareInterview(appId: string, roundType: string = 'HR_SCREEN'): Promise<InterviewBrief> {
-  const res = await fetch(`${API_BASE}/applications/${appId}/prepare-interview`, {
+  const res = await apiFetch(`${API_BASE}/applications/${appId}/prepare-interview`, {
     method: 'POST',
     headers: getAuthHeaders(),
     body: JSON.stringify({ round_type: roundType }),
@@ -556,7 +620,7 @@ export async function prepareInterview(appId: string, roundType: string = 'HR_SC
 }
 
 export async function fetchApplicationInterviews(appId: string): Promise<any[]> {
-  const res = await fetch(`${API_BASE}/applications/${appId}/interviews`, {
+  const res = await apiFetch(`${API_BASE}/applications/${appId}/interviews`, {
     headers: getAuthHeaders(),
   });
   if (!res.ok) return [];
@@ -564,7 +628,7 @@ export async function fetchApplicationInterviews(appId: string): Promise<any[]> 
 }
 
 export async function updateInterviewNotes(appId: string, roundId: number, notes: string, status?: string): Promise<any> {
-  const res = await fetch(`${API_BASE}/applications/${appId}/interviews/${roundId}`, {
+  const res = await apiFetch(`${API_BASE}/applications/${appId}/interviews/${roundId}`, {
     method: 'PATCH',
     headers: getAuthHeaders(),
     body: JSON.stringify({ candidate_notes: notes, status }),
@@ -576,7 +640,7 @@ export async function updateInterviewNotes(appId: string, roundId: number, notes
 // --- Skill Gap Action Plans API ---
 
 export async function fetchActionPlans(): Promise<SkillActionPlan[]> {
-  const res = await fetch(`${API_BASE}/action-plans`, {
+  const res = await apiFetch(`${API_BASE}/action-plans`, {
     headers: getAuthHeaders(),
   });
   if (!res.ok) throw new Error('Failed to load action plans');
@@ -584,7 +648,7 @@ export async function fetchActionPlans(): Promise<SkillActionPlan[]> {
 }
 
 export async function generateActionPlans(): Promise<SkillActionPlan[]> {
-  const res = await fetch(`${API_BASE}/profile/generate-action-plan`, {
+  const res = await apiFetch(`${API_BASE}/profile/generate-action-plan`, {
     method: 'POST',
     headers: getAuthHeaders(),
   });
@@ -593,7 +657,7 @@ export async function generateActionPlans(): Promise<SkillActionPlan[]> {
 }
 
 export async function toggleMilestone(planId: number, milestoneIndex: number): Promise<SkillActionPlan> {
-  const res = await fetch(`${API_BASE}/action-plans/${planId}/milestones/${milestoneIndex}`, {
+  const res = await apiFetch(`${API_BASE}/action-plans/${planId}/milestones/${milestoneIndex}`, {
     method: 'PATCH',
     headers: getAuthHeaders(),
   });
@@ -602,7 +666,7 @@ export async function toggleMilestone(planId: number, milestoneIndex: number): P
 }
 
 export async function deleteActionPlan(planId: number): Promise<void> {
-  const res = await fetch(`${API_BASE}/action-plans/${planId}`, {
+  const res = await apiFetch(`${API_BASE}/action-plans/${planId}`, {
     method: 'DELETE',
     headers: getAuthHeaders(),
   });

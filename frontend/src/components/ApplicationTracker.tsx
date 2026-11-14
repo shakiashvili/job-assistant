@@ -190,7 +190,7 @@ export const ApplicationTracker: React.FC = () => {
 
         <button
           onClick={() => setIsAddModalOpen(true)}
-          className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold text-white bg-sky-600 hover:bg-sky-500 shadow-lg shadow-sky-600/20 transition-all self-start sm:self-auto"
+          className="min-h-[44px] flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold text-white bg-sky-600 hover:bg-sky-500 shadow-lg shadow-sky-600/20 transition-all self-start sm:self-auto"
         >
           <Plus className="w-4 h-4" />
           <span>Add Application</span>
@@ -286,13 +286,13 @@ export const ApplicationTracker: React.FC = () => {
                       )}
 
                       {/* Card Actions: Interview Prep, Gmail Dispatch, PDF Download, Stage Shift */}
-                      <div className="flex items-center justify-between pt-2 border-t border-slate-800/70 text-[10px]">
-                        <div className="flex items-center gap-1">
+                      <div className="flex flex-wrap items-center justify-between gap-1 pt-2 border-t border-slate-800/70 text-[10px]">
+                        <div className="flex items-center gap-0.5">
                           {/* Interview Copilot Button */}
                           <button
                             onClick={() => setPrepModalApp(app)}
                             title="Interview Copilot (10 Questions & STAR Frameworks)"
-                            className="p-1 rounded hover:bg-slate-800 text-indigo-400 hover:text-indigo-300 transition-colors flex items-center gap-0.5"
+                            className="min-h-[44px] min-w-[44px] sm:min-h-[32px] sm:min-w-[32px] p-1.5 rounded-lg hover:bg-slate-800 text-indigo-400 hover:text-indigo-300 transition-colors flex items-center justify-center"
                           >
                             <Sparkles className="w-3.5 h-3.5" />
                           </button>
@@ -301,7 +301,7 @@ export const ApplicationTracker: React.FC = () => {
                           <button
                             onClick={() => setEmailModalApp(app)}
                             title="Save as Gmail Draft or Send via Email"
-                            className="p-1 rounded hover:bg-slate-800 text-rose-400 hover:text-rose-300 transition-colors"
+                            className="min-h-[44px] min-w-[44px] sm:min-h-[32px] sm:min-w-[32px] p-1.5 rounded-lg hover:bg-slate-800 text-rose-400 hover:text-rose-300 transition-colors flex items-center justify-center"
                           >
                             <Mail className="w-3.5 h-3.5" />
                           </button>
@@ -313,7 +313,7 @@ export const ApplicationTracker: React.FC = () => {
                               target="_blank"
                               rel="noopener noreferrer"
                               title="Download Tailored ATS PDF Resume"
-                              className="p-1 rounded hover:bg-slate-800 text-sky-400 transition-colors"
+                              className="min-h-[44px] min-w-[44px] sm:min-h-[32px] sm:min-w-[32px] p-1.5 rounded-lg hover:bg-slate-800 text-sky-400 transition-colors flex items-center justify-center"
                             >
                               <Download className="w-3.5 h-3.5" />
                             </a>
@@ -323,7 +323,7 @@ export const ApplicationTracker: React.FC = () => {
                           <button
                             onClick={() => openInterviewModal(app)}
                             title="Edit Notes & Interview Date"
-                            className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+                            className="min-h-[44px] min-w-[44px] sm:min-h-[32px] sm:min-w-[32px] p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors flex items-center justify-center"
                           >
                             <Calendar className="w-3.5 h-3.5" />
                           </button>
@@ -332,7 +332,7 @@ export const ApplicationTracker: React.FC = () => {
                           <button
                             onClick={() => handleDelete(app.id)}
                             title="Remove from board"
-                            className="p-1 rounded hover:bg-slate-800 text-slate-500 hover:text-rose-400 transition-colors"
+                            className="min-h-[44px] min-w-[44px] sm:min-h-[32px] sm:min-w-[32px] p-1.5 rounded-lg hover:bg-slate-800 text-slate-500 hover:text-rose-400 transition-colors flex items-center justify-center"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -344,7 +344,7 @@ export const ApplicationTracker: React.FC = () => {
                             <button
                               onClick={() => handleStageShift(app.id, stage, 'backward')}
                               title={`Move back to ${KANBAN_STAGES[stageIdx - 1]}`}
-                              className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+                              className="min-h-[44px] min-w-[44px] sm:min-h-[32px] sm:min-w-[32px] p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors flex items-center justify-center"
                             >
                               <ChevronLeft className="w-3.5 h-3.5" />
                             </button>
@@ -353,7 +353,7 @@ export const ApplicationTracker: React.FC = () => {
                             <button
                               onClick={() => handleStageShift(app.id, stage, 'forward')}
                               title={`Advance to ${KANBAN_STAGES[stageIdx + 1]}`}
-                              className="p-1 rounded hover:bg-slate-800 text-sky-400 hover:text-sky-300 transition-colors"
+                              className="min-h-[44px] min-w-[44px] sm:min-h-[32px] sm:min-w-[32px] p-1.5 rounded-lg hover:bg-slate-800 text-sky-400 hover:text-sky-300 transition-colors flex items-center justify-center"
                             >
                               <ChevronRight className="w-3.5 h-3.5" />
                             </button>

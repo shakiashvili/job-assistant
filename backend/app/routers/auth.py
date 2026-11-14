@@ -17,7 +17,9 @@ from ..services.auth_service import (
     hash_password,
     verify_password,
     create_access_token,
+    create_refresh_token,
     decode_access_token,
+    decode_refresh_token,
     get_current_user,
     get_user_by_email,
     security_bearer,
@@ -64,10 +66,33 @@ class UserOut(BaseModel):
     has_gmail_oauth: bool = False
 
 
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str = Field(..., min_length=10, description="Valid refresh token for sliding session renewal")
+
+
 class AuthResponse(BaseModel):
     access_token: str
+    refresh_token: Optional[str] = None
     token_type: str = "bearer"
     user: UserOut
+
+
+def _build_auth_response(user: User) -> AuthResponse:
+    """Issues a fresh Access Token (60m) and Refresh Token (14d) for an authenticated user."""
+    claims = {"sub": user.email, "is_admin": user.is_admin, "user_id": user.id}
+    return AuthResponse(
+        access_token=create_access_token(claims),
+        refresh_token=create_refresh_token(claims),
+        token_type="bearer",
+        user=UserOut(
+            id=user.id,
+            email=user.email,
+            full_name=user.full_name,
+            is_active=user.is_active,
+            is_admin=user.is_admin,
+            has_gmail_oauth=bool(user.gmail_oauth_token),
+        ),
+    )
 
 
 def sanitize_email(email: str) -> str:
@@ -122,20 +147,7 @@ def register_user(req: RegisterRequest, session: Session = Depends(get_session))
     session.refresh(user)
 
     _sync_profile_owner_on_auth(session, clean_email, force_reset=True)
-
-    token = create_access_token({"sub": user.email, "is_admin": user.is_admin, "user_id": user.id})
-    return AuthResponse(
-        access_token=token,
-        token_type="bearer",
-        user=UserOut(
-            id=user.id,
-            email=user.email,
-            full_name=user.full_name,
-            is_active=user.is_active,
-            is_admin=user.is_admin,
-            has_gmail_oauth=bool(user.gmail_oauth_token),
-        ),
-    )
+    return _build_auth_response(user)
 
 
 @router.post("/login", response_model=AuthResponse)
@@ -161,20 +173,7 @@ def login_user(req: LoginRequest, session: Session = Depends(get_session)):
 
     reset_login_attempts(clean_email)
     _sync_profile_owner_on_auth(session, clean_email, force_reset=False)
-
-    token = create_access_token({"sub": user.email, "is_admin": user.is_admin, "user_id": user.id})
-    return AuthResponse(
-        access_token=token,
-        token_type="bearer",
-        user=UserOut(
-            id=user.id,
-            email=user.email,
-            full_name=user.full_name,
-            is_active=user.is_active,
-            is_admin=user.is_admin,
-            has_gmail_oauth=bool(user.gmail_oauth_token),
-        ),
-    )
+    return _build_auth_response(user)
 
 
 @router.get("/smtp-status")
@@ -385,21 +384,45 @@ def verify_otp_code(req: VerifyOTPRequest, session: Session = Depends(get_sessio
 
     reset_login_attempts(clean_email)
     _sync_profile_owner_on_auth(session, clean_email, force_reset=False)
+    return _build_auth_response(user)
 
-    token = create_access_token({"sub": user.email, "is_admin": user.is_admin, "user_id": user.id})
 
-    return AuthResponse(
-        access_token=token,
-        token_type="bearer",
-        user=UserOut(
-            id=user.id,
-            email=user.email,
-            full_name=user.full_name,
-            is_active=user.is_active,
-            is_admin=user.is_admin,
-            has_gmail_oauth=bool(user.gmail_oauth_token),
-        ),
-    )
+@router.post("/refresh", response_model=AuthResponse)
+def refresh_session(req: RefreshTokenRequest, session: Session = Depends(get_session)):
+    """
+    Exchanges a valid Refresh Token (14 days) for a fresh Access Token (60 mins)
+    and a rotated sliding Refresh Token so active users stay signed in seamlessly.
+    """
+    payload = decode_refresh_token(req.refresh_token.strip())
+    if not payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired refresh token. Please sign in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    user_email = payload.get("sub")
+    if not user_email:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Malformed refresh token claims.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    user = get_user_by_email(session, sanitize_email(user_email))
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found or account removed.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is inactive or disabled by admin.",
+        )
+
+    return _build_auth_response(user)
 
 
 @router.get("/me", response_model=UserOut)

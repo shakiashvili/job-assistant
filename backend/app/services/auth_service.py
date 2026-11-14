@@ -8,7 +8,12 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlmodel import Session, select
 
-from ..config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
+from ..config import (
+    SECRET_KEY,
+    ALGORITHM,
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+    REFRESH_TOKEN_EXPIRE_DAYS,
+)
 from ..db.database import get_session
 from ..db.models import User
 from .crypto_service import blind_index
@@ -78,14 +83,27 @@ def reset_login_attempts(identifier: str) -> None:
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    """Generates a secure HS256 JWT access token."""
+    """Generates a secure HS256 JWT access token (default 60 minutes)."""
     to_encode = data.copy()
     now = datetime.now(timezone.utc)
     if expires_delta:
         expire = now + expires_delta
     else:
         expire = now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire, "iat": now})
+    to_encode.update({"exp": expire, "iat": now, "token_type": "access"})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+
+def create_refresh_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    """Generates a long-lived HS256 JWT refresh token (default 14 days)."""
+    to_encode = data.copy()
+    now = datetime.now(timezone.utc)
+    if expires_delta:
+        expire = now + expires_delta
+    else:
+        expire = now + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    to_encode.update({"exp": expire, "iat": now, "token_type": "refresh"})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
@@ -93,9 +111,24 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 def decode_access_token(token: str) -> Optional[dict]:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("token_type") == "refresh":
+            logger.debug("Rejected refresh token presented as access token")
+            return None
         return payload
     except JWTError as e:
         logger.debug(f"JWT decode error: {e}")
+        return None
+
+
+def decode_refresh_token(token: str) -> Optional[dict]:
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("token_type") != "refresh":
+            logger.debug("Rejected non-refresh token in refresh endpoint")
+            return None
+        return payload
+    except JWTError as e:
+        logger.debug(f"Refresh JWT decode error: {e}")
         return None
 
 

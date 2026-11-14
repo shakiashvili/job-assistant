@@ -1,6 +1,9 @@
+import logging
 import os
 from pathlib import Path
 from typing import Any, Dict
+
+logger = logging.getLogger(__name__)
 
 # Paths
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -63,11 +66,33 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 PORT = int(os.getenv("PORT", "8000"))
 HOST = os.getenv("HOST", "0.0.0.0")
+ENABLE_PLAYWRIGHT = os.getenv("ENABLE_PLAYWRIGHT", "true").strip().lower() in ("1", "true", "yes", "on")
 
 # Security & JWT Auth
-SECRET_KEY = os.getenv("SECRET_KEY", "talentflow-ai-ultra-secure-jwt-secret-key-production-hardening-64chars-min-entropy")
+_DEV_FALLBACK_SECRET = "talentflow-ai-ultra-secure-jwt-secret-key-production-hardening-64chars-min-entropy"
+_raw_secret = os.getenv("SECRET_KEY", "").strip()
+_is_prod = (
+    os.getenv("ENVIRONMENT", "").strip().lower() in ("prod", "production")
+    or os.getenv("ENV", "").strip().lower() in ("prod", "production")
+    or bool(os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT"))
+)
+if not _raw_secret or _raw_secret == _DEV_FALLBACK_SECRET:
+    if _is_prod:
+        logger.critical(
+            "SECURITY WARNING: SECRET_KEY is missing or uses the insecure default in production! "
+            "Set a strong random SECRET_KEY in your environment variables / .env file."
+        )
+    else:
+        logger.warning(
+            "SECRET_KEY is not configured in .env; using deterministic local development fallback."
+        )
+    SECRET_KEY = _DEV_FALLBACK_SECRET
+else:
+    SECRET_KEY = _raw_secret
+
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))  # 24 hours
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))  # 60 mins
+REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "14"))  # 14 days
 
 # Google OAuth2 Credentials & URLs
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")

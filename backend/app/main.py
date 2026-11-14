@@ -1,10 +1,12 @@
+import os
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .config import MOCK_PORTALS_DIR, GEMINI_MODEL, DATABASE_URL
+from .config import MOCK_PORTALS_DIR, GEMINI_MODEL, DATABASE_URL, FRONTEND_URL, ENABLE_PLAYWRIGHT
 from .db.database import init_db
 from .services.gemini_service import gemini_service
 from .routers.audit import router as audit_router
@@ -56,7 +58,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Standards-compliant CORS Middleware (explicit origins + regex for Chrome extensions)
+# Standards-compliant CORS Middleware (explicit origins + regex for Chrome extensions & free-tier hosts)
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -65,11 +67,19 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:8000",
     "http://127.0.0.1:8000",
 ]
+if FRONTEND_URL and FRONTEND_URL not in CORS_ALLOWED_ORIGINS:
+    CORS_ALLOWED_ORIGINS.append(FRONTEND_URL)
+_extra_origins = os.getenv("CORS_ORIGINS", "")
+for _orig in _extra_origins.split(","):
+    _orig = _orig.strip()
+    if _orig and _orig not in CORS_ALLOWED_ORIGINS:
+        CORS_ALLOWED_ORIGINS.append(_orig)
 
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ALLOWED_ORIGINS,
-    allow_origin_regex=r"^chrome-extension://[a-z0-9]+$",
+    allow_origin_regex=r"^(chrome-extension://[a-z0-9]+|https://[a-zA-Z0-9-]+\.(vercel\.app|onrender\.com|netlify\.app))$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -98,12 +108,14 @@ def root():
     }
 
 
+@app.get("/health")
 @app.get("/api/health")
 def healthcheck():
     init_db()
     return {
         "status": "healthy",
         "database": "sqlite" if DATABASE_URL.startswith("sqlite") else "postgresql",
+        "playwright_enabled": ENABLE_PLAYWRIGHT,
         "gemini": {
             "model": GEMINI_MODEL,
             "connected": gemini_service.is_available,
