@@ -522,6 +522,22 @@ export function getExportApplicationsUrl(format: 'json' | 'csv' = 'csv'): string
   return `${API_BASE}/applications/export?format=${format}`;
 }
 
+export async function downloadApplicationsExport(format: 'json' | 'csv' = 'csv'): Promise<void> {
+  const res = await apiFetch(`${API_BASE}/applications/export?format=${format}`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to export applications');
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `talentflow_applications.${format}`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 export async function createApplication(app: Partial<ApplicationItem>): Promise<ApplicationItem> {
   const res = await apiFetch(`${API_BASE}/applications`, {
     method: 'POST',
@@ -739,8 +755,13 @@ export async function deactivateAdminUser(userId: number): Promise<void> {
 // --- Gmail OAuth & Dispatch API ---
 
 export async function fetchGoogleLoginUrl(): Promise<string> {
-  const res = await fetch(`${API_BASE}/auth/google/login`);
-  if (!res.ok) throw new Error('Failed to get Google login URL');
+  const res = await apiFetch(`${API_BASE}/auth/google/login`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to initialize Google OAuth' }));
+    throw new Error(err.detail || 'Failed to get Google login URL');
+  }
   const data = await res.json();
   return data.authorization_url;
 }
@@ -843,12 +864,29 @@ export async function fetchSavedJobs(): Promise<{ items: Array<{ saved_id: numbe
   return res.json();
 }
 
-export async function fetchSavedSearches(): Promise<{ items: Array<{ id: number; name: string; filters: Record<string, any>; notify_on_new: boolean }> }> {
+export async function fetchSavedSearches(): Promise<import('../types').SavedSearchItem[]> {
   const res = await apiFetch(`${API_BASE}/saved-searches`, {
     headers: getAuthHeaders(),
   });
-  if (!res.ok) return { items: [] };
-  return res.json();
+  if (!res.ok) return [];
+  const data = await res.json();
+  return Array.isArray(data) ? data : data?.items || [];
+}
+
+export async function fetchNotifications(): Promise<import('../types').NotificationItem[]> {
+  const res = await apiFetch(`${API_BASE}/notifications`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) return [];
+  const data = await res.json();
+  return Array.isArray(data) ? data : [];
+}
+
+export async function markNotificationRead(notifId: number): Promise<void> {
+  await apiFetch(`${API_BASE}/notifications/${notifId}/read`, {
+    method: 'PATCH',
+    headers: getAuthHeaders(),
+  });
 }
 
 export async function createSavedSearch(name: string, filters: Record<string, any>, notify_on_new: boolean = true): Promise<any> {
@@ -991,6 +1029,34 @@ export async function generateB2BProposal(payload: {
     body: JSON.stringify(payload),
   });
   if (!res.ok) throw new Error('Failed to generate B2B proposal');
+  return res.json();
+}
+
+export async function fetchB2BFxRates(): Promise<import('../types').B2BFxRatesResponse> {
+  const res = await apiFetch(`${API_BASE}/b2b/fx-rates`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to fetch GEL exchange rates');
+  return res.json();
+}
+
+export async function generateB2BInvoice(payload: {
+  client_name: string;
+  client_address?: string;
+  service_description: string;
+  amount: number;
+  currency: 'USD' | 'EUR' | 'GBP' | 'GEL';
+  invoice_number?: string;
+  payment_method: string;
+  iban_or_account?: string;
+  language: 'en' | 'ka';
+}): Promise<import('../types').B2BInvoiceResponse> {
+  const res = await apiFetch(`${API_BASE}/b2b/invoice-preview`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error('Failed to generate B2B invoice');
   return res.json();
 }
 

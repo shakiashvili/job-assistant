@@ -347,3 +347,43 @@ async def test_remote_b2b_scrapers_deterministic_parsing(monkeypatch):
     assert len(r1) == 1 and r1[0]["portal"] == "remotive.com" and r1[0]["market"] == "GLOBAL_REMOTE"
     assert len(r2) == 1 and r2[0]["portal"] == "himalayas.app" and "45000-60000 USD" in r2[0]["description_raw"]
     assert len(r3) == 1 and r3[0]["portal"] == "remoteok.com" and r3[0]["url"] == "https://remoteok.com/remote-jobs/999"
+
+
+def test_nbg_fx_rates_and_b2b_invoice_generator():
+    fx_res = client.get("/api/b2b/fx-rates")
+    assert fx_res.status_code == 200
+    fx_data = fx_res.json()
+    assert "rates" in fx_data and "USD" in fx_data["rates"] and fx_data["rates"]["GEL"] == 1.0
+
+    inv_en = client.post(
+        "/api/b2b/invoice-preview",
+        json={
+            "client_name": "Berlin SaaS GmbH",
+            "service_description": "QA Automation Engineering",
+            "amount": 3200,
+            "currency": "EUR",
+            "payment_method": "SWIFT / IBAN",
+            "iban_or_account": "GE11TB1234567890",
+            "language": "en",
+        },
+    )
+    assert inv_en.status_code == 200
+    d_en = inv_en.json()
+    assert d_en["currency"] == "EUR"
+    assert d_en["gel_equivalent"] > 5000
+    assert d_en["estimated_1pct_tax_gel"] == pytest.approx(d_en["gel_equivalent"] * 0.01, abs=0.02)
+    assert "Berlin SaaS GmbH" in d_en["invoice_text"]
+    assert "GE11TB1234567890" in d_en["invoice_text"]
+
+    inv_ka = client.post(
+        "/api/b2b/invoice-preview",
+        json={
+            "client_name": "US Partner LLC",
+            "service_description": "Software Testing",
+            "amount": 2500,
+            "currency": "USD",
+            "language": "ka",
+        },
+    )
+    assert inv_ka.status_code == 200
+    assert "ინვოისი" in inv_ka.json()["invoice_text"]

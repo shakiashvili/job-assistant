@@ -40,9 +40,21 @@ import {
   saveJob,
   unsaveJob,
   fetchSavedJobs,
+  fetchSavedSearches,
+  createSavedSearch,
+  deleteSavedSearch,
+  fetchNotifications,
+  markNotificationRead,
   BACKEND_ORIGIN
 } from '../services/api';
-import { JobAuditResponse, ScreeningAnswer, PortalVacancyItem, DbJobPosting } from '../types';
+import {
+  JobAuditResponse,
+  ScreeningAnswer,
+  PortalVacancyItem,
+  DbJobPosting,
+  SavedSearchItem,
+  NotificationItem,
+} from '../types';
 import { StageModal } from './StageModal';
 import { DiscoveryFeed } from './DiscoveryFeed';
 
@@ -61,6 +73,8 @@ export const AuditPanel: React.FC = () => {
   const [b2bOnlyFilter, setB2bOnlyFilter] = useState<boolean>(false);
   const [geoEligibleOnlyFilter, setGeoEligibleOnlyFilter] = useState<boolean>(false);
   const [savedJobIds, setSavedJobIds] = useState<Set<number>>(new Set());
+  const [savedSearches, setSavedSearches] = useState<SavedSearchItem[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [page, setPage] = useState<number>(1);
   const [totalPages, setTotalPages] = useState<number>(1);
   const [totalJobs, setTotalJobs] = useState<number>(0);
@@ -267,13 +281,17 @@ export const AuditPanel: React.FC = () => {
   const loadInitialData = async () => {
     const uploaded = await refreshProfileData();
     try {
-      const [mdData, savedRes] = await Promise.all([
+      const [mdData, savedRes, ssList, notifList] = await Promise.all([
         fetchSkillsMd(),
         fetchSavedJobs().catch(() => ({ items: [] })),
+        fetchSavedSearches().catch(() => []),
+        fetchNotifications().catch(() => []),
       ]);
       setSkillsMdContent(mdData.content);
       setSkillsFilename(mdData.filename);
       setSavedJobIds(new Set((savedRes.items || []).map((it) => it.job.id)));
+      setSavedSearches(ssList);
+      setNotifications(notifList);
 
       if (!uploaded) {
         setVacancies([]);
@@ -754,6 +772,50 @@ export const AuditPanel: React.FC = () => {
         }}
         savedJobIds={savedJobIds}
         onToggleSaveJob={handleToggleSaveJob}
+        savedSearches={savedSearches}
+        onSaveSearchAlert={async () => {
+          const parts = [
+            selectedPortalFilter !== 'ALL' ? selectedPortalFilter : null,
+            searchQuery.trim() || null,
+            remoteTypeFilter !== 'ALL' ? remoteTypeFilter : null,
+            b2bOnlyFilter ? 'B2B' : null,
+            geoEligibleOnlyFilter ? 'GE-Eligible' : null,
+          ].filter(Boolean);
+          const name = parts.length > 0 ? parts.join(' • ') : 'All High-Match Roles';
+          try {
+            const created = await createSavedSearch(name, {
+              portal: selectedPortalFilter,
+              search: searchQuery.trim(),
+              remote_type: remoteTypeFilter,
+              b2b_only: b2bOnlyFilter,
+              geo_eligible_only: geoEligibleOnlyFilter,
+            });
+            setSavedSearches((prev) => [created, ...prev]);
+          } catch {}
+        }}
+        onApplySavedSearch={(ss) => {
+          const f = ss.filters || {};
+          const nextP = f.portal || 'ALL';
+          const nextQ = f.search || '';
+          const nextRt = f.remote_type || 'ALL';
+          const nextB2b = Boolean(f.b2b_only);
+          const nextGeo = Boolean(f.geo_eligible_only);
+          setSelectedPortalFilter(nextP);
+          setSearchQuery(nextQ);
+          setRemoteTypeFilter(nextRt);
+          setB2bOnlyFilter(nextB2b);
+          setGeoEligibleOnlyFilter(nextGeo);
+          void loadPagedJobs(1, nextP, dbStatusFilter, tierTab, nextQ, nextRt, onlySavedFilter, nextB2b, nextGeo);
+        }}
+        onDeleteSavedSearch={async (searchId) => {
+          await deleteSavedSearch(searchId).catch(() => {});
+          setSavedSearches((prev) => prev.filter((s) => s.id !== searchId));
+        }}
+        notifications={notifications}
+        onMarkNotificationRead={async (notifId) => {
+          await markNotificationRead(notifId).catch(() => {});
+          setNotifications((prev) => prev.map((n) => (n.id === notifId ? { ...n, is_read: true } : n)));
+        }}
         tierCounts={tierCounts}
         statusCounts={statusCounts}
         page={page}

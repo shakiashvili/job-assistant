@@ -99,11 +99,12 @@ CORS_ALLOWED_ORIGINS = [
 ]
 if FRONTEND_URL and FRONTEND_URL not in CORS_ALLOWED_ORIGINS:
     CORS_ALLOWED_ORIGINS.append(FRONTEND_URL.rstrip("/"))
-_extra_origins = os.getenv("CORS_ORIGINS", "")
-for _orig in _extra_origins.split(","):
-    _orig = _orig.strip().rstrip("/")
-    if _orig and _orig not in CORS_ALLOWED_ORIGINS:
-        CORS_ALLOWED_ORIGINS.append(_orig)
+for _env_key in ("CORS_ORIGINS", "ALLOWED_ORIGINS"):
+    _extra_origins = os.getenv(_env_key, "")
+    for _orig in _extra_origins.split(","):
+        _orig = _orig.strip().rstrip("/")
+        if _orig and _orig not in CORS_ALLOWED_ORIGINS:
+            CORS_ALLOWED_ORIGINS.append(_orig)
 
 _custom_cors_regex = os.getenv("CORS_ALLOW_REGEX", "").strip()
 CORS_ORIGIN_REGEX = _custom_cors_regex or r"^chrome-extension://[a-z0-9]+$"

@@ -1,5 +1,8 @@
 import logging
+import time
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
+import httpx
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
@@ -13,10 +16,57 @@ router = APIRouter(prefix="/api/b2b", tags=["Georgia & Global Remote B2B Toolkit
 
 DEFAULT_FX_TO_GEL = {
     "GEL": 1.0,
-    "USD": 2.72,
-    "EUR": 2.95,
+    "USD": 2.70,
+    "EUR": 2.90,
     "GBP": 3.45,
 }
+
+NBG_RATES_URL = "https://nbg.gov.ge/gw/api/ct/monetarypolicy/currencies/en/json/"
+_FX_CACHE: Dict[str, Any] = {
+    "rates": dict(DEFAULT_FX_TO_GEL),
+    "source": "default_fallback",
+    "fetched_at": 0.0,
+    "as_of": None,
+}
+_FX_CACHE_TTL_SEC = 4 * 3600  # 4 hours
+
+
+def get_cached_nbg_rates(allow_network: bool = True) -> Dict[str, Any]:
+    """
+    Returns GEL conversion rates for USD/EUR/GBP from National Bank of Georgia (nbg.gov.ge)
+    with in-memory TTL caching and deterministic offline fallback.
+    """
+    now = time.time()
+    if now - _FX_CACHE["fetched_at"] < _FX_CACHE_TTL_SEC and _FX_CACHE["source"] == "nbg_live":
+        return dict(_FX_CACHE)
+
+    if not allow_network:
+        return dict(_FX_CACHE)
+
+    try:
+        resp = httpx.get(NBG_RATES_URL, timeout=3.5)
+        if resp.status_code == 200:
+            payload = resp.json()
+            if isinstance(payload, list) and payload:
+                block = payload[0]
+                currencies = block.get("currencies") or []
+                parsed = {"GEL": 1.0}
+                for item in currencies:
+                    code = str(item.get("code") or "").upper()
+                    qty = float(item.get("quantity") or 1)
+                    rate = float(item.get("rate") or 0)
+                    if code in ("USD", "EUR", "GBP") and rate > 0 and qty > 0:
+                        parsed[code] = round(rate / qty, 4)
+                if len(parsed) >= 3:
+                    _FX_CACHE["rates"] = parsed
+                    _FX_CACHE["source"] = "nbg_live"
+                    _FX_CACHE["fetched_at"] = now
+                    _FX_CACHE["as_of"] = str(block.get("date") or datetime.now(timezone.utc).date().isoformat())[:10]
+                    return dict(_FX_CACHE)
+    except Exception as exc:
+        logger.debug(f"NBG live FX rate fetch skipped (using fallback): {exc}")
+
+    return dict(_FX_CACHE)
 
 
 class TaxCalculatorRequest(BaseModel):
@@ -38,6 +88,24 @@ class B2BProposalRequest(BaseModel):
     language: str = Field("en", pattern="^(en|ka)$")
 
 
+class B2BInvoiceRequest(BaseModel):
+    client_name: str = Field(..., min_length=1)
+    client_address: Optional[str] = ""
+    service_description: str = Field(..., min_length=2)
+    amount: float = Field(..., gt=0)
+    currency: str = Field("USD", pattern="^(USD|EUR|GBP|GEL)$")
+    invoice_number: Optional[str] = None
+    payment_method: str = Field("SWIFT / IBAN (USD/EUR)", min_length=2)
+    iban_or_account: Optional[str] = ""
+    language: str = Field("en", pattern="^(en|ka)$")
+
+
+@router.get("/fx-rates")
+def fetch_georgia_fx_rates() -> Dict[str, Any]:
+    """Returns official GEL conversion rates (live NBG or deterministic fallback)."""
+    return get_cached_nbg_rates(allow_network=True)
+
+
 @router.post("/tax-calculator")
 def calculate_georgia_b2b_net(req: TaxCalculatorRequest) -> Dict[str, Any]:
     """
@@ -45,7 +113,15 @@ def calculate_georgia_b2b_net(req: TaxCalculatorRequest) -> Dict[str, Any]:
     against a standard Georgian labor contract (20% Personal Income Tax + 2% employee pension).
     """
     cur = req.currency.upper()
-    fx = float(req.custom_fx_to_gel or DEFAULT_FX_TO_GEL.get(cur, 1.0))
+    if req.custom_fx_to_gel:
+        fx = float(req.custom_fx_to_gel)
+        fx_source = "custom"
+        fx_as_of = None
+    else:
+        nbg = get_cached_nbg_rates(allow_network=(cur != "GEL"))
+        fx = float(nbg["rates"].get(cur, DEFAULT_FX_TO_GEL.get(cur, 1.0)))
+        fx_source = "nbg_live" if nbg.get("source") == "nbg_live" and cur != "GEL" else "default_fallback"
+        fx_as_of = nbg.get("as_of")
 
     if req.billing_period == "hourly":
         monthly_orig = req.amount * req.hours_per_month
@@ -79,6 +155,8 @@ def calculate_georgia_b2b_net(req: TaxCalculatorRequest) -> Dict[str, Any]:
     return {
         "currency": cur,
         "fx_to_gel": round(fx, 4),
+        "fx_source": fx_source,
+        "fx_as_of": fx_as_of,
         "monthly_gross_orig": round(monthly_orig, 2),
         "monthly_gross_gel": round(monthly_gross_gel, 2),
         "annual_gross_gel": round(annual_gross_gel, 2),
@@ -225,3 +303,79 @@ def generate_b2b_contractor_proposal(
         f"Best regards,\n{full_name}"
     )
     return {"subject": subject, "proposal_text": proposal, "language": "en"}
+
+
+@router.post("/invoice-preview")
+def generate_b2b_invoice_preview(
+    req: B2BInvoiceRequest,
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Generates a clean Georgia Individual Entrepreneur (IE Small Business 1%) B2B contractor invoice
+    with official NBG GEL equivalent for rs.ge tax declaration and SWIFT/IBAN payment details.
+    """
+    owner = current_user.email if current_user.email != "guest@talentflow.local" else None
+    uid = current_user.id if owner else None
+    gt = ground_truth_store.get_data(owner_email=owner, user_id=uid)
+    cand = gt.get("candidate") or {}
+    full_name = str(cand.get("full_name") or current_user.full_name or "Contractor Name").strip()
+    cand_email = str(cand.get("email") or current_user.email or "").strip()
+    location = str(cand.get("location") or "Tbilisi, Georgia").strip()
+
+    today_str = datetime.now(timezone.utc).date().isoformat()
+    inv_no = (req.invoice_number or f"INV-{today_str.replace('-', '')}-01").strip()
+    cur = req.currency.upper()
+    nbg = get_cached_nbg_rates(allow_network=(cur != "GEL"))
+    fx_rate = float(nbg["rates"].get(cur, DEFAULT_FX_TO_GEL.get(cur, 1.0)))
+    gel_equiv = round(req.amount * fx_rate, 2)
+    tax_1pct_gel = round(gel_equiv * 0.01, 2)
+    acct_line = req.iban_or_account.strip() or "[Your TBC / Bank of Georgia IBAN or Wise Account]"
+
+    if req.language == "ka":
+        text = (
+            f"ინვოისი № {inv_no}\n"
+            f"თარიღი: {today_str}\n\n"
+            f"მიმწოდებელი (B2B ინდ. მეწარმე): {full_name}\n"
+            f"მისამართი: {location}\n"
+            f"ელფოსტა: {cand_email}\n"
+            f"საგადასახადო სტატუსი: მცირე ბიზნესი (1% საშემოსავლო, rs.ge) — დღგ-ს გარეშე (სერვისის ექსპორტი)\n\n"
+            f"დამკვეთი: {req.client_name}\n"
+            + (f"მისამართი: {req.client_address}\n" if req.client_address else "")
+            + f"\nსერვისის აღწერა: {req.service_description}\n"
+            f"თანხა: {req.amount:,.2f} {cur}\n"
+            f"ეროვნული ბანკის (NBG) ეკვივალენტი: {gel_equiv:,.2f} GEL (კურსი: {fx_rate:.4f})\n"
+            f"1% მცირე ბიზნესის საორიენტაციო გადასახადი: {tax_1pct_gel:,.2f} GEL\n\n"
+            f"გადახდის მეთოდი: {req.payment_method}\n"
+            f"ანგარიში / IBAN: {acct_line}\n"
+        )
+    else:
+        text = (
+            f"INVOICE #{inv_no}\n"
+            f"Issue Date: {today_str}\n\n"
+            f"FROM (Independent B2B Contractor): {full_name}\n"
+            f"Address: {location}\n"
+            f"Email: {cand_email}\n"
+            f"Tax Status: Georgian Individual Entrepreneur — Small Business Status (1% Turnover Tax; Zero VAT on Exported B2B Services)\n\n"
+            f"BILL TO: {req.client_name}\n"
+            + (f"Client Address: {req.client_address}\n" if req.client_address else "")
+            + f"\nDESCRIPTION OF SERVICES:\n"
+            f"- {req.service_description}\n\n"
+            f"TOTAL DUE: {req.amount:,.2f} {cur}\n"
+            f"NBG Official Equivalent (for rs.ge Ledger): {gel_equiv:,.2f} GEL (Rate: 1 {cur} = {fx_rate:.4f} GEL)\n"
+            f"Estimated 1% Georgia Small Business Tax: {tax_1pct_gel:,.2f} GEL\n\n"
+            f"PAYMENT DETAILS:\n"
+            f"- Method: {req.payment_method}\n"
+            f"- Account / IBAN: {acct_line}\n"
+            f"- Payment Terms: Net 7 Business Days (W-8BEN / Non-US Contractor Applicable)\n"
+        )
+
+    return {
+        "invoice_number": inv_no,
+        "currency": cur,
+        "amount": round(req.amount, 2),
+        "fx_rate": round(fx_rate, 4),
+        "fx_source": nbg.get("source", "default_fallback"),
+        "gel_equivalent": gel_equiv,
+        "estimated_1pct_tax_gel": tax_1pct_gel,
+        "invoice_text": text,
+    }

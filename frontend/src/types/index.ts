@@ -562,6 +562,8 @@ export interface AIMetricsResponse {
 export interface B2BTaxCalculatorResponse {
   currency: string;
   fx_to_gel: number;
+  fx_source?: string;
+  fx_as_of?: string | null;
   monthly_gross_orig: number;
   monthly_gross_gel: number;
   annual_gross_gel: number;
@@ -602,5 +604,44 @@ export interface B2BProposalResponse {
   subject: string;
   proposal_text: string;
   language: string;
+}
+
+export interface B2BFxRatesResponse {
+  rates: Record<string, number>;
+  source: string;
+  as_of?: string | null;
+}
+
+export interface B2BInvoiceResponse {
+  invoice_number: string;
+  currency: string;
+  amount: number;
+  fx_rate: number;
+  fx_source: string;
+  gel_equivalent: number;
+  estimated_1pct_tax_gel: number;
+  invoice_text: string;
+}
+
+export interface SavedSearchItem {
+  id: number;
+  user_id: number;
+  name: string;
+  filters: Record<string, any>;
+  notify_on_new: boolean;
+  last_run_at?: string | null;
+  created_at: string;
+}
+
+export interface NotificationItem {
+  id: number;
+  user_id: number;
+  job_posting_id?: number | null;
+  saved_search_id?: number | null;
+  title: string;
+  message: string;
+  notification_type: string;
+  is_read: boolean;
+  created_at: string;
 }
 

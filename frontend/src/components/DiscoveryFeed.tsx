@@ -15,8 +15,11 @@ import {
   Star,
   Globe,
   X,
+  Bell,
+  Bookmark,
+  Trash2,
 } from 'lucide-react';
-import { DbJobPosting } from '../types';
+import { DbJobPosting, SavedSearchItem, NotificationItem } from '../types';
 import { BACKEND_ORIGIN } from '../services/api';
 
 export interface CandidateRoleHeaderInfo {
@@ -97,6 +100,12 @@ interface DiscoveryFeedProps {
   onGeoEligibleOnlyFilterChange?: (val: boolean) => void;
   savedJobIds?: Set<number>;
   onToggleSaveJob?: (job: DbJobPosting) => void;
+  savedSearches?: SavedSearchItem[];
+  onSaveSearchAlert?: () => void;
+  onApplySavedSearch?: (item: SavedSearchItem) => void;
+  onDeleteSavedSearch?: (searchId: number) => void;
+  notifications?: NotificationItem[];
+  onMarkNotificationRead?: (notifId: number) => void;
 }
 
 function formatSalaryDisplay(job: DbJobPosting): string | null {
@@ -155,6 +164,12 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
   onGeoEligibleOnlyFilterChange,
   savedJobIds,
   onToggleSaveJob,
+  savedSearches = [],
+  onSaveSearchAlert,
+  onApplySavedSearch,
+  onDeleteSavedSearch,
+  notifications = [],
+  onMarkNotificationRead,
 }) => {
   const [localTierTab, setLocalTierTab] = useState<'ALL' | 'DIRECT' | 'ADJACENT' | 'PUBLIC_INTERNSHIP'>('ALL');
   const tierTab = controlledTierTab ?? localTierTab;
@@ -462,8 +477,77 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 <span>Saved ({savedJobIds ? savedJobIds.size : 0})</span>
               </button>
             )}
+
+            {onSaveSearchAlert && (
+              <button
+                type="button"
+                onClick={onSaveSearchAlert}
+                className="inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg font-semibold bg-slate-950 text-emerald-300 hover:text-white border border-emerald-700/60 transition-colors"
+                title="Save current filter & keywords as a vacancy alert"
+              >
+                <Bookmark className="w-3 h-3" aria-hidden="true" />
+                <span>Save Alert Filter</span>
+              </button>
+            )}
           </div>
         </div>
+
+        {(savedSearches.length > 0 || notifications.some((n) => !n.is_read)) && (
+          <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 text-[11px]">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {savedSearches.length > 0 && (
+                <span className="font-bold uppercase text-[10px] text-slate-300 mr-1">Saved Alerts:</span>
+              )}
+              {savedSearches.map((ss) => (
+                <span
+                  key={ss.id}
+                  className="inline-flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-lg pl-2 pr-1 py-0.5 text-slate-200"
+                >
+                  <button
+                    type="button"
+                    onClick={() => onApplySavedSearch?.(ss)}
+                    className="hover:text-emerald-300 font-medium"
+                  >
+                    {ss.name}
+                  </button>
+                  {onDeleteSavedSearch && (
+                    <button
+                      type="button"
+                      onClick={() => onDeleteSavedSearch(ss.id)}
+                      aria-label={`Delete alert ${ss.name}`}
+                      className="p-0.5 text-slate-400 hover:text-rose-400"
+                    >
+                      <Trash2 className="w-2.5 h-2.5" aria-hidden="true" />
+                    </button>
+                  )}
+                </span>
+              ))}
+            </div>
+
+            {notifications.filter((n) => !n.is_read).length > 0 && (
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="inline-flex items-center gap-1 text-amber-300 font-semibold">
+                  <Bell className="w-3 h-3" aria-hidden="true" />
+                  <span>{notifications.filter((n) => !n.is_read).length} New Alerts:</span>
+                </span>
+                {notifications
+                  .filter((n) => !n.is_read)
+                  .slice(0, 2)
+                  .map((n) => (
+                    <button
+                      key={n.id}
+                      type="button"
+                      onClick={() => onMarkNotificationRead?.(n.id)}
+                      className="px-2 py-0.5 rounded bg-amber-950/60 border border-amber-700/50 text-amber-200 hover:bg-amber-900/60 truncate max-w-[220px]"
+                      title="Click to dismiss notification"
+                    >
+                      {n.title}
+                    </button>
+                  ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Portal Filter Chips */}
         <div className="flex flex-wrap items-center gap-1.5">

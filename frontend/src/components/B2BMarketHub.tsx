@@ -12,8 +12,18 @@ import {
   TrendingUp,
   Info,
 } from 'lucide-react';
-import { calculateB2BTax, fetchTimezoneMatrix, generateB2BProposal } from '../services/api';
-import { B2BTaxCalculatorResponse, TimezoneMatrixResponse, B2BProposalResponse } from '../types';
+import {
+  calculateB2BTax,
+  fetchTimezoneMatrix,
+  generateB2BProposal,
+  generateB2BInvoice,
+} from '../services/api';
+import {
+  B2BTaxCalculatorResponse,
+  TimezoneMatrixResponse,
+  B2BProposalResponse,
+  B2BInvoiceResponse,
+} from '../types';
 
 const CHECKLIST_STORAGE_KEY = 'talentflow_b2b_readiness_v1';
 
@@ -83,6 +93,17 @@ export const B2BMarketHub: React.FC = () => {
   const [proposal, setProposal] = useState<B2BProposalResponse | null>(null);
   const [propLoading, setPropLoading] = useState<boolean>(false);
   const [copiedProp, setCopiedProp] = useState<boolean>(false);
+
+  // B2B Contractor Monthly Invoice State
+  const [invClient, setInvClient] = useState<string>('Acme Remote Inc.');
+  const [invService, setInvService] = useState<string>('Software Engineering & QA Automation Services (Monthly Retainer)');
+  const [invAmount, setInvAmount] = useState<number>(3000);
+  const [invCurrency, setInvCurrency] = useState<'USD' | 'EUR' | 'GBP' | 'GEL'>('USD');
+  const [invMethod, setInvMethod] = useState<string>('SWIFT / IBAN Wire Transfer (USD/EUR)');
+  const [invAccount, setInvAccount] = useState<string>('');
+  const [invoicePreview, setInvoicePreview] = useState<B2BInvoiceResponse | null>(null);
+  const [invLoading, setInvLoading] = useState<boolean>(false);
+  const [copiedInv, setCopiedInv] = useState<boolean>(false);
 
   const runTaxCalc = async () => {
     if (!amount || amount <= 0) return;
@@ -327,6 +348,18 @@ export const B2BMarketHub: React.FC = () => {
               </div>
 
               <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2 text-xs">
+                <div className="flex items-center justify-between text-[11px] text-slate-300 border-b border-slate-800/80 pb-1.5">
+                  <span>{isKa ? 'გამოყენებული კურსი:' : 'Applied FX Rate:'}</span>
+                  <span className="font-mono text-emerald-300">
+                    1 {taxResult.currency} = {taxResult.fx_to_gel.toFixed(4)} GEL (
+                    {taxResult.fx_source === 'nbg_live'
+                      ? `NBG Official${taxResult.fx_as_of ? ` ${taxResult.fx_as_of}` : ''}`
+                      : taxResult.fx_source === 'custom'
+                      ? 'Custom'
+                      : 'Reference Rate'}
+                    )
+                  </span>
+                </div>
                 <div className="flex items-center justify-between">
                   <span className="text-slate-300 flex items-center gap-1.5">
                     <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
@@ -603,6 +636,161 @@ export const B2BMarketHub: React.FC = () => {
             </div>
             <pre className="whitespace-pre-wrap text-xs text-slate-200 font-sans leading-relaxed">
               {proposal.proposal_text}
+            </pre>
+          </div>
+        )}
+      </div>
+
+      {/* Section 5: Georgia 1% IE Monthly Contractor Invoice Generator */}
+      <div className="glass-card rounded-2xl p-5 space-y-4">
+        <div className="flex items-center justify-between flex-wrap gap-2 border-b border-slate-800 pb-3">
+          <div>
+            <h2 className="text-base font-bold text-white">
+              {isKa ? 'B2B ყოველთვიური ინვოისის გენერატორი (1% ინდ. მეწარმე)' : 'Georgia B2B Monthly Contractor Invoice Generator'}
+            </h2>
+            <p className="text-xs text-slate-300">
+              {isKa
+                ? 'ამზადებს უცხოელი კლიენტის ინვოისს NBG კურსით და 1% rs.ge დეკლარირებისთვის'
+                : 'Creates client-ready USD/EUR invoices with live NBG GEL ledger conversion for rs.ge 1% declaration'}
+            </p>
+          </div>
+        </div>
+
+        <form
+          onSubmit={async (e) => {
+            e.preventDefault();
+            setInvLoading(true);
+            try {
+              const res = await generateB2BInvoice({
+                client_name: invClient,
+                service_description: invService,
+                amount: invAmount,
+                currency: invCurrency,
+                payment_method: invMethod,
+                iban_or_account: invAccount,
+                language: lang,
+              });
+              setInvoicePreview(res);
+            } catch {
+              // ignored
+            } finally {
+              setInvLoading(false);
+            }
+          }}
+          className="grid grid-cols-1 md:grid-cols-6 gap-3"
+        >
+          <div className="md:col-span-2">
+            <label htmlFor="inv-client" className="block text-xs font-semibold text-slate-300 mb-1">
+              {isKa ? 'კლიენტი / კომპანია' : 'Client Company'}
+            </label>
+            <input
+              id="inv-client"
+              type="text"
+              required
+              value={invClient}
+              onChange={(e) => setInvClient(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
+            />
+          </div>
+          <div className="md:col-span-2">
+            <label htmlFor="inv-service" className="block text-xs font-semibold text-slate-300 mb-1">
+              {isKa ? 'სერვისის აღწერა' : 'Service Description'}
+            </label>
+            <input
+              id="inv-service"
+              type="text"
+              required
+              value={invService}
+              onChange={(e) => setInvService(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
+            />
+          </div>
+          <div>
+            <label htmlFor="inv-amount" className="block text-xs font-semibold text-slate-300 mb-1">
+              {isKa ? 'თანხა' : 'Amount'}
+            </label>
+            <input
+              id="inv-amount"
+              type="number"
+              min={1}
+              value={invAmount}
+              onChange={(e) => setInvAmount(Math.max(1, Number(e.target.value) || 0))}
+              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono"
+            />
+          </div>
+          <div>
+            <label htmlFor="inv-currency" className="block text-xs font-semibold text-slate-300 mb-1">
+              {isKa ? 'ვალუტა' : 'Currency'}
+            </label>
+            <select
+              id="inv-currency"
+              value={invCurrency}
+              onChange={(e) => setInvCurrency(e.target.value as 'USD' | 'EUR' | 'GBP' | 'GEL')}
+              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
+            >
+              <option value="USD">USD</option>
+              <option value="EUR">EUR</option>
+              <option value="GBP">GBP</option>
+              <option value="GEL">GEL</option>
+            </select>
+          </div>
+          <div className="md:col-span-2">
+            <label htmlFor="inv-method" className="block text-xs font-semibold text-slate-300 mb-1">
+              {isKa ? 'გადახდის არხი' : 'Payment Rail'}
+            </label>
+            <input
+              id="inv-method"
+              type="text"
+              value={invMethod}
+              onChange={(e) => setInvMethod(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
+            />
+          </div>
+          <div className="md:col-span-3">
+            <label htmlFor="inv-iban" className="block text-xs font-semibold text-slate-300 mb-1">
+              {isKa ? 'IBAN / SWIFT ან Wise ანგარიში (არასავალდებულო)' : 'IBAN / SWIFT or Wise Account (Optional)'}
+            </label>
+            <input
+              id="inv-iban"
+              type="text"
+              value={invAccount}
+              onChange={(e) => setInvAccount(e.target.value)}
+              placeholder="GE00TB0000000000000000"
+              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono placeholder-slate-400"
+            />
+          </div>
+          <div className="flex items-end">
+            <button
+              type="submit"
+              disabled={invLoading}
+              className="w-full py-2.5 px-4 rounded-xl btn-primary-emerald text-xs font-bold disabled:opacity-50"
+            >
+              {invLoading ? 'Building...' : isKa ? 'ინვოისის შექმნა' : 'Generate Invoice'}
+            </button>
+          </div>
+        </form>
+
+        {invoicePreview && (
+          <div className="p-4 rounded-xl bg-slate-950 border border-emerald-700/50 space-y-2.5" aria-live="polite">
+            <div className="flex items-center justify-between gap-2 flex-wrap text-xs">
+              <div className="font-bold text-emerald-300">
+                {invoicePreview.invoice_number} • NBG Ledger: {invoicePreview.gel_equivalent.toLocaleString()} GEL (1% Tax: {invoicePreview.estimated_1pct_tax_gel.toLocaleString()} GEL)
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(invoicePreview.invoice_text);
+                  setCopiedInv(true);
+                  setTimeout(() => setCopiedInv(false), 2500);
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white border border-slate-700"
+              >
+                {copiedInv ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedInv ? 'Copied!' : 'Copy Invoice'}</span>
+              </button>
+            </div>
+            <pre className="whitespace-pre-wrap text-xs text-slate-200 font-mono leading-relaxed">
+              {invoicePreview.invoice_text}
             </pre>
           </div>
         )}
