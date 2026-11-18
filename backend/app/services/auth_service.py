@@ -14,6 +14,7 @@ from ..config import (
     ALGORITHM,
     ACCESS_TOKEN_EXPIRE_MINUTES,
     REFRESH_TOKEN_EXPIRE_DAYS,
+    IS_PRODUCTION,
 )
 from ..db.database import get_session
 from ..db.models import User
@@ -172,7 +173,13 @@ def get_current_user(
     If no token is supplied, returns a default active user or raises 401.
     """
     if not credentials:
-        # Check if any user exists; if none exist, return a guest/system user
+        if IS_PRODUCTION:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required. Please sign in.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        # In non-production local/test environments, fallback to local workspace guest account
         guest = get_user_by_email(session, "guest@talentflow.local")
         if not guest:
             guest = User(

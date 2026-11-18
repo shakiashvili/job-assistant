@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import re
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
@@ -116,8 +117,22 @@ def record_candidate_document(
         return None
 
 
+_SAFE_DOC_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,180}\.(pdf|docx|html|eml)$", re.IGNORECASE)
+_HTML_PREVIEW_CSP = "default-src 'none'; style-src 'unsafe-inline'; font-src 'self' data:; img-src data:;"
+
+
+def _sanitize_safe_filename(filename: str) -> str:
+    raw = (filename or "").strip()
+    if not raw or "/" in raw or "\\" in raw or ".." in raw or "\x00" in raw:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid document filename.")
+    safe_name = Path(raw).name
+    if not _SAFE_DOC_NAME_RE.match(safe_name):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported or unsafe document filename.")
+    return safe_name
+
+
 def _verify_document_ownership(filename: str, current_user: User) -> None:
-    safe_name = Path(filename).name
+    safe_name = _sanitize_safe_filename(filename)
     stem = Path(safe_name).stem
     with Session(engine) as session:
         docs = session.exec(
@@ -191,8 +206,8 @@ def update_ground_truth(
             "data": updated,
         }
     except Exception as e:
-        logger.error(f"Error updating ground truth: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error updating ground truth: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to update profile data.")
 
 
 @router.get("/skills-md")
@@ -296,8 +311,8 @@ def apply_skills_md_preset(
             "message": f"Loaded '{preset_id}' profile template ({len(extracted)} skills synced).",
         }
     except Exception as e:
-        logger.error(f"Error applying preset {preset_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error applying preset {preset_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to apply profile preset.")
 
 
 @router.post("/skills-md")
@@ -332,8 +347,8 @@ def save_skills_md_text(
             "ground_truth": updated_gt,
         }
     except Exception as e:
-        logger.error(f"Error saving skills.md: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error saving skills.md: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to save skills profile.")
 
 
 @router.post("/skills-md/upload")
@@ -383,8 +398,8 @@ async def upload_skills_md_file(
             "message": f"Uploaded {filename} and synced {len(extracted)} skills!",
         }
     except Exception as e:
-        logger.error(f"Error uploading skills/CV file: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error uploading skills/CV file: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to process uploaded CV file.")
 
 
 @router.get("/cv-variants")
@@ -823,16 +838,26 @@ def get_generated_resume_file(
     filename: str,
     current_user: User = Depends(get_current_user),
 ):
-    """Downloads or previews a generated PDF, Word (.docx), or HTML resume after verifying ownership."""
-    safe_name = Path(filename).name
+    """Downloads or previews a generated PDF, Word (.docx), EML, or sandboxed HTML resume after verifying ownership."""
+    safe_name = _sanitize_safe_filename(filename)
     _verify_document_ownership(safe_name, current_user)
-    file_path = GENERATED_RESUMES_DIR / safe_name
-    if not file_path.exists():
+    file_path = (GENERATED_RESUMES_DIR / safe_name).resolve()
+    if not file_path.is_relative_to(GENERATED_RESUMES_DIR.resolve()) or not file_path.exists():
         raise HTTPException(status_code=404, detail="Generated Resume file not found")
     lower = safe_name.lower()
     if lower.endswith(".html"):
-        return FileResponse(path=file_path, media_type="text/html; charset=utf-8")
-    dl_headers = {"Content-Disposition": f'attachment; filename="{safe_name}"'}
+        return FileResponse(
+            path=file_path,
+            media_type="text/html; charset=utf-8",
+            headers={
+                "Content-Security-Policy": _HTML_PREVIEW_CSP,
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+    dl_headers = {
+        "Content-Disposition": f'attachment; filename="{safe_name}"',
+        "X-Content-Type-Options": "nosniff",
+    }
     if lower.endswith(".docx"):
         return FileResponse(
             path=file_path,
@@ -861,17 +886,27 @@ def get_resume_pdf(
     current_user: User = Depends(get_current_user),
 ):
     """Downloads or previews a base or generated PDF/DOCX/HTML resume after verifying ownership."""
-    safe_name = Path(filename).name
+    safe_name = _sanitize_safe_filename(filename)
     _verify_document_ownership(safe_name, current_user)
-    file_path = RESUMES_DIR / safe_name
-    if not file_path.exists():
-        file_path = GENERATED_RESUMES_DIR / safe_name
-        if not file_path.exists():
+    file_path = (RESUMES_DIR / safe_name).resolve()
+    if not file_path.is_relative_to(RESUMES_DIR.resolve()) or not file_path.exists():
+        file_path = (GENERATED_RESUMES_DIR / safe_name).resolve()
+        if not file_path.is_relative_to(GENERATED_RESUMES_DIR.resolve()) or not file_path.exists():
             raise HTTPException(status_code=404, detail="Resume file not found")
     lower = safe_name.lower()
     if lower.endswith(".html"):
-        return FileResponse(path=file_path, media_type="text/html; charset=utf-8")
-    dl_headers = {"Content-Disposition": f'attachment; filename="{safe_name}"'}
+        return FileResponse(
+            path=file_path,
+            media_type="text/html; charset=utf-8",
+            headers={
+                "Content-Security-Policy": _HTML_PREVIEW_CSP,
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+    dl_headers = {
+        "Content-Disposition": f'attachment; filename="{safe_name}"',
+        "X-Content-Type-Options": "nosniff",
+    }
     if lower.endswith(".docx"):
         return FileResponse(
             path=file_path,

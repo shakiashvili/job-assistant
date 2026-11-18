@@ -487,13 +487,15 @@
       <div class="hud-body">
         <div class="blocker-alert" id="tf-hud-warn" style="display:none;"></div>
         <div class="hud-meta" id="tf-hud-meta">
-          Portal: <b>${detectPortal().toUpperCase()}</b> · Human-in-the-Loop active
+          Portal: <b id="tf-hud-portal"></b> · Human-in-the-Loop active
         </div>
-        <button class="hud-btn-primary" id="tf-hud-fill-btn">Analyze, Build CV & Fill</button>
+        <button class="hud-btn-primary" id="tf-hud-fill-btn">Analyze, Build CV &amp; Fill</button>
         <button class="hud-btn-secondary" id="tf-hud-step-btn">Fill Current Modal Step</button>
       </div>
     `;
     document.body.appendChild(hud);
+    const portalBadgeEl = document.getElementById("tf-hud-portal");
+    if (portalBadgeEl) portalBadgeEl.textContent = detectPortal().toUpperCase();
 
     document.getElementById("tf-hud-toggle")?.addEventListener("click", () => {
       hud.classList.toggle("minimized");
@@ -615,7 +617,11 @@
       const fields = scanFormFields();
       const metaEl = document.getElementById("tf-hud-meta");
       if (metaEl && !metaEl.dataset.locked) {
-        metaEl.innerHTML = `Portal: <b>${portal.toUpperCase()}</b> · ${fields.length} controls ready`;
+        metaEl.textContent = "";
+        metaEl.append("Portal: ");
+        const portalBold = document.createElement("b");
+        portalBold.textContent = portal.toUpperCase();
+        metaEl.append(portalBold, ` · ${fields.length} controls ready`);
       }
     }, 350);
 

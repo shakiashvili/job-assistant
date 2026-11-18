@@ -191,8 +191,8 @@ def create_application(
     try:
         return tracker_store.create(item, user_id=current_user.id)
     except Exception as e:
-        logger.error(f"Error creating application: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error creating application: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to create application record.")
 
 
 @router.put("/{app_id}", response_model=ApplicationItem)

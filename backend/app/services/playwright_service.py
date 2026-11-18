@@ -24,6 +24,7 @@ except ImportError:  # pragma: no cover - slim cloud deploys with ENABLE_PLAYWRI
 from ..config import RESUMES_DIR, GENERATED_RESUMES_DIR, ENABLE_PLAYWRIGHT
 from ..db.profile_repository import ground_truth_store
 from ..services.portal_detector import detect_portal_from_url, detect_portal_from_html
+from ..services.audit_service import validate_safe_external_url
 from ..services.company_validator import company_validator
 from ..services.cv_generator_service import cv_generator_service
 from ..services.gemini_service import gemini_service
@@ -89,6 +90,11 @@ class PlaywrightStagerService:
         skills_md = ground_truth.get("skills_md_raw") or ground_truth_store.get_skills_md(owner_email=owner_email, user_id=user_id)
 
         portal_type = detect_portal_from_url(job_url)
+        try:
+            validate_safe_external_url(job_url)
+        except ValueError as ssrf_err:
+            raise ValueError(str(ssrf_err)) from ssrf_err
+
         fields_filled: List[str] = []
         file_uploaded = False
         captcha_status = "none_detected"

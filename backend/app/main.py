@@ -1,12 +1,13 @@
 import os
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import GEMINI_MODEL, DATABASE_URL, FRONTEND_URL, ENABLE_PLAYWRIGHT
+from .config import GEMINI_MODEL, DATABASE_URL, FRONTEND_URL, ENABLE_PLAYWRIGHT, IS_PRODUCTION
 from .db.database import init_db
 from .services.gemini_service import gemini_service
 from .routers.audit import router as audit_router
@@ -51,15 +52,43 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="AI Job Application Assistant API",
     description=(
-        "Production-grade backend with SQLModel/SQLAlchemy relational persistence, "
-        "automated multi-portal scrapers (Jobs.ge, HR.ge, DOU.ua, Djinni.co), "
-        "strict remote/English language filtering, dynamic AI salary estimation, and Playwright staging."
+        "Production backend with SQLModel/SQLAlchemy relational persistence, "
+        "multi-portal discovery, remote B2B analytics, and CV tailoring."
     ),
     version="2.0.0",
     lifespan=lifespan,
+    docs_url=None if IS_PRODUCTION else "/docs",
+    redoc_url=None if IS_PRODUCTION else "/redoc",
+    openapi_url=None if IS_PRODUCTION else "/openapi.json",
 )
 
-# Standards-compliant CORS Middleware (explicit origins + regex for Chrome extensions & free-tier hosts)
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    response.headers.setdefault("X-XSS-Protection", "0")
+    response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin-allow-popups")
+    if IS_PRODUCTION:
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
+    return response
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error("Unhandled exception on %s %s: %s", request.method, request.url.path, exc, exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error. Please try again."},
+    )
+
+
+# Tight CORS configuration: explicit allowlisted origins + Chrome Extension protocol only
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -69,21 +98,24 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:8000",
 ]
 if FRONTEND_URL and FRONTEND_URL not in CORS_ALLOWED_ORIGINS:
-    CORS_ALLOWED_ORIGINS.append(FRONTEND_URL)
+    CORS_ALLOWED_ORIGINS.append(FRONTEND_URL.rstrip("/"))
 _extra_origins = os.getenv("CORS_ORIGINS", "")
 for _orig in _extra_origins.split(","):
-    _orig = _orig.strip()
+    _orig = _orig.strip().rstrip("/")
     if _orig and _orig not in CORS_ALLOWED_ORIGINS:
         CORS_ALLOWED_ORIGINS.append(_orig)
+
+_custom_cors_regex = os.getenv("CORS_ALLOW_REGEX", "").strip()
+CORS_ORIGIN_REGEX = _custom_cors_regex or r"^chrome-extension://[a-z0-9]+$"
 
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ALLOWED_ORIGINS,
-    allow_origin_regex=r"^(chrome-extension://[a-z0-9]+|https://[a-zA-Z0-9-]+\.(vercel\.app|onrender\.com|netlify\.app))$",
+    allow_origin_regex=CORS_ORIGIN_REGEX,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With"],
 )
 
 # Include Routers

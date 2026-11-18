@@ -9,7 +9,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
-from ..config import BASE_DIR, reload_env_files, get_smtp_config
+from ..config import BASE_DIR, reload_env_files, get_smtp_config, IS_PRODUCTION
 from ..db.database import get_session, delete_job_posting_cascade
 from ..db.models import User, UserOTP, CandidateProfile, JobPosting, utc_now
 from ..services.crypto_service import blind_index, mask_email
@@ -97,8 +97,17 @@ def _build_auth_response(user: User) -> AuthResponse:
     )
 
 
+_EMAIL_PATTERN = re.compile(r"^[a-zA-Z0-9._%+\-]{1,64}@[a-zA-Z0-9.\-]{1,189}\.[a-zA-Z]{2,24}$")
+
+
 def sanitize_email(email: str) -> str:
-    return email.strip().lower()
+    clean = (email or "").strip().lower()
+    if len(clean) > 254 or not _EMAIL_PATTERN.match(clean):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Please provide a valid email address.",
+        )
+    return clean
 
 
 def _sync_profile_owner_on_auth(session: Session, clean_email: str, force_reset: bool = False) -> None:
@@ -218,8 +227,13 @@ def configure_smtp_sender(
 ):
     """
     Validates and saves local Gmail SMTP credentials into gitignored backend/.env
-    so passwordless OTP codes can be dispatched without manually editing files.
+    in local development only. Disabled in production deployments.
     """
+    if IS_PRODUCTION:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Runtime .env modification is disabled in production. Configure SMTP environment variables in your host settings.",
+        )
     cfg = get_smtp_config()
     if cfg["configured"]:
         payload = decode_access_token(credentials.credentials) if credentials else None
@@ -328,10 +342,12 @@ def send_otp_code(req: SendOTPRequest, session: Session = Depends(get_session)):
 @router.post("/verify-otp", response_model=AuthResponse)
 def verify_otp_code(req: VerifyOTPRequest, session: Session = Depends(get_session)):
     """
-    Verifies the 6-digit OTP code and returns a signed JWT token.
+    Verifies the 6-digit OTP code with strict brute-force rate limiting and returns signed JWT tokens.
     Automatically creates a candidate User record if signing in for the first time.
     """
     clean_email = sanitize_email(req.email)
+    otp_key = f"otp_verify:{clean_email}"
+    check_rate_limit(otp_key)
     clean_code = req.otp_code.strip()
     email_digest = blind_index(clean_email)
 
@@ -353,11 +369,14 @@ def verify_otp_code(req: VerifyOTPRequest, session: Session = Depends(get_sessio
         expires_at = expires_at.replace(tzinfo=timezone.utc)
 
     if not otp_record or not expires_at or expires_at < now_utc:
+        record_login_failure(otp_key)
         record_login_failure(clean_email)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid or expired verification code. Please request a new OTP.",
         )
+
+    reset_login_attempts(otp_key)
 
     # Mark OTP as consumed
     otp_record.is_used = True

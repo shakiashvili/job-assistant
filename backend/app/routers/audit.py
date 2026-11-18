@@ -117,4 +117,4 @@ async def audit_job_endpoint(
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
         logger.error(f"Failed to audit job: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Job audit failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Job audit failed due to an internal error.")

@@ -167,7 +167,7 @@ async def upload_skills_profile(
         raise
     except Exception as e:
         logger.error(f"Failed to ingest skills.md into CandidateProfile: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to process skills profile upload.")
 
 
 @router.get("/profile")
@@ -394,19 +394,22 @@ async def list_scraped_jobs(
             base_conds.append(JobPosting.market == market)
         if min_score is not None and min_score > 0:
             base_conds.append(score_col >= min_score)
+        def _esc_like(val: str) -> str:
+            return val.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
         if search and search.strip():
-            kw = f"%{search.strip()}%"
+            kw = f"%{_esc_like(search.strip())}%"
             base_conds.append(
                 or_(
-                    JobPosting.title.ilike(kw),
-                    JobPosting.company.ilike(kw),
-                    JobPosting.description_raw.ilike(kw),
+                    JobPosting.title.ilike(kw, escape="\\"),
+                    JobPosting.company.ilike(kw, escape="\\"),
+                    JobPosting.description_raw.ilike(kw, escape="\\"),
                 )
             )
         if country and country.strip():
-            base_conds.append(JobPosting.market.ilike(f"%{country.strip()}%"))
+            base_conds.append(JobPosting.market.ilike(f"%{_esc_like(country.strip())}%", escape="\\"))
         if city and city.strip():
-            base_conds.append(JobPosting.market.ilike(f"%{city.strip()}%"))
+            base_conds.append(JobPosting.market.ilike(f"%{_esc_like(city.strip())}%", escape="\\"))
         if remote_type and remote_type.upper() != "ALL":
             rt_up = remote_type.strip().upper()
             if rt_up == "REMOTE":
@@ -416,16 +419,16 @@ async def list_scraped_jobs(
         if salary_min is not None and salary_min > 0:
             base_conds.append(JobPosting.salary_max >= salary_min)
         if technology and technology.strip():
-            tkw = f"%{technology.strip()}%"
+            tkw = f"%{_esc_like(technology.strip())}%"
             base_conds.append(
                 or_(
-                    JobPosting.title.ilike(tkw),
-                    JobPosting.description_raw.ilike(tkw),
+                    JobPosting.title.ilike(tkw, escape="\\"),
+                    JobPosting.description_raw.ilike(tkw, escape="\\"),
                 )
             )
         if language and language.strip():
-            lkw = f"%{language.strip()}%"
-            base_conds.append(JobPosting.description_raw.ilike(lkw))
+            lkw = f"%{_esc_like(language.strip())}%"
+            base_conds.append(JobPosting.description_raw.ilike(lkw, escape="\\"))
         if only_saved and current_user.id is not None:
             saved_sub = select(SavedJob.job_posting_id).where(SavedJob.user_id == current_user.id)
             base_conds.append(JobPosting.id.in_(saved_sub))

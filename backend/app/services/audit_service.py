@@ -2,6 +2,7 @@ import os
 import asyncio
 import ipaddress
 import logging
+import socket
 import urllib.parse
 import urllib.request
 import httpx
@@ -45,6 +46,8 @@ def validate_safe_external_url(url: str) -> str:
     parsed = urllib.parse.urlparse(clean)
     if parsed.scheme not in ("http", "https"):
         raise ValueError(f"SSRF Protection: unsupported URL scheme '{parsed.scheme}'. Only http/https allowed.")
+    if parsed.username or parsed.password:
+        raise ValueError("SSRF Protection: URLs containing embedded credentials are forbidden.")
 
     host = (parsed.hostname or "").strip().lower()
     if not host:
@@ -62,8 +65,11 @@ def validate_safe_external_url(url: str) -> str:
     if host in blocked_hosts or host.endswith((".local", ".internal", ".localhost")):
         raise ValueError(f"SSRF Protection: internal or loopback host '{host}' is forbidden.")
 
-    try:
-        ip_obj = ipaddress.ip_address(host)
+    def _check_ip_public(ip_str: str) -> None:
+        ip_obj = ipaddress.ip_address(ip_str)
+        # Unmap IPv4-mapped IPv6 addresses (e.g., ::ffff:127.0.0.1)
+        if isinstance(ip_obj, ipaddress.IPv6Address) and ip_obj.ipv4_mapped:
+            ip_obj = ip_obj.ipv4_mapped
         if (
             ip_obj.is_loopback
             or ip_obj.is_private
@@ -72,10 +78,24 @@ def validate_safe_external_url(url: str) -> str:
             or ip_obj.is_reserved
             or ip_obj.is_unspecified
         ):
-            raise ValueError(f"SSRF Protection: non-public IP address '{host}' is forbidden.")
+            raise ValueError(f"SSRF Protection: non-public IP address '{ip_str}' is forbidden.")
+
+    try:
+        _check_ip_public(host)
     except ValueError as ve:
         if "SSRF Protection" in str(ve):
             raise
+        # Hostname rather than literal IP: resolve via DNS and inspect every returned IP
+        try:
+            addr_info = socket.getaddrinfo(host, None)
+            for item in addr_info:
+                resolved_ip = item[4][0].split("%")[0]
+                _check_ip_public(resolved_ip)
+        except ValueError as dns_ve:
+            if "SSRF Protection" in str(dns_ve):
+                raise
+        except socket.gaierror:
+            pass
 
     return clean
 

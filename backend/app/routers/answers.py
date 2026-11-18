@@ -26,4 +26,4 @@ async def generate_answers_endpoint(
         return response
     except Exception as e:
         logger.error(f"Failed to generate answers: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Answer generation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Answer generation failed due to an internal error.")

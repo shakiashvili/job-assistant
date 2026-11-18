@@ -43,6 +43,8 @@ async def stage_application_endpoint(
             user_id=uid,
         )
         return response
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
         logger.error(f"Playwright staging failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Playwright staging failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Application staging failed due to an internal error.")

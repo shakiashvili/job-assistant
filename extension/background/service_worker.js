@@ -300,7 +300,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       };
       await chrome.storage.local.set(updates);
       const rawBase = (message.apiBaseUrl || "").trim().replace(/\/+$/, "");
-      if (rawBase && /^https?:\/\//i.test(rawBase)) {
+      if (
+        rawBase &&
+        (/^https:\/\/[a-z0-9.-]+(:\d+)?$/i.test(rawBase) ||
+          /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(rawBase))
+      ) {
         await chrome.storage.sync.set({ apiBaseUrl: rawBase });
       }
       sendResponse({ ok: true, synced: true });

@@ -71,19 +71,19 @@ ENABLE_PLAYWRIGHT = os.getenv("ENABLE_PLAYWRIGHT", "true").strip().lower() in ("
 # Security & JWT Auth
 _DEV_FALLBACK_SECRET = "talentflow-ai-ultra-secure-jwt-secret-key-production-hardening-64chars-min-entropy"
 _raw_secret = os.getenv("SECRET_KEY", "").strip()
-_is_prod = (
+IS_PRODUCTION = (
     os.getenv("ENVIRONMENT", "").strip().lower() in ("prod", "production")
     or os.getenv("ENV", "").strip().lower() in ("prod", "production")
     or bool(os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT"))
 )
-if not _raw_secret or _raw_secret == _DEV_FALLBACK_SECRET:
-    if _is_prod:
+_is_prod = IS_PRODUCTION
+if not _raw_secret or _raw_secret == _DEV_FALLBACK_SECRET or (IS_PRODUCTION and len(_raw_secret) < 32):
+    if IS_PRODUCTION:
         logger.critical(
-            "FATAL SECURITY ERROR: SECRET_KEY is missing or uses the insecure default in production! "
-            "Set a strong random SECRET_KEY in your environment variables / .env file."
+            "FATAL SECURITY ERROR: SECRET_KEY is missing, too short (<32 chars), or uses the insecure default in production!"
         )
         raise RuntimeError(
-            "SECRET_KEY environment variable must be set to a strong secret in production."
+            "SECRET_KEY environment variable must be set to a strong secret (>=32 chars) in production."
         )
     else:
         logger.warning(
