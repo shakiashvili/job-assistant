@@ -1,7 +1,12 @@
 import os
+import sys
 import tempfile
 from pathlib import Path
 import pytest
+
+_BACKEND_DIR = Path(__file__).resolve().parents[1]
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
 
 # Isolate all pytest runs from the user's live data/job_assistant.db
 _tmp_db_dir = Path(tempfile.gettempdir()) / "talentflow_pytest_db"
