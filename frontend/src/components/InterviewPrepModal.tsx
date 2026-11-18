@@ -71,7 +71,7 @@ export const InterviewPrepModal: React.FC<InterviewPrepModalProps> = ({
       setNotesSaved(true);
       setTimeout(() => setNotesSaved(false), 3000);
     } catch (err: any) {
-      alert(err.message || 'Failed to save reflections');
+      setError(err.message || 'Failed to save reflections');
     } finally {
       setSavingNotes(false);
     }
@@ -125,7 +125,7 @@ export const InterviewPrepModal: React.FC<InterviewPrepModalProps> = ({
         <div className="p-3 bg-slate-950 border-b border-slate-800/80 flex items-center gap-1.5 overflow-x-auto">
           {[
             { id: 'HR_SCREEN', label: '📞 HR Screening' },
-            { id: 'TECH_INTERVIEW', label: '💻 Technical QA / SDET' },
+            { id: 'TECH_INTERVIEW', label: '💻 Role / Technical Round' },
             { id: 'FINAL_ROUND', label: '🏆 Final Leadership' },
           ].map((tab) => (
             <button

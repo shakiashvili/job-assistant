@@ -6,7 +6,7 @@
   - `scripting`: injects `content.js` dynamically when syncing web session tokens or scanning SPAs.
   - `storage`: stores the synced backend API URL (`chrome.storage.sync`) and short-lived auth/refresh tokens (`chrome.storage.local`).
   - `sidePanel`: renders the Copilot side panel beside LinkedIn, Workday, Greenhouse, Lever, DOU.ua, Djinni.co, Jobs.ge, HR.ge, JustJoin.it, and HeadHunter.ge.
-- **Least-Privilege Host Policy**: `<all_urls>` is **not** requested. Only supported job portals, Gmail (if drafting), localhost development URLs, and supported cloud deployment domains are permitted.
+- **Least-Privilege Host Policy**: Unconditional wildcard `host_permissions` (`*://*/*`) are **not** requested up front. Supported job portals and local dev hosts (`http://localhost:8000/*`, `http://localhost:5173/*`) are listed explicitly in `host_permissions`, while arbitrary employer/custom ATS domains use `optional_host_permissions` granted only when the user explicitly clicks **Grant Site Access** via `chrome.permissions.request()`.
 - **Human-in-the-Loop Guarantee**: The extension detects reCAPTCHA / hCaptcha / Cloudflare Turnstile and pauses immediately. It **never** auto-clicks final Submit buttons or bypasses anti-bot challenges.
 - **Pre-Fill Edit Review**: Generated per-field answers are rendered inside **Editable Auto-Fill Answers** so candidates can adjust any response before clicking **Apply Edits to Page**.
 

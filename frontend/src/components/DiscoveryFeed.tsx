@@ -192,8 +192,10 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
     return matchesTier && matchStatus && matchPortal;
   });
 
-  const expVal = candidateProfile?.experience_years ?? 1.5;
-  const capVal = candidateProfile?.max_allowed_years ?? Math.min(expVal + 0.5, 2.0);
+  const expVal = candidateProfile?.experience_years ?? null;
+  const capVal =
+    candidateProfile?.max_allowed_years ??
+    (expVal != null ? Math.min(expVal + 0.5, 2.0) : 2.0);
   const primaryRole = candidateProfile?.primary_role || candidateProfile?.headline || 'Upload skills.md';
   const detectedIndustry = candidateProfile?.detected_industry || candidateProfile?.target_industry || 'Domain-Agnostic';
   const adjacentRoles = candidateProfile?.adjacent_roles || [];
@@ -236,7 +238,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
               <span className="text-slate-400">
                 Experience:{' '}
                 <strong className="text-amber-300">
-                  {expVal} Yrs (Cap: {capVal.toFixed(1)} Yrs)
+                  {expVal != null ? `${expVal} Yrs` : 'Not specified'} (Cap: {capVal.toFixed(1)} Yrs)
                 </strong>
               </span>
             </div>
@@ -973,20 +975,55 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
             >
               Previous
             </button>
-            {Array.from({ length: Math.min(totalPages, 5) }, (_, idx) => idx + 1).map((pNum) => (
-              <button
-                key={pNum}
-                type="button"
-                onClick={() => onPageChange(pNum)}
-                className={`px-2.5 py-1.5 rounded-lg font-semibold ${
-                  pNum === page
-                    ? 'bg-emerald-700 text-white'
-                    : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
-                }`}
-              >
-                {pNum}
-              </button>
-            ))}
+            {(() => {
+              const totalP = Math.max(1, totalPages || 1);
+              const winStart = Math.max(1, Math.min(page - 2, totalP - 4));
+              const winEnd = Math.min(totalP, winStart + 4);
+              const pages: number[] = [];
+              for (let p = winStart; p <= winEnd; p++) pages.push(p);
+              return (
+                <>
+                  {winStart > 1 && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => onPageChange(1)}
+                        className="px-2.5 py-1.5 rounded-lg font-semibold bg-slate-950 border border-slate-800 text-slate-300 hover:text-white"
+                      >
+                        1
+                      </button>
+                      {winStart > 2 && <span className="px-1 text-slate-400">...</span>}
+                    </>
+                  )}
+                  {pages.map((pNum) => (
+                    <button
+                      key={pNum}
+                      type="button"
+                      onClick={() => onPageChange(pNum)}
+                      className={`px-2.5 py-1.5 rounded-lg font-semibold ${
+                        pNum === page
+                          ? 'bg-emerald-700 text-white'
+                          : 'bg-slate-950 border border-slate-800 text-slate-300 hover:text-white'
+                      }`}
+                    >
+                      {pNum}
+                    </button>
+                  ))}
+                  {winEnd < totalP && (
+                    <>
+                      {winEnd < totalP - 1 && <span className="px-1 text-slate-400">...</span>}
+                      <button
+                        type="button"
+                        onClick={() => onPageChange(totalP)}
+                        className="px-2.5 py-1.5 rounded-lg font-semibold bg-slate-950 border border-slate-800 text-slate-300 hover:text-white"
+                      >
+                        {totalP}
+                      </button>
+                    </>
+                  )}
+                </>
+              );
+            })()}
             <button
               type="button"
               disabled={page >= totalPages}

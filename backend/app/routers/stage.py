@@ -28,13 +28,13 @@ async def stage_application_endpoint(
     try:
         response = await playwright_service.stage_application(
             job_url=request.job_url,
-            variant=request.variant or "qa_automation",
+            variant=request.variant or "",
             custom_pdf_filename=request.custom_pdf_filename,
             custom_answers=request.custom_answers,
             applicant_summary=request.applicant_summary,
             motivation_letter=request.motivation_letter,
             expected_salary=request.expected_salary,
-            start_date=request.start_date or "1 week after offer",
+            start_date=request.start_date,
             bypass_company_gate=bool(request.bypass_company_gate),
             auto_submit=bool(request.auto_submit),
             headless=request.headless if request.headless is not None else False,

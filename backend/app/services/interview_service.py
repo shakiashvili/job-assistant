@@ -34,7 +34,8 @@ class InterviewService:
             "skills": [str(s) for s in skills[:20]],
             "work_history": work_history[:5],
             "achievements": taxonomy.get("achievements") or [],
-            "experience_years": taxonomy.get("years_of_experience", 1.5),
+            "experience_years": taxonomy.get("years_of_experience"),
+            "experience_status": taxonomy.get("experience_status") or ("confirmed" if taxonomy.get("years_of_experience") is not None else "unknown"),
         }
 
     def prepare_interview(
@@ -291,7 +292,11 @@ Return ONLY valid JSON.
                 "category": "Behavioral",
                 "question": f"Why are you interested in joining {company} as a {role} at this stage of your career?",
                 "star_strategy": {
-                    "situation": f"Summarize your {cand_ctx.get('experience_years', 1.5)} years of hands-on experience in {cand_ctx.get('headline')}.",
+                    "situation": (
+                        f"Summarize your {cand_ctx.get('experience_years'):g} years of hands-on experience in {cand_ctx.get('headline')}."
+                        if cand_ctx.get("experience_years") is not None
+                        else f"Summarize your verified hands-on projects and background in {cand_ctx.get('headline')}."
+                    ),
                     "task": f"Connect your verified strengths in {primary_skill} and {secondary_skill} to {company}'s mission.",
                     "action": f"Highlight specific aspects of {company}'s product and engineering standards where you can contribute immediately.",
                     "result": "Convey genuine motivation, realistic expectations, and readiness to grow with the team.",

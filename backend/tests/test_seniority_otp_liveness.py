@@ -73,7 +73,9 @@ Demonstrate a structured QA approach to a REST API.
 """
     profile = profile_service.extract_structured_profile(skills_md)
     assert profile.full_name == "Giorgi Shakiashvili"
-    assert profile.experience_years <= 2.0
+    assert profile.experience_years is None
+    assert profile.experience_status == "internship_or_project"
+    assert profile.max_allowed_years <= 2.0
     assert profile.seniority_level == "JUNIOR"
     assert profile.target_industry == "qa_tech"
     assert "Lead" not in profile.headline

@@ -99,7 +99,7 @@ export const CVVariantManager: React.FC = () => {
   const loadInitial = async (forceResyncEditor = false) => {
     const [cvs, firstPage, versionsRes] = await Promise.all([
       fetchMyCvs().catch(() => []),
-      fetchScrapedJobs({ page: 1, limit: 100, min_score: 0 }).catch(() => ({ items: [], total: 0, page: 1, limit: 100, total_pages: 1 })),
+      fetchScrapedJobs({ page: 1, limit: 25, min_score: 0 }).catch(() => ({ items: [], total: 0, page: 1, limit: 25, total_pages: 1 })),
       fetchCvVersions().catch(() => ({ items: [] as CVVersionItem[] })),
     ]);
     setMyCvs(cvs);
@@ -113,22 +113,24 @@ export const CVVariantManager: React.FC = () => {
         syncEditorFromVersion(loadedVersions[0]);
       }
     }
-    let combined: DbJobPosting[] = firstPage.items || [];
-    const totalPages = Math.min(firstPage.total_pages || 1, 10);
-    if (totalPages > 1) {
-      const rest = await Promise.all(
-        Array.from({ length: totalPages - 1 }, (_, i) =>
-          fetchScrapedJobs({ page: i + 2, limit: 100, min_score: 0 }).catch(() => ({ items: [] as DbJobPosting[] }))
-        )
-      );
-      for (const pg of rest) {
-        combined = combined.concat(pg.items || []);
-      }
-    }
-    setJobsList(combined);
+    setJobsList(firstPage.items || []);
   };
 
-  const triggerCrossOriginDownload = async (relativeOrFullUrl: string, filename: string) => {
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void fetchScrapedJobs({
+        page: 1,
+        limit: 25,
+        min_score: 0,
+        search: vacancySearch.trim() || undefined,
+      })
+        .then((res) => setJobsList(res.items || []))
+        .catch(() => {});
+    }, 280);
+    return () => clearTimeout(timer);
+  }, [vacancySearch]);
+
+  const triggerCrossOriginDownload = async (relativeOrFullUrl: string, filename: string): Promise<boolean> => {
     const targetUrl = relativeOrFullUrl.startsWith('http') ? relativeOrFullUrl : `${BACKEND_ORIGIN}${relativeOrFullUrl}`;
     try {
       const token = localStorage.getItem('talentflow_token');
@@ -145,8 +147,10 @@ export const CVVariantManager: React.FC = () => {
       a.click();
       document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
-    } catch {
-      window.open(targetUrl, '_blank', 'noopener,noreferrer');
+      return true;
+    } catch (err: any) {
+      setStatusError(err?.message ? `Direct download blocked (${err.message}). Use the download buttons below.` : 'Direct download failed. Use the download buttons below.');
+      return false;
     }
   };
 
@@ -219,10 +223,14 @@ export const CVVariantManager: React.FC = () => {
       const matched = nextVersions.find((v) => v.id === res.cv_version_id) || nextVersions[0] || null;
       if (matched) syncEditorFromVersion(matched);
 
-      // Immediately download ready Word (.docx) file and notify user
-      void triggerCrossOriginDownload(res.docx_url, res.docx_filename);
+      // Immediately attempt download of ready Word (.docx) file and notify user accurately
+      const downloadedOk = await triggerCrossOriginDownload(res.docx_url, res.docx_filename);
 
-      setDownloadBanner(`Downloaded ${res.docx_filename}! Both Word (.docx) and PDF links + Studio version are ready below.`);
+      setDownloadBanner(
+        downloadedOk
+          ? `Downloaded ${res.docx_filename}! Both Word (.docx) and PDF links + Studio version are ready below.`
+          : `Generated ${res.docx_filename}! Use the Word (.docx) or PDF download buttons below.`
+      );
       setTimeout(() => {
         outputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }, 100);
@@ -295,15 +303,19 @@ export const CVVariantManager: React.FC = () => {
     }
   };
 
-  const copyCoverLetter = () => {
+  const copyCoverLetter = async () => {
     const activeText =
       letterTab === 'motivational'
         ? generatedOutput?.motivational_letter || generatedOutput?.cover_letter
         : generatedOutput?.cover_letter;
     if (!activeText) return;
-    navigator.clipboard.writeText(activeText);
-    setCopiedLetter(true);
-    setTimeout(() => setCopiedLetter(false), 2500);
+    try {
+      await navigator.clipboard.writeText(activeText);
+      setCopiedLetter(true);
+      setTimeout(() => setCopiedLetter(false), 2500);
+    } catch {
+      setStatusError('Clipboard copy failed. Please select and copy the text manually.');
+    }
   };
 
   const isKa = cvLanguage === 'ka';
@@ -403,7 +415,7 @@ export const CVVariantManager: React.FC = () => {
           <input
             ref={uploadRef}
             type="file"
-            accept=".pdf,.docx,.doc,.md,.txt"
+            accept=".pdf,.docx,.md,.txt"
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];

@@ -173,20 +173,23 @@ class MatcherService:
             "tools": [],
             "frameworks": [],
             "spoken_languages": [],
-            "years_of_experience": 1.5,
+            "years_of_experience": None,
+            "experience_status": "unknown",
             "seniority_level": "JUNIOR",
             "all_skills": [],
         }
 
-        # Extract years of experience (e.g., "1.5 years", "1-2 years", "5+ years", "4 years")
+        # Extract years of experience ONLY when explicitly stated (never fabricate 1.5 yrs)
         yr_match = re.search(r"(\d+(?:\.\d+)?)\s*\+?\s*(?:years?|yrs?|წელი|წლიანი)", lower_text)
         if yr_match:
             taxonomy["years_of_experience"] = float(yr_match.group(1))
-        elif any(w in lower_text for w in ["portfolio project", "entry-level", "junior", "intern", "დამწყები"]):
-            taxonomy["years_of_experience"] = 1.5
+            taxonomy["experience_status"] = "confirmed"
+        elif any(w in lower_text for w in ["portfolio project", "entry-level", "junior", "intern", "trainee", "დამწყები", "სტაჟირება"]):
+            taxonomy["years_of_experience"] = None
+            taxonomy["experience_status"] = "internship_or_project"
 
-        # Infer seniority level from years
-        exp = taxonomy["years_of_experience"]
+        # Infer seniority level transparently (treat unknown/entry as JUNIOR ceiling)
+        exp = float(taxonomy["years_of_experience"]) if taxonomy["years_of_experience"] is not None else 0.0
         if exp <= 2.5:
             taxonomy["seniority_level"] = "JUNIOR"
         elif exp <= 5.0:
@@ -223,8 +226,6 @@ class MatcherService:
             if any(p in lower_text for p in patterns):
                 if canon_lang not in taxonomy["spoken_languages"]:
                     taxonomy["spoken_languages"].append(canon_lang)
-        if not taxonomy["spoken_languages"]:
-            taxonomy["spoken_languages"] = ["English", "Georgian"]
 
         # Multi-industry & general skills
         all_skills: List[str] = []
@@ -533,7 +534,14 @@ Markdown:
 
         edu_entries = parsed_skills.get("education") or []
         courses_list = [str(c).lower() for c in (parsed_skills.get("courses_and_certifications") or []) if c]
-        eligible_internships = bool(parsed_skills.get("eligible_internships") or edu_entries or courses_list or float(parsed_skills.get("years_of_experience") or 1.5) <= 2.5)
+        raw_exp_val = parsed_skills.get("years_of_experience")
+        eligible_internships = bool(
+            parsed_skills.get("eligible_internships")
+            or edu_entries
+            or courses_list
+            or raw_exp_val is None
+            or float(raw_exp_val) <= 2.5
+        )
         edu_tokens = [
             tok.lower()
             for e in edu_entries
@@ -615,7 +623,8 @@ Markdown:
                 "skill_overlap_pct": None,
             }
 
-        candidate_years = float(parsed_skills.get("years_of_experience") or 1.5)
+        raw_cand_years = parsed_skills.get("years_of_experience")
+        candidate_years = float(raw_cand_years) if raw_cand_years is not None else 0.0
         max_allowed = parsed_skills.get("max_allowed_years")
         candidate_seniority = str(parsed_skills.get("seniority_level") or "JUNIOR")
 

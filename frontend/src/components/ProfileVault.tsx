@@ -217,7 +217,7 @@ export const ProfileVault: React.FC = () => {
       <input
         ref={dropInputRef}
         type="file"
-        accept=".pdf,.docx,.doc,.md,.txt,.markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        accept=".pdf,.docx,.md,.txt,.markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         className="hidden"
         onChange={(e) => {
           const file = e.target.files?.[0];
@@ -555,7 +555,7 @@ export const ProfileVault: React.FC = () => {
                   <span className="text-[10px] text-slate-400 uppercase block mb-1">Notice Period</span>
                   <input
                     type="text"
-                    placeholder="e.g. 1 week after offer"
+                    placeholder="e.g. Immediate / 2 weeks notice"
                     value={compensation.notice_period || ''}
                     onChange={(e) =>
                       setData({
@@ -620,10 +620,12 @@ export const ProfileVault: React.FC = () => {
                 className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
               />
               <button
+                type="button"
+                aria-label="Add skill"
                 onClick={addCoreSkill}
                 className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-500 text-white rounded-lg text-xs font-medium"
               >
-                <Plus className="w-4 h-4" />
+                <Plus className="w-4 h-4" aria-hidden="true" />
               </button>
             </div>
           </div>

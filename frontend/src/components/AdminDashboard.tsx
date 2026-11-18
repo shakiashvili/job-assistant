@@ -60,8 +60,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
     try {
       const updated = await updateAdminUser(user.id, { is_admin: !user.is_admin });
       setUsers((prev) => prev.map((u) => (u.id === user.id ? updated : u)));
+      setError(null);
     } catch (err: any) {
-      alert(err.message || 'Failed to toggle admin role');
+      setError(err.message || 'Failed to toggle admin role');
     }
   };
 
@@ -74,8 +75,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
         const updated = await updateAdminUser(user.id, { is_active: true });
         setUsers((prev) => prev.map((u) => (u.id === user.id ? updated : u)));
       }
+      setError(null);
     } catch (err: any) {
-      alert(err.message || 'Failed to change user status');
+      setError(err.message || 'Failed to change user status');
     }
   };
 

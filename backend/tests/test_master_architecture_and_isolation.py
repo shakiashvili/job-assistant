@@ -281,11 +281,25 @@ def test_scenario_f_query_count_optimizations():
         assert select_query_count <= 5, f"Expected <=5 SELECT queries for batch ingest, got {select_query_count}"
         assert ingest_query_count <= 36, f"Expected <=36 total statements for batch ingest, got {ingest_query_count}"
 
+        # Explicitly stage 5 user applications before measuring single-JOIN get_all()
+        from app.schemas.api_schemas import ApplicationCreate
+        for i in range(5):
+            tracker_store.create(
+                ApplicationCreate(
+                    company=f"TechCo {i}",
+                    role=f"QA Automation Engineer {i}",
+                    portal="djinni.co",
+                    status="Saved",
+                ),
+                user_id=uid,
+            )
+
         # 2. Tracker get_all() must execute in 1 single JOIN query regardless of application count
         queries.clear()
         apps = tracker_store.get_all(user_id=uid, is_guest=False)
         tracker_query_count = len(queries)
         assert len(apps) >= 5
+        assert all(a.applied_date is None for a in apps)
         assert tracker_query_count == 1, f"Expected 1 JOIN query in tracker_store.get_all(), got {tracker_query_count}"
 
         # 3. GET /api/jobs must execute in <= 4 queries (down from 10)
@@ -367,7 +381,18 @@ def test_scenario_g_saved_searches_notifications_analytics_export_and_interview_
     assert csv_res.status_code == 200
     assert "company,role,status" in csv_res.text
 
-    # Interview Copilot & Reflection Note persistence
+    # Interview Copilot & Reflection Note persistence (explicitly save application first)
+    create_app_res = client.post(
+        "/api/applications",
+        json={
+            "company": "AlertCo",
+            "role": "Junior QA Automation Engineer (Playwright)",
+            "portal": "djinni.co",
+            "status": "Applied",
+        },
+        headers=headers,
+    )
+    assert create_app_res.status_code in (200, 201)
     apps = client.get("/api/applications", headers=headers).json()
     app_id = apps[0]["id"]
     prep_res = client.post(

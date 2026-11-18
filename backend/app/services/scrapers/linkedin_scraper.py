@@ -61,6 +61,7 @@ class LinkedInScraper(BasePortalScraper):
         self,
         html: str,
         candidate_languages: Optional[List[str]] = None,
+        max_allowed_years: float = 2.0,
     ) -> List[Dict[str, Any]]:
         soup = self.make_soup(html)
         results: List[Dict[str, Any]] = []
@@ -123,9 +124,9 @@ class LinkedInScraper(BasePortalScraper):
                 candidate_languages=candidate_languages,
             )
 
-            if _SENIOR_TITLE_PATTERN.search(title):
+            if max_allowed_years <= 2.5 and _SENIOR_TITLE_PATTERN.search(title):
                 status = "FILTERED_OUT"
-                reason = f"Strict Experience Cap: Role '{title}' exceeds <= 2.0 yrs Junior/Associate limit."
+                reason = f"Strict Experience Cap: Role '{title}' exceeds <= {max_allowed_years:g} yrs Junior/Associate limit."
 
             market_tag = (
                 "GE_DOMESTIC"
@@ -157,7 +158,7 @@ class LinkedInScraper(BasePortalScraper):
 
         return results
 
-    async def _enrich_card_details(self, job: Dict[str, Any]) -> Dict[str, Any]:
+    async def _enrich_card_details(self, job: Dict[str, Any], max_allowed_years: float = 2.0) -> Dict[str, Any]:
         """Best-effort fetch of LinkedIn guest jobPosting detail HTML to inspect full requirements & salary."""
         raw_id = job.get("raw_job_id")
         if not raw_id:
@@ -178,9 +179,9 @@ class LinkedInScraper(BasePortalScraper):
                 f"{job['title']} at {job['company']} | Location: {job['location']}\n"
                 f"{full_desc[:3500]}"
             )
-            if re.search(r"\b(?:[3-9]|1[0-9])\+?\s*(?:years?|yrs?)\b", full_desc, re.IGNORECASE):
+            if max_allowed_years <= 2.5 and re.search(r"\b(?:[3-9]|1[0-9])\+?\s*(?:years?|yrs?)\b", full_desc, re.IGNORECASE):
                 job["status"] = "FILTERED_OUT"
-                job["filter_out_reason"] = "Strict Experience Cap: LinkedIn job description requires 3+ years."
+                job["filter_out_reason"] = f"Strict Experience Cap: LinkedIn job description exceeds {max_allowed_years:g} yrs limit."
         return job
 
     async def scrape(
@@ -189,6 +190,7 @@ class LinkedInScraper(BasePortalScraper):
         search_urls: Optional[List[str]] = None,
         domain_keywords: Optional[List[str]] = None,
         candidate_languages: Optional[List[str]] = None,
+        max_allowed_years: float = 2.0,
     ) -> List[Dict[str, Any]]:
         if not allow_network:
             return []
@@ -201,7 +203,11 @@ class LinkedInScraper(BasePortalScraper):
             html = await self.fetch_html(u, timeout=10.0)
             if not html:
                 continue
-            parsed = self.parse_html_listings(html, candidate_languages=candidate_languages)
+            parsed = self.parse_html_listings(
+                html,
+                candidate_languages=candidate_languages,
+                max_allowed_years=max_allowed_years,
+            )
             for item in parsed:
                 if item["external_id"] in seen_ids:
                     continue
@@ -218,7 +224,10 @@ class LinkedInScraper(BasePortalScraper):
         # Enrich top non-filtered cards with full descriptions (polite concurrency)
         candidates = [j for j in raw_jobs if j.get("status") != "FILTERED_OUT"][:6]
         if candidates:
-            await asyncio.gather(*(self._enrich_card_details(j) for j in candidates), return_exceptions=True)
+            await asyncio.gather(
+                *(self._enrich_card_details(j, max_allowed_years=max_allowed_years) for j in candidates),
+                return_exceptions=True,
+            )
 
         for j in raw_jobs:
             j.pop("raw_job_id", None)

@@ -70,13 +70,13 @@ class PlaywrightStagerService:
     async def stage_application(
         self,
         job_url: str,
-        variant: str = "qa_automation",
+        variant: str = "",
         custom_pdf_filename: Optional[str] = None,
         custom_answers: Optional[Dict[str, str]] = None,
         applicant_summary: Optional[str] = None,
         motivation_letter: Optional[str] = None,
         expected_salary: Optional[str] = None,
-        start_date: Optional[str] = "1 week after offer",
+        start_date: Optional[str] = None,
         bypass_company_gate: bool = False,
         auto_submit: bool = False,
         headless: bool = False,
@@ -185,12 +185,13 @@ class PlaywrightStagerService:
                 matched_skills=ground_truth.get("skills", {}).get("core", [])[:6],
                 missing_skills=[],
             )
+            verified_notice = str(((candidate.get("compensation") or {}).get("notice_period")) or "").strip()
+            start_text = (start_date or verified_notice or "").strip()
             summary_text = applicant_summary or narratives["human_tone_summary"]
             motivation_text = motivation_letter or (
                 narratives["dou_motivational_letter"] if portal_type == "dou.ua" else narratives["motivation_statement"]
             )
             dou_letter_text = narratives["dou_motivational_letter"]
-            start_text = start_date or "1 week after offer"
 
             if not custom_pdf_filename:
                 cv_gen = cv_generator_service.generate_vacancy_cv(
@@ -340,17 +341,34 @@ class PlaywrightStagerService:
                 start_text,
                 "start_date_1_week",
             )
+            wh_items = ground_truth.get("work_history") or []
+            verified_skills_list = ground_truth.get("skills", {}).get("core", []) or []
+            exp_summary = ""
+            if wh_items and isinstance(wh_items[0], dict):
+                first_wh = wh_items[0]
+                bullets = [str(b).strip() for b in (first_wh.get("highlights") or []) if b]
+                exp_summary = bullets[0] if bullets else f"{first_wh.get('role', '')} at {first_wh.get('company', '')}".strip()
+            elif verified_skills_list:
+                exp_summary = f"Hands-on experience applying {', '.join(str(s) for s in verified_skills_list[:6])}."
+
             await fill_semantic_cascade(
                 re.compile(r"playwright|cypress|automation\s*framework|experience", re.I),
                 re.compile(r"experience|framework", re.I),
                 "textarea[name*='experience' i]",
-                "1.5+ years building modular Playwright (TS/Python) and Cypress test suites, cutting CI regression time.",
+                exp_summary,
                 "framework_experience",
             )
 
-            # Work authorization dropdown if present
+            # Work authorization dropdown ONLY if explicitly confirmed in candidate ground truth
+            wa_info = candidate.get("work_authorization") if isinstance(candidate.get("work_authorization"), dict) else {}
+            has_verified_auth = bool(
+                wa_info.get("eu_work_permit")
+                or wa_info.get("us_work_authorization")
+                or wa_info.get("uk_work_authorization")
+                or wa_info.get("citizenship")
+            )
             auth_select = page.get_by_label(re.compile(r"authorized\s*to\s*work|sponsorship", re.I))
-            if await auth_select.count() > 0:
+            if has_verified_auth and await auth_select.count() > 0:
                 try:
                     await auth_select.first.select_option(value="yes")
                     fields_filled.append("work_auth_select")

@@ -70,12 +70,12 @@ def test_salary_extraction_never_fabricates_unstated_or_unpaid_salaries():
 
 
 def test_ground_truth_vault_never_returns_null_faq_or_compensation():
-    """Verifies ProfileVault tabs (Visas & Work Auth, Work History, FAQ Bank) always receive non-null structures."""
+    """Verifies ProfileVault tabs always receive non-null structures without fabricating unverified FAQ entries."""
     init_db()
     res = client.get("/api/ground-truth")
     assert res.status_code == 200
     gt = res.json()
-    assert isinstance(gt.get("faq_bank"), list) and len(gt["faq_bank"]) >= 1
+    assert isinstance(gt.get("faq_bank"), list)
     assert isinstance(gt.get("work_history"), list)
     assert isinstance(gt.get("skills", {}).get("core"), list)
     assert isinstance(gt.get("candidate", {}).get("compensation", {}).get("expected_salary_eur"), (int, float))

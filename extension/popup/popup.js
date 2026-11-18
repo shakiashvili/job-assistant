@@ -79,7 +79,9 @@
     el("cand-avatar").textContent = initials;
     el("cand-name").textContent = uploaded ? name : `${name} (Profile Missing)`;
     el("cand-role").textContent = uploaded
-      ? `${profile.primary_role || "Specialist"} · ${profile.years_of_experience ?? 1.5} yrs`
+      ? `${profile.primary_role || "Specialist"} · ${
+          profile.years_of_experience != null ? `${profile.years_of_experience} yrs` : "Exp unconfirmed"
+        }`
       : "Upload skills.md to enable tailored CV & cover letter generation";
 
     const skillsBox = el("cand-skills");

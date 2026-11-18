@@ -167,12 +167,14 @@ class HimalayasScraper:
                 continue
 
             url = str(job.get("guid") or job.get("applicationLink") or "").split("?")[0].strip()
-            if not url:
+            if not url or not url.startswith(("https://", "http://")):
                 continue
 
+            import hashlib
+            url_digest = hashlib.md5(url.encode("utf-8")).hexdigest()[:8]
             results.append({
                 "portal": self.portal_name,
-                "external_id": f"himalayas-{job.get('companySlug') or 'co'}-{idx}-{hash(url) & 0xFFFFF}",
+                "external_id": f"himalayas-{job.get('companySlug') or 'co'}-{idx}-{url_digest}",
                 "title": title,
                 "company": company,
                 "url": url,

@@ -17,6 +17,12 @@ services:
         value: "14"
       - key: SECRET_KEY
         generateValue: true
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-3.6-flash
+      - key: GEMINI_FAST_MODEL
+        value: gemini-3.5-flash-lite
       - key: DATABASE_URL
         sync: false
       - key: GEMINI_API_KEY

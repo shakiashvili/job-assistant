@@ -189,10 +189,33 @@ class ProfileRepository:
                     return prof
 
         from ..services.profile_service import profile_service
-        raw_md = ""
         if self.skills_md_path.exists():
             raw_md = self.skills_md_path.read_text(encoding="utf-8")
-        return profile_service.upsert_candidate_profile(raw_md, mark_uploaded=False)
+            return profile_service.upsert_candidate_profile(raw_md, mark_uploaded=False)
+
+        with Session(engine, expire_on_commit=False) as session:
+            blank = CandidateProfile(
+                user_id=None,
+                full_name="",
+                email="",
+                raw_markdown="",
+                parsed_skills={
+                    "user_uploaded": False,
+                    "experience_status": "unknown",
+                    "all_skills": [],
+                    "ground_truth_vault": {
+                        "candidate": {"full_name": "", "email": ""},
+                        "skills": {"core": [], "secondary": []},
+                        "work_history": [],
+                        "education": [],
+                    },
+                },
+                experience_years=None,
+            )
+            session.add(blank)
+            session.commit()
+            session.refresh(blank)
+            return blank
 
     def get_profile_record(
         self,
@@ -200,6 +223,7 @@ class ProfileRepository:
         user_id: Optional[int] = None,
     ) -> CandidateProfile:
         from .models import User
+        from ..services.auth_service import get_user_by_email
 
         target = owner_email.strip().lower() if owner_email else ""
         if target == "guest@talentflow.local":
@@ -215,7 +239,7 @@ class ProfileRepository:
                     else:
                         target = (u_row.email or "").strip().lower()
             elif resolved_uid is None and target:
-                u_row = session.exec(select(User).where(User.email == target)).first()
+                u_row = get_user_by_email(session, target)
                 if u_row:
                     if (u_row.email or "").strip().lower() == "guest@talentflow.local":
                         target = ""
@@ -266,7 +290,7 @@ class ProfileRepository:
                                 "education": [],
                             },
                         },
-                        experience_years=0.0,
+                        experience_years=None,
                     )
 
         return self._ensure_seeded()
@@ -281,21 +305,37 @@ class ProfileRepository:
         return preset["content"]
 
     def _default_faq_bank(self, cand: Dict[str, Any]) -> List[Dict[str, Any]]:
-        loc = cand.get("location", {})
-        city = loc.get("city", "") if isinstance(loc, dict) else ""
-        base_note = f"Based in {city}; " if city else ""
-        return [
-            {
-                "question_trigger": "notice period / earliest start date",
-                "tags": ["availability", "notice", "start_date"],
-                "answer": "Available to start 1 week after offer acceptance.",
-            },
-            {
-                "question_trigger": "work authorization / remote B2B & visa status",
-                "tags": ["visa", "b2b", "remote", "authorization"],
-                "answer": f"{base_note}Available for local employment or international remote B2B engagements.",
-            },
-        ]
+        items: List[Dict[str, Any]] = []
+        comp = cand.get("compensation") if isinstance(cand.get("compensation"), dict) else {}
+        notice = str(comp.get("notice_period") or "").strip()
+        if notice:
+            items.append(
+                {
+                    "question_trigger": "notice period / earliest start date",
+                    "tags": ["availability", "notice", "start_date"],
+                    "answer": notice,
+                }
+            )
+        wa = cand.get("work_authorization") if isinstance(cand.get("work_authorization"), dict) else {}
+        citizenships = [str(c).strip() for c in (wa.get("citizenship") or []) if str(c).strip()]
+        if citizenships or wa.get("eu_work_permit") or wa.get("us_work_authorization") or wa.get("uk_work_authorization"):
+            auth_parts: List[str] = []
+            if citizenships:
+                auth_parts.append(f"Citizenship: {', '.join(citizenships)}")
+            if wa.get("eu_work_permit"):
+                auth_parts.append("EU work permit confirmed")
+            if wa.get("us_work_authorization"):
+                auth_parts.append(f"US: {wa.get('us_work_authorization')}")
+            if wa.get("uk_work_authorization"):
+                auth_parts.append(f"UK: {wa.get('uk_work_authorization')}")
+            items.append(
+                {
+                    "question_trigger": "work authorization / remote B2B & visa status",
+                    "tags": ["visa", "b2b", "remote", "authorization"],
+                    "answer": "; ".join(auth_parts),
+                }
+            )
+        return items
 
     def _normalize_vault(self, vault: Dict[str, Any], profile: CandidateProfile) -> Dict[str, Any]:
         """Normalizes vault fields without hardcoding citizenship, visa assumptions, or fake salary targets."""
@@ -305,11 +345,15 @@ class ProfileRepository:
         ps = dict(profile.parsed_skills or {})
 
         cand = dict(data.get("candidate") or {})
-        full_name = cand.get("full_name") or profile.full_name or "Candidate"
+        full_name = cand.get("full_name") or profile.full_name or ""
         parts = full_name.split()
         cand.setdefault("first_name", parts[0] if parts else "")
         cand.setdefault("last_name", " ".join(parts[1:]) if len(parts) > 1 else "")
         cand["full_name"] = full_name
+        cand["experience_years"] = profile.experience_years
+        cand["experience_status"] = ps.get("experience_status") or (
+            "confirmed" if profile.experience_years is not None else "unknown"
+        )
         cand.setdefault("headline", ps.get("headline") or parsed_md.get("headline") or "")
         cand.setdefault("email", profile.email if profile.email != "candidate@example.com" else "")
         cand.setdefault("phone", profile.phone if "+000" not in str(profile.phone or "") else "")
@@ -455,7 +499,9 @@ class ProfileRepository:
         raw_md = save_copy.pop("skills_md_raw", None)
         save_copy.pop("parsed_skills_taxonomy", None)
 
-        target_prof = self.get_profile_record(owner_email=owner_email, user_id=user_id)
+        is_guest_owner = (owner_email or "").strip().lower() == "guest@talentflow.local"
+        eff_uid = None if is_guest_owner else user_id
+        target_prof = self.get_profile_record(owner_email=owner_email, user_id=eff_uid)
 
         with Session(engine) as session:
             profile = session.get(CandidateProfile, target_prof.id) if target_prof and target_prof.id else None
@@ -463,8 +509,8 @@ class ProfileRepository:
                 profile = self._ensure_seeded()
                 profile = session.get(CandidateProfile, profile.id)
 
-            if user_id is not None and profile.user_id is None:
-                profile.user_id = user_id
+            if eff_uid is not None and profile.user_id is None:
+                profile.user_id = eff_uid
 
             if raw_md is not None:
                 profile.raw_markdown = raw_md
@@ -499,7 +545,24 @@ class ProfileRepository:
                 cleaned_core = dedupe_skills_case_insensitive([str(x) for x in save_copy["skills"]["core"]])
                 save_copy["skills"]["core"] = cleaned_core
                 taxonomy["all_skills"] = cleaned_core
-            for preserve_key in ("user_uploaded", "owner_email", "user_id", "education", "courses_and_certifications", "eligible_internships"):
+            for preserve_key in (
+                "user_uploaded",
+                "owner_email",
+                "user_id",
+                "education",
+                "courses_and_certifications",
+                "eligible_internships",
+                "target_industry",
+                "detected_industry",
+                "primary_role",
+                "adjacent_roles",
+                "verified_skills",
+                "max_allowed_years",
+                "seniority_level",
+                "years_of_experience",
+                "experience_status",
+                "internship_tracks",
+            ):
                 if preserve_key in existing_ps:
                     taxonomy[preserve_key] = existing_ps[preserve_key]
 
@@ -517,10 +580,10 @@ class ProfileRepository:
                     for l in cleaned_langs
                 ]
 
-            if owner_email and owner_email != "guest@talentflow.local":
+            if owner_email and not is_guest_owner:
                 taxonomy["owner_email"] = owner_email.strip().lower()
-            if user_id is not None:
-                taxonomy["user_id"] = user_id
+            if eff_uid is not None:
+                taxonomy["user_id"] = eff_uid
             taxonomy["ground_truth_vault"] = save_copy
             profile.parsed_skills = taxonomy
             profile.updated_at = utc_now()
@@ -610,6 +673,14 @@ class ProfileRepository:
         name_m = re.search(r"(?:Full Name|სახელი და გვარი|Name)\**\s*:\**\s*([^\n]+)", md_content, re.I)
         if name_m:
             result["full_name"] = name_m.group(1).strip()
+
+        notice_m = re.search(
+            r"(?:Availability\s*/\s*Notice\s*Period|Notice\s*Period|Availability|Earliest\s*Start|დაწყების\s*თარიღი)\**\s*:\**\s*([^\n]+)",
+            md_content,
+            re.I,
+        )
+        if notice_m:
+            result["notice_period"] = re.sub(r"[*_`]+", "", notice_m.group(1)).strip()
 
         summary_lines = []
         in_summary = False
@@ -912,6 +983,11 @@ class ProfileRepository:
             if db_prof:
                 skills_copy = dict(db_prof.parsed_skills or {})
                 vault = dict(skills_copy.get("ground_truth_vault") or {})
+                cand_v = dict(vault.get("candidate") or {})
+                comp_v = dict(cand_v.get("compensation") or {})
+                comp_v["notice_period"] = parsed.get("notice_period") or ""
+                cand_v["compensation"] = comp_v
+                vault["candidate"] = cand_v
                 vault["work_history"] = list(parsed.get("work_history") or [])
                 if parsed.get("projects"):
                     vault["projects"] = list(parsed["projects"])

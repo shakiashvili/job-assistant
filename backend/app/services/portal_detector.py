@@ -111,7 +111,7 @@ def detect_portal_from_html(html: str, url: Optional[str] = None) -> Tuple[str, 
     desc_text = main_el.get_text(separator="\n", strip=True) if main_el else ""
 
     return portal_type, {
-        "title": title or "Senior QA Automation Engineer",
-        "company": company or "Tech Company",
+        "title": title,
+        "company": company,
         "description_text": desc_text[:15000],
     }

@@ -143,7 +143,7 @@ class TrackerRepository:
                 else:
                     stmt = stmt.where(ApplicationRecord.user_id == user_id)
 
-            stmt = stmt.order_by(ApplicationRecord.applied_at.desc())
+            stmt = stmt.order_by(ApplicationRecord.applied_at.desc(), ApplicationRecord.updated_at.desc())
             pairs = session.exec(stmt).all()
             return [self._record_to_item(rec, job) for rec, job in pairs]
 
@@ -199,6 +199,8 @@ class TrackerRepository:
                 session.flush()
 
             db_status = UI_TO_DB_STATUS.get(item_in.status or "Saved", item_in.status or "STAGED")
+            submitted_statuses = {"SUBMITTED", "APPLIED", "HR_SCREEN", "TECH_INTERVIEW", "FINAL_INTERVIEW", "OFFER", "REJECTED"}
+            applied_ts = utc_now() if db_status in submitted_statuses else None
             rec = ApplicationRecord(
                 user_id=user_id,
                 job_id=job.id,
@@ -215,7 +217,7 @@ class TrackerRepository:
                 follow_up_date=item_in.follow_up_date,
                 outcome=item_in.outcome,
                 submission_status=db_status,
-                applied_at=utc_now(),
+                applied_at=applied_ts,
                 updated_at=utc_now(),
             )
             session.add(rec)
@@ -259,6 +261,8 @@ class TrackerRepository:
 
             if item_update.status is not None:
                 rec.submission_status = UI_TO_DB_STATUS.get(item_update.status, item_update.status)
+                if rec.submission_status in ("SUBMITTED", "APPLIED", "HR_SCREEN", "TECH_INTERVIEW", "FINAL_INTERVIEW", "OFFER", "REJECTED") and rec.applied_at is None:
+                    rec.applied_at = utc_now()
                 if job:
                     job.status = (
                         "APPLIED"
