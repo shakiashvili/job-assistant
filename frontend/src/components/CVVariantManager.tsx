@@ -350,7 +350,7 @@ export const CVVariantManager: React.FC = () => {
             type="button"
             onClick={() => setCvLanguage('ka')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-              cvLanguage === 'ka' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'
+              cvLanguage === 'ka' ? 'bg-emerald-700 text-white' : 'text-slate-400 hover:text-white'
             }`}
           >
             ქართული
@@ -378,7 +378,7 @@ export const CVVariantManager: React.FC = () => {
             <a
               href={`${BACKEND_ORIGIN}${generatedOutput.pdf_url}`}
               download={generatedOutput.pdf_filename}
-              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold"
+              className="px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-500 text-white font-semibold"
             >
               Download PDF
             </a>
@@ -414,7 +414,7 @@ export const CVVariantManager: React.FC = () => {
             type="button"
             onClick={() => uploadRef.current?.click()}
             disabled={uploading}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-sm transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-500 text-white text-xs font-semibold shadow-sm transition-colors disabled:opacity-50"
           >
             <UploadCloud className="w-4 h-4" />
             <span>{uploading ? 'Uploading...' : 'Upload My CV (.docx / .pdf)'}</span>
@@ -446,7 +446,7 @@ export const CVVariantManager: React.FC = () => {
                     href={`${BACKEND_ORIGIN}${cv.url}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="p-2 rounded-lg bg-slate-900 hover:bg-emerald-600 text-slate-300 hover:text-white border border-slate-800 transition-colors"
+                    className="p-2 rounded-lg bg-slate-900 hover:bg-emerald-700 text-slate-300 hover:text-white border border-slate-800 transition-colors"
                     title="Download CV"
                   >
                     <Download className="w-3.5 h-3.5" />
@@ -454,7 +454,7 @@ export const CVVariantManager: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => handleDeleteCv(cv.filename)}
-                    className="p-2 rounded-lg bg-slate-900 hover:bg-rose-600 text-slate-400 hover:text-white border border-slate-800 transition-colors"
+                    className="p-2 rounded-lg bg-slate-900 hover:bg-rose-700 text-slate-400 hover:text-white border border-slate-800 transition-colors"
                     title="Delete CV"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
@@ -488,7 +488,7 @@ export const CVVariantManager: React.FC = () => {
             type="button"
             onClick={() => handleGenerate('ats')}
             disabled={generatingKey !== null}
-            className="w-full py-2.5 px-4 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+            className="w-full py-2.5 px-4 rounded-xl bg-cyan-700 hover:bg-cyan-500 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
           >
             <Sparkles className="w-4 h-4" />
             <span>
@@ -519,7 +519,7 @@ export const CVVariantManager: React.FC = () => {
             type="button"
             onClick={() => handleGenerate('recruiter')}
             disabled={generatingKey !== null}
-            className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+            className="w-full py-2.5 px-4 rounded-xl bg-emerald-700 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
           >
             <Sparkles className="w-4 h-4" />
             <span>
@@ -608,7 +608,7 @@ export const CVVariantManager: React.FC = () => {
             type="button"
             onClick={() => handleGenerate('tailored')}
             disabled={generatingKey !== null}
-            className="w-full py-2.5 px-4 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+            className="w-full py-2.5 px-4 rounded-xl bg-amber-700 hover:bg-amber-500 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
           >
             <Sparkles className="w-4 h-4" />
             <span>
@@ -660,7 +660,7 @@ export const CVVariantManager: React.FC = () => {
                   onClick={() => setLetterTab('cover')}
                   className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors ${
                     letterTab === 'cover'
-                      ? 'bg-emerald-600 text-white'
+                      ? 'bg-emerald-700 text-white'
                       : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
                   }`}
                 >
@@ -671,7 +671,7 @@ export const CVVariantManager: React.FC = () => {
                   onClick={() => setLetterTab('motivational')}
                   className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors ${
                     letterTab === 'motivational'
-                      ? 'bg-emerald-600 text-white'
+                      ? 'bg-emerald-700 text-white'
                       : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
                   }`}
                 >
@@ -794,7 +794,7 @@ export const CVVariantManager: React.FC = () => {
                     type="button"
                     onClick={handleSaveVersionEdits}
                     disabled={isSavingVersion}
-                    className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold disabled:opacity-50"
+                    className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-500 text-white text-xs font-semibold disabled:opacity-50"
                   >
                     {isSavingVersion ? 'Re-rendering...' : 'Save & Re-Render PDF + Word'}
                   </button>

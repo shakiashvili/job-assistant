@@ -98,7 +98,7 @@ export const EmailDispatchModal: React.FC<EmailDispatchModalProps> = ({
       <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full p-5 sm:p-6 shadow-2xl space-y-5 my-auto">
         <div className="flex items-center justify-between border-b border-slate-800 pb-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-600 flex items-center justify-center text-white shadow-md shadow-emerald-500/20">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-700 to-teal-700 flex items-center justify-center text-white shadow-md shadow-emerald-500/20">
               <Mail className="w-5 h-5" aria-hidden="true" />
             </div>
             <div>
@@ -147,7 +147,7 @@ export const EmailDispatchModal: React.FC<EmailDispatchModalProps> = ({
                 <a
                   href={`${BACKEND_ORIGIN}${result.eml_url}`}
                   download={result.eml_filename}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-semibold"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-700 hover:bg-amber-500 text-white font-semibold"
                 >
                   <Download className="w-3.5 h-3.5" aria-hidden="true" />
                   <span>Download Ready .eml (Open in Mail / Gmail)</span>
@@ -168,7 +168,7 @@ export const EmailDispatchModal: React.FC<EmailDispatchModalProps> = ({
               onClick={() => setMode('draft')}
               className={`py-2 text-xs font-semibold rounded-lg transition-all ${
                 mode === 'draft'
-                  ? 'bg-emerald-600 text-white shadow'
+                  ? 'bg-emerald-700 text-white shadow'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
@@ -179,7 +179,7 @@ export const EmailDispatchModal: React.FC<EmailDispatchModalProps> = ({
               onClick={() => setMode('send')}
               className={`py-2 text-xs font-semibold rounded-lg transition-all ${
                 mode === 'send'
-                  ? 'bg-emerald-600 text-white shadow'
+                  ? 'bg-emerald-700 text-white shadow'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
@@ -262,7 +262,7 @@ export const EmailDispatchModal: React.FC<EmailDispatchModalProps> = ({
               <button
                 type="submit"
                 disabled={loading}
-                className="px-5 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-semibold text-xs flex items-center gap-2 shadow-lg shadow-emerald-600/25 disabled:opacity-50"
+                className="px-5 py-2 rounded-xl bg-gradient-to-r from-emerald-700 to-teal-700 hover:from-emerald-400 hover:to-teal-500 text-white font-semibold text-xs flex items-center gap-2 shadow-lg shadow-emerald-600/25 disabled:opacity-50"
               >
                 <Send className="w-3.5 h-3.5" />
                 <span>{loading ? 'Processing...' : mode === 'draft' ? 'Create Gmail Draft' : 'Send Application'}</span>

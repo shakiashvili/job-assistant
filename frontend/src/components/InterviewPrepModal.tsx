@@ -99,7 +99,7 @@ export const InterviewPrepModal: React.FC<InterviewPrepModalProps> = ({
         {/* Header */}
         <div className="p-4 sm:p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/80 gap-3">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-600 flex items-center justify-center text-white flex-shrink-0 shadow-md shadow-emerald-500/20">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-700 to-teal-700 flex items-center justify-center text-white flex-shrink-0 shadow-md shadow-emerald-500/20">
               <Sparkles className="w-5 h-5" aria-hidden="true" />
             </div>
             <div className="min-w-0">
@@ -133,7 +133,7 @@ export const InterviewPrepModal: React.FC<InterviewPrepModalProps> = ({
               onClick={() => setRoundType(tab.id)}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
                 roundType === tab.id
-                  ? 'bg-emerald-600 text-white shadow-sm'
+                  ? 'bg-emerald-700 text-white shadow-sm'
                   : 'text-slate-400 hover:text-white hover:bg-slate-900'
               }`}
             >
@@ -315,7 +315,7 @@ export const InterviewPrepModal: React.FC<InterviewPrepModalProps> = ({
         <div className="p-4 bg-slate-950/80 border-t border-slate-800 flex justify-end">
           <button
             onClick={onClose}
-            className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs"
+            className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-500 text-white font-semibold text-xs"
           >
             Done
           </button>

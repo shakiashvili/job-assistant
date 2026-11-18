@@ -189,7 +189,7 @@ export const StageModal: React.FC<StageModalProps> = ({
                   onClick={() => setUrlInput(p.url)}
                   className={`text-[11px] px-2.5 py-1 rounded-md border transition-colors ${
                     urlInput === p.url
-                      ? 'bg-emerald-600 text-white border-emerald-500 font-semibold'
+                      ? 'bg-emerald-700 text-white border-emerald-500 font-semibold'
                       : 'bg-slate-950 text-emerald-400 border-slate-800 hover:border-emerald-700'
                   }`}
                 >
@@ -217,7 +217,7 @@ export const StageModal: React.FC<StageModalProps> = ({
                 href={`${BACKEND_ORIGIN}${tailoredCv.pdf_url}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>View PDF</span>
@@ -293,7 +293,7 @@ export const StageModal: React.FC<StageModalProps> = ({
                 aria-labelledby="stage-headless-label"
                 onClick={() => setHeadless(!headless)}
                 className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                  !headless ? 'bg-emerald-600' : 'bg-slate-700'
+                  !headless ? 'bg-emerald-700' : 'bg-slate-700'
                 }`}
               >
                 <span
@@ -316,7 +316,7 @@ export const StageModal: React.FC<StageModalProps> = ({
                 aria-labelledby="stage-autosubmit-label"
                 onClick={() => setAutoSubmit(!autoSubmit)}
                 className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                  autoSubmit ? 'bg-emerald-600' : 'bg-slate-700'
+                  autoSubmit ? 'bg-emerald-700' : 'bg-slate-700'
                 }`}
               >
                 <span
@@ -397,7 +397,7 @@ export const StageModal: React.FC<StageModalProps> = ({
             <button
               onClick={handleStage}
               disabled={isLoading || !urlInput}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 shadow-lg shadow-emerald-600/30 disabled:opacity-50 transition-all"
+              className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-emerald-700 to-teal-700 hover:from-emerald-400 hover:to-teal-500 shadow-lg shadow-emerald-600/30 disabled:opacity-50 transition-all"
             >
               {isLoading ? (
                 <>

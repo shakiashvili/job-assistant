@@ -232,7 +232,7 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({ user, onNavigate }
               <button
                 type="button"
                 onClick={() => onNavigate('vault')}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-500 text-white text-xs font-semibold"
               >
                 <User className="w-3.5 h-3.5" />
                 <span>Upload CV in Profile Vault</span>

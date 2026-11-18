@@ -328,7 +328,7 @@ export const ApplicationTracker: React.FC = () => {
           </a>
           <button
             onClick={() => setIsAddModalOpen(true)}
-            className="min-h-[44px] flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-lg shadow-emerald-600/20 transition-all"
+            className="min-h-[44px] flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-emerald-700 to-teal-700 hover:from-emerald-700 hover:to-teal-500 shadow-lg shadow-emerald-600/20 transition-all"
           >
             <Plus className="w-4 h-4" />
             <span>Add Application</span>
@@ -682,7 +682,7 @@ export const ApplicationTracker: React.FC = () => {
                   onClick={handleSyncToGoogleCalendar}
                   disabled={calendarBusy}
                   data-testid="btn-add-google-calendar"
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 font-semibold transition-all disabled:opacity-50"
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-700/20 hover:bg-emerald-700/30 border border-emerald-500/40 text-emerald-300 font-semibold transition-all disabled:opacity-50"
                 >
                   <CalendarPlus className="w-4 h-4" />
                   <span>{calendarBusy ? 'Syncing...' : 'Add to Google Calendar'}</span>
@@ -699,7 +699,7 @@ export const ApplicationTracker: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleSaveInterviewModal}
-                    className="px-5 py-2 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold"
+                    className="px-5 py-2 rounded-lg bg-gradient-to-r from-emerald-700 to-teal-700 hover:from-emerald-700 hover:to-teal-500 text-white font-semibold"
                   >
                     Save Notes
                   </button>
@@ -834,7 +834,7 @@ export const ApplicationTracker: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold"
+                  className="px-5 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-500 text-white font-semibold"
                 >
                   Save to Pipeline
                 </button>

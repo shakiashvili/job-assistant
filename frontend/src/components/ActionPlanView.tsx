@@ -189,7 +189,7 @@ export const ActionPlanView: React.FC = () => {
                   <div
                     className={`h-full transition-all duration-500 rounded-full ${
                       plan.is_completed
-                        ? 'bg-gradient-to-r from-emerald-500 to-teal-400'
+                        ? 'bg-gradient-to-r from-emerald-700 to-teal-400'
                         : 'bg-gradient-to-r from-indigo-500 to-sky-400'
                     }`}
                     style={{ width: `${plan.progress_percent}%` }}
@@ -310,7 +310,7 @@ export const ActionPlanView: React.FC = () => {
           <button
             onClick={handleGenerate}
             disabled={generating}
-            className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white inline-flex items-center gap-1.5"
+            className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-500 text-xs font-semibold text-white inline-flex items-center gap-1.5"
           >
             <Sparkles className="w-3.5 h-3.5" />
             <span>Generate Roadmaps</span>

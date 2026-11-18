@@ -584,7 +584,7 @@ export const AuditPanel: React.FC = () => {
                 onClick={() => setCvLanguage('en')}
                 className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border transition-all ${
                   cvLanguage === 'en'
-                    ? 'bg-emerald-600 text-white border-emerald-400 shadow-md shadow-emerald-600/25'
+                    ? 'bg-emerald-700 text-white border-emerald-400 shadow-md shadow-emerald-600/25'
                     : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
                 }`}
               >
@@ -594,7 +594,7 @@ export const AuditPanel: React.FC = () => {
                 onClick={() => setCvLanguage('ka')}
                 className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border transition-all ${
                   cvLanguage === 'ka'
-                    ? 'bg-emerald-600 text-white border-emerald-400 shadow-md shadow-emerald-600/25'
+                    ? 'bg-emerald-700 text-white border-emerald-400 shadow-md shadow-emerald-600/25'
                     : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
                 }`}
               >
@@ -640,7 +640,7 @@ export const AuditPanel: React.FC = () => {
             />
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors shadow-sm"
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors shadow-sm"
             >
               <Upload className="w-3.5 h-3.5" />
               <span>Upload CV (.pdf / .docx / .md)</span>
@@ -697,7 +697,7 @@ export const AuditPanel: React.FC = () => {
             <div className="flex justify-end">
               <button
                 onClick={handleSaveSkillsMdText}
-                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold"
+                className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-500 text-white text-xs font-semibold"
               >
                 Save &amp; Sync Profile
               </button>
@@ -827,7 +827,7 @@ export const AuditPanel: React.FC = () => {
               <button
                 onClick={() => handleRunAudit('en')}
                 disabled={isAuditing}
-                className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-bold text-xs text-white bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 shadow-lg shadow-emerald-600/20 transition-all disabled:opacity-50"
+                className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-bold text-xs text-white bg-gradient-to-r from-emerald-700 to-teal-700 hover:from-emerald-400 hover:to-teal-500 shadow-lg shadow-emerald-600/20 transition-all disabled:opacity-50"
               >
                 {isAuditing && cvLanguage === 'en' ? (
                   <>
@@ -845,7 +845,7 @@ export const AuditPanel: React.FC = () => {
               <button
                 onClick={() => handleRunAudit('ka')}
                 disabled={isAuditing}
-                className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-bold text-xs text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-lg shadow-emerald-600/20 transition-all disabled:opacity-50"
+                className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-bold text-xs text-white bg-gradient-to-r from-emerald-700 to-teal-700 hover:from-emerald-700 hover:to-teal-500 shadow-lg shadow-emerald-600/20 transition-all disabled:opacity-50"
               >
                 {isAuditing && cvLanguage === 'ka' ? (
                   <>
@@ -971,7 +971,7 @@ export const AuditPanel: React.FC = () => {
                       href={`${BACKEND_ORIGIN}${auditResult.tailored_cv.pdf_url}`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-sm transition-colors"
+                      className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-500 text-white text-xs font-semibold shadow-sm transition-colors"
                     >
                       <Download className="w-3.5 h-3.5" />
                       <span>Download PDF CV</span>
@@ -981,7 +981,7 @@ export const AuditPanel: React.FC = () => {
                         href={`${BACKEND_ORIGIN}${auditResult.tailored_cv.html_preview_url}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-semibold shadow-sm transition-colors"
+                        className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm transition-colors"
                       >
                         <Eye className="w-3.5 h-3.5" />
                         <span>Printable View</span>
@@ -1065,7 +1065,7 @@ export const AuditPanel: React.FC = () => {
 
                 <button
                   onClick={() => setIsStageModalOpen(true)}
-                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-xs font-semibold text-white shadow-md shadow-emerald-600/20 transition-all"
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-gradient-to-r from-emerald-700 to-teal-700 hover:from-emerald-400 hover:to-teal-500 text-xs font-semibold text-white shadow-md shadow-emerald-600/20 transition-all"
                 >
                   <Play className="w-4 h-4 fill-current" />
                   <span>Apply / Stage with Playwright</span>

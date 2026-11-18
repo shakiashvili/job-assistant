@@ -178,7 +178,7 @@ export const B2BMarketHub: React.FC = () => {
             onClick={() => setLang('en')}
             aria-pressed={lang === 'en'}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-              lang === 'en' ? 'bg-emerald-600 text-white shadow' : 'text-slate-300 hover:text-white'
+              lang === 'en' ? 'bg-emerald-700 text-white shadow' : 'text-slate-300 hover:text-white'
             }`}
           >
             English
@@ -188,7 +188,7 @@ export const B2BMarketHub: React.FC = () => {
             onClick={() => setLang('ka')}
             aria-pressed={lang === 'ka'}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-              lang === 'ka' ? 'bg-emerald-600 text-white shadow' : 'text-slate-300 hover:text-white'
+              lang === 'ka' ? 'bg-emerald-700 text-white shadow' : 'text-slate-300 hover:text-white'
             }`}
           >
             ქართული

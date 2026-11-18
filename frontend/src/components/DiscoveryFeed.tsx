@@ -274,7 +274,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
           <button
             type="button"
             onClick={onUploadClick}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 text-xs font-bold transition-all"
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-700/20 hover:bg-emerald-700/30 border border-emerald-500/40 text-emerald-300 text-xs font-bold transition-all"
             title="Upload or replace your CV (.pdf, .docx, .md, .txt)"
           >
             <Upload className="w-3.5 h-3.5" />
@@ -285,7 +285,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
             type="button"
             onClick={onRunScrapers}
             disabled={isScraping}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-md shadow-emerald-600/20 transition-all disabled:opacity-50"
+            className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-700 to-teal-700 hover:from-emerald-700 hover:to-teal-500 text-white text-xs font-bold shadow-md shadow-emerald-600/20 transition-all disabled:opacity-50"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isScraping ? 'animate-spin' : ''}`} />
             <span>{isScraping ? 'Scanning Live Portals...' : 'Run Live Role Scrapers'}</span>
@@ -297,7 +297,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
               onClick={() => onSelectStatusFilter(st)}
               className={`text-[11px] px-2.5 py-1.5 rounded-lg font-semibold transition-colors ${
                 dbStatusFilter === st
-                  ? 'bg-emerald-600 text-white'
+                  ? 'bg-emerald-700 text-white'
                   : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
               }`}
             >
@@ -327,7 +327,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
           onClick={() => handleTierClick('DIRECT')}
           className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl font-bold transition-all ${
             tierTab === 'DIRECT'
-              ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/20'
+              ? 'bg-emerald-700 text-white shadow-sm shadow-emerald-600/20'
               : 'bg-slate-950 text-slate-300 hover:text-white border border-slate-800'
           }`}
         >
@@ -349,7 +349,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
           onClick={() => handleTierClick('PUBLIC_INTERNSHIP')}
           className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl font-bold transition-all ${
             tierTab === 'PUBLIC_INTERNSHIP'
-              ? 'bg-cyan-600 text-white shadow-sm shadow-cyan-600/20'
+              ? 'bg-cyan-700 text-white shadow-sm shadow-cyan-600/20'
               : 'bg-slate-950 text-slate-300 hover:text-white border border-slate-800'
           }`}
         >
@@ -407,7 +407,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                     onClick={() => onRemoteTypeFilterChange(mode.id)}
                     className={`text-[11px] px-2.5 py-1 rounded-lg font-medium transition-colors ${
                       remoteTypeFilter === mode.id
-                        ? 'bg-emerald-600 text-white'
+                        ? 'bg-emerald-700 text-white'
                         : 'bg-slate-950 text-slate-300 hover:text-white border border-slate-800'
                     }`}
                   >
@@ -439,7 +439,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 onClick={() => onGeoEligibleOnlyFilterChange(!geoEligibleOnlyFilter)}
                 className={`inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg font-semibold transition-colors ${
                   geoEligibleOnlyFilter
-                    ? 'bg-emerald-600/30 border border-emerald-400/70 text-emerald-200'
+                    ? 'bg-emerald-700/30 border border-emerald-400/70 text-emerald-200'
                     : 'bg-slate-950 text-slate-300 hover:text-emerald-200 border border-slate-800'
                 }`}
               >
@@ -476,7 +476,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
               onClick={() => onSelectPortalFilter(p)}
               className={`text-[11px] px-2.5 py-1 rounded-lg font-medium transition-colors ${
                 selectedPortalFilter === p
-                  ? 'bg-emerald-600 text-white'
+                  ? 'bg-emerald-700 text-white'
                   : 'bg-slate-950 text-slate-300 hover:text-white border border-slate-800'
               }`}
             >
@@ -536,7 +536,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 href={preparedEmailPkg.gmailUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-semibold"
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-700 hover:bg-rose-500 text-white font-semibold"
               >
                 <Mail className="w-3.5 h-3.5" />
                 <span>{preparedEmailPkg.gmail_draft_saved ? 'Open Gmail Drafts' : 'Open Gmail Compose'}</span>
@@ -615,7 +615,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
               </p>
               <button
                 onClick={onUploadClick}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-md transition-colors"
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-500 text-white text-xs font-bold shadow-md transition-colors"
               >
                 <Upload className="w-3.5 h-3.5" />
                 <span>Upload skills.md Now</span>
@@ -637,7 +637,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 <button
                   type="button"
                   onClick={() => onSelectPortalFilter('ALL')}
-                  className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold"
+                  className="px-3.5 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-500 text-white font-semibold"
                 >
                   View All Portals
                 </button>
@@ -831,7 +831,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                         e.stopPropagation();
                         onDraftInGmail(job);
                       }}
-                      className="flex-1 flex items-center justify-center gap-1 py-1 px-2 rounded-lg bg-rose-600/90 hover:bg-rose-500 text-white font-semibold transition-colors disabled:opacity-50"
+                      className="flex-1 flex items-center justify-center gap-1 py-1 px-2 rounded-lg bg-rose-700 hover:bg-rose-500 text-white font-semibold transition-colors disabled:opacity-50"
                       title="Generate Tailored Word CV (.docx) + Cover Letter and save Gmail Draft"
                     >
                       <Mail className="w-3 h-3" />
@@ -848,7 +848,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                           onSelectJob(job);
                         }
                       }}
-                      className="flex-1 flex items-center justify-center gap-1 py-1 px-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold transition-colors"
+                      className="flex-1 flex items-center justify-center gap-1 py-1 px-2 rounded-lg bg-emerald-700 hover:bg-emerald-500 text-white font-semibold transition-colors"
                     >
                       <Play className="w-3 h-3" />
                       <span>Open &amp; Fill Form</span>
@@ -896,7 +896,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 onClick={() => onPageChange(pNum)}
                 className={`px-2.5 py-1.5 rounded-lg font-semibold ${
                   pNum === page
-                    ? 'bg-emerald-600 text-white'
+                    ? 'bg-emerald-700 text-white'
                     : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
                 }`}
               >

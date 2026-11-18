@@ -189,7 +189,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
             type="button"
             onClick={() => { setMode('register'); setError(null); setInfoMsg(null); }}
             className={`py-2 text-[11px] font-semibold rounded-lg transition-all flex items-center justify-center gap-1 ${
-              mode === 'register' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white'
+              mode === 'register' ? 'bg-emerald-700 text-white shadow' : 'text-slate-400 hover:text-white'
             }`}
           >
             <User className="w-3 h-3" />
@@ -199,7 +199,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
             type="button"
             onClick={() => { setMode('login'); setError(null); setInfoMsg(null); }}
             className={`py-2 text-[11px] font-semibold rounded-lg transition-all flex items-center justify-center gap-1 ${
-              mode === 'login' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white'
+              mode === 'login' ? 'bg-emerald-700 text-white shadow' : 'text-slate-400 hover:text-white'
             }`}
           >
             <Lock className="w-3 h-3" />
@@ -209,7 +209,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
             type="button"
             onClick={() => { setMode('otp'); setOtpStep('request'); setError(null); setInfoMsg(null); }}
             className={`py-2 text-[11px] font-semibold rounded-lg transition-all flex items-center justify-center gap-1 ${
-              mode === 'otp' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white'
+              mode === 'otp' ? 'bg-emerald-700 text-white shadow' : 'text-slate-400 hover:text-white'
             }`}
           >
             <Sparkles className="w-3 h-3" />
@@ -232,7 +232,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
                     setError(null);
                     setInfoMsg('Switched to Sign In. Enter your password or switch to Email OTP.');
                   }}
-                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-[11px] transition-colors"
+                  className="px-2.5 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-500 text-white font-semibold text-[11px] transition-colors"
                 >
                   Switch to Sign In &rarr;
                 </button>
@@ -258,7 +258,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
                     setError(null);
                     setInfoMsg(null);
                   }}
-                  className="px-2.5 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 font-semibold text-[11px] transition-colors"
+                  className="px-2.5 py-1 rounded-lg bg-emerald-700/20 hover:bg-emerald-700/30 border border-emerald-500/40 text-emerald-300 font-semibold text-[11px] transition-colors"
                 >
                   New user? Create Account &rarr;
                 </button>
@@ -302,7 +302,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
               <button
                 type="submit"
                 disabled={loading || !email}
-                className="w-full py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/25 transition-all disabled:opacity-50"
+                className="w-full py-2.5 rounded-xl bg-gradient-to-r from-emerald-700 to-teal-700 hover:from-emerald-400 hover:to-teal-500 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/25 transition-all disabled:opacity-50"
               >
                 <span>{loading ? 'Sending Verification Code...' : 'Send One-Time Code'}</span>
                 <ArrowRight className="w-4 h-4" />
@@ -344,7 +344,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
                     <button
                       type="submit"
                       disabled={smtpSaving}
-                      className="w-full py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-[11px] transition-colors disabled:opacity-50"
+                      className="w-full py-2 rounded-lg bg-emerald-700 hover:bg-emerald-500 text-white font-semibold text-[11px] transition-colors disabled:opacity-50"
                     >
                       {smtpSaving ? 'Verifying with Gmail SMTP...' : 'Verify & Save Local SMTP'}
                     </button>
@@ -391,7 +391,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
             <button
               type="submit"
               disabled={loading || otpCode.length !== 6}
-              className="w-full py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/25 transition-all mt-4 disabled:opacity-50"
+              className="w-full py-2.5 rounded-xl bg-gradient-to-r from-emerald-700 to-teal-700 hover:from-emerald-700 hover:to-teal-500 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/25 transition-all mt-4 disabled:opacity-50"
             >
               <span>{loading ? 'Verifying Code...' : 'Verify & Sign In'}</span>
               <CheckCircle2 className="w-4 h-4" />
@@ -494,7 +494,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/25 transition-all mt-6 disabled:opacity-50"
+              className="w-full py-2.5 rounded-xl bg-gradient-to-r from-emerald-700 to-teal-700 hover:from-emerald-400 hover:to-teal-500 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/25 transition-all mt-6 disabled:opacity-50"
             >
               <span>{loading ? 'Authenticating...' : mode === 'login' ? 'Sign In' : 'Create Account'}</span>
               <ArrowRight className="w-4 h-4" aria-hidden="true" />

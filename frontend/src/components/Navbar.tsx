@@ -72,7 +72,7 @@ git push -u origin my-feature-branch`;
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between gap-3">
           {/* Brand */}
           <div className="flex items-center gap-3 min-w-0">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-500 via-teal-500 to-cyan-500 flex items-center justify-center shadow-lg shadow-emerald-500/25 flex-shrink-0">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-700 via-teal-500 to-cyan-500 flex items-center justify-center shadow-lg shadow-emerald-500/25 flex-shrink-0">
               <Bot className="w-5 h-5 text-white" />
             </div>
             <div className="min-w-0">
@@ -109,7 +109,7 @@ git push -u origin my-feature-branch`;
                     onClick={() => setActiveTab(item.id)}
                     className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
                       isActive
-                        ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-md shadow-emerald-500/25'
+                        ? 'bg-gradient-to-r from-emerald-700 to-teal-700 text-white shadow-md shadow-emerald-500/25'
                         : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
                     }`}
                     aria-current={isActive ? 'page' : undefined}
@@ -135,7 +135,7 @@ git push -u origin my-feature-branch`;
             {currentUser ? (
               <div className="flex items-center gap-2">
                 <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-xs">
-                  <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-emerald-500 to-teal-600 flex items-center justify-center text-[10px] font-bold text-white uppercase">
+                  <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-emerald-700 to-teal-700 flex items-center justify-center text-[10px] font-bold text-white uppercase">
                     {currentUser.full_name[0] || 'U'}
                   </div>
                   <span className="font-semibold text-white max-w-[100px] truncate hidden sm:inline">
@@ -153,7 +153,7 @@ git push -u origin my-feature-branch`;
             ) : (
               <button
                 onClick={onOpenAuth}
-                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-md shadow-emerald-600/20"
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-500 text-white text-xs font-semibold shadow-md shadow-emerald-600/20"
               >
                 <LogIn className="w-3.5 h-3.5" />
                 <span>Sign In</span>
@@ -190,7 +190,7 @@ git push -u origin my-feature-branch`;
                     aria-current={isActive ? 'page' : undefined}
                     className={`w-full min-h-[44px] flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
                       isActive
-                        ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-md shadow-emerald-500/20'
+                        ? 'bg-gradient-to-r from-emerald-700 to-teal-700 text-white shadow-md shadow-emerald-500/20'
                         : 'text-slate-200 hover:text-white hover:bg-slate-900'
                     }`}
                   >
@@ -327,7 +327,7 @@ git push -u origin my-feature-branch`;
             <div className="flex justify-end pt-2 border-t border-slate-800">
               <button
                 onClick={() => setIsShareOpen(false)}
-                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold"
+                className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-500 text-white text-xs font-semibold"
               >
                 Got It
               </button>

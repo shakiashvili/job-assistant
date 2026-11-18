@@ -269,7 +269,7 @@ export const ProfileVault: React.FC = () => {
             type="button"
             onClick={handleSave}
             disabled={isSaving}
-            className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-xs text-white bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 shadow-lg shadow-emerald-600/25 transition-all disabled:opacity-50"
+            className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-xs text-white bg-gradient-to-r from-emerald-700 to-teal-700 hover:from-emerald-400 hover:to-teal-500 shadow-lg shadow-emerald-600/25 transition-all disabled:opacity-50"
           >
             <Save className="w-4 h-4" />
             <span>{isSaving ? 'Saving...' : 'Save Ground Truth'}</span>
@@ -621,7 +621,7 @@ export const ProfileVault: React.FC = () => {
               />
               <button
                 onClick={addCoreSkill}
-                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-medium"
+                className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-500 text-white rounded-lg text-xs font-medium"
               >
                 <Plus className="w-4 h-4" />
               </button>
@@ -828,7 +828,7 @@ export const ProfileVault: React.FC = () => {
               <button
                 type="button"
                 onClick={addFaqItem}
-                className="min-h-[44px] px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1"
+                className="min-h-[44px] px-3.5 py-2 bg-emerald-700 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Add FAQ</span>
