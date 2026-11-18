@@ -14,22 +14,22 @@
      - `AdminDashboard`: RBAC-protected platform metrics and **Gemini AI Pipeline & Cost Observability** (`GET /api/admin/ai-metrics`).
 
 2. **Backend API (`backend/app/`)**
-   - **FastAPI** application initialized with SQLModel + Alembic (`alembic/versions/b9f4e21a8d10_ai_observability_cv_versions.py`).
+   - **FastAPI** application initialized with SQLModel + Alembic (`alembic/versions/c4e8a12f9b30_nullable_applied_at_and_experience_years.py`).
    - **Centralized Gemini Gateway (`services/gemini_service.py`)**:
-     - Single shared `google-genai` client across all AI features.
-     - Model routing between `GEMINI_MODEL` and `GEMINI_FAST_MODEL`.
-     - Persistent SHA-256 response cache (`AICacheEntry` table) and per-request telemetry (`AIOperationLog` recording `task_name`, `model_name`, `cache_hit`, `latency_ms`, `status`, token usage, and estimated USD cost).
-     - Automatic deterministic fallbacks whenever Gemini is unconfigured, offline, or rate-limited.
+     - Single shared `google-genai` client configured with explicit HTTP timeouts (`HttpOptions(timeout=GEMINI_TIMEOUT_MS)`).
+     - Model routing between `GEMINI_MODEL` (`gemini-3.6-flash`) and `GEMINI_FAST_MODEL` (`gemini-3.5-flash-lite`), randomized nonce XML boundary delimiters, and strict `system_instruction` separation.
+     - Persistent SHA-256 response cache (`AICacheEntry` table with tenant scope) and per-request telemetry (`AIOperationLog` recording `task_name`, `model_name`, `cache_hit`, `latency_ms`, `status`, token usage, and estimated USD cost).
+     - Automatic deterministic fallbacks whenever Gemini is unconfigured, offline, or rate-limited — without fabricating unverified candidate facts.
    - **Universal Document Parsing (`services/cv_parser_service.py`)**:
-     - Extracts normalized text from `.pdf` (`pypdf`), `.docx` (`python-docx`), `.md`, and `.txt` without fabricating missing contact details or employers.
+     - Extracts normalized text from `.pdf` (`pypdf`), `.docx` (`python-docx` with zip-bomb bounds), `.md`, and `.txt`, rejecting binary legacy `.doc` and unverified fabrication of missing contact details or employers.
    - **CV & Letter Generation (`services/cv_generator_service.py`)**:
-     - Domain-agnostic skill bucketing and bilingual (`en` / `ka`) rendering into HTML, PDF (`WeasyPrint` / `ReportLab`), and Word (`.docx` via `python-docx`).
-     - Supports live re-rendering from edited structured CV JSON via `render_cv_from_sections(...)`.
-   - **Multi-User Isolation & Security (`services/auth_service.py`, routers)**:
-     - Every user owns scoped `CandidateProfile`, `UserJobMatch`, `ApplicationTracker`, `SavedJob`, `SavedSearch`, `CandidateDocument`, `CVVersion`, and `SkillActionPlan` records.
+     - Domain-agnostic skill bucketing and bilingual (`en` / `ka`) rendering into HTML, PDF (`ReportLab` with Sylfaen / FreeSans / DejaVu Unicode fonts), and Word (`.docx` via `python-docx`).
+     - Supports live re-rendering from edited structured CV JSON via `render_cv_from_sections(...)` and distinct concise Cover Letters vs fuller Motivational Letters.
+   - **Multi-User Isolation & Security (`services/auth_service.py`, `db/profile_repository.py`, routers)**:
+     - Every user owns scoped `CandidateProfile` (via encrypted PII columns + `email_hash` blind index), `UserJobMatch`, `ApplicationTracker`, `ApplicationRecord`, `SavedJob`, `SavedSearch`, `CandidateDocument`, `CVVersion`, and `SkillActionPlan` records.
      - OAuth flows bind user identity in signed JWT `state` tokens; admin routes enforce `get_current_admin`.
 
 3. **Chrome Extension (`extension/`)**
-   - **Manifest V3** Side Panel Copilot using least-privilege permissions (`activeTab`, `scripting`, `storage`, `sidePanel`) and dynamic `chrome.storage.sync` backend URL routing.
+   - **Manifest V3** Side Panel Copilot using least-privilege permissions (`activeTab`, `scripting`, `storage`, `sidePanel`, `optional_host_permissions`) and dynamic `chrome.storage.sync` backend URL routing.
    - Extracts job metadata and multi-step form controls (`input`, `textarea`, `select`, `radio`, `[role="textbox"][contenteditable="true"]`) with a `350ms`-debounced `MutationObserver`.
    - Supports `.pdf`/`.docx`/`.md`/`.txt` profile sync, editable pre-fill answers, DataTransfer PDF attachment, and human-in-the-loop review before submission.

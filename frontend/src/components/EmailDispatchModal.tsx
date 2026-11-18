@@ -60,9 +60,9 @@ export const EmailDispatchModal: React.FC<EmailDispatchModalProps> = ({
   const handleConnectGoogle = async () => {
     try {
       const url = await fetchGoogleLoginUrl();
-      window.open(url, '_blank');
+      window.open(url, '_blank', 'noopener,noreferrer');
     } catch (err: any) {
-      alert(err.message || 'Failed to initiate Google OAuth');
+      setError(err.message || 'Failed to initiate Google OAuth');
     }
   };
 

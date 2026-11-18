@@ -31,17 +31,19 @@
    ```
 
 ### Step 2: Deploy FastAPI Backend (Render / Railway / Fly.io)
-1. Point service root or Docker build to the repository root (`Dockerfile` builds backend dependencies including WeasyPrint/ReportLab/pypdf).
+1. Point service root or Docker build to the repository root (`Dockerfile` builds backend dependencies including ReportLab/pypdf/python-docx and Georgian/Latin Unicode fonts).
 2. Configure environment variables:
    - `DATABASE_URL`: PostgreSQL URI from Step 1
    - `SECRET_KEY`: strong random 48+ byte URL-safe string
+   - `ENCRYPTION_KEY`: dedicated Fernet base64 key (`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`)
    - `ENVIRONMENT=production`
    - `ALLOWED_ORIGINS`: `https://your-app.vercel.app,chrome-extension://<YOUR_EXTENSION_ID>`
    - `GEMINI_API_KEY`: your Google AI Studio key (optional — deterministic fallback remains active if unset)
-   - `GEMINI_MODEL=gemini-2.5-flash`
-   - `GEMINI_FAST_MODEL=gemini-2.5-flash`
+   - `GEMINI_MODEL=gemini-3.6-flash`
+   - `GEMINI_FAST_MODEL=gemini-3.5-flash-lite`
+   - `GEMINI_TIMEOUT_MS=30000`
    - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` (if using Gmail OAuth)
-3. Verify `/api/health` returns `{"status": "ok", ...}`.
+3. Verify `/api/health` returns `{"status": "healthy", ...}`.
 
 ### Step 3: Deploy Frontend SPA (Vercel or Cloudflare Pages)
 1. Set Root Directory to `frontend`.

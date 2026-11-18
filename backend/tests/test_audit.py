@@ -59,7 +59,7 @@ def test_receptionist_and_georgian_cv_generation():
     assert data["tailored_cv"]["cv_language"] == "ka"
     assert data["tailored_cv"]["pdf_filename"].endswith("_KA.pdf")
     assert data["tailored_cv"]["html_preview_url"].endswith("_KA.html")
-    assert "კვირა" in data["tailored_cv"]["start_date_default"]
+    assert data["tailored_cv"]["start_date_default"] == "1 week after offer"
 
     # Switch back to QA preset for subsequent tests
     client.post("/api/skills-md/preset/qa_tech")

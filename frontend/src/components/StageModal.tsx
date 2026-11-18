@@ -25,6 +25,15 @@ interface StageModalProps {
   tailoredCv?: TailoredCVResult;
 }
 
+function isSafeHttpUrl(rawUrl: string): boolean {
+  try {
+    const u = new URL((rawUrl || '').trim());
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 export const StageModal: React.FC<StageModalProps> = ({
   isOpen,
   onClose,
@@ -164,15 +173,19 @@ export const StageModal: React.FC<StageModalProps> = ({
               <label htmlFor="stage-url-input" className="block text-xs font-semibold uppercase text-slate-300">
                 Target Portal Application URL
               </label>
-              <a
-                href={urlInput}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-emerald-300 hover:underline flex items-center gap-1 font-medium"
-              >
-                <span>Open Form in Browser Tab</span>
-                <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
-              </a>
+              {isSafeHttpUrl(urlInput) ? (
+                <a
+                  href={urlInput}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-emerald-300 hover:underline flex items-center gap-1 font-medium"
+                >
+                  <span>Open Form in Browser Tab</span>
+                  <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
+                </a>
+              ) : (
+                <span className="text-xs text-slate-400">Enter a valid http(s):// portal URL</span>
+              )}
             </div>
             <input
               id="stage-url-input"
@@ -307,21 +320,23 @@ export const StageModal: React.FC<StageModalProps> = ({
             <div className="flex items-center justify-between">
               <div>
                 <span id="stage-autosubmit-label" className="block text-xs font-medium text-slate-200">Pause for Final Review</span>
-                <span className="text-[11px] text-slate-300">Auto-submit or review before sending</span>
+                <span className="text-[11px] text-slate-300">
+                  {!autoSubmit ? 'Stops before submit so you review first' : 'Auto-submit enabled if no CAPTCHA blocks submission'}
+                </span>
               </div>
               <button
                 type="button"
                 role="switch"
-                aria-checked={autoSubmit}
+                aria-checked={!autoSubmit}
                 aria-labelledby="stage-autosubmit-label"
                 onClick={() => setAutoSubmit(!autoSubmit)}
                 className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                  autoSubmit ? 'bg-emerald-700' : 'bg-slate-700'
+                  !autoSubmit ? 'bg-emerald-700' : 'bg-slate-700'
                 }`}
               >
                 <span
                   className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                    autoSubmit ? 'translate-x-6' : 'translate-x-1'
+                    !autoSubmit ? 'translate-x-6' : 'translate-x-1'
                   }`}
                 />
               </button>
@@ -377,15 +392,19 @@ export const StageModal: React.FC<StageModalProps> = ({
 
         {/* Modal Footer */}
         <div className="px-6 py-4 border-t border-slate-800 bg-slate-950/60 flex items-center justify-between">
-          <a
-            href={urlInput}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs text-slate-400 hover:text-emerald-400 flex items-center gap-1"
-          >
-            <ExternalLink className="w-3.5 h-3.5" />
-            <span>Preview Portal Form in New Tab</span>
-          </a>
+          {isSafeHttpUrl(urlInput) ? (
+            <a
+              href={urlInput}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-slate-300 hover:text-emerald-400 flex items-center gap-1"
+            >
+              <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>Preview Portal Form in New Tab</span>
+            </a>
+          ) : (
+            <span className="text-xs text-slate-400">Preview available for http(s):// URLs</span>
+          )}
 
           <div className="flex items-center gap-3">
             <button

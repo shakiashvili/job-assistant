@@ -8,10 +8,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app/backend
 
-# Minimal system libs for PostgreSQL / cryptography / ReportLab fonts
+# Minimal system libs for PostgreSQL / cryptography / Georgian & Latin ReportLab PDF fonts
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
+    fonts-freefont-ttf \
+    fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt ./requirements.txt

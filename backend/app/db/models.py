@@ -76,7 +76,7 @@ class CandidateProfile(SQLModel, table=True):
     github_url: str = Field(default="", sa_column=Column(EncryptedString, nullable=False))
     linkedin_url: str = Field(default="", sa_column=Column(EncryptedString, nullable=False))
     parsed_skills: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(EncryptedJSON, nullable=False))
-    experience_years: float = Field(default=0.0)
+    experience_years: Optional[float] = Field(default=None)
     updated_at: datetime = Field(default_factory=utc_now, index=True)
 
 
@@ -295,7 +295,7 @@ class ApplicationRecord(SQLModel, table=True):
     submission_status: str = Field(default="STAGED", index=True)
     interview_date: Optional[datetime] = Field(default=None)
     interview_notes: Optional[str] = Field(default=None, sa_column=Column(Text, nullable=True))
-    applied_at: datetime = Field(default_factory=utc_now, index=True)
+    applied_at: Optional[datetime] = Field(default=None, index=True)
     updated_at: datetime = Field(default_factory=utc_now, index=True)
 
 

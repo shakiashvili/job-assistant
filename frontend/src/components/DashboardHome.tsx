@@ -110,7 +110,7 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({ user, onNavigate }
                 style={{ width: `${Math.min(100, Math.max(4, completeness))}%` }}
               />
             </div>
-            <div className="flex items-center justify-between text-[11px] text-slate-500">
+            <div className="flex items-center justify-between text-[11px] text-slate-300">
               <span>{analytics?.profile_uploaded ? 'CV / Profile Synced' : 'No CV uploaded yet'}</span>
               <button
                 type="button"

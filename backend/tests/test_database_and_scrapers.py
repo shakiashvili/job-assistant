@@ -330,6 +330,9 @@ def test_multi_portal_scrapers_and_suitability_promotion():
         },
     ]
 
+    with Session(engine) as session:
+        existing_app_count = len(session.exec(select(ApplicationRecord)).all())
+
     payload = scraper_orchestrator.ingest_scraped_jobs(discovered_batch)
     assert payload["staged_ready_count"] >= 3
     assert payload["filtered_out_count"] >= 2
@@ -356,7 +359,8 @@ def test_multi_portal_scrapers_and_suitability_promotion():
 
     with Session(engine) as session:
         app_records = session.exec(select(ApplicationRecord)).all()
-        assert len(app_records) >= 3
+        # Scraping/ingestion MUST NEVER auto-create fake ApplicationRecord rows or fabricate applied_at!
+        assert len(app_records) == existing_app_count
         # Ensure off-domain Senior job & Salesforce specialization mismatch were NOT stored in JobPosting DB
         disq = session.exec(select(JobPosting).where(JobPosting.external_id == "jobsge-760613")).first()
         assert disq is None

@@ -1,3 +1,4 @@
+import bcrypt
 import logging
 import secrets
 import time
@@ -6,7 +7,6 @@ from typing import Optional, Dict, Any
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 from sqlmodel import Session, select
 
 from ..config import (
@@ -22,59 +22,106 @@ from .crypto_service import blind_index
 
 logger = logging.getLogger(__name__)
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security_bearer = HTTPBearer(auto_error=False)
 
 # Simple in-memory rate limiting / brute-force protection
-# Key: email/ip -> [timestamp, attempt_count]
+# Key: bucket -> {"first_time": float, "attempts": int}
 _LOGIN_ATTEMPTS: Dict[str, Dict[str, Any]] = {}
 MAX_LOGIN_ATTEMPTS = 5
+MAX_OTP_REQUESTS = 5
 LOCKOUT_SECONDS = 300  # 5 minutes
+MAX_PASSWORD_BYTES = 72
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Safely verifies a candidate password against bcrypt hash."""
+    """Safely verifies a candidate password against a bcrypt hash without raising on oversized inputs."""
+    if not plain_password or not hashed_password:
+        return False
     try:
-        return pwd_context.verify(plain_password, hashed_password)
+        pw_bytes = plain_password.encode("utf-8")
+        if len(pw_bytes) > MAX_PASSWORD_BYTES:
+            return False
+        return bcrypt.checkpw(pw_bytes, hashed_password.encode("utf-8"))
     except Exception as e:
         logger.warning(f"Password verification error: {e}")
         return False
 
 
 def hash_password(password: str) -> str:
-    """Hashes a plain password using bcrypt."""
-    if len(password) < 8:
+    """Hashes a plain password using bcrypt with explicit UTF-8 byte-length validation."""
+    if not isinstance(password, str) or len(password) < 8:
         raise ValueError("Password must be at least 8 characters long.")
-    return pwd_context.hash(password)
+    pw_bytes = password.encode("utf-8")
+    if len(pw_bytes) > MAX_PASSWORD_BYTES:
+        raise ValueError(f"Password must not exceed {MAX_PASSWORD_BYTES} UTF-8 bytes.")
+    return bcrypt.hashpw(pw_bytes, bcrypt.gensalt(rounds=12)).decode("utf-8")
 
 
-def check_rate_limit(identifier: str) -> None:
-    """Protects against brute force login attempts."""
+def check_rate_limit(
+    identifier: str,
+    max_attempts: int = MAX_LOGIN_ATTEMPTS,
+    window_seconds: int = LOCKOUT_SECONDS,
+    error_detail: Optional[str] = None,
+) -> None:
+    """Checks brute-force lockout state without incrementing the failure counter."""
     now = time.time()
     record = _LOGIN_ATTEMPTS.get(identifier)
     if record:
         attempts = record.get("attempts", 0)
         first_time = record.get("first_time", now)
-        if attempts >= MAX_LOGIN_ATTEMPTS:
-            elapsed = now - first_time
-            if elapsed < LOCKOUT_SECONDS:
-                remaining = int(LOCKOUT_SECONDS - elapsed)
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=f"Too many failed login attempts. Please wait {remaining} seconds before retrying.",
-                )
-            else:
-                # Reset after lockout period
-                _LOGIN_ATTEMPTS[identifier] = {"attempts": 1, "first_time": now}
-                return
+        elapsed = now - first_time
+        if elapsed >= window_seconds:
+            _LOGIN_ATTEMPTS[identifier] = {"attempts": 0, "first_time": now}
+            return
+        if attempts >= max_attempts:
+            remaining = max(1, int(window_seconds - elapsed))
+            detail = error_detail or (
+                f"Too many failed login attempts. Please wait {remaining} seconds before retrying."
+            )
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=detail.format(remaining=remaining) if "{remaining}" in detail else detail,
+            )
     if identifier not in _LOGIN_ATTEMPTS:
         _LOGIN_ATTEMPTS[identifier] = {"attempts": 0, "first_time": now}
 
 
+def consume_rate_limit(
+    identifier: str,
+    max_attempts: int = MAX_OTP_REQUESTS,
+    window_seconds: int = LOCKOUT_SECONDS,
+    error_detail: Optional[str] = None,
+) -> int:
+    """Atomically enforces and increments a request quota counter (e.g. OTP dispatch throttling)."""
+    now = time.time()
+    record = _LOGIN_ATTEMPTS.get(identifier)
+    if record:
+        elapsed = now - record.get("first_time", now)
+        if elapsed >= window_seconds:
+            _LOGIN_ATTEMPTS[identifier] = {"attempts": 1, "first_time": now}
+            return 1
+        attempts = record.get("attempts", 0)
+        if attempts >= max_attempts:
+            remaining = max(1, int(window_seconds - elapsed))
+            detail = error_detail or (
+                f"Too many requests. Please wait {remaining} seconds before retrying."
+            )
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=detail.format(remaining=remaining) if "{remaining}" in detail else detail,
+            )
+        record["attempts"] = attempts + 1
+        return int(record["attempts"])
+
+    _LOGIN_ATTEMPTS[identifier] = {"attempts": 1, "first_time": now}
+    return 1
+
+
 def record_login_failure(identifier: str) -> None:
     now = time.time()
-    if identifier in _LOGIN_ATTEMPTS:
-        _LOGIN_ATTEMPTS[identifier]["attempts"] += 1
+    record = _LOGIN_ATTEMPTS.get(identifier)
+    if record and (now - record.get("first_time", now)) < LOCKOUT_SECONDS:
+        record["attempts"] = record.get("attempts", 0) + 1
     else:
         _LOGIN_ATTEMPTS[identifier] = {"attempts": 1, "first_time": now}
 
@@ -185,7 +232,7 @@ def get_current_user(
             guest = User(
                 email="guest@talentflow.local",
                 full_name="Guest Candidate",
-                hashed_password=pwd_context.hash("GuestPassword123!"),
+                hashed_password=hash_password("GuestPassword123!"),
                 is_active=True,
                 is_admin=False,
             )

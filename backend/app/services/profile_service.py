@@ -31,9 +31,9 @@ class ExtractedSkillsTaxonomy(BaseModel):
 
 class ParsedCandidateProfileSchema(BaseModel):
     full_name: str = ""
-    headline: str = "Specialist"
-    primary_role: str = "Specialist"
-    detected_industry: str = "General Professional"
+    headline: str = ""
+    primary_role: str = ""
+    detected_industry: str = ""
     adjacent_roles: List[str] = Field(default_factory=list)
     verified_skills: List[str] = Field(default_factory=list)
     eligible_internships: bool = True
@@ -43,8 +43,9 @@ class ParsedCandidateProfileSchema(BaseModel):
     location: str = ""
     github_url: str = ""
     linkedin_url: str = ""
-    experience_years: float = 0.0
-    max_allowed_years: float = 2.0
+    experience_years: Optional[float] = None
+    experience_status: str = "unknown"  # confirmed, internship_or_project, unknown
+    max_allowed_years: Optional[float] = 2.0
     seniority_level: str = "JUNIOR"
     target_industry: str = "general_professional"
     parsed_skills: ExtractedSkillsTaxonomy = Field(default_factory=ExtractedSkillsTaxonomy)
@@ -240,7 +241,7 @@ class ProfileService:
 
         # Refine QA vs General headline and extract explicit Target Role / Headline if authored in skills.md
         if target_industry == "qa_tech":
-            if any(w in lower_text for w in ["portfolio project", "entry-level", "starter", "junior", "1.5"]):
+            if any(w in lower_text for w in ["portfolio project", "entry-level", "starter", "junior", "intern", "trainee"]):
                 headline = "QA Engineer (Test Design & API Quality)"
                 primary_role = headline
             else:
@@ -345,12 +346,37 @@ class ProfileService:
                 if len(clean_line) >= 4 and clean_line not in courses_certs and not clean_line.lower().startswith("http"):
                     courses_certs.append(clean_line[:140])
 
-        exp_years = float(taxonomy_dict.get("years_of_experience") or 1.5)
-        max_allowed_years = min(exp_years + 0.5, 2.0) if exp_years <= 2.0 else round(exp_years + 0.5, 1)
-        seniority_level = taxonomy_dict.get("seniority_level") or ("JUNIOR" if exp_years <= 2.0 else "MID")
+        if not text.strip():
+            return ParsedCandidateProfileSchema(
+                full_name="",
+                headline="",
+                primary_role="",
+                detected_industry="",
+                target_industry="general_professional",
+                experience_years=None,
+                experience_status="unknown",
+                max_allowed_years=2.0,
+                seniority_level="JUNIOR",
+            )
+
+        raw_exp = taxonomy_dict.get("years_of_experience")
+        exp_years: Optional[float] = float(raw_exp) if raw_exp is not None else None
+        exp_status = str(
+            taxonomy_dict.get("experience_status")
+            or ("confirmed" if exp_years is not None else "unknown")
+        )
+        eff_years = exp_years if exp_years is not None else 0.0
+        if exp_years is None or exp_years == 0.0:
+            max_allowed_years = 2.0
+        elif exp_years <= 2.0:
+            max_allowed_years = min(exp_years + 0.5, 2.0)
+        else:
+            max_allowed_years = round(exp_years + 0.5, 1)
+        seniority_level = taxonomy_dict.get("seniority_level") or ("JUNIOR" if eff_years <= 2.0 else "MID")
         verified_skills = list(taxonomy_dict.get("all_skills") or [])
         eligible_internships = bool(
-            exp_years <= 2.5
+            exp_years is None
+            or exp_years <= 2.5
             or courses_certs
             or any(e.get("is_student_or_recent_grad") for e in education_entries)
             or len(education_entries) > 0
@@ -380,8 +406,9 @@ CRITICAL INSTRUCTIONS:
 - `parsed_skills.courses_and_certifications`: List of completed bootcamps, courses, and certificates.
 - `eligible_internships`: True if candidate is a student, recent grad, completed courses/bootcamps, or has <= 2.5 yrs experience.
 - `internship_tracks`: Specific internship / graduate trainee tracks suited to their degree + courses + skills.
-- `experience_years`: Exact numeric years from profile (0.0 if unstated; never inflate).
-- `max_allowed_years`: Strictly min(experience_years + 0.5, 2.0) when experience_years <= 2.0.
+- `experience_years`: Exact numeric years explicitly stated in profile, or `null` if unstated/only academic projects. NEVER invent a number such as 1.5.
+- `experience_status`: "confirmed" if explicit work tenure is stated, "internship_or_project" if only internships/academic projects are present, or "unknown" if unstated.
+- `max_allowed_years`: Strictly min((experience_years or 0) + 0.5, 2.0) when (experience_years or 0) <= 2.0.
 - `seniority_level`: Must be "JUNIOR", "MID", "SENIOR", or "LEAD".
 
 <candidate_skills_untrusted_input>
@@ -411,7 +438,19 @@ CRITICAL INSTRUCTIONS:
                     gem_parsed.linkedin_url = linkedin_url
                 if not (gem_parsed.headline or "").strip() and headline:
                     gem_parsed.headline = headline
-                gem_parsed.max_allowed_years = min(float(gem_parsed.experience_years) + 0.5, 2.0) if gem_parsed.experience_years <= 2.0 else round(float(gem_parsed.experience_years) + 0.5, 1)
+                if gem_parsed.experience_years is None and exp_years is not None:
+                    gem_parsed.experience_years = exp_years
+                gem_eff_yrs = float(gem_parsed.experience_years) if gem_parsed.experience_years is not None else None
+                if gem_parsed.experience_years is not None:
+                    gem_parsed.experience_status = "confirmed"
+                elif exp_status != "unknown":
+                    gem_parsed.experience_status = exp_status
+                if gem_eff_yrs is None or gem_eff_yrs == 0.0:
+                    gem_parsed.max_allowed_years = 2.0
+                elif gem_eff_yrs <= 2.0:
+                    gem_parsed.max_allowed_years = min(gem_eff_yrs + 0.5, 2.0)
+                else:
+                    gem_parsed.max_allowed_years = round(gem_eff_yrs + 0.5, 1)
                 for k in ["qa_automation", "manual_qa", "languages", "api_and_performance", "cicd_and_devops", "all_skills"]:
                     existing_list = getattr(gem_parsed.parsed_skills, k)
                     merged = list(dict.fromkeys(existing_list + taxonomy_dict.get(k, [])))
@@ -455,6 +494,7 @@ CRITICAL INSTRUCTIONS:
             github_url=github_url,
             linkedin_url=linkedin_url,
             experience_years=exp_years,
+            experience_status=exp_status,
             max_allowed_years=max_allowed_years,
             seniority_level=seniority_level,
             target_industry=target_industry,
@@ -466,7 +506,7 @@ CRITICAL INSTRUCTIONS:
                 cicd_and_devops=taxonomy_dict.get("cicd_and_devops", []),
                 tools=taxonomy_dict.get("tools", []),
                 frameworks=taxonomy_dict.get("frameworks", []),
-                spoken_languages=spoken_lang_strs or ["English", "Georgian"],
+                spoken_languages=spoken_lang_strs,
                 achievements=achievements,
                 education=education_entries,
                 projects=projects_entries,
@@ -516,6 +556,7 @@ CRITICAL INSTRUCTIONS:
         extracted = self.extract_structured_profile(raw_markdown)
         skills_payload: Dict[str, Any] = extracted.parsed_skills.model_dump()
         skills_payload["years_of_experience"] = extracted.experience_years
+        skills_payload["experience_status"] = extracted.experience_status
         skills_payload["max_allowed_years"] = extracted.max_allowed_years
         skills_payload["seniority_level"] = extracted.seniority_level
         skills_payload["target_industry"] = extracted.target_industry
@@ -534,13 +575,14 @@ CRITICAL INSTRUCTIONS:
             skills_payload["owner_email"] = clean_owner
 
         with Session(engine, expire_on_commit=False) as session:
+            from .auth_service import get_user_by_email
             resolved_user_id = None if is_guest_owner else user_id
             if resolved_user_id is not None and not clean_owner:
                 u_by_id = session.get(User, resolved_user_id)
                 if u_by_id and (u_by_id.email or "").strip().lower() == "guest@talentflow.local":
                     resolved_user_id = None
             if resolved_user_id is None and clean_owner:
-                u_row = session.exec(select(User).where(User.email == clean_owner)).first()
+                u_row = get_user_by_email(session, clean_owner)
                 if u_row and (u_row.email or "").strip().lower() != "guest@talentflow.local":
                     resolved_user_id = u_row.id
             if resolved_user_id is not None:

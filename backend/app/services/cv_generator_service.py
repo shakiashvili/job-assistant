@@ -52,19 +52,13 @@ def group_skills_into_ats_buckets(skills: List[str], cv_language: str = "en") ->
         "infra": [],
         "mgmt": [],
     }
-    has_qa_bucket = bool(buckets["auto"])
-    mgmt_label = (
-        ("მეთოდოლოგიები და ტესტ-მენეჯმენტი" if has_qa_bucket else "ძირითადი პროფესიული კომპეტენციები")
-        if cv_language == "ka"
-        else ("Methodologies & Test Management" if has_qa_bucket else "Core Domain Competencies")
-    )
     labels = (
         {
             "auto": "ტესტ-ავტომატიზაცია და ფრეიმვორქები",
             "lang": "პროგრამირება და სკრიპტინგი",
             "api": "API და Backend ვალიდაცია",
             "infra": "CI/CD და ინფრასტრუქტურა",
-            "mgmt": mgmt_label,
+            "mgmt": "ძირითადი პროფესიული კომპეტენციები",
         }
         if cv_language == "ka"
         else {
@@ -72,7 +66,7 @@ def group_skills_into_ats_buckets(skills: List[str], cv_language: str = "en") ->
             "lang": "Programming & Technical Stack",
             "api": "API & Backend Validation",
             "infra": "CI/CD, Cloud & Infrastructure",
-            "mgmt": mgmt_label,
+            "mgmt": "Core Domain Competencies",
         }
     )
 
@@ -92,9 +86,8 @@ def group_skills_into_ats_buckets(skills: List[str], cv_language: str = "en") ->
         else:
             buckets["mgmt"].append(s)
 
-    # Recompute mgmt label after classifying items so non-QA candidates don't get QA Test Management label
-    if not buckets["auto"] and buckets["mgmt"]:
-        labels["mgmt"] = "ძირითადი პროფესიული კომპეტენციები" if cv_language == "ka" else "Core Domain Competencies"
+    if buckets["auto"] and buckets["mgmt"]:
+        labels["mgmt"] = "მეთოდოლოგიები და ტესტ-მენეჯმენტი" if cv_language == "ka" else "Methodologies & Test Management"
 
     return [(labels[key], vals) for key, vals in buckets.items() if vals]
 
@@ -195,6 +188,34 @@ def clean_bullets(highlights: Optional[List[Any]]) -> List[str]:
     return result
 
 
+def _resolve_ats_role_tag(parsed_skills: Dict[str, Any], candidate_headline: str) -> str:
+    """
+    Computes the canonical ASCII filename role tag for ATS and Recruiter editions from the
+    candidate's verified profile role (rather than a target vacancy's title, preventing internship
+    postings from downgrading the candidate's file identity).
+    """
+    if str((parsed_skills or {}).get("target_industry") or "").lower() == "qa_tech":
+        return "QA_Engineer"
+    return ascii_filename_slug(
+        str(candidate_headline or "").split("|")[0],
+        default="Specialist",
+        max_len=24,
+    )
+
+
+def _extract_override_profile_taxonomy(skills_md: str) -> tuple[Dict[str, Any], List[str], str]:
+    """Extracts verified industry, primary_role, and skills from an explicit skills_md override."""
+    from .profile_service import profile_service
+
+    extracted = profile_service.extract_structured_profile(skills_md)
+    ps = extracted.parsed_skills.model_dump()
+    ps["target_industry"] = extracted.target_industry
+    ps["detected_industry"] = extracted.detected_industry
+    ps["primary_role"] = extracted.primary_role
+    ps["verified_skills"] = extracted.verified_skills
+    return ps, list(extracted.verified_skills or ps.get("all_skills") or []), extracted.full_name
+
+
 def resolve_candidate_headline(candidate: Dict[str, Any], skills: List[str], parsed_skills: Dict[str, Any]) -> str:
     """Returns candidate's true professional seniority/headline across ANY domain without QA bias."""
     ps = parsed_skills or {}
@@ -290,13 +311,13 @@ def _register_unicode_font(prefer_georgian: bool = False) -> str:
             "C:/Windows/Fonts/ariali.ttf",
             "C:/Windows/Fonts/arialbi.ttf",
         ),
-        # Linux / Docker
+        # Linux / Docker (FreeSans covers both Latin & Georgian Mkhedruli cleanly in one TTF)
         (
-            "NotoSansGeorgian",
-            "/usr/share/fonts/truetype/noto/NotoSansGeorgian-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansGeorgian-Bold.ttf",
-            None,
-            None,
+            "FreeSans",
+            "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSansOblique.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSansBoldOblique.ttf",
         ),
         (
             "DejaVuSans",
@@ -304,6 +325,13 @@ def _register_unicode_font(prefer_georgian: bool = False) -> str:
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf",
+        ),
+        (
+            "NotoSansGeorgian",
+            "/usr/share/fonts/truetype/noto/NotoSansGeorgian-Regular.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSansGeorgian-Bold.ttf",
+            None,
+            None,
         ),
         (
             "LiberationSans",
@@ -523,8 +551,18 @@ class CVGeneratorService:
         owner_email: Optional[str] = None,
         vault_override: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        """
+        Generates tailored PDF, Word (.docx), and HTML CVs from verified candidate ground truth.
+
+        Filename contract:
+        - `cv_style` in `("ats", "recruiter")`: canonical edition named after the candidate's
+          verified profile role (`<Candidate>_<VerifiedRoleTag>_(ATS|RECRUITER)[_KA].ext`),
+          avoiding target-job title downgrades (e.g. internship postings).
+        - `cv_style == "tailored"`: vacancy-specific edition named after the target company and
+          target role (`<Candidate>_<Company>_<TargetRole>_CV[_KA].ext`).
+        """
         gt = vault_override if vault_override else ground_truth_store.get_data(owner_email=owner_email)
-        ps = dict(gt.get("_parsed_skills") or {})
+        ps = dict(gt.get("_parsed_skills") or gt.get("parsed_skills_taxonomy") or {})
         raw_vault_md = str(gt.get("skills_md_raw") or "")
         has_explicit_md_override = bool(
             skills_md_override
@@ -534,10 +572,15 @@ class CVGeneratorService:
         skills_md = skills_md_override or raw_vault_md or ground_truth_store.get_skills_md(owner_email=owner_email)
         parsed_md = ground_truth_store.parse_profile_from_md(skills_md) if skills_md else {}
 
+        override_skills: List[str] = []
+        if has_explicit_md_override and skills_md:
+            override_ps, override_skills, _ = _extract_override_profile_taxonomy(skills_md)
+            ps = override_ps
+
         candidate = dict(gt.get("candidate", {}))
         for fld in ("full_name", "headline", "email", "phone"):
-            if has_explicit_md_override and parsed_md.get(fld):
-                candidate[fld] = parsed_md[fld]
+            if has_explicit_md_override:
+                candidate[fld] = parsed_md.get(fld) or ""
             elif not candidate.get(fld) and parsed_md.get(fld):
                 candidate[fld] = parsed_md[fld]
         if parsed_md.get("location") and (has_explicit_md_override or not _format_candidate_location(candidate.get("location"))):
@@ -558,7 +601,7 @@ class CVGeneratorService:
         candidate["links"] = cand_links
 
         if has_explicit_md_override:
-            core_skills = parsed_md.get("skills") or (gt.get("skills", {}) or {}).get("core", []) or []
+            core_skills = parsed_md.get("skills") or override_skills or (gt.get("skills", {}) or {}).get("core", []) or []
             raw_work_history = parsed_md.get("work_history") or gt.get("work_history", [])
             education = parsed_md.get("education") or gt.get("education", [])
             projects = parsed_md.get("projects") or gt.get("projects", [])
@@ -624,7 +667,7 @@ class CVGeneratorService:
         cand_slug = ascii_filename_slug(clean_full_for_slug or str(candidate.get("full_name", "Candidate")), default="Candidate", max_len=24)
 
         lang_suffix = "_KA" if cv_language == "ka" else ""
-        role_tag = "QA_Engineer" if (ps.get("target_industry", "qa_tech") == "qa_tech") else ascii_filename_slug(candidate_headline.split("|")[0], default="Specialist", max_len=18)
+        role_tag = _resolve_ats_role_tag(ps, candidate_headline)
         job_role_slug = ascii_filename_slug(job_title, default="Role", max_len=20)
         languages_line = (
             _format_candidate_languages({}, skills_md, cv_language == "ka")
@@ -709,7 +752,13 @@ class CVGeneratorService:
             languages_line=languages_line,
         )
 
-        start_date_str = "1 კვირა შეთავაზებიდან (1 week after offer)" if cv_language == "ka" else "1 week after offer"
+        comp_cfg = candidate.get("compensation") if isinstance(candidate.get("compensation"), dict) else {}
+        start_date_str = str(comp_cfg.get("notice_period") or "").strip()
+        exp_eur = comp_cfg.get("expected_salary_eur") or 0
+        exp_usd = comp_cfg.get("expected_salary_usd") or 0
+        expected_salary_str = (
+            f"€{int(exp_eur):,}/yr" if exp_eur else (f"${int(exp_usd):,}/yr" if exp_usd else "")
+        )
 
         cv_sections = {
             "candidate": {
@@ -755,7 +804,7 @@ class CVGeneratorService:
             "tailored_highlights": tailored_highlights,
             "ats_keywords_covered": matched_skills or display_skills[:8],
             "start_date_default": start_date_str,
-            "expected_salary": "Negotiable / Market Rate",
+            "expected_salary": expected_salary_str,
         }
 
     def render_cv_from_sections(
@@ -1063,25 +1112,26 @@ class CVGeneratorService:
             r.font.size = Pt(10)
             _apply_docx_run_font(r, font_family)
 
-        add_section_heading(lbl_skills)
-        grouped = group_skills_into_ats_buckets(display_skills[:60], cv_language=cv_language)
-        if grouped:
-            for bucket_title, bucket_items in grouped:
-                p_sk = doc.add_paragraph(style="List Bullet")
-                p_sk.paragraph_format.space_after = Pt(2)
-                rk = p_sk.add_run(f"{bucket_title}: ")
-                rk.bold = True
-                rk.font.size = Pt(9.5)
-                _apply_docx_run_font(rk, font_family)
-                rv = p_sk.add_run(", ".join(bucket_items))
-                rv.font.size = Pt(9.5)
-                _apply_docx_run_font(rv, font_family)
-        else:
-            p_sk = doc.add_paragraph(", ".join(display_skills[:24]) or "Manual QA, REST API, Test Design")
-            p_sk.paragraph_format.space_after = Pt(4)
-            for r in p_sk.runs:
-                r.font.size = Pt(10)
-                _apply_docx_run_font(r, font_family)
+        if display_skills:
+            add_section_heading(lbl_skills)
+            grouped = group_skills_into_ats_buckets(display_skills[:60], cv_language=cv_language)
+            if grouped:
+                for bucket_title, bucket_items in grouped:
+                    p_sk = doc.add_paragraph(style="List Bullet")
+                    p_sk.paragraph_format.space_after = Pt(2)
+                    rk = p_sk.add_run(f"{bucket_title}: ")
+                    rk.bold = True
+                    rk.font.size = Pt(9.5)
+                    _apply_docx_run_font(rk, font_family)
+                    rv = p_sk.add_run(", ".join(bucket_items))
+                    rv.font.size = Pt(9.5)
+                    _apply_docx_run_font(rv, font_family)
+            else:
+                p_sk = doc.add_paragraph(", ".join(display_skills[:24]))
+                p_sk.paragraph_format.space_after = Pt(4)
+                for r in p_sk.runs:
+                    r.font.size = Pt(10)
+                    _apply_docx_run_font(r, font_family)
 
         if work_history:
             add_section_heading(lbl_exp)
@@ -1599,8 +1649,22 @@ class CVGeneratorService:
 
         gt = ground_truth_store.get_data(owner_email=owner_email)
         candidate = dict(gt.get("candidate", {}))
-        ps = gt.get("parsed_skills_taxonomy") or {}
-        skills_md = skills_md_override or gt.get("skills_md_raw") or ""
+        ps = dict(gt.get("_parsed_skills") or gt.get("parsed_skills_taxonomy") or {})
+        raw_vault_md = str(gt.get("skills_md_raw") or "")
+        skills_md = skills_md_override or raw_vault_md
+        has_explicit_override = bool(
+            skills_md_override
+            and str(skills_md_override).strip()
+            and str(skills_md_override).strip() != raw_vault_md.strip()
+        )
+        if has_explicit_override and skills_md:
+            override_ps, override_skills, override_name = _extract_override_profile_taxonomy(skills_md)
+            ps = override_ps
+            if override_name:
+                candidate["full_name"] = override_name
+            cand_skills = override_skills
+        else:
+            cand_skills = [str(s) for s in (gt.get("skills", {}).get("core") or [])]
         cand_name = str(candidate.get("full_name") or "Candidate").strip()
         raw_phone = str(candidate.get("phone") or "").strip(" -\t\r\n")
         # Never inject placeholder '+000 000 0000' or '-' into outgoing emails
@@ -1608,7 +1672,7 @@ class CVGeneratorService:
         links = candidate.get("links", {}) if isinstance(candidate.get("links"), dict) else {}
         cand_linkedin = str(links.get("linkedin") or "").strip(" -\t\r\n")
 
-        target_industry = str(ps.get("target_industry") or "qa_tech").lower()
+        target_industry = str(ps.get("target_industry") or "general_professional").lower()
         detected_industry = str(ps.get("detected_industry") or ps.get("primary_role") or target_industry)
         is_tech_profile = target_industry in ("qa_tech", "software_engineering", "data_analytics")
 
@@ -1627,7 +1691,6 @@ class CVGeneratorService:
             cover_lang = cv_language if cv_language in ("en", "ka") else cover_lang
 
         req_skills = matcher_service.extract_job_requirements(job_title, description)
-        cand_skills = [str(s) for s in (gt.get("skills", {}).get("core") or [])]
         matched = [
             r for r in req_skills if any(r.lower() in c.lower() or c.lower() in r.lower() for c in cand_skills)
         ] or cand_skills[:6]
@@ -1741,7 +1804,10 @@ class CVGeneratorService:
             if comp_raw and comp_raw not in work_companies:
                 work_companies.append(comp_raw)
         companies_phrase = ", ".join(work_companies[:3])
-        exp_years = ps.get("years_of_experience") or 1.5
+        raw_exp_years = ps.get("years_of_experience")
+        if raw_exp_years is None:
+            raw_exp_years = candidate.get("experience_years")
+        exp_years: Optional[float] = float(raw_exp_years) if raw_exp_years is not None else None
 
         # Domain-specific focus descriptions (NEVER leak QA terms into Hospitality/Logistics/Finance/Healthcare emails!)
         domain_focus_ka = {
@@ -1824,6 +1890,11 @@ class CVGeneratorService:
             salutation = f"მოგესალმებით, {real_company}-ის გუნდს," if real_company else "მოგესალმებით, გუნდს,"
             hook_company = f"{real_company}-ში" if real_company else "თქვენს კომპანიაში"
             req_snippet = ", ".join(req_skills[:4]) if req_skills else skills_highlight
+            exp_phrase_ka = (
+                f"ჩემი {exp_years:g} წლიანი გამოცდილება"
+                if exp_years is not None
+                else "ჩემი პრაქტიკული გამოცდილება"
+            )
             proof_para = (
                 f"{companies_phrase}-ში მუშაობისას პრაქტიკულად გამოვიყენე {skills_highlight} — ვუზრუნველყოფდი {ka_action}, რაც პირდაპირ პასუხობს ვაკანსიის მოთხოვნებს ({req_snippet})."
                 if companies_phrase
@@ -1833,8 +1904,8 @@ class CVGeneratorService:
             cover_letter = (
                 f"{salutation}\n\n"
                 f"გიგზავნით განაცხადს „{job_title}“ პოზიციაზე {hook_company}. "
-                f"ჩემი {exp_years:g} წლიანი გამოცდილება ({skills_highlight}) პირდაპირ შეესაბამება პოზიციის მოთხოვნებს ({req_snippet}).\n\n"
-                f"{proof_para} თანდართულია განახლებული რეზიუმე (CV).\n\n"
+                f"{exp_phrase_ka} ({skills_highlight}) პირდაპირ შეესაბამება პოზიციის ძირითად მოთხოვნებს ({req_snippet}).\n\n"
+                f"თანდართულია განახლებული რეზიუმე (CV) და მოხარული ვიქნები გასაუბრებაზე შეხვედრით.\n\n"
                 f"პატივისცემით,\n{contact_footer}"
             )
             gap_ka = (
@@ -1855,6 +1926,16 @@ class CVGeneratorService:
             salutation = f"Dear {real_company} Hiring Team," if real_company else "Dear Hiring Team,"
             target_phrase = f"at {real_company}" if real_company else "with your team"
             req_snippet = ", ".join(req_skills[:5]) if req_skills else skills_highlight
+            exp_phrase_en = (
+                f"With {exp_years:g} years of verified experience in {skills_highlight}"
+                if exp_years is not None
+                else f"With verified hands-on experience in {skills_highlight}"
+            )
+            exp_mot_en = (
+                f"With {exp_years:g} years of hands-on experience in {en_area} ({skills_highlight}), I want to bring measurable impact directly to your stated goals around {req_snippet}."
+                if exp_years is not None
+                else f"With hands-on experience in {en_area} ({skills_highlight}), I want to contribute dependable execution toward your goals around {req_snippet}."
+            )
             gap_bridge = (
                 f" Where additional ramp-up is helpful ({', '.join(missing[:2])}), my core engineering foundation supports fast onboarding."
                 if missing and not is_non_tech_domain
@@ -1864,7 +1945,7 @@ class CVGeneratorService:
             cover_letter = (
                 f"{salutation}\n\n"
                 f"Please find attached my tailored CV for the {job_title} position {target_phrase}. "
-                f"With {exp_years:g} years of verified experience in {skills_highlight}, my background aligns directly with {req_snippet}.\n\n"
+                f"{exp_phrase_en}, my background aligns directly with {req_snippet}.\n\n"
                 f"I look forward to discussing how I can contribute to {cta_team} {en_goal}.\n\n"
                 f"Best regards,\n{contact_footer}"
             )
@@ -1875,11 +1956,21 @@ class CVGeneratorService:
             )
             motivational_letter = (
                 f"{salutation}\n\n"
-                f"I am excited to apply for the {job_title} role {target_phrase}. With {exp_years:g} years of hands-on experience in {en_area} ({skills_highlight}), I want to bring measurable impact directly to your stated goals around {req_snippet}.\n\n"
+                f"I am excited to apply for the {job_title} role {target_phrase}. {exp_mot_en}\n\n"
                 f"{proof_para}\n\n"
                 f"I would welcome the chance to connect with {cta_team} team and share how my tailored experience supports {en_goal}.\n\n"
                 f"Best regards,\n{contact_footer}"
             )
+
+        # Deterministic ground-truth safety sanitization across outputs
+        def _sanitize_letter_output(txt: str) -> str:
+            out = _clean_foreign_script_text(txt, cover_lang)
+            if not str(((candidate.get("compensation") or {}).get("notice_period")) or "").strip():
+                out = re.sub(r"[^.!?\n]*\b1 week after offer\b[^.!?\n]*[.!?]?", "", out, flags=re.I)
+            return re.sub(r"\n{3,}", "\n\n", out).strip()
+
+        cover_letter = _sanitize_letter_output(cover_letter)
+        motivational_letter = _sanitize_letter_output(motivational_letter)
 
         return {
             "company": real_company or company,

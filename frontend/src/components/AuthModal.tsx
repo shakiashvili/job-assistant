@@ -113,9 +113,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
     e.preventDefault();
     setError(null);
 
-    if (mode === 'register' && password !== confirmPassword) {
-      setError('Passwords do not match. Please verify both password fields.');
-      return;
+    if (mode === 'register') {
+      if (password !== confirmPassword) {
+        setError('Passwords do not match. Please verify both password fields.');
+        return;
+      }
+      if (new TextEncoder().encode(password).length > 72) {
+        setError('Password must not exceed 72 UTF-8 bytes.');
+        return;
+      }
     }
 
     setLoading(true);

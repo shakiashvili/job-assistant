@@ -16,9 +16,10 @@ export const options = {
 };
 
 export default function () {
-  const healthRes = http.get(`${BASE_URL}/health`);
+  const healthRes = http.get(`${BASE_URL}/api/health`);
   check(healthRes, {
     'health status 200': (r) => r.status === 200,
+    'health body valid': (r) => r.json('status') === 'healthy',
   });
 
   const jobsRes = http.get(`${BASE_URL}/api/jobs?page=1&limit=12`);

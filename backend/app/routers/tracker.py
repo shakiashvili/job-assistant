@@ -75,8 +75,13 @@ def get_or_create_app_tracker(
     session: Session,
     current_user: Optional[User] = None,
 ) -> ApplicationTracker:
-    clean_id = app_id_str.replace("app-", "")
-    app_id = int(clean_id) if clean_id.isdigit() else 1
+    clean_id = app_id_str.replace("app-", "").strip()
+    if not clean_id.isdigit():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid application identifier.",
+        )
+    app_id = int(clean_id)
     is_guest = _is_guest_user(current_user) if current_user else True
     uid = current_user.id if current_user else None
 

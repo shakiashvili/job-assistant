@@ -65,8 +65,8 @@ class TailoredCVResult(BaseModel):
     dou_motivational_letter: str
     tailored_highlights: List[str]
     ats_keywords_covered: List[str]
-    start_date_default: str = "1 week after offer"
-    expected_salary: str = "Negotiable / Market Rate"
+    start_date_default: Optional[str] = ""
+    expected_salary: Optional[str] = ""
     document_id: Optional[int] = None
     version_number: int = 1
 
@@ -81,7 +81,7 @@ class Blocker(BaseModel):
 class JobAuditRequest(BaseModel):
     raw_text: Optional[str] = Field(None, description="Pasted job description text")
     job_url: Optional[str] = Field(None, description="Direct URL to job posting")
-    variant: Optional[str] = Field("qa_automation", description="Selected CV variant")
+    variant: Optional[str] = Field(None, description="Selected CV variant")
     cv_language: Optional[str] = Field("en", description="'en' (English) or 'ka' (Georgian / ქართული)")
     skills_md_override: Optional[str] = Field(None, description="Optional live markdown skills override")
 
@@ -136,7 +136,7 @@ class GenerateAnswersRequest(BaseModel):
     company: Optional[str] = None
     job_description: Optional[str] = None
     portal: Optional[str] = None
-    variant: Optional[str] = "qa_automation"
+    variant: Optional[str] = None
     cv_language: Optional[str] = "en"
 
 
@@ -156,21 +156,21 @@ class GenerateAnswersResponse(BaseModel):
     applicant_summary: str
     motivation_letter: str
     dou_motivational_letter: str
-    default_start_date: str = "1 week after offer"
+    default_start_date: str = ""
 
 
 # --- Stage Application Schemas ---
 
 class StageApplicationRequest(BaseModel):
     job_url: str
-    variant: Optional[str] = "qa_automation"
+    variant: Optional[str] = None
     cv_language: Optional[str] = "en"
     custom_pdf_filename: Optional[str] = None
     custom_answers: Optional[Dict[str, str]] = None
     applicant_summary: Optional[str] = None
     motivation_letter: Optional[str] = None
     expected_salary: Optional[str] = None
-    start_date: Optional[str] = "1 week after offer"
+    start_date: Optional[str] = None
     bypass_company_gate: Optional[bool] = False
     auto_submit: Optional[bool] = False
     headless: Optional[bool] = False
@@ -197,7 +197,7 @@ class PortalVacancyItem(BaseModel):
     title: str
     company: str
     portal: str
-    industry: str = "qa_tech"
+    industry: str = "general"
     location: str
     salary: str
     url: str

@@ -11,6 +11,7 @@ from app.services.gemini_service import gemini_service
 from app.services.gmail_service import GMAIL_SCOPES, gmail_service
 
 client = TestClient(app)
+FIXTURE_SKILLS_MD = Path(__file__).resolve().parent / "fixtures" / "tsu_candidate_skills.md"
 
 
 def _auth_headers(email_prefix: str = "qa_tester") -> dict:
@@ -31,8 +32,7 @@ def _auth_headers(email_prefix: str = "qa_tester") -> dict:
 
 def test_education_grouping_certifications_and_no_fabricated_honors():
     """Groups each university degree + modules + GPA cleanly without fabricating Honors or Erasmus+."""
-    md_path = Path(__file__).resolve().parents[2] / "data" / "candidate_skills.md"
-    md_content = md_path.read_text(encoding="utf-8")
+    md_content = FIXTURE_SKILLS_MD.read_text(encoding="utf-8")
     parsed = profile_repository.parse_profile_from_md(md_content)
 
     edu = parsed.get("education", [])
@@ -93,7 +93,7 @@ def test_foreign_script_stripping_and_georgian_sylfaen_docx_pdf(tmp_path):
             "company": "STARTRIBE LTD. Разработка",
             "description": "Manual and automated API testing using Postman, Playwright, SQL.",
         },
-        skills_md=Path(__file__).resolve().parents[2].joinpath("data", "candidate_skills.md").read_text(encoding="utf-8"),
+        skills_md=FIXTURE_SKILLS_MD.read_text(encoding="utf-8"),
         matched_skills=["Playwright", "Postman", "SQL"],
         missing_skills=[],
         cv_language="en",
@@ -262,7 +262,7 @@ def test_profile_updates_automatically_sync_to_saved_and_generated_cvs():
     headers = _auth_headers("profile_cv_sync")
 
     # 1. Initial skills.md upload
-    initial_md = Path(__file__).resolve().parents[2].joinpath("data", "candidate_skills.md").read_text(encoding="utf-8")
+    initial_md = FIXTURE_SKILLS_MD.read_text(encoding="utf-8")
     up_res = client.post("/api/skills-md", headers=headers, json={"content": initial_md})
     assert up_res.status_code == 200
 

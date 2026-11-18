@@ -150,12 +150,14 @@ def test_cover_letter_domain_adaptation():
 
 def test_global_tier_and_status_counts():
     """Verifies that GET /api/jobs returns accurate global tier and status counts regardless of pagination limit."""
+    from app.db.database import delete_job_posting_cascade
+    from app.db.models import UserJobMatch
     from app.services.auth_service import get_user_by_email, create_access_token
+    from sqlmodel import delete
 
     test_email = "count_tester@talentflow.local"
     init_db()
     with Session(engine) as session:
-        # Create test user & profile
         test_user = get_user_by_email(session, test_email)
         if not test_user:
             test_user = User(
@@ -168,33 +170,36 @@ def test_global_tier_and_status_counts():
             session.commit()
             session.refresh(test_user)
 
-        # Clear existing non-applied jobs
-        non_app = session.exec(select(JobPosting).where(JobPosting.status != "APPLIED")).all()
-        for j in non_app:
-            session.delete(j)
+        session.exec(delete(UserJobMatch).where(UserJobMatch.user_id == test_user.id))
+        for j in session.exec(select(JobPosting)).all():
+            delete_job_posting_cascade(session, j)
         session.commit()
 
-        # Ingest profile
+        # Bind CandidateProfile strictly to test_user (never mutating another user's profile row)
         tax = matcher_service.parse_skills_markdown("# QA Engineer\n- Playwright, Python, PyTest, REST API, SQL, Docker")
         tax["user_uploaded"] = True
         tax["owner_email"] = test_email
+        tax["user_id"] = test_user.id
         tax["target_industry"] = "qa_tech"
 
-        prof = session.exec(select(CandidateProfile)).first()
+        prof = session.exec(
+            select(CandidateProfile).where(CandidateProfile.user_id == test_user.id)
+        ).first()
         if not prof:
             prof = CandidateProfile(
+                user_id=test_user.id,
                 full_name="Count Tester",
                 email=test_email,
                 raw_markdown="# Profile",
                 parsed_skills=tax,
             )
-            session.add(prof)
         else:
             prof.parsed_skills = tax
-            session.add(prof)
+        session.add(prof)
         session.commit()
+        test_uid = test_user.id
 
-        # Add 3 direct, 2 adjacent, 1 public internship
+        # Add 3 direct, 2 adjacent, 1 public internship (all >= 60), plus 1 sub-threshold job (25.0)
         for i in range(3):
             session.add(JobPosting(
                 portal="jobs.ge", external_id=f"test-dir-{i}", url=f"https://jobs.ge/{i}",
@@ -212,10 +217,15 @@ def test_global_tier_and_status_counts():
             title="Internship", company="Agency", match_tier="PUBLIC_INTERNSHIP", status="STAGED",
             suitability_score=76.0, description_raw="Desc",
         ))
+        session.add(JobPosting(
+            portal="jobs.ge", external_id="test-low-1", url="https://jobs.ge/low-1",
+            title="Low Match Role", company="Comp", match_tier="DIRECT", status="STAGED",
+            suitability_score=25.0, description_raw="Desc",
+        ))
         session.commit()
 
-    # Query with limit=2 (page 1 of 3)
-    token = create_access_token({"sub": test_email, "is_admin": False})
+    # Query with default min_score=60 and limit=2 (page 1 of 3 -> excludes the 25.0 job)
+    token = create_access_token({"sub": test_email, "user_id": test_uid, "is_admin": False})
 
     res = client.get("/api/jobs?page=1&limit=2", headers={"Authorization": f"Bearer {token}"})
     assert res.status_code == 200
@@ -235,6 +245,11 @@ def test_global_tier_and_status_counts():
     assert data["status_counts"]["ALL"] == 6
     assert data["status_counts"]["STAGED"] == 4
     assert data["status_counts"]["AUDITED"] == 2
+
+    # Explicitly requesting min_score=0 includes the low-score job cleanly
+    res_all = client.get("/api/jobs?page=1&limit=10&min_score=0", headers={"Authorization": f"Bearer {token}"})
+    assert res_all.status_code == 200
+    assert res_all.json()["total"] == 7
 
 
 def test_foreign_portal_hybrid_and_onsite_disqualification():

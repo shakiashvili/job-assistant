@@ -60,14 +60,16 @@ class AnswerService:
         request: GenerateAnswersRequest,
         user: Optional[Any] = None,
     ) -> GenerateAnswersResponse:
-        data = dict(ground_truth_store.get_data())
-        live_profile = load_live_candidate_profile(getattr(user, "email", None))
+        owner_email = getattr(user, "email", None)
+        user_id = getattr(user, "id", None)
+        data = dict(ground_truth_store.get_data(owner_email=owner_email, user_id=user_id))
+        live_profile = load_live_candidate_profile(owner_email)
 
         candidate = dict(data.get("candidate", {}))
         skills_md = (
             live_profile.get("skills_markdown")
             or data.get("skills_md_raw")
-            or ground_truth_store.get_skills_md()
+            or ground_truth_store.get_skills_md(owner_email=owner_email, user_id=user_id)
         )
         data["skills_md_raw"] = skills_md
 
@@ -85,12 +87,13 @@ class AnswerService:
             or data.get("skills", {}).get("core", [])
         )
         lang = (request.cv_language or "en").lower()
+        target_industry = str(live_profile.get("target_industry") or "general_professional")
 
         questions_dicts = [q.model_dump() for q in request.questions]
         job_details = {
             "title": request.job_title or live_profile.get("primary_role") or parsed_profile.get("headline") or "Specialist",
             "company": request.company or "Hiring Team",
-            "industry": live_profile.get("target_industry") or "qa_tech",
+            "industry": target_industry,
             "summary": request.job_description or "",
         }
 
@@ -98,7 +101,7 @@ class AnswerService:
             questions=questions_dicts,
             candidate_data=data,
             job_details=job_details,
-            variant=request.variant or str(live_profile.get("target_industry") or "qa_automation"),
+            variant=request.variant or target_industry,
             cv_language=lang,
             candidate_profile=live_profile,
         )
@@ -125,18 +128,20 @@ class AnswerService:
                     question=ans.get("question", ""),
                     field_type=ans.get("field_type", "text"),
                     answer=str(ans.get("answer", "")),
-                    confidence=float(ans.get("confidence", 0.92)),
-                    source_ground_truth_field=ans.get("source_ground_truth_field", "candidate_skills.md")
+                    confidence=float(ans.get("confidence", 0.0)),
+                    source_ground_truth_field=ans.get("source_ground_truth_field", "candidate_skills.md"),
+                    verification_status=str(ans.get("verification_status") or ("VERIFIED" if str(ans.get("answer", "")).strip() else "REQUIRES_CONFIRMATION")),
                 ))
 
+        verified_notice = str(((candidate.get("compensation") or {}).get("notice_period")) or "").strip()
         return GenerateAnswersResponse(
             answers=formatted_answers,
-            variant_used=request.variant or str(live_profile.get("target_industry") or "qa_automation"),
+            variant_used=request.variant or target_industry,
             candidate_name=cand_name,
             applicant_summary=narratives["human_tone_summary"],
             motivation_letter=narratives["motivation_statement"],
             dou_motivational_letter=narratives["dou_motivational_letter"],
-            default_start_date="1 კვირა შეთავაზებიდან (1 week after offer)" if lang == "ka" else "1 week after offer",
+            default_start_date=verified_notice,
         )
 
 

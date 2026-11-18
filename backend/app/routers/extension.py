@@ -179,13 +179,17 @@ def get_extension_profile(current_user: User = Depends(require_extension_user)) 
     skills_md = live.get("skills_markdown") or gt.get("skills_md_raw") or ""
     parsed_md = ground_truth_store.parse_profile_from_md(skills_md) if skills_md else {}
 
+    exp_val = live.get("years_of_experience")
+    if exp_val is None:
+        exp_val = live.get("experience_years")
     return {
         "user_email": current_user.email,
         "full_name": live.get("full_name") or parsed_md.get("full_name") or current_user.full_name or cand.get("full_name", "Candidate"),
         "primary_role": live.get("primary_role") or parsed_md.get("headline") or cand.get("headline", "Specialist"),
         "detected_industry": live.get("detected_industry") or "General Professional",
-        "target_industry": live.get("target_industry") or "qa_tech",
-        "years_of_experience": float(live.get("years_of_experience") or live.get("experience_years") or 1.5),
+        "target_industry": live.get("target_industry") or "general_professional",
+        "years_of_experience": float(exp_val) if exp_val is not None else None,
+        "experience_status": live.get("experience_status") or ("confirmed" if exp_val is not None else "unknown"),
         "verified_skills": list(live.get("verified_skills") or live.get("all_skills") or parsed_md.get("skills") or [])[:25],
         "profile_uploaded": True,
     }
@@ -263,8 +267,9 @@ async def extension_upload_skills(
         "synced_cv_versions": synced_cv_versions,
         "primary_role": ps.get("primary_role") or ps.get("headline") or "Specialist",
         "detected_industry": ps.get("detected_industry") or "General Professional",
-        "target_industry": ps.get("target_industry") or "qa_tech",
-        "years_of_experience": float(profile.experience_years or 1.5),
+        "target_industry": ps.get("target_industry") or "general_professional",
+        "years_of_experience": float(profile.experience_years) if profile.experience_years is not None else None,
+        "experience_status": ps.get("experience_status") or ("confirmed" if profile.experience_years is not None else "unknown"),
         "verified_skills": list(ps.get("verified_skills") or ps.get("all_skills") or [])[:25],
         "profile_uploaded": True,
         "filename": filename,

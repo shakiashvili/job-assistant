@@ -70,12 +70,12 @@ def test_salary_extraction_never_fabricates_unstated_or_unpaid_salaries():
 
 
 def test_ground_truth_vault_never_returns_null_faq_or_compensation():
-    """Verifies ProfileVault tabs (Visas & Work Auth, Work History, FAQ Bank) always receive non-null structures."""
+    """Verifies ProfileVault tabs always receive non-null structures without fabricating unverified FAQ entries."""
     init_db()
     res = client.get("/api/ground-truth")
     assert res.status_code == 200
     gt = res.json()
-    assert isinstance(gt.get("faq_bank"), list) and len(gt["faq_bank"]) >= 1
+    assert isinstance(gt.get("faq_bank"), list)
     assert isinstance(gt.get("work_history"), list)
     assert isinstance(gt.get("skills", {}).get("core"), list)
     assert isinstance(gt.get("candidate", {}).get("compensation", {}).get("expected_salary_eur"), (int, float))
@@ -190,11 +190,24 @@ def test_prepare_gmail_package_with_word_docx_cover_letter_and_my_cvs():
 
 
 def test_jobsge_location_never_parsed_as_company_and_clean_highlights():
-    """Ensures 'საქართველოს მასშტაბით' is never treated as company name and '---' never yields '--' bullet."""
+    """Ensures 'საქართველოს მასშტაბით' is never treated as company name, '---' never yields '--', and ATS filenames reflect the verified candidate profile role."""
+    import uuid
+    from sqlmodel import delete
+    from app.db.models import (
+        User,
+        CandidateProfile,
+        CandidateSkill,
+        CandidateExperience,
+        CandidateEducation,
+        CandidateDocument,
+    )
+    from app.services.auth_service import hash_password
     from app.services.scrapers.jobs_ge_scraper import jobs_ge_scraper
     from app.services.scrapers.base_scraper import sanitize_company_name
     from app.db.profile_repository import ground_truth_store
     from app.services.cv_generator_service import cv_generator_service
+
+    init_db()
 
     # 1. Jobs.ge row without view=client link & last column location
     html_row = """
@@ -219,26 +232,63 @@ def test_jobsge_location_never_parsed_as_company_and_clean_highlights():
 - Validated trading calculations and API responses.
 ---
 ## Skills
-- Playwright, Python, PyTest
+- Playwright, Python, PyTest, REST API
 """
     parsed_profile = ground_truth_store.parse_profile_from_md(md)
     highlights = parsed_profile["work_history"][0]["highlights"]
     assert "--" not in highlights
     assert len(highlights) == 1
 
-    # 3. Clean ASCII filenames, no intern title downgrade, & sanitized cover letter even with location string
-    pkg = cv_generator_service.prepare_email_application_package(
-        job_title="Manual QA სტაჟიორი",
-        company="საქართველოს მასშტაბით",
-        description="QA Bridge ტესტირების სტაჟირება. Manual Testing, Test Cases.",
-        portal="jobs.ge",
-        cv_language="ka",
-        cv_style="ats",
-    )
-    assert "საქართველოს მასშტაბით" not in pkg["cover_letter"]
-    assert pkg["docx_filename"].isascii()
-    assert pkg["pdf_filename"].isascii()
-    assert "QA_Engineer_ATS" in pkg["docx_filename"]
+    # 3. Isolate an explicit QA user profile in DB so test never depends on shared guest state or local candidate_skills.md
+    qa_email = f"ux_qa_{uuid.uuid4().hex[:8]}@example.com"
+    with Session(engine) as session:
+        qa_user = User(
+            email=qa_email,
+            hashed_password=hash_password("QaTestPass123!"),
+            full_name="Giorgi QA",
+            is_active=True,
+        )
+        session.add(qa_user)
+        session.commit()
+        session.refresh(qa_user)
+        qa_uid = qa_user.id
+
+    pkg = None
+    try:
+        ground_truth_store.save_skills_md(md, owner_email=qa_email, user_id=qa_uid)
+
+        # Clean ASCII filenames, no intern title downgrade, & sanitized cover letter even with location string
+        pkg = cv_generator_service.prepare_email_application_package(
+            job_title="Manual QA სტაჟიორი",
+            company="საქართველოს მასშტაბით",
+            description="QA Bridge ტესტირების სტაჟირება. Manual Testing, Test Cases.",
+            portal="jobs.ge",
+            cv_language="ka",
+            cv_style="ats",
+            owner_email=qa_email,
+        )
+        assert "საქართველოს მასშტაბით" not in pkg["cover_letter"]
+        assert pkg["docx_filename"].isascii()
+        assert pkg["pdf_filename"].isascii()
+        assert "QA_Engineer_ATS" in pkg["docx_filename"]
+    finally:
+        if pkg:
+            for p_str in (pkg.get("docx_path"), pkg.get("pdf_path")):
+                if p_str:
+                    p_obj = Path(p_str)
+                    for cand_p in (p_obj, p_obj.with_suffix(".html")):
+                        if cand_p.exists():
+                            cand_p.unlink()
+        with Session(engine) as session:
+            session.exec(delete(CandidateSkill).where(CandidateSkill.user_id == qa_uid))
+            session.exec(delete(CandidateExperience).where(CandidateExperience.user_id == qa_uid))
+            session.exec(delete(CandidateEducation).where(CandidateEducation.user_id == qa_uid))
+            session.exec(delete(CandidateDocument).where(CandidateDocument.user_id == qa_uid))
+            session.exec(delete(CandidateProfile).where(CandidateProfile.user_id == qa_uid))
+            user_row = session.get(User, qa_uid)
+            if user_row:
+                session.delete(user_row)
+            session.commit()
 
 
 def test_action_plan_generation_includes_docs_and_tutorials():

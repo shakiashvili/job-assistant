@@ -195,10 +195,12 @@ export const AuditPanel: React.FC = () => {
         setProfileUploaded(uploaded);
         setCandidateProfile({
           full_name: p.full_name || 'Candidate',
-          experience_years: p.experience_years ?? 1.5,
-          max_allowed_years: p.parsed_skills?.max_allowed_years ?? Math.min((p.experience_years ?? 1.5) + 0.5, 2.0),
+          experience_years: p.experience_years ?? null,
+          max_allowed_years:
+            p.parsed_skills?.max_allowed_years ??
+            (p.experience_years != null ? Math.min(p.experience_years + 0.5, 2.0) : 2.0),
           seniority_level: p.parsed_skills?.seniority_level || 'JUNIOR',
-          target_industry: p.parsed_skills?.target_industry || 'qa_tech',
+          target_industry: p.parsed_skills?.target_industry || 'general_professional',
           detected_industry: p.parsed_skills?.detected_industry || p.parsed_skills?.target_industry || 'Domain-Agnostic',
           primary_role: p.parsed_skills?.primary_role || p.parsed_skills?.headline || 'Specialist',
           adjacent_roles: p.parsed_skills?.adjacent_roles || [],
@@ -652,7 +654,7 @@ export const AuditPanel: React.FC = () => {
             <input
               ref={fileInputRef}
               type="file"
-              accept=".pdf,.docx,.doc,.md,.txt,.markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              accept=".pdf,.docx,.md,.txt,.markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
               onChange={handleFileUpload}
               className="hidden"
             />
@@ -683,7 +685,13 @@ export const AuditPanel: React.FC = () => {
             <span>Industry: {candidateProfile?.detected_industry || candidateProfile?.target_industry || 'Auto-Detect on Upload'}</span>
           </span>
           <span className="text-xs px-2.5 py-1 rounded-lg bg-emerald-950 text-emerald-300 border border-emerald-800 font-semibold flex items-center gap-1">
-            <span>Experience: {candidateProfile?.experience_years ?? 1.5} Years (Cap {(candidateProfile?.max_allowed_years ?? 2.0).toFixed(1)})</span>
+            <span>
+              Experience:{' '}
+              {candidateProfile?.experience_years != null
+                ? `${candidateProfile.experience_years} Years`
+                : 'Not specified'}{' '}
+              (Cap {(candidateProfile?.max_allowed_years ?? 2.0).toFixed(1)})
+            </span>
           </span>
           {candidateProfile?.eligible_internships && (
             <span className="text-xs px-2.5 py-1 rounded-lg bg-cyan-950 text-cyan-300 border border-cyan-800 font-semibold">
@@ -733,27 +741,27 @@ export const AuditPanel: React.FC = () => {
         selectedPortalFilter={selectedPortalFilter}
         onSelectPortalFilter={(p) => {
           setSelectedPortalFilter(p);
-          loadPagedJobs(1, p, dbStatusFilter, tierTab, searchQuery, remoteTypeFilter, onlySavedFilter);
+          loadPagedJobs(1, p, dbStatusFilter, tierTab, searchQuery, remoteTypeFilter, onlySavedFilter, b2bOnlyFilter, geoEligibleOnlyFilter);
         }}
         dbStatusFilter={dbStatusFilter}
         onSelectStatusFilter={(s) => {
           setDbStatusFilter(s);
-          loadPagedJobs(1, selectedPortalFilter, s, tierTab, searchQuery, remoteTypeFilter, onlySavedFilter);
+          loadPagedJobs(1, selectedPortalFilter, s, tierTab, searchQuery, remoteTypeFilter, onlySavedFilter, b2bOnlyFilter, geoEligibleOnlyFilter);
         }}
         tierTab={tierTab}
         onSelectTierTab={(t) => {
           setTierTab(t);
-          loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, t, searchQuery, remoteTypeFilter, onlySavedFilter);
+          loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, t, searchQuery, remoteTypeFilter, onlySavedFilter, b2bOnlyFilter, geoEligibleOnlyFilter);
         }}
         searchQuery={searchQuery}
         onSearchQueryChange={(q) => {
           setSearchQuery(q);
-          loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab, q, remoteTypeFilter, onlySavedFilter);
+          loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab, q, remoteTypeFilter, onlySavedFilter, b2bOnlyFilter, geoEligibleOnlyFilter);
         }}
         remoteTypeFilter={remoteTypeFilter}
         onRemoteTypeFilterChange={(rt) => {
           setRemoteTypeFilter(rt);
-          loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab, searchQuery, rt, onlySavedFilter);
+          loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab, searchQuery, rt, onlySavedFilter, b2bOnlyFilter, geoEligibleOnlyFilter);
         }}
         onlySavedFilter={onlySavedFilter}
         onOnlySavedFilterChange={(savedOnly) => {
@@ -821,7 +829,7 @@ export const AuditPanel: React.FC = () => {
         page={page}
         totalPages={totalPages}
         totalJobs={totalJobs}
-        onPageChange={(nextP) => loadPagedJobs(nextP, selectedPortalFilter, dbStatusFilter, tierTab, searchQuery, remoteTypeFilter, onlySavedFilter)}
+        onPageChange={(nextP) => loadPagedJobs(nextP, selectedPortalFilter, dbStatusFilter, tierTab, searchQuery, remoteTypeFilter, onlySavedFilter, b2bOnlyFilter, geoEligibleOnlyFilter)}
         scrapeStats={scrapeStats}
         scrapeTaskInfo={scrapeTaskInfo}
         preparedEmailPkg={preparedEmailPkg}

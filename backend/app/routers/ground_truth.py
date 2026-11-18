@@ -68,6 +68,16 @@ def _purge_stale_unapplied_jobs(user: Optional[User] = None) -> None:
         logger.debug(f"Purge unapplied jobs skipped: {e}")
 
 
+def _user_cv_dir(user_id: Optional[int]) -> Path:
+    """Returns the dedicated per-user upload directory inside USER_CV_DIR."""
+    folder = f"user_{user_id}" if user_id is not None else "guest"
+    d = (USER_CV_DIR / folder).resolve()
+    if not d.is_relative_to(USER_CV_DIR.resolve()):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user storage directory.")
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def record_candidate_document(
     user_id: Optional[int],
     filename: str,
@@ -75,6 +85,7 @@ def record_candidate_document(
     doc_type: str = "generated_pdf",
     target_company: str = "",
     target_role: str = "",
+    original_filename: Optional[str] = None,
 ) -> Optional[CandidateDocument]:
     if not file_path.exists():
         return None
@@ -83,15 +94,21 @@ def record_candidate_document(
         sha = hashlib.sha256(raw_bytes).hexdigest()
         size_b = len(raw_bytes)
         with Session(engine) as session:
-            existing = session.exec(
-                select(CandidateDocument).where(CandidateDocument.filename == filename)
-            ).first()
+            stmt = select(CandidateDocument).where(
+                CandidateDocument.filename == filename,
+                CandidateDocument.doc_type == doc_type,
+            )
+            if user_id is not None:
+                stmt = stmt.where(CandidateDocument.user_id == user_id)
+            else:
+                stmt = stmt.where(CandidateDocument.user_id.is_(None))
+            existing = session.exec(stmt).first()
             if existing:
-                if user_id is not None:
-                    existing.user_id = user_id
                 existing.storage_path = str(file_path)
                 existing.size_bytes = size_b
                 existing.sha256_hash = sha
+                if original_filename:
+                    existing.original_filename = original_filename
                 existing.version_number = (existing.version_number or 1) + 1
                 session.add(existing)
                 session.commit()
@@ -102,7 +119,7 @@ def record_candidate_document(
                 user_id=user_id,
                 doc_type=doc_type,
                 filename=filename,
-                original_filename=filename,
+                original_filename=original_filename or filename,
                 storage_path=str(file_path),
                 size_bytes=size_b,
                 sha256_hash=sha,
@@ -117,7 +134,7 @@ def record_candidate_document(
         return None
 
 
-_SAFE_DOC_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,180}\.(pdf|docx|html|eml)$", re.IGNORECASE)
+_SAFE_DOC_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,180}\.(pdf|docx|html|eml|md|txt)$", re.IGNORECASE)
 _HTML_PREVIEW_CSP = "default-src 'none'; style-src 'unsafe-inline'; font-src 'self' data:; img-src data:;"
 
 
@@ -131,6 +148,19 @@ def _sanitize_safe_filename(filename: str) -> str:
     return safe_name
 
 
+def _sanitize_uploaded_cv_name(raw_filename: Optional[str]) -> str:
+    raw = (raw_filename or "resume.pdf").strip()
+    if "/" in raw or "\\" in raw or ".." in raw or "\x00" in raw:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid uploaded filename.")
+    base = Path(raw).name
+    ext = Path(base).suffix.lower()
+    if ext not in (".pdf", ".docx", ".md", ".txt"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported format. Upload .pdf, .docx, .md, or .txt.")
+    stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", Path(base).stem).strip("._-") or "resume"
+    candidate_name = f"{stem[:150]}{ext}"
+    return _sanitize_safe_filename(candidate_name)
+
+
 def _verify_document_ownership(filename: str, current_user: User) -> None:
     safe_name = _sanitize_safe_filename(filename)
     stem = Path(safe_name).stem
@@ -142,6 +172,8 @@ def _verify_document_ownership(filename: str, current_user: User) -> None:
                 | (CandidateDocument.filename == f"{stem}.docx")
             )
         ).all()
+        if any(doc.user_id == current_user.id for doc in docs):
+            return
         for doc in docs:
             if doc.user_id is not None and doc.user_id != current_user.id:
                 raise HTTPException(
@@ -150,12 +182,18 @@ def _verify_document_ownership(filename: str, current_user: User) -> None:
                 )
 
 
-def _is_file_visible_to_user(filename: str, current_user: User, owner_map: Dict[str, Optional[int]]) -> bool:
+def _is_file_visible_to_user(filename: str, current_user: User, owner_map: Dict[str, Any]) -> bool:
     safe_name = Path(filename).name
     stem = Path(safe_name).stem
-    doc_uid = owner_map.get(safe_name) or owner_map.get(f"{stem}.pdf")
-    if doc_uid is not None:
-        return doc_uid == current_user.id
+    owners: set = set()
+    for key in (safe_name, f"{stem}.pdf", f"{stem}.docx"):
+        val = owner_map.get(key)
+        if isinstance(val, (set, list, tuple)):
+            owners.update(v for v in val if v is not None)
+        elif val is not None:
+            owners.add(val)
+    if owners:
+        return current_user.id in owners
     return _is_guest(current_user)
 
 
@@ -413,19 +451,45 @@ def get_cv_variants(current_user: User = Depends(get_current_user)):
 
 @router.get("/resumes/my-cvs")
 def list_my_uploaded_cvs(current_user: User = Depends(get_current_user)):
-    """Lists user-uploaded personal CV files (.pdf, .docx, .md) scoped to the current user."""
+    """Lists user-uploaded personal CV files (.pdf, .docx, .md, .txt) strictly scoped to the current user."""
     files = []
-    USER_CV_DIR.mkdir(parents=True, exist_ok=True)
-    with Session(engine) as session:
-        docs = session.exec(select(CandidateDocument)).all()
-        owner_map = {d.filename: d.user_id for d in docs}
+    seen_names: set[str] = set()
+    user_dir = _user_cv_dir(current_user.id)
+    base_resolved = USER_CV_DIR.resolve()
 
-    for f in sorted(USER_CV_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
-        if f.is_file() and f.suffix.lower() in (".pdf", ".docx", ".doc", ".md", ".txt"):
-            if not _is_file_visible_to_user(f.name, current_user, owner_map):
-                continue
+    with Session(engine) as session:
+        user_docs = session.exec(
+            select(CandidateDocument)
+            .where(
+                CandidateDocument.user_id == current_user.id,
+                CandidateDocument.doc_type == "uploaded_cv",
+            )
+            .order_by(CandidateDocument.created_at.desc())
+        ).all()
+
+    for doc in user_docs:
+        p = Path(doc.storage_path).resolve() if doc.storage_path else (user_dir / doc.filename).resolve()
+        if not p.is_relative_to(base_resolved) or not p.is_file():
+            continue
+        if p.suffix.lower() not in (".pdf", ".docx", ".md", ".txt"):
+            continue
+        if doc.filename in seen_names:
+            continue
+        seen_names.add(doc.filename)
+        files.append({
+            "filename": doc.filename,
+            "original_filename": doc.original_filename or doc.filename,
+            "url": f"/api/resumes/user/{doc.filename}",
+            "ext": p.suffix.lower().lstrip("."),
+            "size_kb": round(p.stat().st_size / 1024, 1),
+        })
+
+    for f in sorted(user_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        if f.is_file() and f.suffix.lower() in (".pdf", ".docx", ".md", ".txt") and f.name not in seen_names:
+            seen_names.add(f.name)
             files.append({
                 "filename": f.name,
+                "original_filename": f.name,
                 "url": f"/api/resumes/user/{f.name}",
                 "ext": f.suffix.lower().lstrip("."),
                 "size_kb": round(f.stat().st_size / 1024, 1),
@@ -439,13 +503,11 @@ async def upload_personal_cv(
     parse_into_profile: bool = Form(True),
     current_user: User = Depends(get_current_user),
 ):
-    """Uploads a personal resume (.pdf, .docx, .md, .txt), stores it safely, and optionally parses it into the vault."""
+    """Uploads a personal resume (.pdf, .docx, .md, .txt) into isolated per-user storage and optionally parses it."""
     from ..services.cv_parser_service import cv_parser_service
 
-    safe_name = Path(file.filename or "resume.pdf").name
+    safe_name = _sanitize_uploaded_cv_name(file.filename)
     ext = Path(safe_name).suffix.lower()
-    if ext not in (".pdf", ".docx", ".doc", ".md", ".txt"):
-        raise HTTPException(status_code=400, detail="Unsupported format. Upload .pdf, .docx, .md, or .txt.")
 
     content = await file.read()
     if len(content) == 0:
@@ -481,15 +543,16 @@ async def upload_personal_cv(
                 "synced_cv_versions": synced_cv_versions,
             }
         except ValueError as parse_err:
-            # File passed header validation; preserve upload in My CVs vault and surface non-fatal warning
             parsed_summary = {
                 "completeness_score": None,
                 "missing_fields": [],
                 "parse_warning": str(parse_err),
             }
 
-    USER_CV_DIR.mkdir(parents=True, exist_ok=True)
-    dest = USER_CV_DIR / safe_name
+    user_dir = _user_cv_dir(current_user.id)
+    dest = (user_dir / safe_name).resolve()
+    if not dest.is_relative_to(user_dir.resolve()):
+        raise HTTPException(status_code=400, detail="Invalid upload path.")
     dest.write_bytes(content)
 
     record_candidate_document(
@@ -497,6 +560,7 @@ async def upload_personal_cv(
         filename=safe_name,
         file_path=dest,
         doc_type="uploaded_cv",
+        original_filename=Path(file.filename or safe_name).name,
     )
 
     return {
@@ -509,24 +573,73 @@ async def upload_personal_cv(
     }
 
 
+def _resolve_user_uploaded_cv(filename: str, current_user: User) -> tuple[Path, Optional[int]]:
+    """Resolves an uploaded personal CV strictly for current_user (raising 403 if owned solely by another user)."""
+    safe_name = _sanitize_safe_filename(filename)
+    base_resolved = USER_CV_DIR.resolve()
+    user_dir = _user_cv_dir(current_user.id)
+
+    with Session(engine) as session:
+        user_doc = session.exec(
+            select(CandidateDocument).where(
+                CandidateDocument.filename == safe_name,
+                CandidateDocument.doc_type == "uploaded_cv",
+                CandidateDocument.user_id == current_user.id,
+            )
+        ).first()
+        if user_doc:
+            candidate_path = Path(user_doc.storage_path).resolve() if user_doc.storage_path else (user_dir / safe_name).resolve()
+            if candidate_path.is_relative_to(base_resolved) and candidate_path.is_file():
+                return candidate_path, user_doc.id
+
+        local_candidate = (user_dir / safe_name).resolve()
+        if local_candidate.is_relative_to(user_dir.resolve()) and local_candidate.is_file():
+            return local_candidate, None
+
+        other_doc = session.exec(
+            select(CandidateDocument).where(
+                CandidateDocument.filename == safe_name,
+                CandidateDocument.doc_type == "uploaded_cv",
+                CandidateDocument.user_id != current_user.id,
+            )
+        ).first()
+        if other_doc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Forbidden: document belongs to another user.",
+            )
+
+        if _is_guest(current_user):
+            legacy = (USER_CV_DIR / safe_name).resolve()
+            if legacy.is_relative_to(base_resolved) and legacy.is_file():
+                return legacy, None
+
+    raise HTTPException(status_code=404, detail="Uploaded CV not found")
+
+
 @router.delete("/resumes/my-cvs/{filename}")
 def delete_personal_cv(
     filename: str,
     current_user: User = Depends(get_current_user),
 ):
-    """Deletes an uploaded personal resume after verifying ownership."""
-    safe_name = Path(filename).name
-    _verify_document_ownership(safe_name, current_user)
-    target = USER_CV_DIR / safe_name
-    if target.exists() and target.is_file():
-        target.unlink()
-        with Session(engine) as session:
-            session.exec(
-                delete(CandidateDocument).where(CandidateDocument.filename == safe_name)
+    """Deletes an uploaded personal resume strictly scoped to current_user."""
+    target, doc_id = _resolve_user_uploaded_cv(filename, current_user)
+    safe_name = _sanitize_safe_filename(filename)
+    target.unlink()
+    with Session(engine) as session:
+        stmt = delete(CandidateDocument).where(
+            CandidateDocument.user_id == current_user.id,
+            CandidateDocument.doc_type == "uploaded_cv",
+            CandidateDocument.filename == safe_name,
+        )
+        if doc_id is not None:
+            stmt = delete(CandidateDocument).where(
+                CandidateDocument.id == doc_id,
+                CandidateDocument.user_id == current_user.id,
             )
-            session.commit()
-        return {"status": "deleted", "filename": safe_name}
-    raise HTTPException(status_code=404, detail="File not found")
+        session.exec(stmt)
+        session.commit()
+    return {"status": "deleted", "filename": safe_name}
 
 
 @router.get("/resumes/user/{filename}")
@@ -534,12 +647,9 @@ def get_user_cv_file(
     filename: str,
     current_user: User = Depends(get_current_user),
 ):
-    """Downloads or previews a user-uploaded personal CV after verifying ownership."""
-    safe_name = Path(filename).name
-    _verify_document_ownership(safe_name, current_user)
-    target = USER_CV_DIR / safe_name
-    if not target.exists():
-        raise HTTPException(status_code=404, detail="Uploaded CV not found")
+    """Downloads or previews a user-uploaded personal CV strictly scoped to current_user."""
+    target, _ = _resolve_user_uploaded_cv(filename, current_user)
+    safe_name = _sanitize_safe_filename(filename)
     lower = safe_name.lower()
     if lower.endswith(".docx"):
         media = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -815,7 +925,9 @@ def list_generated_resumes(current_user: User = Depends(get_current_user)):
     files = []
     with Session(engine) as session:
         docs = session.exec(select(CandidateDocument)).all()
-        owner_map = {d.filename: d.user_id for d in docs}
+        owner_map: Dict[str, set] = {}
+        for d in docs:
+            owner_map.setdefault(d.filename, set()).add(d.user_id)
 
     if GENERATED_RESUMES_DIR.exists():
         for f in sorted(GENERATED_RESUMES_DIR.glob("*.pdf"), key=lambda p: p.stat().st_mtime, reverse=True):

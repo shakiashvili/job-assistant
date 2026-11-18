@@ -89,10 +89,11 @@ class ScraperOrchestrator:
         parsed_skills = profile.parsed_skills if profile else {}
         headline = parsed_skills.get("headline", "") if isinstance(parsed_skills, dict) else ""
         cand_langs = (
-            parsed_skills.get("spoken_languages", ["English", "Georgian"])
+            parsed_skills.get("spoken_languages") or []
             if isinstance(parsed_skills, dict)
-            else ["English", "Georgian"]
+            else []
         )
+        max_allowed_years = float(parsed_skills.get("max_allowed_years") or 2.0) if isinstance(parsed_skills, dict) else 2.0
         search_cfg = profile_service.get_search_queries_for_profile(parsed_skills, headline=headline)
 
         combined_kw = list(dict.fromkeys(
@@ -143,6 +144,7 @@ class ScraperOrchestrator:
                     search_urls=li_urls,
                     domain_keywords=combined_kw,
                     candidate_languages=cand_langs,
+                    max_allowed_years=max_allowed_years,
                 ))
             elif p in ("greenhouse.io", "greenhouse"):
                 tasks.append(greenhouse_scraper.scrape(
@@ -350,14 +352,7 @@ class ScraperOrchestrator:
 
         profile = ground_truth_store.get_profile_record(owner_email=owner_email, user_id=user_id)
         with Session(engine, expire_on_commit=False) as session:
-            if not profile or (not profile.full_name and not profile.raw_markdown):
-                profile = session.exec(
-                    select(CandidateProfile)
-                    .where(CandidateProfile.full_name != "")
-                    .order_by(CandidateProfile.updated_at.desc())
-                ).first()
-
-            resolved_uid = user_id or (profile.user_id if profile else None)
+            resolved_uid = user_id or (profile.user_id if profile and profile.user_id is not None else None)
             parsed_skills = (
                 profile.parsed_skills
                 if profile and profile.parsed_skills and profile.parsed_skills.get("all_skills")
@@ -555,46 +550,8 @@ class ScraperOrchestrator:
             # Single flush assigns primary key IDs to all newly created JobPostings at once
             session.flush()
 
-            # Pre-fetch existing ApplicationRecords for staged jobs in ONE query
-            staged_job_ids = [
-                jr.id for jr, _ in active_records_to_serialize
-                if jr.status == "STAGED" and jr.id is not None
-            ]
-            existing_app_job_ids: Set[int] = set()
-            if staged_job_ids:
-                app_rows = session.exec(
-                    select(ApplicationRecord).where(
-                        (ApplicationRecord.job_id.in_(staged_job_ids))
-                        | (ApplicationRecord.job_posting_id.in_(staged_job_ids))
-                    )
-                ).all()
-                for ar in app_rows:
-                    if ar.job_id is not None:
-                        existing_app_job_ids.add(ar.job_id)
-                    if ar.job_posting_id is not None:
-                        existing_app_job_ids.add(ar.job_posting_id)
-
-            for jr, meta in active_records_to_serialize:
-                if jr.status == "STAGED" and jr.id is not None and jr.id not in existing_app_job_ids:
-                    cv_path = f"/api/resumes/generated/CV_{jr.company[:15]}_{jr.title[:15]}_EN.pdf".replace(" ", "_")
-                    cover_txt = f"Auto-staged application for {jr.title} at {jr.company} ({meta['score']}% match)."
-                    session.add(
-                        ApplicationRecord(
-                            user_id=resolved_uid,
-                            job_id=jr.id,
-                            job_posting_id=jr.id,
-                            cv_pdf_path=cv_path,
-                            custom_cv_path=cv_path,
-                            cover_letter=cover_txt,
-                            cover_letter_text=cover_txt,
-                            screening_answers={"notice_period": "1 week after offer"},
-                            submission_status="STAGED",
-                            applied_at=now_utc,
-                            updated_at=now_utc,
-                        )
-                    )
-                    existing_app_job_ids.add(jr.id)
-
+            # ApplicationRecord rows must ONLY be created when a user explicitly saves,
+            # dispatches, or applies to a role — never auto-fabricated during scraping.
             # Batch-upsert UserJobMatch for the current user and check SavedSearch notifications
             if resolved_uid is not None and active_records_to_serialize:
                 existing_matches = {

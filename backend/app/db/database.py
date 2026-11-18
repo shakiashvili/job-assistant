@@ -72,26 +72,37 @@ _MIGRATION_RUN_DONE = False
 
 def init_db(force: bool = False) -> None:
     """
-    Initializes and migrates relational database schema using Alembic as the primary source of truth,
-    followed by SQLModel.metadata.create_all(engine) to guarantee all tables exist in test/dev environments.
-    Logs any migration errors visibly.
+    Initializes and migrates relational database schema using Alembic as the single source of truth
+    for file-backed and server databases. Migration failures propagate loudly rather than being masked
+    by create_all(). In-memory SQLite engines still use metadata.create_all() because Alembic opens its
+    own connection pool.
     """
     global _MIGRATION_RUN_DONE
     if _MIGRATION_RUN_DONE and not force:
         return
-    try:
-        from pathlib import Path
-        from alembic import command
-        from alembic.config import Config
 
-        base_dir = Path(__file__).resolve().parents[2]
-        alembic_ini = base_dir / "alembic.ini"
-        if alembic_ini.exists():
+    from pathlib import Path
+
+    base_dir = Path(__file__).resolve().parents[2]
+    alembic_ini = base_dir / "alembic.ini"
+    is_in_memory = is_sqlite and (
+        engine.url.database in (None, "", ":memory:")
+        or ":memory:" in str(engine.url)
+    )
+
+    if alembic_ini.exists() and not is_in_memory:
+        try:
+            from alembic import command
+            from alembic.config import Config
+
             cfg = Config(str(alembic_ini))
             cfg.set_main_option("sqlalchemy.url", str(engine.url).replace("%", "%%"))
             command.upgrade(cfg, "head")
-    except Exception as e:
-        logger.error(f"Alembic migration error (falling back to metadata sync): {e}")
+            _MIGRATION_RUN_DONE = True
+            return
+        except Exception as e:
+            logger.critical(f"Alembic migration failed — refusing to mask schema error: {e}")
+            raise RuntimeError(f"Database migration failed: {e}") from e
 
     try:
         SQLModel.metadata.create_all(engine)

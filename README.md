@@ -44,17 +44,19 @@ Designed specifically for job seekers in **Georgia (Tbilisi, `UTC+4`)** and glob
 ```text
 job-application-assistant/
 ├── backend/                  # FastAPI API, SQLModel models, scrapers, AI & PDF services
+│   ├── alembic/              # Database schema migrations
 │   ├── app/
-│   │   ├── routers/          # auth, profile, audit, b2b, jobs, tracker, stage, interviews, admin
-│   │   ├── services/         # CV/PDF generator, Gemini wrapper, Gmail/SMTP, Playwright stager
-│   │   │   └── scrapers/     # jobs.ge, hr.ge, hr.gov.ge, headhunter.ge, remotive, himalayas, remoteok, etc.
-│   │   └── models/           # SQLModel relational schema & migrations
+│   │   ├── db/               # SQLModel ORM tables, encrypted PII columns & repositories
+│   │   ├── routers/          # auth, ground_truth, audit, b2b, jobs, tracker, stage, extension, admin
+│   │   ├── schemas/          # Pydantic request/response contracts
+│   │   └── services/         # CV/PDF/DOCX generator, Gemini 3.x gateway, Gmail/SMTP, Playwright stager
+│   │       └── scrapers/     # jobs.ge, hr.ge, hr.gov.ge, headhunter.ge, remotive, himalayas, remoteok, etc.
 │   └── tests/                # Pytest backend functional, unit & Playwright form integration tests
 ├── frontend/                 # React 18 + TypeScript + Vite + Tailwind CSS
 │   └── src/components/       # DashboardHome, AuditPanel, DiscoveryFeed, B2BMarketHub, Tracker, CVStudio
 ├── extension/                # Chrome Extension Manifest V3 (popup, background SW, content scripts)
 ├── tests/non_functional/     # Playwright + axe-core WCAG 2.1 AA, performance & security probes
-└── docs/                     # Architecture, deployment, API & extension guides
+└── docs/                     # Architecture, deployment, extension & quality audit guides
 ```
 
 ---

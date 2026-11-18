@@ -7,7 +7,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import GEMINI_MODEL, DATABASE_URL, FRONTEND_URL, ENABLE_PLAYWRIGHT, IS_PRODUCTION
+from .config import GEMINI_MODEL, GEMINI_FAST_MODEL, DATABASE_URL, FRONTEND_URL, ENABLE_PLAYWRIGHT, IS_PRODUCTION
 from .db.database import init_db
 from .services.gemini_service import gemini_service
 from .routers.audit import router as audit_router
@@ -153,7 +153,8 @@ def healthcheck():
         "playwright_enabled": ENABLE_PLAYWRIGHT,
         "gemini": {
             "model": GEMINI_MODEL,
+            "fast_model": GEMINI_FAST_MODEL,
             "connected": gemini_service.is_available,
-            "mode": "live_gemini_2.5_flash" if gemini_service.is_available else "ground_truth_heuristic_engine"
+            "mode": f"live_{GEMINI_MODEL}" if gemini_service.is_available else "ground_truth_heuristic_engine"
         }
     }

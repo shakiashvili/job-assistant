@@ -293,15 +293,20 @@ class AuditService:
         skills_score = int(round((req_matched_count / max(len(req_skills), 1)) * 100)) if req_skills else 80
         skills_score = min(100, max(0, skills_score))
 
-        # 2. Experience Match (read real experience from uploaded CandidateProfile)
+        # 2. Experience Match (read real experience from uploaded CandidateProfile; never fabricate 1.5 yrs)
         prof_record = ground_truth_store.get_profile_record(owner_email=owner_email, user_id=user_id)
-        candidate_exp_years = float(getattr(prof_record, "experience_years", 1.5) or 1.5)
-        required_exp = details.experience_years_required or 1
-        if candidate_exp_years >= required_exp:
-            exp_score = 100
+        raw_exp_years = getattr(prof_record, "experience_years", None)
+        required_exp = details.experience_years_required or 0
+        if raw_exp_years is None:
+            exp_score = 100 if required_exp <= 0 else 55
         else:
-            diff = required_exp - candidate_exp_years
-            exp_score = max(35, int(round(100 - (diff * 20))))
+            candidate_exp_years = float(raw_exp_years)
+            req_eff = required_exp or 1
+            if candidate_exp_years >= req_eff:
+                exp_score = 100
+            else:
+                diff = req_eff - candidate_exp_years
+                exp_score = max(35, int(round(100 - (diff * 20))))
 
         # 3. Transparent ATS & Recruiter Match Scores (no arbitrary +24 / +20 inflation constants)
         nice_bonus = int(round((matched_nice_count / max(len(nice_skills), 1)) * 15)) if nice_skills else 10

@@ -124,14 +124,25 @@ class PlanService:
     ) -> List[SkillActionPlan]:
         gt = profile_repository.get_data(owner_email=user.email, user_id=user.id)
         existing_skills: set[str] = {str(s) for s in (gt.get("skills", {}).get("core") or [])}
-        candidate_prof = session.exec(
-            select(CandidateProfile)
-            .where(CandidateProfile.user_id == user.id)
-            .order_by(CandidateProfile.updated_at.desc())
-        ).first()
-        primary_role = "Specialist"
+        is_guest = (user.email or "").strip().lower() == "guest@talentflow.local"
+        candidate_prof = (
+            profile_repository.get_profile_record(owner_email=user.email, user_id=user.id)
+            if is_guest
+            else session.exec(
+                select(CandidateProfile)
+                .where(CandidateProfile.user_id == user.id)
+                .order_by(CandidateProfile.updated_at.desc())
+            ).first()
+        )
+        gt_tax = gt.get("parsed_skills_taxonomy") if isinstance(gt.get("parsed_skills_taxonomy"), dict) else {}
+        cand_gt = gt.get("candidate") if isinstance(gt.get("candidate"), dict) else {}
+        primary_role = str(gt_tax.get("primary_role") or gt_tax.get("headline") or cand_gt.get("headline") or "Specialist")
         if candidate_prof and isinstance(candidate_prof.parsed_skills, dict):
-            primary_role = str(candidate_prof.parsed_skills.get("primary_role") or candidate_prof.parsed_skills.get("headline") or "Specialist")
+            primary_role = str(
+                candidate_prof.parsed_skills.get("primary_role")
+                or candidate_prof.parsed_skills.get("headline")
+                or primary_role
+            )
             for key in ("verified_skills", "all_skills", "qa_automation", "manual_qa", "languages", "api_and_performance", "cicd_and_devops", "core_skills"):
                 for s in candidate_prof.parsed_skills.get(key) or []:
                     existing_skills.add(str(s))
@@ -172,8 +183,10 @@ class PlanService:
                 top_gaps = ["SAP SCM", "SQL Analytics", "Power BI"]
             elif "finance" in role_low or "account" in role_low:
                 top_gaps = ["IFRS Reporting", "Python Financial Modeling", "Power BI"]
-            else:
+            elif is_qa_profile:
                 top_gaps = ["AI-Assisted QA & LLM Test Engineering", "Docker", "k6 Performance Testing"]
+            else:
+                top_gaps = ["SQL & Data Literacy", "Workflow Automation", "Cross-Functional Documentation"]
 
         plans_data: List[Dict[str, Any]] = []
         if gemini_service.is_available:

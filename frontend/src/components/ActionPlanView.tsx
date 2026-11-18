@@ -71,8 +71,9 @@ export const ActionPlanView: React.FC = () => {
     try {
       const updated = await toggleMilestone(planId, index);
       setPlans((prev) => prev.map((p) => (p.id === planId ? updated : p)));
+      setError(null);
     } catch (err: any) {
-      alert(err.message || 'Failed to update milestone status');
+      setError(err.message || 'Failed to update milestone status');
       loadPlans();
     }
   };
@@ -82,8 +83,9 @@ export const ActionPlanView: React.FC = () => {
     try {
       await deleteActionPlan(planId);
       setPlans((prev) => prev.filter((p) => p.id !== planId));
+      setError(null);
     } catch (err: any) {
-      alert(err.message || 'Failed to remove plan');
+      setError(err.message || 'Failed to remove plan');
     }
   };
 
@@ -205,30 +207,36 @@ export const ActionPlanView: React.FC = () => {
                 {plan.milestones.map((m, idx) => (
                   <div
                     key={idx}
-                    onClick={() => handleToggleMilestone(plan.id, idx)}
-                    className={`p-2.5 rounded-xl border cursor-pointer transition-all flex items-start gap-2.5 text-xs ${
+                    className={`p-2.5 rounded-xl border transition-all flex items-start gap-2.5 text-xs ${
                       m.completed
                         ? 'bg-emerald-950/20 border-emerald-900/40 text-slate-300'
                         : 'bg-slate-950/80 border-slate-800 hover:border-slate-700 text-slate-300'
                     }`}
                   >
-                    <div className="pt-0.5 flex-shrink-0">
-                      {m.completed ? (
-                        <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                      ) : (
-                        <Circle className="w-4 h-4 text-slate-600 hover:text-slate-400" />
-                      )}
-                    </div>
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="font-bold text-[10px] text-indigo-400 uppercase">
-                          Day {m.day}:
+                      <button
+                        type="button"
+                        onClick={() => handleToggleMilestone(plan.id, idx)}
+                        aria-pressed={Boolean(m.completed)}
+                        className="w-full text-left flex items-start gap-2.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 rounded-md"
+                      >
+                        <span className="pt-0.5 flex-shrink-0">
+                          {m.completed ? (
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400" aria-hidden="true" />
+                          ) : (
+                            <Circle className="w-4 h-4 text-slate-500 hover:text-slate-300" aria-hidden="true" />
+                          )}
                         </span>
-                        <span className={m.completed ? 'line-through text-slate-400' : 'text-slate-200'}>
-                          {m.task}
+                        <span className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-bold text-[10px] text-indigo-400 uppercase">
+                            Day {m.day}:
+                          </span>
+                          <span className={m.completed ? 'line-through text-slate-400' : 'text-slate-200'}>
+                            {m.task}
+                          </span>
                         </span>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                      </button>
+                      <div className="flex flex-wrap items-center gap-2 mt-1.5 pl-6">
                         {m.resource_url && (
                           <a
                             href={m.resource_url}

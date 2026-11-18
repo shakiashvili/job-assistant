@@ -176,13 +176,14 @@ def build_search_queries(
     dynamically for ANY uploaded candidate profile (Tech, Logistics, Finance, Marketing, Public, etc.).
     """
     skills = parsed_skills or {}
-    target_industry = str(skills.get("target_industry") or "qa_tech").lower()
+    target_industry = str(skills.get("target_industry") or "general_professional").lower()
     detected_ind = str(skills.get("detected_industry") or target_industry)
     primary_role = str(skills.get("primary_role") or headline or skills.get("headline") or "Specialist").strip()
     adj_roles = [str(r) for r in (skills.get("adjacent_roles") or []) if r]
     verified = [str(s) for s in (skills.get("verified_skills") or skills.get("all_skills") or []) if s]
-    exp_years = float(skills.get("years_of_experience") or 1.5)
-    cap_exp = min(exp_years + 0.5, 2.0)
+    raw_exp = skills.get("years_of_experience")
+    exp_years = float(raw_exp) if raw_exp is not None else 0.0
+    cap_exp = min(exp_years + 0.5, 2.0) if exp_years <= 2.0 else round(exp_years + 0.5, 1)
 
     tmpl = _DOMAIN_QUERY_TEMPLATES.get(target_industry)
     if tmpl:

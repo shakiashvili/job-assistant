@@ -1,12 +1,15 @@
 import io
 import logging
 import re
+import zipfile
 from pathlib import Path
 from typing import Dict, Any, List, Tuple
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_CV_EXTENSIONS = (".pdf", ".docx", ".doc", ".md", ".txt")
+SUPPORTED_CV_EXTENSIONS = (".pdf", ".docx", ".md", ".txt")
+MAX_DOCX_UNCOMPRESSED_BYTES = 25 * 1024 * 1024  # 25 MB zip-bomb safety ceiling
+MAX_DOCX_ZIP_ENTRIES = 2000
 
 
 class CVParserService:
@@ -57,10 +60,22 @@ class CVParserService:
             except Exception as e:
                 raise ValueError(f"Failed to parse PDF file: {e}")
 
-        if ext in (".docx", ".doc"):
-            if ext == ".docx" and not content.startswith(b"PK"):
+        if ext == ".doc":
+            raise ValueError(
+                "Legacy binary .doc files are not supported. Please convert your resume to .docx, .pdf, or .md."
+            )
+
+        if ext == ".docx":
+            if not content.startswith(b"PK"):
                 raise ValueError("Invalid DOCX header: file is not a valid Word .docx archive.")
             try:
+                with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                    infos = zf.infolist()
+                    if len(infos) > MAX_DOCX_ZIP_ENTRIES:
+                        raise ValueError("Word .docx archive contains too many entries.")
+                    total_uncompressed = sum(info.file_size for info in infos)
+                    if total_uncompressed > MAX_DOCX_UNCOMPRESSED_BYTES:
+                        raise ValueError("Word .docx archive exceeds safe uncompressed size limit (25 MB).")
                 from docx import Document
 
                 doc = Document(io.BytesIO(content))
