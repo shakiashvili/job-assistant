@@ -188,6 +188,34 @@ def clean_bullets(highlights: Optional[List[Any]]) -> List[str]:
     return result
 
 
+def _resolve_ats_role_tag(parsed_skills: Dict[str, Any], candidate_headline: str) -> str:
+    """
+    Computes the canonical ASCII filename role tag for ATS and Recruiter editions from the
+    candidate's verified profile role (rather than a target vacancy's title, preventing internship
+    postings from downgrading the candidate's file identity).
+    """
+    if str((parsed_skills or {}).get("target_industry") or "").lower() == "qa_tech":
+        return "QA_Engineer"
+    return ascii_filename_slug(
+        str(candidate_headline or "").split("|")[0],
+        default="Specialist",
+        max_len=24,
+    )
+
+
+def _extract_override_profile_taxonomy(skills_md: str) -> tuple[Dict[str, Any], List[str], str]:
+    """Extracts verified industry, primary_role, and skills from an explicit skills_md override."""
+    from .profile_service import profile_service
+
+    extracted = profile_service.extract_structured_profile(skills_md)
+    ps = extracted.parsed_skills.model_dump()
+    ps["target_industry"] = extracted.target_industry
+    ps["detected_industry"] = extracted.detected_industry
+    ps["primary_role"] = extracted.primary_role
+    ps["verified_skills"] = extracted.verified_skills
+    return ps, list(extracted.verified_skills or ps.get("all_skills") or []), extracted.full_name
+
+
 def resolve_candidate_headline(candidate: Dict[str, Any], skills: List[str], parsed_skills: Dict[str, Any]) -> str:
     """Returns candidate's true professional seniority/headline across ANY domain without QA bias."""
     ps = parsed_skills or {}
@@ -523,6 +551,16 @@ class CVGeneratorService:
         owner_email: Optional[str] = None,
         vault_override: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        """
+        Generates tailored PDF, Word (.docx), and HTML CVs from verified candidate ground truth.
+
+        Filename contract:
+        - `cv_style` in `("ats", "recruiter")`: canonical edition named after the candidate's
+          verified profile role (`<Candidate>_<VerifiedRoleTag>_(ATS|RECRUITER)[_KA].ext`),
+          avoiding target-job title downgrades (e.g. internship postings).
+        - `cv_style == "tailored"`: vacancy-specific edition named after the target company and
+          target role (`<Candidate>_<Company>_<TargetRole>_CV[_KA].ext`).
+        """
         gt = vault_override if vault_override else ground_truth_store.get_data(owner_email=owner_email)
         ps = dict(gt.get("_parsed_skills") or gt.get("parsed_skills_taxonomy") or {})
         raw_vault_md = str(gt.get("skills_md_raw") or "")
@@ -534,10 +572,15 @@ class CVGeneratorService:
         skills_md = skills_md_override or raw_vault_md or ground_truth_store.get_skills_md(owner_email=owner_email)
         parsed_md = ground_truth_store.parse_profile_from_md(skills_md) if skills_md else {}
 
+        override_skills: List[str] = []
+        if has_explicit_md_override and skills_md:
+            override_ps, override_skills, _ = _extract_override_profile_taxonomy(skills_md)
+            ps = override_ps
+
         candidate = dict(gt.get("candidate", {}))
         for fld in ("full_name", "headline", "email", "phone"):
-            if has_explicit_md_override and parsed_md.get(fld):
-                candidate[fld] = parsed_md[fld]
+            if has_explicit_md_override:
+                candidate[fld] = parsed_md.get(fld) or ""
             elif not candidate.get(fld) and parsed_md.get(fld):
                 candidate[fld] = parsed_md[fld]
         if parsed_md.get("location") and (has_explicit_md_override or not _format_candidate_location(candidate.get("location"))):
@@ -558,7 +601,7 @@ class CVGeneratorService:
         candidate["links"] = cand_links
 
         if has_explicit_md_override:
-            core_skills = parsed_md.get("skills") or (gt.get("skills", {}) or {}).get("core", []) or []
+            core_skills = parsed_md.get("skills") or override_skills or (gt.get("skills", {}) or {}).get("core", []) or []
             raw_work_history = parsed_md.get("work_history") or gt.get("work_history", [])
             education = parsed_md.get("education") or gt.get("education", [])
             projects = parsed_md.get("projects") or gt.get("projects", [])
@@ -624,7 +667,7 @@ class CVGeneratorService:
         cand_slug = ascii_filename_slug(clean_full_for_slug or str(candidate.get("full_name", "Candidate")), default="Candidate", max_len=24)
 
         lang_suffix = "_KA" if cv_language == "ka" else ""
-        role_tag = "QA_Engineer" if (ps.get("target_industry") == "qa_tech") else ascii_filename_slug(candidate_headline.split("|")[0], default="Specialist", max_len=18)
+        role_tag = _resolve_ats_role_tag(ps, candidate_headline)
         job_role_slug = ascii_filename_slug(job_title, default="Role", max_len=20)
         languages_line = (
             _format_candidate_languages({}, skills_md, cv_language == "ka")
@@ -1606,8 +1649,22 @@ class CVGeneratorService:
 
         gt = ground_truth_store.get_data(owner_email=owner_email)
         candidate = dict(gt.get("candidate", {}))
-        ps = gt.get("parsed_skills_taxonomy") or {}
-        skills_md = skills_md_override or gt.get("skills_md_raw") or ""
+        ps = dict(gt.get("_parsed_skills") or gt.get("parsed_skills_taxonomy") or {})
+        raw_vault_md = str(gt.get("skills_md_raw") or "")
+        skills_md = skills_md_override or raw_vault_md
+        has_explicit_override = bool(
+            skills_md_override
+            and str(skills_md_override).strip()
+            and str(skills_md_override).strip() != raw_vault_md.strip()
+        )
+        if has_explicit_override and skills_md:
+            override_ps, override_skills, override_name = _extract_override_profile_taxonomy(skills_md)
+            ps = override_ps
+            if override_name:
+                candidate["full_name"] = override_name
+            cand_skills = override_skills
+        else:
+            cand_skills = [str(s) for s in (gt.get("skills", {}).get("core") or [])]
         cand_name = str(candidate.get("full_name") or "Candidate").strip()
         raw_phone = str(candidate.get("phone") or "").strip(" -\t\r\n")
         # Never inject placeholder '+000 000 0000' or '-' into outgoing emails
@@ -1634,7 +1691,6 @@ class CVGeneratorService:
             cover_lang = cv_language if cv_language in ("en", "ka") else cover_lang
 
         req_skills = matcher_service.extract_job_requirements(job_title, description)
-        cand_skills = [str(s) for s in (gt.get("skills", {}).get("core") or [])]
         matched = [
             r for r in req_skills if any(r.lower() in c.lower() or c.lower() in r.lower() for c in cand_skills)
         ] or cand_skills[:6]

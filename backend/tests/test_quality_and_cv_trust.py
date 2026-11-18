@@ -468,3 +468,47 @@ def test_cv_upload_per_user_isolation_same_filename_and_migration_errors_not_mas
     finally:
         command.upgrade = orig_upgrade
         db_init(force=True)
+
+
+def test_ats_filename_contract_verified_role_vs_tailored_job():
+    """ATS/Recruiter filenames use the verified candidate role; Tailored filenames use company and job role."""
+    qa_override = (
+        "# Tamar Dev\n"
+        "Headline: QA Engineer\n"
+        "Email: tamar.qa@example.com\n"
+        "## Core Skills\n"
+        "- Playwright, PyTest, Python, REST API\n"
+    )
+    be_override = (
+        "# Davit Beridze\n"
+        "Headline: Backend Engineer\n"
+        "Email: davit.be@example.com\n"
+        "## Core Skills\n"
+        "- Go, FastAPI, PostgreSQL, Kubernetes\n"
+    )
+    ats_qa = cv_generator_service.prepare_email_application_package(
+        job_title="Manual QA სტაჟიორი",
+        company="GenofIT",
+        skills_md_override=qa_override,
+        cv_language="ka",
+        cv_style="ats",
+    )
+    assert ats_qa["docx_filename"] == "Tamar_Dev_QA_Engineer_ATS_KA.docx"
+
+    ats_be = cv_generator_service.prepare_email_application_package(
+        job_title="Senior Platform Architect",
+        company="ATS Edition",
+        skills_md_override=be_override,
+        cv_language="en",
+        cv_style="ats",
+    )
+    assert ats_be["docx_filename"] == "Davit_Beridze_Backend_Engineer_ATS.docx"
+
+    tailored_be = cv_generator_service.prepare_email_application_package(
+        job_title="Platform Engineer",
+        company="CloudScale",
+        skills_md_override=be_override,
+        cv_language="en",
+        cv_style="tailored",
+    )
+    assert tailored_be["docx_filename"] == "Davit_Beridze_CloudScale_Platform_Engineer_CV.docx"
