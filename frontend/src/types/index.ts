@@ -178,6 +178,10 @@ export interface DbJobPosting {
   target_email?: string | null;
   email_subject?: string | null;
   scraped_at: string;
+  contract_mode?: 'GE_LOCAL' | 'REMOTE_B2B' | 'REGION_LOCKED' | string;
+  georgia_eligible?: boolean;
+  b2b_ready?: boolean;
+  eligibility_note?: string;
 }
 
 export interface ParsedSkillsTaxonomy {
@@ -303,7 +307,6 @@ export interface PortalVacancyItem {
   location: string;
   salary: string;
   url: string;
-  mock_url: string;
   company_reviews_count: number;
   company_rating: number;
   requires_motivational_letter: boolean;
@@ -493,6 +496,8 @@ export interface CandidateAnalyticsResponse {
   detected_industry?: string;
   primary_role?: string;
   matching_jobs_count: number;
+  remote_b2b_matches_count?: number;
+  local_georgia_matches_count?: number;
   ready_to_apply_count?: number;
   tier_breakdown: Record<string, number>;
   saved_jobs_count: number;
@@ -552,5 +557,50 @@ export interface AIMetricsResponse {
     estimated_cost_usd?: number | null;
     created_at: string;
   }>;
+}
+
+export interface B2BTaxCalculatorResponse {
+  currency: string;
+  fx_to_gel: number;
+  monthly_gross_orig: number;
+  monthly_gross_gel: number;
+  annual_gross_gel: number;
+  under_500k_cap: boolean;
+  b2b_small_business: {
+    tax_rate_pct: number;
+    tax_gel: number;
+    transfer_fee_gel: number;
+    net_gel: number;
+    net_orig: number;
+    hourly_net_orig: number;
+  };
+  standard_labor_contract: {
+    pension_gel: number;
+    income_tax_gel: number;
+    net_gel: number;
+    net_orig: number;
+  };
+  monthly_b2b_advantage_gel: number;
+  cap_usage_pct: number;
+  notes: string[];
+}
+
+export interface TimezoneMatrixResponse {
+  base_timezone: string;
+  selected_shift_get: string;
+  regions: Array<{
+    region: string;
+    hours_behind_tbilisi: number;
+    client_hours_tbilisi_time: string;
+    overlap_hours_count: number;
+    overlap_window_get: string;
+    recommended_shift_get: string;
+  }>;
+}
+
+export interface B2BProposalResponse {
+  subject: string;
+  proposal_text: string;
+  language: string;
 }
 

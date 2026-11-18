@@ -44,16 +44,11 @@ class GmailService:
         return bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
 
     def get_authorization_url(self, state: str) -> str:
-        """Returns the Google OAuth consent URL or a simulated local auth link if credentials are unset."""
+        """Returns the real Google OAuth 2.0 consent URL using configured GCP credentials."""
         if not self.is_configured():
-            # Return local simulated callback using configured callback origin
-            query = urlencode({
-                "state": state,
-                "code": "simulated_local_google_oauth_code",
-                "simulated": "true",
-            })
-            callback_url = GOOGLE_REDIRECT_URI or f"{BACKEND_URL}/api/auth/google/callback"
-            return f"{callback_url}?{query}"
+            raise ValueError(
+                "Google OAuth credentials (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET) are not configured."
+            )
 
         params = {
             "client_id": GOOGLE_CLIENT_ID,
@@ -67,16 +62,9 @@ class GmailService:
         return f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
 
     def exchange_code_for_token(self, code: str) -> Dict[str, Any]:
-        """Exchanges auth code for OAuth token dictionary."""
-        if not self.is_configured() or code == "simulated_local_google_oauth_code":
-            return {
-                "access_token": "ya29.simulated_talentflow_token",
-                "refresh_token": "simulated_refresh_token",
-                "token_type": "Bearer",
-                "expires_in": 3600,
-                "email": "connected.candidate@gmail.com",
-                "simulated": True,
-            }
+        """Exchanges an authorization code for real Google OAuth tokens."""
+        if not self.is_configured():
+            return {"error": "Google OAuth credentials are not configured on the server."}
 
         try:
             import requests
@@ -372,20 +360,29 @@ class GmailService:
                     "note": detail,
                 }
 
-        # Verified MIME simulation (allows instant local staging without mandatory GCP credentials)
-        action_name = "Draft Created in Gmail" if mode == "draft" else "Application Dispatched"
+        # Build downloadable RFC 2822 .eml draft file so user can open directly in any mail client with CV attached
+        import uuid
+        eml_filename = f"application_{uuid.uuid4().hex[:8]}.eml"
+        GENERATED_RESUMES_DIR.mkdir(parents=True, exist_ok=True)
+        eml_path = GENERATED_RESUMES_DIR / eml_filename
+        eml_path.write_bytes(mime_msg.as_bytes())
         return {
-            "status": "success",
+            "status": "needs_transport",
             "mode": mode,
-            "action": action_name,
+            "action": "Prepared Downloadable .eml Draft (Configure Gmail OAuth or SMTP App Password for 1-Click Send)",
             "recipient": recipient_email,
             "subject": subject,
             "pdf_attached": bool(pdf_path and Path(pdf_path).exists()),
             "attached_filename": Path(pdf_path).name if pdf_path else None,
+            "eml_filename": eml_filename,
+            "eml_url": f"/api/resumes/generated/{eml_filename}",
             "gmail_account": user.email,
             "message_size_bytes": len(raw_base64),
-            "simulated": not bool(self.is_configured() and token_data),
-            "note": "RFC 2822 MIME packet verified and pre-staged." if not self.is_configured() else "Dispatched via Gmail API.",
+            "simulated": False,
+            "note": (
+                "No simulated transmission: download the pre-assembled .eml file (with CV attached) "
+                "or connect Gmail OAuth / SMTP App Password to send directly."
+            ),
         }
 
     def verify_smtp_credentials(

@@ -840,6 +840,13 @@ def get_generated_resume_file(
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             headers=dl_headers,
         )
+    if lower.endswith(".eml"):
+        return FileResponse(
+            path=file_path,
+            filename=safe_name,
+            media_type="message/rfc822",
+            headers=dl_headers,
+        )
     return FileResponse(
         path=file_path,
         filename=safe_name,

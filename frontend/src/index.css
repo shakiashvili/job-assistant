@@ -4,43 +4,74 @@
 
 @layer base {
   html {
-    color-scheme: dark;
     scroll-behavior: smooth;
+    font-family: 'Inter', 'Noto Sans Georgian', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   }
 
   body {
-    @apply bg-[#070b12] text-slate-100 font-sans antialiased selection:bg-emerald-500/30 selection:text-emerald-200;
+    @apply bg-[#070b12] text-slate-100 antialiased selection:bg-emerald-500/30 selection:text-emerald-100;
     background-image:
-      radial-gradient(ellipse 80% 50% at 50% -20%, rgba(16, 185, 129, 0.14), transparent),
-      radial-gradient(ellipse 55% 40% at 95% 95%, rgba(20, 184, 166, 0.09), transparent),
-      radial-gradient(ellipse 40% 30% at 0% 80%, rgba(139, 92, 246, 0.06), transparent);
+      radial-gradient(ellipse 80% 50% at 50% -20%, rgba(16, 185, 129, 0.12), transparent),
+      radial-gradient(ellipse 55% 40% at 95% 95%, rgba(20, 184, 166, 0.08), transparent),
+      radial-gradient(ellipse 40% 30% at 0% 80%, rgba(56, 189, 248, 0.05), transparent);
     background-attachment: fixed;
+    line-height: 1.55;
   }
 
-  button,
-  a,
-  input,
-  select,
-  textarea {
-    @apply transition-colors duration-200;
+  h1, h2, h3, .font-display {
+    font-family: 'Plus Jakarta Sans', 'Noto Sans Georgian', 'Inter', system-ui, sans-serif;
+    letter-spacing: -0.015em;
+  }
+
+  /* WCAG 2.1 AA high-visibility keyboard focus indicator */
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  [role="button"]:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 2px solid #34d399;
+    outline-offset: 2px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
   }
 }
 
 @layer components {
   .glass-card {
-    @apply bg-[#0d1523]/85 backdrop-blur-xl border border-slate-800/80 shadow-xl shadow-black/35;
+    @apply bg-[#0d1523]/90 backdrop-blur-xl border border-slate-800/80 shadow-xl shadow-black/35;
   }
 
   .glass-pill {
-    @apply bg-[#0d1523]/90 backdrop-blur-md border border-slate-700/60;
+    @apply bg-[#0d1523]/95 backdrop-blur-md border border-slate-700/60;
   }
 
   .btn-primary-emerald {
-    @apply bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-semibold shadow-lg shadow-emerald-500/20 transition-all;
+    @apply bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold shadow-lg shadow-emerald-600/20 transition-all;
   }
 }
 
-/* Custom modern dark scrollbars */
+/* Custom accessible dark scrollbars */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -49,10 +80,10 @@
   background: #060913;
 }
 ::-webkit-scrollbar-thumb {
-  background: #1e293b;
+  background: #334155;
   border-radius: 9999px;
   border: 2px solid #060913;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #4f46e5;
+  background: #10b981;
 }

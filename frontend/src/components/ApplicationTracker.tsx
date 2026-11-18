@@ -373,7 +373,7 @@ export const ApplicationTracker: React.FC = () => {
                     {stage}
                   </span>
                 </div>
-                <span className="text-xs font-semibold text-slate-500 bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
+                <span className="text-xs font-semibold text-slate-400 bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
                   {colApps.length}
                 </span>
               </div>
@@ -500,7 +500,7 @@ export const ApplicationTracker: React.FC = () => {
                           <button
                             onClick={() => handleDelete(app.id)}
                             title="Remove from board"
-                            className="min-h-[44px] min-w-[44px] sm:min-h-[32px] sm:min-w-[32px] p-1.5 rounded-lg hover:bg-slate-800 text-slate-500 hover:text-rose-400 transition-colors flex items-center justify-center"
+                            className="min-h-[44px] min-w-[44px] sm:min-h-[32px] sm:min-w-[32px] p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-rose-400 transition-colors flex items-center justify-center"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>

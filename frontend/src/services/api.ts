@@ -241,6 +241,8 @@ export async function fetchScrapedJobs(params?: {
   remote_type?: string;
   only_new?: boolean;
   only_saved?: boolean;
+  b2b_only?: boolean;
+  geo_eligible_only?: boolean;
 } | string): Promise<PaginatedJobsResponse> {
   const qs = new URLSearchParams();
   if (typeof params === 'string') {
@@ -256,6 +258,8 @@ export async function fetchScrapedJobs(params?: {
     if (params.remote_type && params.remote_type !== 'ALL') qs.set('remote_type', params.remote_type);
     if (params.only_new) qs.set('only_new', 'true');
     if (params.only_saved) qs.set('only_saved', 'true');
+    if (params.b2b_only) qs.set('b2b_only', 'true');
+    if (params.geo_eligible_only) qs.set('geo_eligible_only', 'true');
   }
   const queryStr = qs.toString() ? `?${qs.toString()}` : '';
   const res = await apiFetch(`${API_BASE}/jobs${queryStr}`, {
@@ -941,5 +945,52 @@ export async function deleteCvVersion(versionId: number): Promise<void> {
     headers: getAuthHeaders(),
   });
   if (!res.ok) throw new Error('Failed to delete CV version');
+}
+
+export async function calculateB2BTax(payload: {
+  amount: number;
+  currency: 'USD' | 'EUR' | 'GBP' | 'GEL';
+  billing_period: 'monthly' | 'hourly' | 'annual';
+  hours_per_month?: number;
+  custom_fx_to_gel?: number;
+  include_pension_for_labor?: boolean;
+  transfer_fee_pct?: number;
+}): Promise<import('../types').B2BTaxCalculatorResponse> {
+  const res = await apiFetch(`${API_BASE}/b2b/tax-calculator`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error('Failed to calculate B2B take-home pay');
+  return res.json();
+}
+
+export async function fetchTimezoneMatrix(
+  workStartGet = 11,
+  workEndGet = 19
+): Promise<import('../types').TimezoneMatrixResponse> {
+  const res = await apiFetch(
+    `${API_BASE}/b2b/timezone-matrix?work_start_get=${workStartGet}&work_end_get=${workEndGet}`,
+    { headers: getAuthHeaders() }
+  );
+  if (!res.ok) throw new Error('Failed to load timezone overlap matrix');
+  return res.json();
+}
+
+export async function generateB2BProposal(payload: {
+  target_role: string;
+  target_company: string;
+  client_region: string;
+  contract_rate?: string;
+  requirements_snippet?: string;
+  language: 'en' | 'ka';
+}): Promise<import('../types').B2BProposalResponse> {
+  const res = await apiFetch(`${API_BASE}/b2b/proposal`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error('Failed to generate B2B proposal');
+  return res.json();
 }
 

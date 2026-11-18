@@ -222,25 +222,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
 
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
             <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
-              <div className="text-[10px] uppercase text-slate-500 font-bold">Total Calls</div>
+              <div className="text-[10px] uppercase text-slate-400 font-bold">Total Calls</div>
               <div className="text-lg font-extrabold text-white">{aiMetrics.total_requests}</div>
             </div>
             <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
-              <div className="text-[10px] uppercase text-slate-500 font-bold">Cache Hit Rate</div>
+              <div className="text-[10px] uppercase text-slate-400 font-bold">Cache Hit Rate</div>
               <div className="text-lg font-extrabold text-emerald-400">{aiMetrics.cache_hit_rate}%</div>
             </div>
             <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
-              <div className="text-[10px] uppercase text-slate-500 font-bold">Avg / P95 Latency</div>
+              <div className="text-[10px] uppercase text-slate-400 font-bold">Avg / P95 Latency</div>
               <div className="text-sm font-bold text-slate-200 mt-1">
                 {aiMetrics.avg_latency_ms}ms / {aiMetrics.p95_latency_ms}ms
               </div>
             </div>
             <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
-              <div className="text-[10px] uppercase text-slate-500 font-bold">Total Tokens</div>
+              <div className="text-[10px] uppercase text-slate-400 font-bold">Total Tokens</div>
               <div className="text-lg font-extrabold text-emerald-300">{aiMetrics.total_tokens.toLocaleString()}</div>
             </div>
             <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
-              <div className="text-[10px] uppercase text-slate-500 font-bold">Est. Cost</div>
+              <div className="text-[10px] uppercase text-slate-400 font-bold">Est. Cost</div>
               <div className="text-lg font-extrabold text-indigo-300">
                 {aiMetrics.estimated_cost_usd !== null && aiMetrics.estimated_cost_usd !== undefined
                   ? `$${aiMetrics.estimated_cost_usd.toFixed(4)}`
@@ -248,7 +248,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
               </div>
             </div>
             <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
-              <div className="text-[10px] uppercase text-slate-500 font-bold">Rate Limits / Fails</div>
+              <div className="text-[10px] uppercase text-slate-400 font-bold">Rate Limits / Fails</div>
               <div className="text-lg font-extrabold text-amber-300">
                 {aiMetrics.rate_limited_count} / {aiMetrics.failed_count}
               </div>
@@ -297,13 +297,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
           </div>
 
           <div className="relative w-full sm:w-64">
-            <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" aria-hidden="true" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
+              aria-label="Search users by name or email"
               placeholder="Search by name or email..."
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+              className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-9 pr-3 py-1.5 text-xs text-white placeholder-slate-400 focus:outline-none focus:border-emerald-400"
             />
           </div>
         </div>
@@ -387,7 +388,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
               ))}
               {filteredUsers.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="py-8 text-center text-slate-500 italic text-xs">
+                  <td colSpan={6} className="py-8 text-center text-slate-400 italic text-xs">
                     No users matching "{searchQuery}"
                   </td>
                 </tr>

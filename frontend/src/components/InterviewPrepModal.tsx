@@ -77,31 +77,47 @@ export const InterviewPrepModal: React.FC<InterviewPrepModalProps> = ({
     }
   };
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+    <div
+      className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="interview-prep-dialog-title"
+    >
       <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-3xl w-full max-h-[92vh] flex flex-col shadow-2xl overflow-hidden my-auto">
         {/* Header */}
         <div className="p-4 sm:p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/80 gap-3">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-sky-500 to-indigo-600 flex items-center justify-center text-white flex-shrink-0 shadow-md shadow-emerald-500/20">
-              <Sparkles className="w-5 h-5" />
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-600 flex items-center justify-center text-white flex-shrink-0 shadow-md shadow-emerald-500/20">
+              <Sparkles className="w-5 h-5" aria-hidden="true" />
             </div>
             <div className="min-w-0">
-              <h2 className="text-base sm:text-lg font-bold text-white truncate">
+              <h2 id="interview-prep-dialog-title" className="text-base sm:text-lg font-bold text-white truncate">
                 Interview Copilot: {companyName}
               </h2>
-              <p className="text-xs text-slate-400 truncate">
-                Role: <span className="text-slate-200">{jobTitle}</span>
+              <p className="text-xs text-slate-300 truncate">
+                Role: <span className="text-slate-100">{jobTitle}</span>
               </p>
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 flex-shrink-0"
+            aria-label="Close interview preparation dialog"
+            className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 flex-shrink-0"
           >
-            <X className="w-5 h-5" />
+            <X className="w-5 h-5" aria-hidden="true" />
           </button>
         </div>
 

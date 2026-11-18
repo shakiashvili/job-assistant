@@ -201,7 +201,6 @@ class PortalVacancyItem(BaseModel):
     location: str
     salary: str
     url: str
-    mock_url: str
     company_reviews_count: Optional[int] = None
     company_rating: Optional[float] = None
     verification_status: str = "UNVERIFIED"

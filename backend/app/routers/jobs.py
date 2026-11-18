@@ -27,7 +27,7 @@ from ..db.models import (
 from ..db.profile_repository import ground_truth_store
 from ..services.auth_service import get_current_user, get_current_admin
 from ..services.scrapers.scraper_orchestrator import scraper_orchestrator
-from ..services.scrapers.base_scraper import sanitize_company_name
+from ..services.scrapers.base_scraper import sanitize_company_name, classify_georgia_b2b_suitability
 from ..services.salary_service import salary_service
 from ..services.backup_service import backup_service
 from .ground_truth import _purge_stale_unapplied_jobs, MAX_UPLOAD_SIZE_BYTES, record_candidate_document
@@ -353,14 +353,19 @@ async def list_scraped_jobs(
     technology: Optional[str] = Query(None),
     only_new: bool = Query(False, description="Exclude jobs already applied to or saved"),
     only_saved: bool = Query(False, description="Only return jobs bookmarked by current user"),
+    b2b_only: bool = Query(False, description="Only return remote B2B / international contractor eligible roles"),
+    geo_eligible_only: bool = Query(False, description="Exclude roles with foreign US/EU residency locks"),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
-    Lists suitable JobPosting records with SQL-backed filtering, single-query conditional aggregation
-    for tier/status counts, and server-side pagination.
+    Lists suitable JobPosting records scoped strictly to the current user via UserJobMatch,
+    with single-query conditional aggregation, Georgia B2B eligibility tagging, and pagination.
     """
+    from ..db.models import UserJobMatch
+
     init_db()
     owner = current_user.email if current_user.email != "guest@talentflow.local" else None
+    uid = current_user.id if owner else None
     profile = ground_truth_store.get_profile_record(owner_email=owner, user_id=current_user.id)
 
     with Session(engine) as session:
@@ -375,15 +380,20 @@ async def list_scraped_jobs(
                 "status_counts": {"ALL": 0, "STAGED": 0, "AUDITED": 0},
             }
 
+        use_user_matches = uid is not None
+        score_col = func.coalesce(UserJobMatch.suitability_score, JobPosting.suitability_score) if use_user_matches else JobPosting.suitability_score
+        status_col = func.coalesce(UserJobMatch.status, JobPosting.status) if use_user_matches else JobPosting.status
+        tier_col = func.coalesce(UserJobMatch.match_tier, JobPosting.match_tier) if use_user_matches else JobPosting.match_tier
+
         base_conds = []
         if not include_filtered:
-            base_conds.append(JobPosting.status != "FILTERED_OUT")
+            base_conds.append(status_col != "FILTERED_OUT")
         if portal and portal.upper() != "ALL":
             base_conds.append(JobPosting.portal == portal)
         if market and market.upper() != "ALL":
             base_conds.append(JobPosting.market == market)
         if min_score is not None and min_score > 0:
-            base_conds.append(JobPosting.suitability_score >= min_score)
+            base_conds.append(score_col >= min_score)
         if search and search.strip():
             kw = f"%{search.strip()}%"
             base_conds.append(
@@ -425,21 +435,32 @@ async def list_scraped_jobs(
                 ApplicationRecord.job_posting_id.is_not(None),
             )
             base_conds.append(JobPosting.id.not_in(applied_sub))
+        if b2b_only:
+            base_conds.append(
+                or_(
+                    JobPosting.portal.in_(["remotive.com", "himalayas.app", "remoteok.com", "djinni.co", "dou.ua", "justjoin.it", "greenhouse.io", "lever.co"]),
+                    JobPosting.market.in_(["GLOBAL_REMOTE", "INT_REMOTE", "EU_REMOTE"]),
+                )
+            )
 
-        # Single conditional-aggregation SQL query replacing 6 separate COUNT(*) queries!
         agg_stmt = select(
             func.count().label("all_cnt"),
-            func.sum(case((JobPosting.match_tier == "DIRECT", 1), else_=0)).label("direct_cnt"),
-            func.sum(case((JobPosting.match_tier == "ADJACENT", 1), else_=0)).label("adjacent_cnt"),
+            func.sum(case((tier_col == "DIRECT", 1), else_=0)).label("direct_cnt"),
+            func.sum(case((tier_col == "ADJACENT", 1), else_=0)).label("adjacent_cnt"),
             func.sum(
                 case(
-                    ((JobPosting.match_tier == "PUBLIC_INTERNSHIP") | (JobPosting.portal == "hr.gov.ge"), 1),
+                    ((tier_col == "PUBLIC_INTERNSHIP") | (JobPosting.portal == "hr.gov.ge"), 1),
                     else_=0,
                 )
             ).label("intern_cnt"),
-            func.sum(case((JobPosting.status == "STAGED", 1), else_=0)).label("staged_cnt"),
-            func.sum(case((JobPosting.status == "AUDITED", 1), else_=0)).label("audited_cnt"),
+            func.sum(case((status_col == "STAGED", 1), else_=0)).label("staged_cnt"),
+            func.sum(case((status_col == "AUDITED", 1), else_=0)).label("audited_cnt"),
         ).select_from(JobPosting)
+        if use_user_matches:
+            agg_stmt = agg_stmt.outerjoin(
+                UserJobMatch,
+                (UserJobMatch.job_posting_id == JobPosting.id) & (UserJobMatch.user_id == uid),
+            )
         if base_conds:
             agg_stmt = agg_stmt.where(*base_conds)
 
@@ -460,39 +481,64 @@ async def list_scraped_jobs(
         conditions = list(base_conds)
         has_extra_filter = False
         if status and status.upper() != "ALL":
-            conditions.append(JobPosting.status == status)
+            conditions.append(status_col == status)
             has_extra_filter = True
         if tier and tier.upper() != "ALL":
             t_low = tier.strip().lower()
             has_extra_filter = True
             if t_low == "direct":
-                conditions.append(JobPosting.match_tier == "DIRECT")
+                conditions.append(tier_col == "DIRECT")
             elif t_low == "adjacent":
-                conditions.append(JobPosting.match_tier == "ADJACENT")
+                conditions.append(tier_col == "ADJACENT")
             elif t_low in ("internship", "public_internship"):
-                conditions.append((JobPosting.match_tier == "PUBLIC_INTERNSHIP") | (JobPosting.portal == "hr.gov.ge"))
+                conditions.append((tier_col == "PUBLIC_INTERNSHIP") | (JobPosting.portal == "hr.gov.ge"))
 
         if has_extra_filter:
-            count_stmt = select(func.count()).select_from(JobPosting).where(*conditions)
-            total = int(session.exec(count_stmt).one() or 0)
+            count_stmt = select(func.count()).select_from(JobPosting)
+            if use_user_matches:
+                count_stmt = count_stmt.outerjoin(
+                    UserJobMatch,
+                    (UserJobMatch.job_posting_id == JobPosting.id) & (UserJobMatch.user_id == uid),
+                )
+            total = int(session.exec(count_stmt.where(*conditions)).one() or 0)
         else:
             total = all_cnt
 
         total_pages = max(1, math.ceil(total / limit))
 
-        stmt = select(JobPosting)
+        if use_user_matches:
+            stmt = select(JobPosting, UserJobMatch).outerjoin(
+                UserJobMatch,
+                (UserJobMatch.job_posting_id == JobPosting.id) & (UserJobMatch.user_id == uid),
+            )
+        else:
+            stmt = select(JobPosting)
         if conditions:
             stmt = stmt.where(*conditions)
         stmt = (
-            stmt.order_by(JobPosting.suitability_score.desc(), JobPosting.scraped_at.desc())
+            stmt.order_by(score_col.desc(), JobPosting.scraped_at.desc())
             .offset((page - 1) * limit)
             .limit(limit)
         )
         rows = session.exec(stmt).all()
 
         items: List[Dict[str, Any]] = []
-        for r in rows:
-            dumped = r.model_dump(mode="json")
+        for entry in rows:
+            if use_user_matches:
+                r, um = entry
+                dumped = r.model_dump(mode="json")
+                if um is not None:
+                    dumped["suitability_score"] = um.suitability_score
+                    dumped["match_score"] = um.match_score
+                    dumped["match_tier"] = um.match_tier or dumped.get("match_tier")
+                    dumped["adjacent_role_tag"] = um.adjacent_role_tag
+                    dumped["skill_overlap_pct"] = um.skill_overlap_pct
+                    dumped["status"] = um.status
+                    dumped["match_rationale"] = um.match_rationale or dumped.get("match_rationale")
+            else:
+                r = entry
+                dumped = r.model_dump(mode="json")
+
             if str(dumped.get("salary_currency") or "").lower() in ("gel", "ლარი", "ᲚᲐᲠᲘ", "₾"):
                 dumped["salary_currency"] = "GEL"
             dumped["company"] = sanitize_company_name(
@@ -523,6 +569,18 @@ async def list_scraped_jobs(
             else:
                 dumped["salary_source"] = "verified"
             dumped["posting_date"] = dumped.get("scraped_at")
+
+            geo_info = classify_georgia_b2b_suitability(
+                title=str(dumped.get("title") or ""),
+                description=str(dumped.get("description_raw") or ""),
+                location_text=str(dumped.get("market") or ""),
+                portal=str(dumped.get("portal") or ""),
+                market=str(dumped.get("market") or ""),
+                salary_currency=dumped.get("salary_currency"),
+            )
+            dumped.update(geo_info)
+            if geo_eligible_only and not geo_info["georgia_eligible"]:
+                continue
             items.append(dumped)
 
         return {
@@ -828,22 +886,42 @@ def get_candidate_analytics(current_user: User = Depends(get_current_user)):
 
     with Session(engine) as session:
         if uid is not None:
-            matches = session.exec(
-                select(UserJobMatch).where(UserJobMatch.user_id == uid)
+            matched_pairs = session.exec(
+                select(UserJobMatch, JobPosting)
+                .join(JobPosting, JobPosting.id == UserJobMatch.job_posting_id)
+                .where(UserJobMatch.user_id == uid)
             ).all()
-            matching_jobs = [m for m in matches if m.status != "FILTERED_OUT"]
+            matching_jobs = [m for m, _ in matched_pairs if m.status != "FILTERED_OUT"]
+            matching_job_postings = [j for m, j in matched_pairs if m.status != "FILTERED_OUT"]
             ready_to_apply = sum(1 for m in matching_jobs if float(m.suitability_score or 0) >= 75.0)
         else:
             jobs = session.exec(
                 select(JobPosting).where(JobPosting.status != "FILTERED_OUT")
             ).all()
             matching_jobs = jobs
+            matching_job_postings = jobs
             ready_to_apply = sum(1 for j in jobs if float(j.suitability_score or 0) >= 75.0)
 
         tier_counts: Dict[str, int] = {"DIRECT": 0, "ADJACENT": 0, "PUBLIC_INTERNSHIP": 0}
         for row in matching_jobs:
             t = str(getattr(row, "match_tier", None) or "DIRECT")
             tier_counts[t] = tier_counts.get(t, 0) + 1
+
+        remote_b2b_count = 0
+        local_ge_count = 0
+        for jp in matching_job_postings:
+            ginfo = classify_georgia_b2b_suitability(
+                title=str(jp.title or ""),
+                description=str(jp.description_raw or ""),
+                location_text=str(jp.market or ""),
+                portal=str(jp.portal or ""),
+                market=str(jp.market or ""),
+                salary_currency=jp.salary_currency,
+            )
+            if ginfo["contract_mode"] == "GE_LOCAL":
+                local_ge_count += 1
+            elif ginfo["contract_mode"] == "REMOTE_B2B" and ginfo["georgia_eligible"]:
+                remote_b2b_count += 1
 
         saved_count = len(
             session.exec(
@@ -888,6 +966,8 @@ def get_candidate_analytics(current_user: User = Depends(get_current_user)):
         "detected_industry": ps.get("detected_industry") or "Not detected yet",
         "primary_role": ps.get("primary_role") or (cand.get("headline") or ""),
         "matching_jobs_count": len(matching_jobs),
+        "remote_b2b_matches_count": remote_b2b_count,
+        "local_georgia_matches_count": local_ge_count,
         "ready_to_apply_count": ready_to_apply,
         "tier_breakdown": tier_counts,
         "saved_jobs_count": saved_count,

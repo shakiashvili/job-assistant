@@ -146,16 +146,16 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({ user, onNavigate }
         <button
           type="button"
           onClick={() => onNavigate('audit')}
-          className="text-left p-5 rounded-2xl bg-slate-900/90 border border-slate-800 hover:border-sky-600/60 transition-all space-y-2"
+          className="text-left p-5 rounded-2xl bg-slate-900/90 border border-slate-800 hover:border-emerald-500/60 transition-all space-y-2"
         >
-          <div className="flex items-center justify-between text-slate-400 text-xs font-semibold uppercase">
+          <div className="flex items-center justify-between text-slate-300 text-xs font-semibold uppercase">
             <span>Matching Jobs</span>
-            <Compass className="w-4 h-4 text-emerald-400" />
+            <Compass className="w-4 h-4 text-emerald-400" aria-hidden="true" />
           </div>
-          <div className="text-3xl font-extrabold text-white">{analytics?.matching_jobs_count ?? 0}</div>
-          <div className="text-[11px] text-slate-400">
-            Direct: {tierBreakdown.DIRECT ?? 0} • Adjacent: {tierBreakdown.ADJACENT ?? 0} • Intern/Gov:{' '}
-            {tierBreakdown.PUBLIC_INTERNSHIP ?? 0}
+          <div className="text-3xl font-extrabold text-white font-mono">{analytics?.matching_jobs_count ?? 0}</div>
+          <div className="text-[11px] text-slate-300">
+            Remote B2B: <strong className="text-emerald-300">{analytics?.remote_b2b_matches_count ?? 0}</strong> &bull; Georgia Local:{' '}
+            <strong className="text-cyan-300">{analytics?.local_georgia_matches_count ?? 0}</strong> &bull; Direct: {tierBreakdown.DIRECT ?? 0}
           </div>
         </button>
 
@@ -258,29 +258,41 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({ user, onNavigate }
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <button
                 type="button"
                 onClick={() => onNavigate('audit')}
-                className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-sky-600/60 text-left space-y-1 transition-all"
+                className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-emerald-500/60 text-left space-y-1 transition-all"
               >
                 <div className="text-xs font-bold text-white flex items-center gap-1.5">
-                  <Compass className="w-3.5 h-3.5 text-emerald-400" />
+                  <Compass className="w-3.5 h-3.5 text-emerald-400" aria-hidden="true" />
                   <span>Scan Live Portals</span>
                 </div>
-                <p className="text-[11px] text-slate-400">Fetch & score new matching remote/local vacancies.</p>
+                <p className="text-[11px] text-slate-300">Fetch &amp; score local Georgian &amp; remote B2B roles.</p>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onNavigate('b2b')}
+                className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-cyan-500/60 text-left space-y-1 transition-all"
+              >
+                <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                  <TrendingUp className="w-3.5 h-3.5 text-cyan-400" aria-hidden="true" />
+                  <span>1% B2B &amp; Timezones</span>
+                </div>
+                <p className="text-[11px] text-slate-300">Calculate net GEL/USD &amp; UTC+4 remote overlap.</p>
               </button>
 
               <button
                 type="button"
                 onClick={() => onNavigate('variants')}
-                className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-emerald-600/60 text-left space-y-1 transition-all"
+                className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-emerald-500/60 text-left space-y-1 transition-all"
               >
                 <div className="text-xs font-bold text-white flex items-center gap-1.5">
-                  <FileText className="w-3.5 h-3.5 text-emerald-400" />
+                  <FileText className="w-3.5 h-3.5 text-emerald-400" aria-hidden="true" />
                   <span>Open CV Studio</span>
                 </div>
-                <p className="text-[11px] text-slate-400">Edit sections live and export ATS Word (.docx) + PDF.</p>
+                <p className="text-[11px] text-slate-300">Edit sections live and export ATS Word (.docx) + PDF.</p>
               </button>
             </div>
           )}

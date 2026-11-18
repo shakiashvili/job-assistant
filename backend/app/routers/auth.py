@@ -445,8 +445,17 @@ def google_login(
     state: Optional[str] = None,
     current_user: User = Depends(get_current_user),
 ):
-    """Returns Google OAuth consent URL with cryptographic user-bound state for Gmail dispatch permissions."""
+    """Returns Google OAuth consent URL with cryptographic user-bound state for Gmail & Calendar permissions."""
     from ..services.gmail_service import gmail_service
+
+    if not gmail_service.is_configured():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Google OAuth credentials (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET) are not configured. "
+                "Configure them in backend/.env or use Gmail SMTP App Password."
+            ),
+        )
     signed_state = create_oauth_state_token(current_user.id, current_user.email)
     url = gmail_service.get_authorization_url(state=signed_state)
     return {"authorization_url": url}

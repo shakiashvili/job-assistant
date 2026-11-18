@@ -35,9 +35,11 @@
 
     <!-- Authentication Card (Shown when signed out) -->
     <div id="auth-section" class="panel-card">
-      <span class="section-label">Sign In to Sync Live Profile & CVs</span>
-      <input type="email" id="login-email" class="input-field" placeholder="Account Email" autocomplete="email" />
-      <input type="password" id="login-password" class="input-field" placeholder="Password" autocomplete="current-password" />
+      <span class="section-label">Sign In to Sync Live Profile &amp; CVs</span>
+      <label class="sr-only" for="login-email">Account Email</label>
+      <input type="email" id="login-email" class="input-field" aria-label="Account Email" placeholder="Account Email" autocomplete="email" />
+      <label class="sr-only" for="login-password">Password</label>
+      <input type="password" id="login-password" class="input-field" aria-label="Password" placeholder="Password" autocomplete="current-password" />
       <div class="actions">
         <button id="btn-login" class="btn btn-primary">🔐 Sign In</button>
         <button id="btn-sync-web-session" class="btn btn-secondary" type="button">🔄 Sync Session from Web Portal</button>
@@ -47,7 +49,8 @@
         <button id="btn-toggle-api" class="btn-link" type="button">Backend URL</button>
       </div>
       <div id="token-box" class="hidden" style="margin-top: 8px;">
-        <input type="text" id="manual-jwt" class="input-field" placeholder="Paste Bearer JWT token" />
+        <label class="sr-only" for="manual-jwt">Bearer Token</label>
+        <input type="text" id="manual-jwt" class="input-field" aria-label="Bearer Token" placeholder="Paste Bearer JWT token" />
         <button id="btn-save-token" class="btn btn-secondary" style="width:100%;">Save Token</button>
       </div>
     </div>

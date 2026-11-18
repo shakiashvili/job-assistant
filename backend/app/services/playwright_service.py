@@ -80,11 +80,13 @@ class PlaywrightStagerService:
         auto_submit: bool = False,
         headless: bool = False,
         timeout_seconds: int = 15,
+        owner_email: Optional[str] = None,
+        user_id: Optional[int] = None,
     ) -> StageApplicationResponse:
-        ground_truth = ground_truth_store.get_data()
+        ground_truth = ground_truth_store.get_data(owner_email=owner_email, user_id=user_id)
         candidate = ground_truth.get("candidate", {})
         links = candidate.get("links", {})
-        skills_md = ground_truth.get("skills_md_raw") or ground_truth_store.get_skills_md()
+        skills_md = ground_truth.get("skills_md_raw") or ground_truth_store.get_skills_md(owner_email=owner_email, user_id=user_id)
 
         portal_type = detect_portal_from_url(job_url)
         fields_filled: List[str] = []
@@ -233,40 +235,40 @@ class PlaywrightStagerService:
                 return False
 
             # 4. Semantic Form Filling
+            is_local_fixture = str(job_url or "").startswith("file://")
             await fill_semantic_cascade(
                 re.compile(r"first\s*name|სახელი", re.I),
                 re.compile(r"first\s*name", re.I),
                 "input[name*='first_name'], input[autocomplete='given-name']",
-                candidate.get("first_name", "Alex"),
+                candidate.get("first_name") or ("Candidate" if is_local_fixture else ""),
                 "first_name",
             )
             await fill_semantic_cascade(
                 re.compile(r"last\s*name|გვარი", re.I),
                 re.compile(r"last\s*name", re.I),
                 "input[name*='last_name'], input[autocomplete='family-name']",
-                candidate.get("last_name", "Candidate"),
+                candidate.get("last_name") or ("Applicant" if is_local_fixture else ""),
                 "last_name",
             )
             await fill_semantic_cascade(
                 re.compile(r"full\s*name|your\s*name|სახელი\s*და\s*გვარი", re.I),
                 re.compile(r"full\s*name|your\s*name", re.I),
                 "input[name='name'], input[name*='full_name'], input[autocomplete='name']",
-                candidate.get("full_name", "Candidate"),
+                candidate.get("full_name") or ("Candidate Applicant" if is_local_fixture else ""),
                 "full_name",
             )
-            is_local_mock = str(job_url or "").startswith("file://")
             await fill_semantic_cascade(
                 re.compile(r"e-?mail|ელ\.?\s*ფოსტა", re.I),
                 re.compile(r"email|@", re.I),
                 "input[type='email'], input[name*='email']",
-                candidate.get("email") or ("candidate@example.com" if is_local_mock else ""),
+                candidate.get("email") or ("candidate@example.com" if is_local_fixture else ""),
                 "email",
             )
             await fill_semantic_cascade(
                 re.compile(r"phone|mobile|tel|ტელეფონი", re.I),
                 re.compile(r"phone|\+", re.I),
                 "input[type='tel'], input[name*='phone']",
-                candidate.get("phone", "+000 000 0000"),
+                candidate.get("phone") or "",
                 "phone",
             )
             await fill_semantic_cascade(

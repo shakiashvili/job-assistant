@@ -164,11 +164,13 @@ export const ActionPlanView: React.FC = () => {
                     </span>
                   )}
                   <button
+                    type="button"
                     onClick={() => handleDelete(plan.id)}
-                    className="text-slate-500 hover:text-rose-400 p-1"
+                    aria-label={`Delete roadmap for ${plan.skill_name}`}
+                    className="text-slate-400 hover:text-rose-400 p-1"
                     title="Delete Roadmap"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
+                    <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
                   </button>
                 </div>
               </div>
@@ -222,7 +224,7 @@ export const ActionPlanView: React.FC = () => {
                         <span className="font-bold text-[10px] text-indigo-400 uppercase">
                           Day {m.day}:
                         </span>
-                        <span className={m.completed ? 'line-through text-slate-500' : 'text-slate-200'}>
+                        <span className={m.completed ? 'line-through text-slate-400' : 'text-slate-200'}>
                           {m.task}
                         </span>
                       </div>

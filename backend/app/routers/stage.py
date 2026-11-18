@@ -1,6 +1,7 @@
 import logging
-from fastapi import APIRouter, HTTPException
-from ..db.models import StageApplicationRequest, StageApplicationResponse
+from fastapi import APIRouter, HTTPException, Depends
+from ..db.models import StageApplicationRequest, StageApplicationResponse, User
+from ..services.auth_service import get_current_user
 from ..services.playwright_service import playwright_service
 
 logger = logging.getLogger(__name__)
@@ -8,15 +9,21 @@ router = APIRouter(prefix="/api", tags=["Stage Application"])
 
 
 @router.post("/stage-application", response_model=StageApplicationResponse)
-async def stage_application_endpoint(request: StageApplicationRequest):
+async def stage_application_endpoint(
+    request: StageApplicationRequest,
+    current_user: User = Depends(get_current_user),
+):
     """
-    Playwright automation runner that validates company reviews (3+ gate),
+    Playwright automation runner that validates company reviews,
     generates & attaches the per-vacancy Human-Tone PDF CV, fills all inputs
-    (including DOU.ua motivational letter, applicant summary, salary, and '1 week after offer' start date),
-    handles CAPTCHA checkboxes, and stages/submits the application.
+    from the signed-in user's Candidate Profile, pauses on CAPTCHA checkpoints,
+    and stages the application cleanly.
     """
     if not request.job_url:
         raise HTTPException(status_code=400, detail="'job_url' is required.")
+
+    owner = current_user.email if current_user.email != "guest@talentflow.local" else None
+    uid = current_user.id if owner else None
 
     try:
         response = await playwright_service.stage_application(
@@ -31,7 +38,9 @@ async def stage_application_endpoint(request: StageApplicationRequest):
             bypass_company_gate=bool(request.bypass_company_gate),
             auto_submit=bool(request.auto_submit),
             headless=request.headless if request.headless is not None else False,
-            timeout_seconds=request.timeout_seconds or 15
+            timeout_seconds=request.timeout_seconds or 15,
+            owner_email=owner,
+            user_id=uid,
         )
         return response
     except Exception as e:

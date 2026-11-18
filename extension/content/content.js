@@ -7,10 +7,13 @@
     const url = (window.location.href || "").toLowerCase();
     if (host.includes("linkedin.com")) return "linkedin.com";
     if (host.includes("myworkdayjobs.com")) return "workday";
-    if (host.includes("greenhouse.io") || url.includes("/mock-portals/greenhouse")) return "greenhouse";
-    if (host.includes("lever.co") || url.includes("/mock-portals/lever")) return "lever";
+    if (host.includes("greenhouse.io")) return "greenhouse";
+    if (host.includes("lever.co")) return "lever";
     if (host.includes("djinni.co")) return "djinni.co";
-    if (host.includes("dou.ua") || url.includes("/mock-portals/dou")) return "dou.ua";
+    if (host.includes("dou.ua")) return "dou.ua";
+    if (host.includes("remotive.com")) return "remotive.com";
+    if (host.includes("himalayas.app")) return "himalayas.app";
+    if (host.includes("remoteok.com")) return "remoteok.com";
     if (host.includes("vacancy.hr.gov.ge") || host.includes("hr.gov.ge")) return "hr.gov.ge";
     if (host.includes("jobs.ge")) return "jobs.ge";
     if (host.includes("headhunter.ge")) return "headhunter.ge";

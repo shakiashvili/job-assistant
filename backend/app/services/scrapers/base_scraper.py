@@ -331,8 +331,10 @@ def evaluate_remote_and_language_gate(
     has_onsite_body = any(re.search(pat, body_only, re.IGNORECASE) for pat in ONSITE_WORK_PATTERNS)
     is_onsite = has_onsite_loc or has_onsite_body
 
-    # Detect full remote eligibility
-    has_remote = any(re.search(pat, combined, re.IGNORECASE) for pat in FULL_REMOTE_PATTERNS)
+    # Detect full remote eligibility (remote-only portals default to remote unless explicit hybrid/onsite)
+    has_remote = any(re.search(pat, combined, re.IGNORECASE) for pat in FULL_REMOTE_PATTERNS) or (
+        portal in ("remotive.com", "himalayas.app", "remoteok.com") and not is_onsite and not is_hybrid
+    )
 
     is_georgia_location = any(
         w in loc_lower for w in [
@@ -458,6 +460,70 @@ def evaluate_remote_and_language_gate(
             )
 
     return (True if is_foreign_portal_or_job else is_remote, "DISCOVERED", "", langs_detected)
+
+
+def classify_georgia_b2b_suitability(
+    *,
+    title: str = "",
+    description: str = "",
+    location_text: str = "",
+    portal: str = "generic",
+    market: str = "GLOBAL_REMOTE",
+    salary_currency: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Classifies whether a vacancy fits a Georgia-based job seeker locally (GEL / Tbilisi / Georgia)
+    or remotely from Georgia via an international B2B / Independent Contractor arrangement (UTC+4).
+    """
+    p_low = (portal or "").lower()
+    m_up = (market or "").upper()
+    blob = f"{title} {location_text} {description[:2500]}".lower()
+
+    ge_local_portals = {"jobs.ge", "hr.ge", "hr.gov.ge", "headhunter.ge"}
+    if p_low in ge_local_portals or m_up in ("GE_DOMESTIC", "GE_PUBLIC") or (salary_currency or "").upper() == "GEL":
+        is_remote_flag = bool(re.search(r"\b(remote|დისტანციურ|სახლიდან|hybrid)\b", blob))
+        return {
+            "contract_mode": "GE_LOCAL",
+            "georgia_eligible": True,
+            "b2b_ready": bool(is_remote_flag or "b2b" in blob or "contract" in blob),
+            "eligibility_note": "Georgian Local Market (GEL / Labor or Contractor)",
+        }
+
+    # Check explicit foreign residency / work-authorization hard locks
+    hard_region_locks = [
+        r"\bus[\s-]only\b",
+        r"\bunited states only\b",
+        r"\bmust be (?:located|based|resident) in (?:the )?(?:us|usa|canada|uk|eu|germany|poland)\b",
+        r"\bauthorized to work in the (?:us|united states|uk|canada)\b",
+        r"\bno visa sponsorship\b.*\bus citizens?\b",
+        r"\bw-?2 only\b",
+    ]
+    explicit_ge_or_worldwide = bool(
+        re.search(
+            r"\b(georgia|tbilisi|worldwide|anywhere|global remote|work from anywhere|emea|europe|caucasus|utc\+?4|gmt\+?4)\b",
+            blob,
+        )
+    )
+    if any(re.search(pat, blob) for pat in hard_region_locks) and not explicit_ge_or_worldwide:
+        return {
+            "contract_mode": "REGION_LOCKED",
+            "georgia_eligible": False,
+            "b2b_ready": False,
+            "eligibility_note": "Residency or local work permit restriction detected",
+        }
+
+    is_b2b_signal = bool(
+        re.search(
+            r"\b(b2b|contractor|freelance|independent contractor|consultant|eur|usd|worldwide|emea|europe|remote)\b",
+            blob,
+        )
+    ) or m_up in ("GLOBAL_REMOTE", "INT_REMOTE", "EU_REMOTE")
+    return {
+        "contract_mode": "REMOTE_B2B",
+        "georgia_eligible": True,
+        "b2b_ready": is_b2b_signal,
+        "eligibility_note": "Remote B2B Eligible from Georgia (UTC+4 / Independent Contractor)",
+    }
 
 
 class BasePortalScraper:

@@ -1,11 +1,14 @@
+import os
 import asyncio
 import ipaddress
 import logging
 import urllib.parse
+import urllib.request
 import httpx
 from bs4 import BeautifulSoup
+from pathlib import Path
 from typing import List, Optional, Dict, Any
-from ..config import ENABLE_PLAYWRIGHT, GENERATED_RESUMES_DIR
+from ..config import ENABLE_PLAYWRIGHT, GENERATED_RESUMES_DIR, TEST_FORMS_DIR
 from ..db.profile_repository import ground_truth_store
 from ..services.gemini_service import gemini_service
 from ..services.portal_detector import detect_portal_from_html, detect_portal_from_url
@@ -28,11 +31,15 @@ def validate_safe_external_url(url: str) -> str:
     clean = (url or "").strip()
     if not clean:
         return clean
-    if clean.startswith("mock://"):
-        return clean
     if clean.startswith("file://"):
-        if "mock_portal" in clean.replace("\\", "/"):
-            return clean
+        if os.getenv("PYTEST_CURRENT_TEST"):
+            try:
+                parsed_file = urllib.parse.urlparse(clean)
+                local_path = Path(urllib.request.url2pathname(parsed_file.path)).resolve()
+                if local_path.is_relative_to(TEST_FORMS_DIR.resolve()):
+                    return clean
+            except Exception:
+                pass
         raise ValueError("SSRF Protection: arbitrary file:// URLs are forbidden.")
 
     parsed = urllib.parse.urlparse(clean)

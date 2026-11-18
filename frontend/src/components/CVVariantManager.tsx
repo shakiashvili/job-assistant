@@ -422,7 +422,7 @@ export const CVVariantManager: React.FC = () => {
         </div>
 
         {myCvs.length === 0 ? (
-          <div className="text-xs text-slate-500 border border-dashed border-slate-800 bg-slate-950/50 rounded-xl p-6 text-center">
+          <div className="text-xs text-slate-400 border border-dashed border-slate-800 bg-slate-950/50 rounded-xl p-6 text-center">
             No personal CV uploaded yet. Click <strong>Upload My CV</strong> above to store your own <code>.docx</code> or <code>.pdf</code> file.
           </div>
         ) : (
@@ -439,7 +439,7 @@ export const CVVariantManager: React.FC = () => {
                     </span>
                     <div className="text-xs font-semibold text-white truncate">{cv.filename}</div>
                   </div>
-                  <div className="text-[11px] text-slate-500 mt-1">{cv.size_kb} KB</div>
+                  <div className="text-[11px] text-slate-400 mt-1">{cv.size_kb} KB</div>
                 </div>
                 <div className="flex items-center gap-1.5 flex-shrink-0">
                   <a
@@ -731,10 +731,11 @@ export const CVVariantManager: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => handleDeleteVersion(ver.id)}
-                  className="text-slate-500 hover:text-rose-400"
+                  aria-label={`Delete CV version ${ver.title}`}
+                  className="text-slate-400 hover:text-rose-400"
                   title="Delete saved CV version"
                 >
-                  <Trash2 className="w-3 h-3" />
+                  <Trash2 className="w-3 h-3" aria-hidden="true" />
                 </button>
               </div>
             ))}
@@ -834,7 +835,7 @@ export const CVVariantManager: React.FC = () => {
                     sandbox="allow-same-origin"
                   />
                 ) : (
-                  <div className="h-full flex items-center justify-center text-xs text-slate-500 p-6">
+                  <div className="h-full flex items-center justify-center text-xs text-slate-400 p-6">
                     Click Save &amp; Re-Render to preview HTML layout.
                   </div>
                 )}

@@ -58,6 +58,8 @@ export const AuditPanel: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [remoteTypeFilter, setRemoteTypeFilter] = useState<string>('ALL');
   const [onlySavedFilter, setOnlySavedFilter] = useState<boolean>(false);
+  const [b2bOnlyFilter, setB2bOnlyFilter] = useState<boolean>(false);
+  const [geoEligibleOnlyFilter, setGeoEligibleOnlyFilter] = useState<boolean>(false);
   const [savedJobIds, setSavedJobIds] = useState<Set<number>>(new Set());
   const [page, setPage] = useState<number>(1);
   const [totalPages, setTotalPages] = useState<number>(1);
@@ -217,7 +219,9 @@ export const AuditPanel: React.FC = () => {
     nextTier = tierTab,
     nextSearch = searchQuery,
     nextRemoteType = remoteTypeFilter,
-    nextOnlySaved = onlySavedFilter
+    nextOnlySaved = onlySavedFilter,
+    nextB2bOnly = b2bOnlyFilter,
+    nextGeoEligible = geoEligibleOnlyFilter
   ) => {
     const res = await fetchScrapedJobs({
       page: nextPage,
@@ -229,6 +233,8 @@ export const AuditPanel: React.FC = () => {
       search: nextSearch,
       remote_type: nextRemoteType,
       only_saved: nextOnlySaved,
+      b2b_only: nextB2bOnly,
+      geo_eligible_only: nextGeoEligible,
     });
     setScrapedJobs(res.items || []);
     setPage(res.page || 1);
@@ -385,8 +391,10 @@ export const AuditPanel: React.FC = () => {
       try {
         await triggerMultiPortalScrape(true);
         const freshPaged = await loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab);
-        setSkillsStatusMsg(`✅ ${res.message} Found ${freshPaged.total || validJobs.length} live verified vacancies.`);
-      } catch {}
+        setSkillsStatusMsg(`Profile indexed: ${res.message}. Found ${freshPaged.total || validJobs.length} live verified vacancies.`);
+      } catch (refreshErr: any) {
+        setSkillsStatusMsg(`Profile indexed (${res.message}). Live portal scan could not complete automatically: ${refreshErr?.message || 'try clicking Run Live Role Scrapers'}.`);
+      }
       setTimeout(() => setSkillsStatusMsg(null), 6000);
     } catch (err: any) {
       setError(err.message || 'Failed to upload .md file');
@@ -422,7 +430,7 @@ export const AuditPanel: React.FC = () => {
   };
 
   const handleSelectVacancy = (vac: PortalVacancyItem) => {
-    setJobUrl(vac.url || vac.mock_url);
+    setJobUrl(vac.url);
     setJobText(vac.description);
     setError(null);
   };
@@ -522,7 +530,7 @@ export const AuditPanel: React.FC = () => {
     }
   };
 
-  const portalsList = ['ALL', 'jobs.ge', 'hr.ge', 'headhunter.ge', 'dou.ua', 'djinni.co', 'justjoin.it', 'greenhouse', 'lever'];
+  const portalsList = ['ALL', 'jobs.ge', 'hr.ge', 'headhunter.ge', 'remotive.com', 'himalayas.app', 'remoteok.com', 'dou.ua', 'djinni.co', 'justjoin.it', 'greenhouse', 'lever'];
   const industryFilters = [
     { id: 'ALL', label: '🌐 All Industries' },
     { id: 'receptionist_hospitality', label: '🏨 Receptionist & Hospitality' },
@@ -544,19 +552,19 @@ export const AuditPanel: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      {/* Top 1% B2B SaaS Hero Banner */}
-      <div className="relative overflow-hidden rounded-2xl border border-emerald-500/30 bg-gradient-to-r from-slate-900 via-slate-900 to-indigo-950/80 p-6 shadow-xl">
+      {/* Hero Banner */}
+      <div className="relative overflow-hidden rounded-2xl border border-emerald-500/30 bg-gradient-to-r from-slate-900 via-slate-900 to-teal-950/70 p-6 shadow-xl">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5">
           <div className="space-y-2 max-w-3xl">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs font-semibold">
-              <Building2 className="w-3.5 h-3.5" />
-              <span>SQLModel Relational DB • Automated Portal Scrapers • AI Salary Estimator • EN / KA ქართული</span>
+              <Building2 className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>Georgia Local &amp; Global B2B Matching • AI Salary Estimator • EN / KA ქართული</span>
             </div>
             <h1 className="text-xl sm:text-2xl font-extrabold text-white tracking-tight">
-              Automated Job Discovery, Strict Language Filtering & Bilingual CV Generation
+              Automated Job Discovery, Eligibility Filtering &amp; Bilingual CV Generation
             </h1>
             <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
-              Scrapes <strong>Jobs.ge, HR.ge, DOU.ua, and Djinni.co</strong> into a relational SQL database, shows only the vacancies that match your requirements, estimates unstated salaries via AI, and promotes `&gt;= 75%` matches to the <strong>STAGED</strong> queue.
+              Scans <strong>Jobs.ge, HR.ge, HeadHunter.ge, Remotive, Himalayas, RemoteOK, and Djinni</strong>, highlights Georgia-eligible local and B2B remote roles, estimates missing salary bands, and prepares tailored Word/PDF CVs for high-match vacancies.
             </p>
           </div>
 
@@ -610,10 +618,10 @@ export const AuditPanel: React.FC = () => {
             <div>
               <div className="flex items-center gap-2 flex-wrap">
                 <h3 className="text-sm font-bold text-white">
-                  SQL CandidateProfile (`POST /api/profile/upload-skills`): <code className="text-emerald-400">{skillsFilename}</code>
+                  Candidate Profile &amp; Skills Source: <code className="text-emerald-300">{skillsFilename}</code>
                 </h3>
                 <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800 font-semibold">
-                  {extractedSkillsCount} Skills Indexed in DB
+                  {extractedSkillsCount} Skills Indexed
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
@@ -691,7 +699,7 @@ export const AuditPanel: React.FC = () => {
                 onClick={handleSaveSkillsMdText}
                 className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold"
               >
-                Save & Sync skills.md to SQL DB
+                Save &amp; Sync Profile
               </button>
             </div>
           </div>
@@ -732,7 +740,17 @@ export const AuditPanel: React.FC = () => {
         onlySavedFilter={onlySavedFilter}
         onOnlySavedFilterChange={(savedOnly) => {
           setOnlySavedFilter(savedOnly);
-          loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab, searchQuery, remoteTypeFilter, savedOnly);
+          loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab, searchQuery, remoteTypeFilter, savedOnly, b2bOnlyFilter, geoEligibleOnlyFilter);
+        }}
+        b2bOnlyFilter={b2bOnlyFilter}
+        onB2bOnlyFilterChange={(b2b) => {
+          setB2bOnlyFilter(b2b);
+          loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab, searchQuery, remoteTypeFilter, onlySavedFilter, b2b, geoEligibleOnlyFilter);
+        }}
+        geoEligibleOnlyFilter={geoEligibleOnlyFilter}
+        onGeoEligibleOnlyFilterChange={(geo) => {
+          setGeoEligibleOnlyFilter(geo);
+          loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab, searchQuery, remoteTypeFilter, onlySavedFilter, b2bOnlyFilter, geo);
         }}
         savedJobIds={savedJobIds}
         onToggleSaveJob={handleToggleSaveJob}
@@ -845,10 +863,10 @@ export const AuditPanel: React.FC = () => {
 
             <button
               onClick={() => setIsStageModalOpen(true)}
-              className="w-full flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-xs text-indigo-300 bg-indigo-950/60 hover:bg-indigo-900/70 border border-indigo-700/60 transition-all"
+              className="w-full flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-xs text-teal-200 bg-teal-950/60 hover:bg-teal-900/70 border border-teal-700/60 transition-all"
             >
-              <Play className="w-4 h-4 fill-current" />
-              <span>Launch Playwright Live Form Stager (Fills Form, AI Salary, 1-Week Start & CAPTCHA)</span>
+              <Play className="w-4 h-4 fill-current" aria-hidden="true" />
+              <span>Launch Form Auto-Fill Stager (Fills Application &amp; Attaches Tailored CV)</span>
             </button>
 
             {error && (
@@ -1069,8 +1087,8 @@ export const AuditPanel: React.FC = () => {
                 <h4 className="text-sm font-semibold text-slate-200">
                   Ready to Audit & Generate Your English or Georgian (ქართული) PDF CV
                 </h4>
-                <p className="text-xs text-slate-400 max-w-md mt-1">
-                  Select any scraped vacancy from the <strong>SQLite JobPosting table</strong> above or choose an industry template, then click <strong>🇬🇧 Generate English CV</strong> or <strong>🇬🇪 Generate ქართული CV</strong>.
+                <p className="text-xs text-slate-300 max-w-md mt-1">
+                  Select any vacancy from the <strong>Opportunity Feed</strong> above or paste a job description on the left, then click <strong>Generate English CV</strong> or <strong>Generate ქართული CV</strong>.
                 </p>
               </div>
             </div>
@@ -1084,11 +1102,11 @@ export const AuditPanel: React.FC = () => {
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <h3 className="text-base font-semibold text-white flex items-center gap-2">
-                <FileText className="w-4 h-4 text-emerald-400" />
-                Grounded Screening Answers ({cvLanguage === 'ka' ? 'ქართულ ენაზე' : 'English'} — Summary, Motivation, AI Salary, 1-Week Start)
+                <FileText className="w-4 h-4 text-emerald-400" aria-hidden="true" />
+                Grounded Screening Answers ({cvLanguage === 'ka' ? 'ქართულ ენაზე' : 'English'})
               </h3>
-              <p className="text-xs text-slate-400">
-                All answers use a natural human tone and default to starting <strong>1 week after offer (1 კვირა შეთავაზებიდან)</strong>.
+              <p className="text-xs text-slate-300">
+                Answers are tailored directly from your verified profile and the role requirements.
               </p>
             </div>
 
@@ -1117,8 +1135,8 @@ export const AuditPanel: React.FC = () => {
                 <div key={idx} className="bg-slate-950 p-4 rounded-xl border border-slate-800/80 space-y-2">
                   <div className="flex items-start justify-between gap-2">
                     <span className="text-xs font-semibold text-slate-300">{ans.question}</span>
-                    <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-sky-900">
-                      {cvLanguage === 'ka' ? 'ქართული' : 'Human Tone'}
+                    <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800">
+                      {cvLanguage === 'ka' ? 'ქართული' : 'Natural Tone'}
                     </span>
                   </div>
                   <p className="text-xs text-slate-300 leading-relaxed bg-slate-900/50 p-2.5 rounded-lg border border-slate-800 whitespace-pre-line">

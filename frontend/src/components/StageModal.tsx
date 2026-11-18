@@ -45,6 +45,15 @@ export const StageModal: React.FC<StageModalProps> = ({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!isOpen) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [isOpen, onClose]);
+
+  useEffect(() => {
     if (jobUrl) setUrlInput(jobUrl);
     if (tailoredCv) {
       setApplicantSummary(tailoredCv.applicant_summary || tailoredCv.human_tone_summary || '');
@@ -91,28 +100,35 @@ export const StageModal: React.FC<StageModalProps> = ({
     : [];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200 overflow-y-auto">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200 overflow-y-auto"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="stage-modal-title"
+    >
       <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-3xl overflow-hidden shadow-2xl my-8">
         {/* Modal Header */}
         <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/60">
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-lg">
+            <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-lg" aria-hidden="true">
               ⚡
             </div>
             <div>
-              <h3 className="text-base font-semibold text-white">
-                Playwright Full Form & CAPTCHA Application Stager
+              <h3 id="stage-modal-title" className="text-base font-semibold text-white">
+                Automated Form Stager &amp; Pre-Flight Review
               </h3>
-              <p className="text-xs text-slate-400">
-                Validates 3+ company reviews • Attaches Per-Vacancy Human-Tone PDF • Fills Summary, Motivation, Salary, Start Date ("1 week after offer") & CAPTCHA
+              <p className="text-xs text-slate-300">
+                Attaches your tailored PDF CV and pre-fills summary, motivation letter, salary expectation, and availability
               </p>
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            aria-label="Close application stager dialog"
+            className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
           >
-            <X className="w-5 h-5" />
+            <X className="w-5 h-5" aria-hidden="true" />
           </button>
         </div>
 
@@ -145,24 +161,25 @@ export const StageModal: React.FC<StageModalProps> = ({
           {/* Target URL & Portal Switcher */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
-              <label className="block text-xs font-semibold uppercase text-slate-400">
+              <label htmlFor="stage-url-input" className="block text-xs font-semibold uppercase text-slate-300">
                 Target Portal Application URL
               </label>
               <a
                 href={urlInput}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-xs text-emerald-400 hover:underline flex items-center gap-1 font-medium"
+                className="text-xs text-emerald-300 hover:underline flex items-center gap-1 font-medium"
               >
                 <span>Open Form in Browser Tab</span>
-                <ExternalLink className="w-3.5 h-3.5" />
+                <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
               </a>
             </div>
             <input
+              id="stage-url-input"
               type="text"
               value={urlInput}
               onChange={(e) => setUrlInput(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 font-mono"
+              className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3.5 py-2 text-xs text-slate-100 focus:outline-none focus:border-emerald-400 font-mono"
             />
             <div className="flex flex-wrap gap-1.5 mt-2">
               {portalPresets.map((p) => (
@@ -208,53 +225,57 @@ export const StageModal: React.FC<StageModalProps> = ({
             </div>
           )}
 
-          {/* Editable Answers: Summary, DOU/Portal Motivation, Salary, 1-Week Start Date */}
+          {/* Editable Answers */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
-              <label className="block text-[11px] font-semibold uppercase text-slate-400 mb-1">
+              <label htmlFor="stage-expected-salary" className="block text-[11px] font-semibold uppercase text-slate-300 mb-1">
                 Expected Salary
               </label>
               <input
+                id="stage-expected-salary"
                 type="text"
                 value={expectedSalary}
                 onChange={(e) => setExpectedSalary(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200"
+                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100"
               />
             </div>
             <div>
-              <label className="block text-[11px] font-semibold uppercase text-emerald-400 mb-1">
-                Start Date / Availability (Default: 1 Week After Offer)
+              <label htmlFor="stage-start-date" className="block text-[11px] font-semibold uppercase text-emerald-300 mb-1">
+                Start Date / Availability
               </label>
               <input
+                id="stage-start-date"
                 type="text"
                 value={startDate}
                 onChange={(e) => setStartDate(e.target.value)}
-                className="w-full bg-slate-950 border border-emerald-800/60 rounded-lg px-3 py-2 text-xs text-emerald-300 font-semibold"
+                className="w-full bg-slate-950 border border-emerald-700/70 rounded-lg px-3 py-2 text-xs text-emerald-200 font-semibold"
               />
             </div>
           </div>
 
           <div>
-            <label className="block text-[11px] font-semibold uppercase text-slate-400 mb-1">
-              Applicant Summary (Human Tone)
+            <label htmlFor="stage-applicant-summary" className="block text-[11px] font-semibold uppercase text-slate-300 mb-1">
+              Applicant Summary
             </label>
             <textarea
+              id="stage-applicant-summary"
               rows={2}
               value={applicantSummary}
               onChange={(e) => setApplicantSummary(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 leading-relaxed"
+              className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-100 leading-relaxed"
             />
           </div>
 
           <div>
-            <label className="block text-[11px] font-semibold uppercase text-rose-400 mb-1">
-              Motivational Letter / Recruiter Message (Mandatory on DOU.ua & Djinni)
+            <label htmlFor="stage-motivation-letter" className="block text-[11px] font-semibold uppercase text-rose-300 mb-1">
+              Motivational Letter / Recruiter Message
             </label>
             <textarea
+              id="stage-motivation-letter"
               rows={4}
               value={motivationLetter}
               onChange={(e) => setMotivationLetter(e.target.value)}
-              className="w-full bg-slate-950 border border-rose-900/50 rounded-lg p-2.5 text-xs text-slate-200 leading-relaxed"
+              className="w-full bg-slate-950 border border-rose-800/60 rounded-lg p-2.5 text-xs text-slate-100 leading-relaxed"
             />
           </div>
 
@@ -262,11 +283,14 @@ export const StageModal: React.FC<StageModalProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950/60 p-3.5 rounded-xl border border-slate-800">
             <div className="flex items-center justify-between">
               <div>
-                <span className="block text-xs font-medium text-slate-300">Visible Browser Window</span>
-                <span className="text-[11px] text-slate-500">Opens Chromium on your desktop</span>
+                <span id="stage-headless-label" className="block text-xs font-medium text-slate-200">Visible Browser Window</span>
+                <span className="text-[11px] text-slate-300">Opens Chromium on your desktop</span>
               </div>
               <button
                 type="button"
+                role="switch"
+                aria-checked={!headless}
+                aria-labelledby="stage-headless-label"
                 onClick={() => setHeadless(!headless)}
                 className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                   !headless ? 'bg-emerald-600' : 'bg-slate-700'
@@ -282,11 +306,14 @@ export const StageModal: React.FC<StageModalProps> = ({
 
             <div className="flex items-center justify-between">
               <div>
-                <span className="block text-xs font-medium text-slate-300">Auto-Submit Form After CAPTCHA</span>
-                <span className="text-[11px] text-slate-500">Or pause for human review</span>
+                <span id="stage-autosubmit-label" className="block text-xs font-medium text-slate-200">Pause for Final Review</span>
+                <span className="text-[11px] text-slate-300">Auto-submit or review before sending</span>
               </div>
               <button
                 type="button"
+                role="switch"
+                aria-checked={autoSubmit}
+                aria-labelledby="stage-autosubmit-label"
                 onClick={() => setAutoSubmit(!autoSubmit)}
                 className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                   autoSubmit ? 'bg-emerald-600' : 'bg-slate-700'

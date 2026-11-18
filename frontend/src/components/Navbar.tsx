@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import { UserProfile } from '../types';
 
-export type NavTab = 'dashboard' | 'audit' | 'vault' | 'variants' | 'tracker' | 'plans' | 'admin';
+export type NavTab = 'dashboard' | 'audit' | 'b2b' | 'tracker' | 'variants' | 'vault' | 'plans' | 'admin';
 
 interface NavbarProps {
   activeTab: NavTab;
@@ -58,6 +58,7 @@ git push -u origin my-feature-branch`;
   const navItems: Array<{ id: NavTab; label: string; icon: React.FC<{ className?: string }>; adminOnly?: boolean }> = [
     { id: 'dashboard', label: 'Home', icon: Sparkles },
     { id: 'audit', label: 'Jobs & Audit', icon: Compass },
+    { id: 'b2b', label: 'Remote & B2B', icon: Globe2 },
     { id: 'tracker', label: 'Kanban Tracker', icon: LayoutDashboard },
     { id: 'variants', label: 'CV Studio', icon: FileText },
     { id: 'vault', label: 'Profile Vault', icon: User },
@@ -109,8 +110,9 @@ git push -u origin my-feature-branch`;
                     className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
                       isActive
                         ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-md shadow-emerald-500/25'
-                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/70'
+                        : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
                     }`}
+                    aria-current={isActive ? 'page' : undefined}
                   >
                     <Icon className="w-3.5 h-3.5 flex-shrink-0" />
                     <span>{item.label}</span>
@@ -185,10 +187,11 @@ git push -u origin my-feature-branch`;
                       setActiveTab(item.id);
                       setIsMobileMenuOpen(false);
                     }}
+                    aria-current={isActive ? 'page' : undefined}
                     className={`w-full min-h-[44px] flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
                       isActive
-                        ? 'bg-gradient-to-r from-sky-600 to-indigo-600 text-white shadow-md shadow-indigo-500/20'
-                        : 'text-slate-300 hover:text-white hover:bg-slate-900'
+                        ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-md shadow-emerald-500/20'
+                        : 'text-slate-200 hover:text-white hover:bg-slate-900'
                     }`}
                   >
                     <Icon className="w-4 h-4" />
@@ -244,23 +247,33 @@ git push -u origin my-feature-branch`;
           })}
       </nav>
 
-      {/* Share Repository & B2B SaaS Modal */}
+      {/* Share Workspace Modal */}
       {isShareOpen && (
-        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+        <div
+          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="share-modal-title"
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setIsShareOpen(false);
+          }}
+        >
           <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-2xl w-full p-6 space-y-5 shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-800 pb-4">
               <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
                   <Share2 className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-white">Share Your Repository & B2B SaaS Deployment Guide</h3>
-                  <p className="text-xs text-slate-400">Publish to GitHub or share live with businesses & recruiters</p>
+                  <h3 id="share-modal-title" className="text-base font-bold text-white">Share TalentFlow &amp; Deployment Guide</h3>
+                  <p className="text-xs text-slate-300">Clone or self-host your career assistant</p>
                 </div>
               </div>
               <button
+                type="button"
+                aria-label="Close share dialog"
                 onClick={() => setIsShareOpen(false)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+                className="p-2 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -287,14 +300,14 @@ git push -u origin my-feature-branch`;
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5">
-                  <div className="font-bold text-indigo-400 flex items-center gap-1.5">
+                  <div className="font-bold text-emerald-300 flex items-center gap-1.5">
                     <Globe2 className="w-4 h-4" />
-                    <span>2. Live Demo Link (Ngrok / Cloudflare)</span>
+                    <span>2. Remote Tunnel Access</span>
                   </div>
-                  <p className="text-[11px] text-slate-400 leading-relaxed">
-                    Want to show a client or business partner right now without deploying? Run{' '}
-                    <code className="text-slate-200 bg-slate-900 px-1.5 py-0.5 rounded">npx localtunnel --port 5173</code>{' '}
-                    or <code className="text-slate-200 bg-slate-900 px-1.5 py-0.5 rounded">ngrok http 5173</code> to get an instant public HTTPS URL.
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    Share a temporary HTTPS URL cleanly using{' '}
+                    <code className="text-slate-100 bg-slate-900 px-1.5 py-0.5 rounded">npx localtunnel --port 5173</code>{' '}
+                    or <code className="text-slate-100 bg-slate-900 px-1.5 py-0.5 rounded">ngrok http 5173</code>.
                   </p>
                 </div>
 

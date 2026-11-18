@@ -91,6 +91,10 @@ interface DiscoveryFeedProps {
   onRemoteTypeFilterChange?: (mode: string) => void;
   onlySavedFilter?: boolean;
   onOnlySavedFilterChange?: (val: boolean) => void;
+  b2bOnlyFilter?: boolean;
+  onB2bOnlyFilterChange?: (val: boolean) => void;
+  geoEligibleOnlyFilter?: boolean;
+  onGeoEligibleOnlyFilterChange?: (val: boolean) => void;
   savedJobIds?: Set<number>;
   onToggleSaveJob?: (job: DbJobPosting) => void;
 }
@@ -145,6 +149,10 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
   onRemoteTypeFilterChange,
   onlySavedFilter = false,
   onOnlySavedFilterChange,
+  b2bOnlyFilter = false,
+  onB2bOnlyFilterChange,
+  geoEligibleOnlyFilter = false,
+  onGeoEligibleOnlyFilterChange,
   savedJobIds,
   onToggleSaveJob,
 }) => {
@@ -182,6 +190,9 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
     'hr.ge',
     'headhunter.ge',
     'hr.gov.ge',
+    'remotive.com',
+    'himalayas.app',
+    'remoteok.com',
     'linkedin.com',
     'djinni.co',
     'dou.ua',
@@ -254,8 +265,8 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
             <Database className="w-4 h-4 text-emerald-400" />
             Universal Multi-Tier Optimal Opportunity Feed
           </h3>
-          <p className="text-xs text-slate-400">
-            Adapts dynamically to any uploaded <code>skills.md</code> across <strong>Jobs.ge</strong>, <strong>HR.ge</strong>, <strong>HeadHunter.ge</strong>, <strong>HR.gov.ge</strong>, <strong>Djinni.co</strong>, <strong>DOU.ua</strong> &amp; <strong>JustJoin.it</strong>.
+          <p className="text-xs text-slate-300">
+            Adapts dynamically to your <code>skills.md</code> across Georgian portals (<strong>Jobs.ge</strong>, <strong>HR.ge</strong>, <strong>HeadHunter.ge</strong>, <strong>HR.gov.ge</strong>) and global Remote B2B boards (<strong>Remotive</strong>, <strong>Himalayas</strong>, <strong>RemoteOK</strong>, <strong>Djinni</strong>, <strong>JustJoin</strong>).
           </p>
         </div>
 
@@ -353,48 +364,51 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
           {/* Live Keyword Search Input */}
           {onSearchQueryChange && (
             <div className="relative flex-1 max-w-md">
-              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" aria-hidden="true" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => onSearchQueryChange(e.target.value)}
+                aria-label="Search vacancies by role, company, or skill"
                 placeholder="Search by role, company, or skill (e.g. QA, Python, API, TBC)..."
-                className="w-full pl-8 pr-8 py-1.5 rounded-xl bg-slate-950 border border-slate-800 focus:border-emerald-500 focus:outline-none text-xs text-white placeholder-slate-500"
+                className="w-full pl-8 pr-8 py-1.5 rounded-xl bg-slate-950 border border-slate-700 focus:border-emerald-400 focus:outline-none text-xs text-white placeholder-slate-400"
               />
               {searchQuery && (
                 <button
                   type="button"
                   onClick={() => onSearchQueryChange('')}
                   className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                  aria-label="Clear search"
                   title="Clear search"
                 >
-                  <X className="w-3.5 h-3.5" />
+                  <X className="w-3.5 h-3.5" aria-hidden="true" />
                 </button>
               )}
             </div>
           )}
 
-          {/* Work Mode & Saved Jobs Filter Pills */}
+          {/* Work Mode, Georgia/B2B Eligibility & Saved Jobs Filter Pills */}
           <div className="flex flex-wrap items-center gap-1.5">
             {onRemoteTypeFilterChange && (
               <>
-                <span className="text-[10px] font-bold uppercase text-slate-500 mr-1 inline-flex items-center gap-1">
-                  <Globe className="w-3 h-3" /> Mode:
+                <span className="text-[10px] font-bold uppercase text-slate-300 mr-1 inline-flex items-center gap-1">
+                  <Globe className="w-3 h-3" aria-hidden="true" /> Mode:
                 </span>
                 {[
                   { id: 'ALL', label: 'All Modes' },
-                  { id: 'REMOTE', label: '🌍 Remote' },
-                  { id: 'HYBRID', label: '🏢 Hybrid' },
-                  { id: 'ONSITE', label: '📍 On-Site' },
+                  { id: 'REMOTE', label: 'Remote' },
+                  { id: 'HYBRID', label: 'Hybrid' },
+                  { id: 'ONSITE', label: 'On-Site' },
                 ].map((mode) => (
                   <button
                     key={mode.id}
                     type="button"
+                    aria-pressed={remoteTypeFilter === mode.id}
                     onClick={() => onRemoteTypeFilterChange(mode.id)}
                     className={`text-[11px] px-2.5 py-1 rounded-lg font-medium transition-colors ${
                       remoteTypeFilter === mode.id
-                        ? 'bg-indigo-600 text-white'
-                        : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-slate-950 text-slate-300 hover:text-white border border-slate-800'
                     }`}
                   >
                     {mode.label}
@@ -403,17 +417,48 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
               </>
             )}
 
+            {onB2bOnlyFilterChange && (
+              <button
+                type="button"
+                aria-pressed={b2bOnlyFilter}
+                onClick={() => onB2bOnlyFilterChange(!b2bOnlyFilter)}
+                className={`inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg font-semibold transition-colors ${
+                  b2bOnlyFilter
+                    ? 'bg-teal-600/30 border border-teal-400/70 text-teal-200'
+                    : 'bg-slate-950 text-slate-300 hover:text-teal-200 border border-slate-800'
+                }`}
+              >
+                <span>B2B Remote Contracts</span>
+              </button>
+            )}
+
+            {onGeoEligibleOnlyFilterChange && (
+              <button
+                type="button"
+                aria-pressed={geoEligibleOnlyFilter}
+                onClick={() => onGeoEligibleOnlyFilterChange(!geoEligibleOnlyFilter)}
+                className={`inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg font-semibold transition-colors ${
+                  geoEligibleOnlyFilter
+                    ? 'bg-emerald-600/30 border border-emerald-400/70 text-emerald-200'
+                    : 'bg-slate-950 text-slate-300 hover:text-emerald-200 border border-slate-800'
+                }`}
+              >
+                <span>Georgia Eligible</span>
+              </button>
+            )}
+
             {onOnlySavedFilterChange && (
               <button
                 type="button"
+                aria-pressed={onlySavedFilter}
                 onClick={() => onOnlySavedFilterChange(!onlySavedFilter)}
                 className={`inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg font-semibold transition-colors ${
                   onlySavedFilter
-                    ? 'bg-amber-500/20 border border-amber-500/60 text-amber-300'
-                    : 'bg-slate-950 text-slate-400 hover:text-amber-300 border border-slate-800'
+                    ? 'bg-amber-500/20 border border-amber-400/70 text-amber-200'
+                    : 'bg-slate-950 text-slate-300 hover:text-amber-200 border border-slate-800'
                 }`}
               >
-                <Star className={`w-3 h-3 ${onlySavedFilter ? 'fill-amber-400 text-amber-400' : ''}`} />
+                <Star className={`w-3 h-3 ${onlySavedFilter ? 'fill-amber-400 text-amber-400' : ''}`} aria-hidden="true" />
                 <span>Saved ({savedJobIds ? savedJobIds.size : 0})</span>
               </button>
             )}
@@ -422,16 +467,17 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
 
         {/* Portal Filter Chips */}
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[10px] font-bold uppercase text-slate-500 mr-1">Portals:</span>
+          <span className="text-[10px] font-bold uppercase text-slate-300 mr-1">Portals:</span>
           {portals.map((p) => (
             <button
               key={p}
               type="button"
+              aria-pressed={selectedPortalFilter === p}
               onClick={() => onSelectPortalFilter(p)}
               className={`text-[11px] px-2.5 py-1 rounded-lg font-medium transition-colors ${
                 selectedPortalFilter === p
                   ? 'bg-emerald-600 text-white'
-                  : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                  : 'bg-slate-950 text-slate-300 hover:text-white border border-slate-800'
               }`}
             >
               {p}
@@ -625,18 +671,27 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
           return (
             <div
               key={`${job.portal}-${job.external_id}`}
+              role="button"
+              tabIndex={0}
               onClick={() => onSelectJob(job)}
-              className={`p-3.5 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onSelectJob(job);
+                }
+              }}
+              aria-label={`Inspect ${job.title} at ${job.company}`}
+              className={`p-3.5 rounded-xl border cursor-pointer transition-all flex flex-col justify-between text-left ${
                 isStaged
-                  ? 'bg-slate-950 border-emerald-700/60 hover:border-emerald-500'
+                  ? 'bg-slate-950 border-emerald-700/60 hover:border-emerald-400'
                   : tier === 'ADJACENT'
-                  ? 'bg-slate-950 border-indigo-700/60 hover:border-indigo-500'
-                  : 'bg-slate-950/70 border-slate-800 hover:border-slate-700'
+                  ? 'bg-slate-950 border-indigo-700/60 hover:border-indigo-400'
+                  : 'bg-slate-950/70 border-slate-800 hover:border-slate-600'
               }`}
             >
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between gap-1 flex-wrap">
-                  <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-slate-900 text-emerald-400 border border-slate-700">
+                  <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-slate-900 text-emerald-300 border border-slate-700">
                     {job.portal} • {job.market}
                   </span>
                   <div className="flex items-center gap-1">
@@ -647,10 +702,11 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                           e.stopPropagation();
                           onToggleSaveJob(job);
                         }}
+                        aria-label={savedJobIds?.has(job.id) ? `Unsave ${job.title}` : `Save ${job.title}`}
                         className={`p-1 rounded-md border transition-colors ${
                           savedJobIds?.has(job.id)
                             ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
-                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-amber-300'
+                            : 'bg-slate-900 border-slate-800 text-slate-300 hover:text-amber-300'
                         }`}
                         title={savedJobIds?.has(job.id) ? 'Remove from Saved Jobs' : 'Bookmark / Save Job for later'}
                       >
@@ -658,6 +714,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                           className={`w-3 h-3 ${
                             savedJobIds?.has(job.id) ? 'fill-amber-400 text-amber-400' : ''
                           }`}
+                          aria-hidden="true"
                         />
                       </button>
                     )}
@@ -684,9 +741,30 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 )}
 
                 {tier === 'PUBLIC_INTERNSHIP' && (
-                  <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-cyan-950/90 text-cyan-300 border border-cyan-700/60">
-                    <Landmark className="w-2.5 h-2.5" />
+                  <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-cyan-950/90 text-cyan-200 border border-cyan-700/60">
+                    <Landmark className="w-2.5 h-2.5" aria-hidden="true" />
                     <span>Public Sector / Internship</span>
+                  </div>
+                )}
+
+                {job.contract_mode && (
+                  <div
+                    title={job.eligibility_note || ''}
+                    className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-md border ${
+                      job.contract_mode === 'REMOTE_B2B'
+                        ? 'bg-teal-950/80 text-teal-200 border-teal-700/60'
+                        : job.contract_mode === 'GE_LOCAL'
+                        ? 'bg-emerald-950/80 text-emerald-200 border-emerald-700/60'
+                        : 'bg-amber-950/70 text-amber-200 border-amber-700/60'
+                    }`}
+                  >
+                    <span>
+                      {job.contract_mode === 'REMOTE_B2B'
+                        ? 'Global B2B (1% Tax Eligible)'
+                        : job.contract_mode === 'GE_LOCAL'
+                        ? 'Georgia Market'
+                        : 'Region Check Needed'}
+                    </span>
                   </div>
                 )}
 
@@ -697,24 +775,24 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                   <div className="flex items-center gap-1.5 text-[11px] pt-0.5 flex-wrap">
                     <span className="text-emerald-300 font-semibold">{salaryStr}</span>
                     {job.salary_source === 'ai_estimated' || job.salary_estimated_by_ai ? (
-                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-950/70 text-amber-300 border border-amber-800/70">
-                        🤖 AI Estimated
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-950/70 text-amber-200 border border-amber-800/70">
+                        AI Estimated
                       </span>
                     ) : (
-                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-950/70 text-emerald-300 border border-emerald-800/70">
-                        ✓ Verified
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-950/70 text-emerald-200 border border-emerald-800/70">
+                        Verified
                       </span>
                     )}
                   </div>
                 ) : (
-                  <div className="text-[10px] text-slate-500 pt-0.5 flex items-center gap-1.5">
+                  <div className="text-[10px] text-slate-300 pt-0.5 flex items-center gap-1.5">
                     <span>
                       {(job.description_raw || '').includes('არ ითვალისწინებს ანაზღაურებას') ||
                       (job.description_raw || '').toLowerCase().includes('unpaid')
                         ? 'Salary: Unpaid Internship'
                         : 'Salary: Not Listed'}
                     </span>
-                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-900 text-slate-400 border border-slate-800">
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-900 text-slate-300 border border-slate-700">
                       Not Listed
                     </span>
                   </div>
@@ -722,26 +800,26 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
 
                 <div className="flex items-center gap-2 flex-wrap">
                   {(job.posting_date || job.scraped_at) && (
-                    <span className="text-[10px] text-slate-500">
-                      🕒 {job.posting_date || new Date(job.scraped_at).toLocaleDateString()}
+                    <span className="text-[10px] text-slate-300">
+                      Posted: {job.posting_date || new Date(job.scraped_at).toLocaleDateString()}
                     </span>
                   )}
                   {job.deadline_text && (
-                    <span className="text-[10px] text-amber-300 bg-amber-950/40 border border-amber-800/60 px-2 py-0.5 rounded-md">
-                      📅 Deadline: {job.deadline_text}
+                    <span className="text-[10px] text-amber-200 bg-amber-950/50 border border-amber-800/60 px-2 py-0.5 rounded-md">
+                      Deadline: {job.deadline_text}
                     </span>
                   )}
                 </div>
 
-                <div className="text-[10px] text-slate-400 line-clamp-2 pt-1 border-t border-slate-800/60">
+                <div className="text-[10px] text-slate-300 line-clamp-2 pt-1 border-t border-slate-800/60">
                   <span>{job.match_rationale}</span>
                 </div>
               </div>
 
               <div className="pt-2 mt-2 border-t border-slate-800/60 space-y-2 text-[10px]">
                 <div className="flex items-center justify-between">
-                  <span className="text-emerald-400 font-semibold">Load into Auditor</span>
-                  <span className="text-slate-500">Lang: {job.language_requirements.join(', ')}</span>
+                  <span className="text-emerald-300 font-semibold">View Details &amp; Tailor CV</span>
+                  <span className="text-slate-300">Lang: {job.language_requirements.join(', ')}</span>
                 </div>
 
                 <div className="flex items-center gap-1.5 pt-1">
@@ -782,10 +860,11 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                     target="_blank"
                     rel="noopener noreferrer"
                     onClick={(e) => e.stopPropagation()}
-                    className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700"
+                    className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700"
+                    aria-label={`Open original posting for ${job.title}`}
                     title="Open live job page in new tab"
                   >
-                    <ExternalLink className="w-3 h-3" />
+                    <ExternalLink className="w-3 h-3" aria-hidden="true" />
                   </a>
                 </div>
               </div>

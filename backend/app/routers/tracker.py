@@ -306,7 +306,19 @@ def send_or_draft_application_email(
         mode=req.mode,
     )
 
-    if req.mode == "send":
+    if result.get("eml_filename"):
+        from .ground_truth import record_candidate_document
+        eml_fname = result["eml_filename"]
+        record_candidate_document(
+            user_id=current_user.id,
+            filename=eml_fname,
+            file_path=GENERATED_RESUMES_DIR / eml_fname,
+            doc_type="eml_draft",
+            target_company=app_tracker.company_name,
+            target_role=app_tracker.job_title,
+        )
+
+    if req.mode == "send" and result.get("status") == "success":
         tracker_store.update(
             app_id,
             ApplicationUpdate(status="Applied"),

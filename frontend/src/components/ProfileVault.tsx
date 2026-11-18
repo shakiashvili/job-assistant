@@ -516,7 +516,7 @@ export const ProfileVault: React.FC = () => {
               <label className="block text-xs font-semibold uppercase text-slate-400 mb-2">Compensation & Notice Preferences</label>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
-                  <span className="text-[10px] text-slate-500 uppercase block mb-1">Expected Salary (EUR)</span>
+                  <span className="text-[10px] text-slate-400 uppercase block mb-1">Expected Salary (EUR)</span>
                   <input
                     type="number"
                     min={0}
@@ -534,7 +534,7 @@ export const ProfileVault: React.FC = () => {
                   />
                 </div>
                 <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
-                  <span className="text-[10px] text-slate-500 uppercase block mb-1">Expected Salary (USD)</span>
+                  <span className="text-[10px] text-slate-400 uppercase block mb-1">Expected Salary (USD)</span>
                   <input
                     type="number"
                     min={0}
@@ -552,7 +552,7 @@ export const ProfileVault: React.FC = () => {
                   />
                 </div>
                 <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
-                  <span className="text-[10px] text-slate-500 uppercase block mb-1">Notice Period</span>
+                  <span className="text-[10px] text-slate-400 uppercase block mb-1">Notice Period</span>
                   <input
                     type="text"
                     placeholder="e.g. 1 week after offer"
@@ -602,7 +602,7 @@ export const ProfileVault: React.FC = () => {
               <div className="text-xs font-semibold text-slate-200">
                 {isUploadingSkills ? 'Parsing skills.md...' : 'Drag & drop skills.md here, or click to browse'}
               </div>
-              <p className="text-[11px] text-slate-500 max-w-sm">
+              <p className="text-[11px] text-slate-400 max-w-sm">
                 Uploads and extracts clean technical competencies into the encrypted database and refreshes verified skills instantly.
               </p>
             </div>
@@ -636,10 +636,12 @@ export const ProfileVault: React.FC = () => {
               >
                 <span>{skill}</span>
                 <button
+                  type="button"
                   onClick={() => removeCoreSkill(skill)}
-                  className="text-slate-500 hover:text-rose-400 transition-colors"
+                  aria-label={`Remove ${skill}`}
+                  className="text-slate-400 hover:text-rose-400 transition-colors"
                 >
-                  <Trash2 className="w-3 h-3" />
+                  <Trash2 className="w-3 h-3" aria-hidden="true" />
                 </button>
               </span>
             ))}
@@ -663,7 +665,7 @@ export const ProfileVault: React.FC = () => {
                     <div>
                       <h4 className="text-sm font-semibold text-white">{job.role || 'Role'}</h4>
                       <span className="text-xs text-emerald-400 font-medium">{job.company || 'Organization'}</span>
-                      {job.location && <span className="text-xs text-slate-500"> • {job.location}</span>}
+                      {job.location && <span className="text-xs text-slate-400"> • {job.location}</span>}
                     </div>
                     {(job.start_date || job.end_date) && (
                       <span className="text-xs text-slate-400 font-mono bg-slate-900 px-2 py-0.5 rounded">
@@ -749,7 +751,7 @@ export const ProfileVault: React.FC = () => {
 
                     {modulesList.length > 0 && (
                       <div className="pt-1 border-t border-slate-800/70">
-                        <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1.5">
+                        <div className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1.5">
                           Studying Subjects &amp; Core Modules
                         </div>
                         <div className="flex flex-wrap gap-1.5">
@@ -850,7 +852,7 @@ export const ProfileVault: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => removeFaqItem(idx)}
-                      className="min-h-[44px] min-w-[44px] sm:min-h-[32px] sm:min-w-[32px] flex items-center justify-center text-slate-500 hover:text-rose-400"
+                      className="min-h-[44px] min-w-[44px] sm:min-h-[32px] sm:min-w-[32px] flex items-center justify-center text-slate-400 hover:text-rose-400"
                       title="Delete FAQ entry"
                     >
                       <Trash2 className="w-3.5 h-3.5" />

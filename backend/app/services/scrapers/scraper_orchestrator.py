@@ -28,6 +28,7 @@ from .justjoin_scraper import justjoin_scraper
 from .headhunter_scraper import headhunter_scraper
 from .linkedin_scraper import linkedin_scraper
 from .ats_board_scraper import greenhouse_scraper, lever_scraper
+from .remote_b2b_scrapers import remotive_scraper, himalayas_scraper, remoteok_scraper
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +36,8 @@ logger = logging.getLogger(__name__)
 class ScraperOrchestrator:
     """
     Universal Domain-Agnostic Multi-Portal Scraper Orchestrator:
-    1. Builds primary, adjacent, public-sector internship, and remote queries dynamically from CandidateProfile.
-    2. Scrapes Jobs.ge, HR.ge, HeadHunter.ge, HR.gov.ge, DOU.ua, Djinni.co, JustJoin.it, LinkedIn, Greenhouse, and Lever.
+    1. Builds primary, adjacent, public-sector internship, and remote B2B queries dynamically from CandidateProfile.
+    2. Scrapes Jobs.ge, HR.ge, HeadHunter.ge, HR.gov.ge, Remotive, Himalayas, RemoteOK, DOU.ua, Djinni.co, JustJoin.it, LinkedIn, Greenhouse, and Lever.
     3. Deduplicates across (portal, external_id), (url), and (title, company) using O(1) batch lookup maps.
     4. Commits all JobPosting, UserJobMatch, and ApplicationRecord upserts in a single database transaction.
     """
@@ -46,6 +47,9 @@ class ScraperOrchestrator:
         "hr.ge": hr_ge_scraper,
         "hr.gov.ge": hr_gov_scraper,
         "headhunter.ge": headhunter_scraper,
+        "remotive.com": remotive_scraper,
+        "himalayas.app": himalayas_scraper,
+        "remoteok.com": remoteok_scraper,
         "dou.ua": dou_scraper,
         "djinni.co": djinni_scraper,
         "justjoin.it": justjoin_scraper,
@@ -59,6 +63,9 @@ class ScraperOrchestrator:
         "hr.ge",
         "hr.gov.ge",
         "headhunter.ge",
+        "remotive.com",
+        "himalayas.app",
+        "remoteok.com",
         "dou.ua",
         "djinni.co",
         "justjoin.it",
@@ -149,14 +156,32 @@ class ScraperOrchestrator:
                     domain_keywords=combined_kw,
                     candidate_languages=cand_langs,
                 ))
+            elif p == "remotive.com":
+                tasks.append(remotive_scraper.scrape(
+                    allow_network=True,
+                    domain_keywords=combined_kw,
+                    candidate_languages=cand_langs,
+                ))
+            elif p == "himalayas.app":
+                tasks.append(himalayas_scraper.scrape(
+                    allow_network=True,
+                    domain_keywords=combined_kw,
+                    candidate_languages=cand_langs,
+                ))
+            elif p == "remoteok.com":
+                tasks.append(remoteok_scraper.scrape(
+                    allow_network=True,
+                    domain_keywords=combined_kw,
+                    candidate_languages=cand_langs,
+                ))
 
         raw_discovered: List[Dict[str, Any]] = []
         if tasks:
-            sem = asyncio.Semaphore(6)
+            sem = asyncio.Semaphore(8)
 
             async def _bounded_task(coro):
                 async with sem:
-                    return await asyncio.wait_for(coro, timeout=9.0)
+                    return await asyncio.wait_for(coro, timeout=18.0)
 
             batches = await asyncio.gather(*(_bounded_task(t) for t in tasks), return_exceptions=True)
             for b in batches:

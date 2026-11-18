@@ -118,10 +118,13 @@ def test_action_plans_and_milestone_completion():
 
 
 def test_gmail_dispatch_and_mime_assembly():
-    # 1. Google login link
+    # 1. Google login link: returns 400 when GCP OAuth credentials are unset (no simulated OAuth URL)
     login_link = client.get("/api/auth/google/login")
-    assert login_link.status_code == 200
-    assert "authorization_url" in login_link.json()
+    if login_link.status_code == 200:
+        url = login_link.json().get("authorization_url", "")
+        assert url and "simulated" not in url.lower()
+    else:
+        assert login_link.status_code == 400
 
     # 2. Create sample application
     create_res = client.post("/api/applications", json={
@@ -134,18 +137,21 @@ def test_gmail_dispatch_and_mime_assembly():
     app_data = create_res.json()
     app_id = app_data["id"]
 
-    # 3. Prepare email draft
+    # 3. Prepare email draft (real transport if configured, otherwise real downloadable .eml)
     email_res = client.post(f"/api/applications/{app_id}/send-email", json={
         "mode": "draft",
         "recipient_email": "talent@autoqa-global.com",
-        "subject": "Application for QA Automation Engineer - Giorgi Shakiashvili",
+        "subject": "Application for QA Automation Engineer - Candidate",
         "body_text": "Attached is my tailored CV for the Staff SDET role."
     })
     assert email_res.status_code == 200
     data = email_res.json()
-    assert data["status"] == "success"
+    assert data["status"] in ("success", "needs_transport")
+    assert data.get("simulated") is not True
     assert data["mode"] == "draft"
     assert data["recipient"] == "talent@autoqa-global.com"
+    if data["status"] == "needs_transport":
+        assert data.get("eml_filename", "").endswith(".eml")
 
 
 def test_interview_preparation_copilot():

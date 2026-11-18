@@ -1,4 +1,5 @@
 import uuid
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -398,12 +399,18 @@ def test_prod_secret_key_enforced_gmail_oauth_and_tracker_blank_recipient(monkey
     assert proc.returncode != 0
     assert "RuntimeError" in proc.stderr or "SECRET_KEY" in proc.stderr
 
-    # 2. Simulated Google auth callback URL uses GOOGLE_REDIRECT_URI rather than hardcoded localhost:8000
+    # 2. Unconfigured Google OAuth raises explicit ValueError (no fake simulated code),
+    #    and configured OAuth uses GOOGLE_REDIRECT_URI rather than hardcoded localhost:8000
     monkeypatch.setattr("app.services.gmail_service.GOOGLE_CLIENT_ID", "")
     monkeypatch.setattr("app.services.gmail_service.GOOGLE_CLIENT_SECRET", "")
     monkeypatch.setattr("app.services.gmail_service.GOOGLE_REDIRECT_URI", "https://api.example.com/api/auth/google/callback")
+    with pytest.raises(ValueError):
+        gmail_service.get_authorization_url("state123")
+
+    monkeypatch.setattr("app.services.gmail_service.GOOGLE_CLIENT_ID", "real-client-id")
+    monkeypatch.setattr("app.services.gmail_service.GOOGLE_CLIENT_SECRET", "real-client-secret")
     auth_url = gmail_service.get_authorization_url("state123")
-    assert auth_url.startswith("https://api.example.com/api/auth/google/callback?")
+    assert "redirect_uri=https%3A%2F%2Fapi.example.com%2Fapi%2Fauth%2Fgoogle%2Fcallback" in auth_url
 
     # 3. send_application_email uses connected Google OAuth before SMTP
     fake_user = User(

@@ -49,7 +49,6 @@ APPLICATIONS_FILE = DATA_DIR / "applications.json"
 RESUMES_DIR = DATA_DIR / "resumes"
 GENERATED_RESUMES_DIR = RESUMES_DIR / "generated"
 TEST_FORMS_DIR = BASE_DIR / "tests" / "fixtures" / "forms"
-MOCK_PORTALS_DIR = TEST_FORMS_DIR
 
 GENERATED_RESUMES_DIR.mkdir(parents=True, exist_ok=True)
 

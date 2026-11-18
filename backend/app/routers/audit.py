@@ -77,7 +77,6 @@ def list_portal_vacancies(current_user: User = Depends(get_current_user)):
                     location=r.market or "Remote",
                     salary=salary_str,
                     url=r.url,
-                    mock_url=r.url,
                     company_reviews_count=None,
                     company_rating=None,
                     requires_motivational_letter=(r.portal == "dou.ua"),
