@@ -68,17 +68,19 @@
 
   function renderProfile(profile) {
     if (!profile) return;
-    const name = profile.full_name || "Candidate";
+    const uploaded = Boolean(profile.profile_uploaded);
+    const name = profile.full_name || "Upload skills.md";
     const initials = name
       .split(/\s+/)
       .filter((w) => w && !w.startsWith("("))
       .slice(0, 2)
-      .map((w) => w[0].toUpperCase())
+      .map((s) => s[0].toUpperCase())
       .join("") || "TF";
-
     el("cand-avatar").textContent = initials;
-    el("cand-name").textContent = name;
-    el("cand-role").textContent = `${profile.primary_role || "Specialist"} · ${profile.years_of_experience ?? 1.5} yrs`;
+    el("cand-name").textContent = uploaded ? name : `${name} (Profile Missing)`;
+    el("cand-role").textContent = uploaded
+      ? `${profile.primary_role || "Specialist"} · ${profile.years_of_experience ?? 1.5} yrs`
+      : "Upload skills.md to enable tailored CV & cover letter generation";
 
     const skillsBox = el("cand-skills");
     skillsBox.innerHTML = "";
@@ -88,6 +90,18 @@
       chip.textContent = sk;
       skillsBox.appendChild(chip);
     });
+
+    if (uploaded) {
+      el("profile-upload-banner")?.classList.add("hidden");
+      el("skills-upload-box")?.classList.add("hidden");
+      if (el("btn-prepare-fill")) el("btn-prepare-fill").disabled = false;
+      if (el("btn-fill-step")) el("btn-fill-step").disabled = false;
+    } else {
+      el("profile-upload-banner")?.classList.remove("hidden");
+      el("skills-upload-box")?.classList.remove("hidden");
+      if (el("btn-prepare-fill")) el("btn-prepare-fill").disabled = true;
+      if (el("btn-fill-step")) el("btn-fill-step").disabled = true;
+    }
   }
 
   function renderAuthView() {
@@ -148,8 +162,79 @@
       el("cv-download-link").href = fullPdfUrl;
     }
 
-    el("cover-letter-preview").textContent = data.cover_letter || "";
+    if (data.tailored_cv?.docx_url && el("cv-docx-download-link")) {
+      const fullDocxUrl = data.tailored_cv.docx_url.startsWith("http")
+        ? data.tailored_cv.docx_url
+        : `${state.apiBaseUrl}${data.tailored_cv.docx_url}`;
+      el("cv-docx-download-link").href = fullDocxUrl;
+      el("cv-docx-download-link").classList.remove("hidden");
+    }
+
+    const matchedSkills = data.matched_skills || [];
+    const missingSkills = data.missing_skills || [];
+    if ((matchedSkills.length > 0 || missingSkills.length > 0) && el("matched-skills-box")) {
+      el("matched-skills-section")?.classList.remove("hidden");
+      const box = el("matched-skills-box");
+      box.innerHTML = "";
+      matchedSkills.slice(0, 6).forEach((sk) => {
+        const chip = document.createElement("span");
+        chip.className = "skill-chip";
+        chip.textContent = `✓ ${sk}`;
+        box.appendChild(chip);
+      });
+      missingSkills.slice(0, 3).forEach((sk) => {
+        const chip = document.createElement("span");
+        chip.className = "skill-chip";
+        chip.style.borderColor = "#f59e0b";
+        chip.style.color = "#fcd34d";
+        chip.textContent = `△ ${sk}`;
+        box.appendChild(chip);
+      });
+    }
+
+    if (data.applicant_summary && el("applicant-summary-preview")) {
+      el("summary-box-wrap")?.classList.remove("hidden");
+      el("applicant-summary-preview").textContent = data.applicant_summary;
+    }
+
+    el("cover-letter-preview").textContent = data.cover_letter || data.motivational_letter || "";
     el("btn-mark-applied").classList.remove("hidden");
+
+    const answersWrap = el("field-answers-wrap");
+    const answersList = el("field-answers-list");
+    if (answersWrap && answersList) {
+      const answers = Array.isArray(data.field_answers) ? data.field_answers : [];
+      answersList.innerHTML = "";
+      if (answers.length > 0) {
+        answersWrap.classList.remove("hidden");
+        answers.forEach((item, idx) => {
+          const row = document.createElement("div");
+          row.style.cssText = "background:#0f172a; padding:6px; border-radius:6px; border:1px solid #1e293b;";
+          const lbl = document.createElement("div");
+          lbl.style.cssText = "font-size:10px; color:#94a3b8; margin-bottom:3px; display:flex; justify-content:space-between;";
+          lbl.textContent = `${item.label || item.field_id} (${Math.round((item.confidence || 0.9) * 100)}%)`;
+          const isLong = String(item.value || "").length > 90 || item.field_type === "textarea";
+          const ctrl = document.createElement(isLong ? "textarea" : "input");
+          ctrl.className = "input-field";
+          ctrl.style.cssText = "width:100%; margin:0; font-size:11px; padding:4px 6px;";
+          if (isLong) ctrl.rows = 3;
+          else ctrl.type = "text";
+          ctrl.value = item.value || "";
+          ctrl.dataset.fieldId = item.field_id || `field-${idx}`;
+          ctrl.dataset.answerIndex = String(idx);
+          ctrl.addEventListener("input", () => {
+            if (state.preparedApp?.field_answers?.[idx]) {
+              state.preparedApp.field_answers[idx].value = ctrl.value;
+            }
+          });
+          row.appendChild(lbl);
+          row.appendChild(ctrl);
+          answersList.appendChild(row);
+        });
+      } else {
+        answersWrap.classList.add("hidden");
+      }
+    }
   }
 
   async function initPopup() {
@@ -181,23 +266,38 @@
       const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (activeTab?.id) {
         state.activeTabId = activeTab.id;
-        const scraped = await ensureContentScriptAndScrape(activeTab.id);
-        if (scraped?.ok) {
-          state.pageContext = scraped.context;
-          state.scannedFields = scraped.fields || [];
-          el("portal-badge").textContent = (scraped.context?.portal || "generic").toUpperCase();
-          el("job-title-input").value = scraped.context?.job_title || "";
-          el("company-input").value = scraped.context?.company_name || "";
+        state.activeTabUrl = activeTab.url || "";
+        el("site-access-banner")?.classList.add("hidden");
+        el("extraction-warn")?.classList.add("hidden");
+        el("captcha-warn")?.classList.add("hidden");
 
-          if (!scraped.context?.job_title || !scraped.context?.company_name) {
-            el("extraction-warn").classList.remove("hidden");
-          }
-          if (scraped.captcha?.detected) {
-            el("captcha-warn").textContent = scraped.captcha.reason;
-            el("captcha-warn").classList.remove("hidden");
-          }
+        const isHttpTab = !state.activeTabUrl || /^https?:\/\//i.test(state.activeTabUrl);
+        if (!isHttpTab) {
+          el("portal-badge").textContent = "BROWSER TAB";
         } else {
-          el("portal-badge").textContent = "PAGE RESTRICTED";
+          const scraped = await ensureContentScriptAndScrape(activeTab.id);
+          if (scraped?.ok) {
+            state.pageContext = scraped.context;
+            state.scannedFields = scraped.fields || [];
+            el("portal-badge").textContent = (scraped.context?.portal || "generic").toUpperCase();
+            if (!el("job-title-input").value.trim()) {
+              el("job-title-input").value = scraped.context?.job_title || "";
+            }
+            if (!el("company-input").value.trim()) {
+              el("company-input").value = scraped.context?.company_name || "";
+            }
+
+            if (!el("job-title-input").value.trim() || !el("company-input").value.trim()) {
+              el("extraction-warn")?.classList.remove("hidden");
+            }
+            if (scraped.captcha?.detected) {
+              el("captcha-warn").textContent = scraped.captcha.reason;
+              el("captcha-warn").classList.remove("hidden");
+            }
+          } else {
+            el("portal-badge").textContent = "GRANT ACCESS";
+            el("site-access-banner")?.classList.remove("hidden");
+          }
         }
       }
     } finally {
@@ -248,6 +348,9 @@
         if (res?.status === 401) {
           state.authenticated = false;
           renderAuthView();
+        } else if (res?.status === 400 && String(res?.error || "").includes("PROFILE_REQUIRED")) {
+          el("profile-upload-banner")?.classList.remove("hidden");
+          el("skills-upload-box")?.classList.remove("hidden");
         }
         showStatus(res?.error || "Failed to prepare application.", "error");
         return;
@@ -296,9 +399,112 @@
     if (state.listenersBound) return;
     state.listenersBound = true;
 
+    el("btn-grant-site-access")?.addEventListener("click", async () => {
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab?.url || !/^https?:\/\//i.test(tab.url)) {
+          showStatus("Navigate to an http:// or https:// job posting page first.", "error");
+          return;
+        }
+        const originPattern = `${new URL(tab.url).origin}/*`;
+        const granted = await chrome.permissions.request({ origins: [originPattern] });
+        if (granted) {
+          el("site-access-banner")?.classList.add("hidden");
+          showStatus("Site access granted! Rescanning active vacancy page...", "success");
+          el("job-title-input").value = "";
+          el("company-input").value = "";
+          initPopup();
+        } else {
+          showStatus("Permission was dismissed. You can still type Job Title & Company manually below.", "error");
+        }
+      } catch (err) {
+        showStatus(`Could not request site access: ${err?.message || err}`, "error");
+      }
+    });
+
+    if (chrome.tabs?.onActivated && !state.tabListenersBound) {
+      state.tabListenersBound = true;
+      chrome.tabs.onActivated.addListener(() => {
+        el("job-title-input").value = "";
+        el("company-input").value = "";
+        initPopup();
+      });
+      chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+        if (tab?.active && changeInfo.status === "complete") {
+          el("job-title-input").value = "";
+          el("company-input").value = "";
+          initPopup();
+        }
+      });
+    }
+
     el("btn-toggle-token")?.addEventListener("click", () => el("token-box")?.classList.toggle("hidden"));
     el("btn-toggle-api")?.addEventListener("click", () => el("api-settings-card")?.classList.toggle("hidden"));
     el("btn-toggle-settings")?.addEventListener("click", () => el("api-settings-card")?.classList.toggle("hidden"));
+    el("btn-toggle-upload")?.addEventListener("click", () => el("skills-upload-box")?.classList.toggle("hidden"));
+
+    el("btn-upload-skills")?.addEventListener("click", async () => {
+      const fileInput = el("skills-file-input");
+      const file = fileInput?.files?.[0];
+      if (!file) {
+        showStatus("Select your .pdf, .docx, .md, or .txt CV file first.", "error");
+        return;
+      }
+      const btn = el("btn-upload-skills");
+      btn.disabled = true;
+      btn.textContent = "⏳ Uploading...";
+      try {
+        const lowerName = (file.name || "").toLowerCase();
+        let msgPayload;
+        if (lowerName.endsWith(".pdf") || lowerName.endsWith(".docx") || lowerName.endsWith(".doc")) {
+          const dataUrl = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result || ""));
+            reader.onerror = () => reject(reader.error || new Error("File read failed"));
+            reader.readAsDataURL(file);
+          });
+          msgPayload = {
+            type: "UPLOAD_SKILLS_MD",
+            contentBase64: dataUrl,
+            filename: file.name || "cv.pdf",
+          };
+        } else {
+          const content = await file.text();
+          msgPayload = {
+            type: "UPLOAD_SKILLS_MD",
+            content,
+            filename: file.name || "skills.md",
+          };
+        }
+        const res = await sendBg(msgPayload);
+        if (!res?.ok) {
+          showStatus(res?.error || "Failed to upload CV / skills profile.", "error");
+          return;
+        }
+        state.profile = res.data;
+        renderProfile(state.profile);
+        fileInput.value = "";
+        const scoreNote = res.data?.completeness_score !== undefined ? ` · ${res.data.completeness_score}% complete` : "";
+        showStatus(`Profile synced for ${res.data?.full_name || "candidate"} (${file.name}${scoreNote}).`, "success");
+      } catch (err) {
+        showStatus(`Could not read file: ${err?.message || err}`, "error");
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "⬆️ Upload & Sync Profile";
+      }
+    });
+
+    el("btn-reapply-edited")?.addEventListener("click", async () => {
+      if (!state.activeTabId || !state.preparedApp?.field_answers?.length) return;
+      const fillRes = await new Promise((resolve) => {
+        chrome.tabs.sendMessage(
+          state.activeTabId,
+          { type: "APPLY_FIELD_ANSWERS", fieldAnswers: state.preparedApp.field_answers },
+          resolve
+        );
+      });
+      showStatus(`Re-applied ${fillRes?.filledCount || 0} edited answers to page.`, "success");
+    });
 
     el("btn-save-api")?.addEventListener("click", async () => {
       const url = el("api-base-url").value.trim();
@@ -344,6 +550,22 @@
     renderAuthView();
   });
 
+  el("btn-sync-web-session")?.addEventListener("click", async () => {
+    const btn = el("btn-sync-web-session");
+    if (btn) btn.disabled = true;
+    const res = await sendBg({ type: "SYNC_FROM_OPEN_WEB_TAB" });
+    if (btn) btn.disabled = false;
+    if (!res?.ok) {
+      showStatus(res?.error || "Could not sync session from Web Portal tab.", "error");
+      return;
+    }
+    state.authenticated = true;
+    state.profile = res.profile;
+    hideStatus();
+    renderAuthView();
+    showStatus("Synced active session from TalentFlow Web Portal!", "success");
+  });
+
   el("btn-logout")?.addEventListener("click", async () => {
     await sendBg({ type: "LOGOUT" });
     state.authenticated = false;
@@ -382,6 +604,34 @@
     if (!txt) return;
     await navigator.clipboard.writeText(txt);
     showStatus("Copied cover letter to clipboard.", "success");
+  });
+
+  el("btn-copy-summary")?.addEventListener("click", async () => {
+    const txt = el("applicant-summary-preview")?.textContent || "";
+    if (!txt) return;
+    await navigator.clipboard.writeText(txt);
+    showStatus("Copied applicant pitch to clipboard.", "success");
+  });
+
+  el("btn-save-job-later")?.addEventListener("click", async () => {
+    const app = state.preparedApp || {};
+    const jobUrl = state.pageContext?.url || window.location.href;
+    const payload = {
+      company_name: el("company-input").value.trim() || app.company_name || "Unknown Company",
+      job_title: el("job-title-input").value.trim() || app.job_title || "Saved Role",
+      job_url: jobUrl,
+      portal: state.pageContext?.portal || app.portal || "custom",
+      salary_offered: app.salary_info?.display || null,
+      cv_pdf_path: app.tailored_cv?.pdf_filename || null,
+      cover_letter_text: app.cover_letter || null,
+      status: "SAVED",
+    };
+    const res = await sendBg({ type: "LOG_APPLICATION", payload });
+    if (res?.ok) {
+      showStatus(`Bookmarked "${payload.job_title}" at "${payload.company_name}" as SAVED in your Tracker!`, "success");
+    } else {
+      showStatus(res?.error || "Could not bookmark job in Kanban tracker.", "error");
+    }
   });
   }
 

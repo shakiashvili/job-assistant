@@ -82,6 +82,8 @@ def toggle_milestone_completion(
     plan = session.get(SkillActionPlan, plan_id)
     if not plan:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Action plan {plan_id} not found.")
+    if plan.user_id is not None and plan.user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: action plan belongs to another user.")
 
     updated_plan = plan_service.toggle_milestone(plan=plan, milestone_index=milestone_index, session=session)
     return plan_to_out(updated_plan)
@@ -97,6 +99,8 @@ def delete_action_plan(
     plan = session.get(SkillActionPlan, plan_id)
     if not plan:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Action plan {plan_id} not found.")
+    if plan.user_id is not None and plan.user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: action plan belongs to another user.")
 
     session.delete(plan)
     session.commit()

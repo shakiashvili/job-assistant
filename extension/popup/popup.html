@@ -35,18 +35,22 @@
 
     <!-- Authentication Card (Shown when signed out) -->
     <div id="auth-section" class="panel-card">
-      <span class="section-label">Sign In to Sync Live Profile & CVs</span>
-      <input type="email" id="login-email" class="input-field" placeholder="Account Email" autocomplete="email" />
-      <input type="password" id="login-password" class="input-field" placeholder="Password" autocomplete="current-password" />
+      <span class="section-label">Sign In to Sync Live Profile &amp; CVs</span>
+      <label class="sr-only" for="login-email">Account Email</label>
+      <input type="email" id="login-email" class="input-field" aria-label="Account Email" placeholder="Account Email" autocomplete="email" />
+      <label class="sr-only" for="login-password">Password</label>
+      <input type="password" id="login-password" class="input-field" aria-label="Password" placeholder="Password" autocomplete="current-password" />
       <div class="actions">
         <button id="btn-login" class="btn btn-primary">🔐 Sign In</button>
+        <button id="btn-sync-web-session" class="btn btn-secondary" type="button">🔄 Sync Session from Web Portal</button>
       </div>
       <div style="margin-top: 8px; display: flex; justify-content: space-between; align-items: center;">
         <button id="btn-toggle-token" class="btn-link" type="button">Use JWT Token</button>
         <button id="btn-toggle-api" class="btn-link" type="button">Backend URL</button>
       </div>
       <div id="token-box" class="hidden" style="margin-top: 8px;">
-        <input type="text" id="manual-jwt" class="input-field" placeholder="Paste Bearer JWT token" />
+        <label class="sr-only" for="manual-jwt">Bearer Token</label>
+        <input type="text" id="manual-jwt" class="input-field" aria-label="Bearer Token" placeholder="Paste Bearer JWT token" />
         <button id="btn-save-token" class="btn btn-secondary" style="width:100%;">Save Token</button>
       </div>
     </div>
@@ -62,9 +66,20 @@
               <div id="cand-role" class="candidate-role">Syncing role...</div>
             </div>
           </div>
-          <button id="btn-logout" class="btn-link" type="button" title="Sign out">Sign Out</button>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <button id="btn-toggle-upload" class="btn-link" type="button" title="Upload or replace CV (.pdf/.docx/.md)">📄 Upload CV</button>
+            <button id="btn-logout" class="btn-link" type="button" title="Sign out">Sign Out</button>
+          </div>
         </div>
         <div id="cand-skills" class="skills-row"></div>
+        <div id="profile-upload-banner" class="warning-banner hidden" style="margin-top:8px;">
+          No CV or <code>skills.md</code> uploaded for this account yet. Upload your <code>.pdf</code>, <code>.docx</code>, or <code>.md</code> resume below before generating tailored CVs &amp; cover letters.
+        </div>
+        <div id="skills-upload-box" class="hidden" style="margin-top:8px; padding-top:8px; border-top:1px solid #334155;">
+          <label class="section-label" for="skills-file-input">Upload Candidate CV / Profile (.pdf, .docx, .md, .txt)</label>
+          <input type="file" id="skills-file-input" accept=".pdf,.docx,.md,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/markdown,text/plain" class="input-field" style="padding:4px;" />
+          <button id="btn-upload-skills" class="btn btn-secondary" type="button" style="width:100%;">⬆️ Upload &amp; Sync Profile</button>
+        </div>
       </div>
 
       <!-- Extracted Page Context -->
@@ -76,6 +91,12 @@
 
         <div id="extraction-warn" class="warning-banner hidden">
           Could not auto-detect Role or Company cleanly from DOM. Please confirm below before generating your CV:
+        </div>
+        <div id="site-access-banner" class="warning-banner hidden">
+          Browser blocked automatic script access on this tab.
+          <button id="btn-grant-site-access" class="btn btn-secondary" type="button" style="width:100%; margin-top:6px;">
+            🔓 Enable Copilot on This Site
+          </button>
         </div>
         <div id="seniority-warn" class="warning-banner hidden"></div>
         <div id="captcha-warn" class="warning-banner hidden"></div>
@@ -104,6 +125,7 @@
         <div class="actions">
           <button id="btn-prepare-fill" class="btn btn-primary">⚡ Analyze, Build CV & Auto-Fill</button>
           <button id="btn-fill-step" class="btn btn-secondary">🪜 Fill Current Modal Step</button>
+          <button id="btn-save-job-later" class="btn btn-secondary" type="button">🔖 Save Job for Later (Tracker)</button>
           <button id="btn-mark-applied" class="btn btn-success hidden">✅ Mark as Applied & Save to Tracker</button>
         </div>
       </div>
@@ -114,9 +136,25 @@
         <div id="company-intel-text" style="font-size:11px; color:#e2e8f0; line-height:1.4;"></div>
         <ul id="talking-points-list" class="intel-list"></ul>
 
-        <div id="cv-download-bar" class="cv-download-bar hidden">
-          <span id="cv-filename-label" style="color:#cbd5e1;">Tailored Resume</span>
-          <a id="cv-download-link" href="#" target="_blank" rel="noopener noreferrer">Download PDF ↗</a>
+        <div id="matched-skills-section" class="hidden" style="margin-top:6px;">
+          <span class="section-label">Matched Skills vs. Gaps</span>
+          <div id="matched-skills-box" class="skills-row" style="margin-top:3px;"></div>
+        </div>
+
+        <div id="cv-download-bar" class="cv-download-bar hidden" style="display:flex; justify-content:space-between; align-items:center; gap:6px; flex-wrap:wrap;">
+          <span id="cv-filename-label" style="color:#cbd5e1; font-size:10px;">Tailored Resume</span>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <a id="cv-download-link" href="#" target="_blank" rel="noopener noreferrer">PDF ↗</a>
+            <a id="cv-docx-download-link" href="#" target="_blank" rel="noopener noreferrer" class="hidden">Word (.docx) ↗</a>
+          </div>
+        </div>
+
+        <div id="summary-box-wrap" class="hidden" style="margin-top:8px;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <span class="section-label" style="margin-bottom:2px;">Tailored Applicant Pitch</span>
+            <button id="btn-copy-summary" class="btn-link" type="button">Copy Pitch</button>
+          </div>
+          <div id="applicant-summary-preview" style="font-size:11px; color:#cbd5e1; max-height:65px; overflow-y:auto; background:#0f172a; padding:6px; border-radius:6px; white-space:pre-wrap;"></div>
         </div>
 
         <div style="margin-top:8px;">
@@ -125,6 +163,14 @@
             <button id="btn-copy-letter" class="btn-link" type="button">Copy</button>
           </div>
           <div id="cover-letter-preview" style="font-size:11px; color:#cbd5e1; max-height:95px; overflow-y:auto; background:#0f172a; padding:7px; border-radius:6px; white-space:pre-wrap;"></div>
+        </div>
+
+        <div id="field-answers-wrap" class="hidden" style="margin-top:8px; padding-top:8px; border-top:1px solid #334155;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <span class="section-label" style="margin-bottom:0;">Editable Auto-Fill Answers</span>
+            <button id="btn-reapply-edited" class="btn-link" type="button">Apply Edits to Page</button>
+          </div>
+          <div id="field-answers-list" style="display:flex; flex-direction:column; gap:6px; max-height:170px; overflow-y:auto;"></div>
         </div>
       </div>
     </div>

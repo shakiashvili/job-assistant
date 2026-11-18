@@ -33,16 +33,25 @@ export const StageModal: React.FC<StageModalProps> = ({
   companyValidation,
   tailoredCv
 }) => {
-  const [urlInput, setUrlInput] = useState(jobUrl || 'https://jobs.dou.ua/companies/macpaw/vacancies/289104/');
+  const [urlInput, setUrlInput] = useState(jobUrl || '');
   const [applicantSummary, setApplicantSummary] = useState('');
   const [motivationLetter, setMotivationLetter] = useState('');
-  const [expectedSalary, setExpectedSalary] = useState('€85,000 / year ($4,500/mo remote)');
-  const [startDate, setStartDate] = useState('1 week after offer');
+  const [expectedSalary, setExpectedSalary] = useState('');
+  const [startDate, setStartDate] = useState('');
   const [headless, setHeadless] = useState(false);
   const [autoSubmit, setAutoSubmit] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<StageApplicationResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [isOpen, onClose]);
 
   useEffect(() => {
     if (jobUrl) setUrlInput(jobUrl);
@@ -55,7 +64,7 @@ export const StageModal: React.FC<StageModalProps> = ({
           : tailoredCv.motivation_statement || tailoredCv.dou_motivational_letter
       );
       if (tailoredCv.expected_salary) setExpectedSalary(tailoredCv.expected_salary);
-      setStartDate(tailoredCv.start_date_default || '1 week after offer');
+      setStartDate(tailoredCv.start_date_default || '');
     }
   }, [jobUrl, tailoredCv]);
 
@@ -86,38 +95,40 @@ export const StageModal: React.FC<StageModalProps> = ({
     }
   };
 
-  const portalPresets = [
-    { label: 'DOU.ua (+Motivational Letter)', url: 'https://jobs.dou.ua/companies/macpaw/vacancies/289104/' },
-    { label: 'Djinni.co', url: 'https://djinni.co/jobs/654321-qa-engineer-playwright/' },
-    { label: 'Jobs.ge / HR.ge / HH.ge', url: 'https://jobs.ge/en/?view=jobs&id=541092' },
-    { label: 'JustJoin.it (B2B)', url: 'https://justjoin.it/offers/allegro-qa-automation-engineer' },
-    { label: 'Greenhouse', url: 'https://boards.greenhouse.io/cloudscale/jobs/7123910' },
-    { label: 'Lever', url: 'https://jobs.lever.co/datasphere/sdet' },
-  ];
+  const portalPresets: Array<{ label: string; url: string }> = jobUrl
+    ? [{ label: 'Selected Vacancy URL', url: jobUrl }]
+    : [];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200 overflow-y-auto">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200 overflow-y-auto"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="stage-modal-title"
+    >
       <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-3xl overflow-hidden shadow-2xl my-8">
         {/* Modal Header */}
         <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/60">
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-sky-500/20 text-sky-400 flex items-center justify-center font-bold text-lg">
+            <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-lg" aria-hidden="true">
               ⚡
             </div>
             <div>
-              <h3 className="text-base font-semibold text-white">
-                Playwright Full Form & CAPTCHA Application Stager
+              <h3 id="stage-modal-title" className="text-base font-semibold text-white">
+                Automated Form Stager &amp; Pre-Flight Review
               </h3>
-              <p className="text-xs text-slate-400">
-                Validates 3+ company reviews • Attaches Per-Vacancy Human-Tone PDF • Fills Summary, Motivation, Salary, Start Date ("1 week after offer") & CAPTCHA
+              <p className="text-xs text-slate-300">
+                Attaches your tailored PDF CV and pre-fills summary, motivation letter, salary expectation, and availability
               </p>
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            aria-label="Close application stager dialog"
+            className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
           >
-            <X className="w-5 h-5" />
+            <X className="w-5 h-5" aria-hidden="true" />
           </button>
         </div>
 
@@ -150,24 +161,25 @@ export const StageModal: React.FC<StageModalProps> = ({
           {/* Target URL & Portal Switcher */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
-              <label className="block text-xs font-semibold uppercase text-slate-400">
+              <label htmlFor="stage-url-input" className="block text-xs font-semibold uppercase text-slate-300">
                 Target Portal Application URL
               </label>
               <a
                 href={urlInput}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-xs text-sky-400 hover:underline flex items-center gap-1 font-medium"
+                className="text-xs text-emerald-300 hover:underline flex items-center gap-1 font-medium"
               >
                 <span>Open Form in Browser Tab</span>
-                <ExternalLink className="w-3.5 h-3.5" />
+                <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
               </a>
             </div>
             <input
+              id="stage-url-input"
               type="text"
               value={urlInput}
               onChange={(e) => setUrlInput(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-sky-500 font-mono"
+              className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3.5 py-2 text-xs text-slate-100 focus:outline-none focus:border-emerald-400 font-mono"
             />
             <div className="flex flex-wrap gap-1.5 mt-2">
               {portalPresets.map((p) => (
@@ -177,8 +189,8 @@ export const StageModal: React.FC<StageModalProps> = ({
                   onClick={() => setUrlInput(p.url)}
                   className={`text-[11px] px-2.5 py-1 rounded-md border transition-colors ${
                     urlInput === p.url
-                      ? 'bg-sky-600 text-white border-sky-500 font-semibold'
-                      : 'bg-slate-950 text-sky-400 border-slate-800 hover:border-sky-700'
+                      ? 'bg-emerald-600 text-white border-emerald-500 font-semibold'
+                      : 'bg-slate-950 text-emerald-400 border-slate-800 hover:border-emerald-700'
                   }`}
                 >
                   {p.label}
@@ -189,15 +201,15 @@ export const StageModal: React.FC<StageModalProps> = ({
 
           {/* Attached Per-Vacancy PDF CV */}
           {tailoredCv && (
-            <div className="p-3.5 bg-sky-950/25 border border-sky-800/50 rounded-xl flex items-center justify-between">
+            <div className="p-3.5 bg-emerald-950/25 border border-emerald-800/50 rounded-xl flex items-center justify-between">
               <div className="flex items-center gap-2.5 text-xs">
-                <FileCheck className="w-5 h-5 text-sky-400 flex-shrink-0" />
+                <FileCheck className="w-5 h-5 text-emerald-400 flex-shrink-0" />
                 <div>
                   <span className="font-semibold text-white">
                     Per-Vacancy Human-Tone PDF CV: {tailoredCv.pdf_filename}
                   </span>
                   <div className="text-[11px] text-slate-400">
-                    Generated from your attached <code className="text-sky-300">candidate_skills.md</code> • ATS Keywords injected
+                    Generated from your attached <code className="text-emerald-300">candidate_skills.md</code> • ATS Keywords injected
                   </div>
                 </div>
               </div>
@@ -205,7 +217,7 @@ export const StageModal: React.FC<StageModalProps> = ({
                 href={`${BACKEND_ORIGIN}${tailoredCv.pdf_url}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>View PDF</span>
@@ -213,53 +225,57 @@ export const StageModal: React.FC<StageModalProps> = ({
             </div>
           )}
 
-          {/* Editable Answers: Summary, DOU/Portal Motivation, Salary, 1-Week Start Date */}
+          {/* Editable Answers */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
-              <label className="block text-[11px] font-semibold uppercase text-slate-400 mb-1">
+              <label htmlFor="stage-expected-salary" className="block text-[11px] font-semibold uppercase text-slate-300 mb-1">
                 Expected Salary
               </label>
               <input
+                id="stage-expected-salary"
                 type="text"
                 value={expectedSalary}
                 onChange={(e) => setExpectedSalary(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200"
+                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100"
               />
             </div>
             <div>
-              <label className="block text-[11px] font-semibold uppercase text-emerald-400 mb-1">
-                Start Date / Availability (Default: 1 Week After Offer)
+              <label htmlFor="stage-start-date" className="block text-[11px] font-semibold uppercase text-emerald-300 mb-1">
+                Start Date / Availability
               </label>
               <input
+                id="stage-start-date"
                 type="text"
                 value={startDate}
                 onChange={(e) => setStartDate(e.target.value)}
-                className="w-full bg-slate-950 border border-emerald-800/60 rounded-lg px-3 py-2 text-xs text-emerald-300 font-semibold"
+                className="w-full bg-slate-950 border border-emerald-700/70 rounded-lg px-3 py-2 text-xs text-emerald-200 font-semibold"
               />
             </div>
           </div>
 
           <div>
-            <label className="block text-[11px] font-semibold uppercase text-slate-400 mb-1">
-              Applicant Summary (Human Tone)
+            <label htmlFor="stage-applicant-summary" className="block text-[11px] font-semibold uppercase text-slate-300 mb-1">
+              Applicant Summary
             </label>
             <textarea
+              id="stage-applicant-summary"
               rows={2}
               value={applicantSummary}
               onChange={(e) => setApplicantSummary(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 leading-relaxed"
+              className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-100 leading-relaxed"
             />
           </div>
 
           <div>
-            <label className="block text-[11px] font-semibold uppercase text-rose-400 mb-1">
-              Motivational Letter / Recruiter Message (Mandatory on DOU.ua & Djinni)
+            <label htmlFor="stage-motivation-letter" className="block text-[11px] font-semibold uppercase text-rose-300 mb-1">
+              Motivational Letter / Recruiter Message
             </label>
             <textarea
+              id="stage-motivation-letter"
               rows={4}
               value={motivationLetter}
               onChange={(e) => setMotivationLetter(e.target.value)}
-              className="w-full bg-slate-950 border border-rose-900/50 rounded-lg p-2.5 text-xs text-slate-200 leading-relaxed"
+              className="w-full bg-slate-950 border border-rose-800/60 rounded-lg p-2.5 text-xs text-slate-100 leading-relaxed"
             />
           </div>
 
@@ -267,14 +283,17 @@ export const StageModal: React.FC<StageModalProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950/60 p-3.5 rounded-xl border border-slate-800">
             <div className="flex items-center justify-between">
               <div>
-                <span className="block text-xs font-medium text-slate-300">Visible Browser Window</span>
-                <span className="text-[11px] text-slate-500">Opens Chromium on your desktop</span>
+                <span id="stage-headless-label" className="block text-xs font-medium text-slate-200">Visible Browser Window</span>
+                <span className="text-[11px] text-slate-300">Opens Chromium on your desktop</span>
               </div>
               <button
                 type="button"
+                role="switch"
+                aria-checked={!headless}
+                aria-labelledby="stage-headless-label"
                 onClick={() => setHeadless(!headless)}
                 className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                  !headless ? 'bg-sky-600' : 'bg-slate-700'
+                  !headless ? 'bg-emerald-600' : 'bg-slate-700'
                 }`}
               >
                 <span
@@ -287,11 +306,14 @@ export const StageModal: React.FC<StageModalProps> = ({
 
             <div className="flex items-center justify-between">
               <div>
-                <span className="block text-xs font-medium text-slate-300">Auto-Submit Form After CAPTCHA</span>
-                <span className="text-[11px] text-slate-500">Or pause for human review</span>
+                <span id="stage-autosubmit-label" className="block text-xs font-medium text-slate-200">Pause for Final Review</span>
+                <span className="text-[11px] text-slate-300">Auto-submit or review before sending</span>
               </div>
               <button
                 type="button"
+                role="switch"
+                aria-checked={autoSubmit}
+                aria-labelledby="stage-autosubmit-label"
                 onClick={() => setAutoSubmit(!autoSubmit)}
                 className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                   autoSubmit ? 'bg-emerald-600' : 'bg-slate-700'
@@ -339,7 +361,7 @@ export const StageModal: React.FC<StageModalProps> = ({
                   <span className="text-slate-400">{result.fields_filled.join(', ')}</span>
                 </div>
                 <div className="flex flex-wrap items-center gap-4 pt-1">
-                  <span className="flex items-center gap-1.5 text-sky-400 font-medium">
+                  <span className="flex items-center gap-1.5 text-emerald-400 font-medium">
                     <FileCheck className="w-4 h-4" />
                     CV PDF Attached: {result.file_uploaded ? 'Yes' : 'No'}
                   </span>
@@ -359,7 +381,7 @@ export const StageModal: React.FC<StageModalProps> = ({
             href={urlInput}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-xs text-slate-400 hover:text-sky-400 flex items-center gap-1"
+            className="text-xs text-slate-400 hover:text-emerald-400 flex items-center gap-1"
           >
             <ExternalLink className="w-3.5 h-3.5" />
             <span>Preview Portal Form in New Tab</span>
@@ -375,7 +397,7 @@ export const StageModal: React.FC<StageModalProps> = ({
             <button
               onClick={handleStage}
               disabled={isLoading || !urlInput}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 shadow-lg shadow-sky-600/30 disabled:opacity-50 transition-all"
+              className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 shadow-lg shadow-emerald-600/30 disabled:opacity-50 transition-all"
             >
               {isLoading ? (
                 <>

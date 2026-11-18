@@ -122,10 +122,12 @@ class PlanService:
         session: Session,
         force_refresh: bool = False,
     ) -> List[SkillActionPlan]:
-        gt = profile_repository.get_data()
+        gt = profile_repository.get_data(owner_email=user.email, user_id=user.id)
         existing_skills: set[str] = {str(s) for s in (gt.get("skills", {}).get("core") or [])}
         candidate_prof = session.exec(
-            select(CandidateProfile).order_by(CandidateProfile.updated_at.desc())
+            select(CandidateProfile)
+            .where(CandidateProfile.user_id == user.id)
+            .order_by(CandidateProfile.updated_at.desc())
         ).first()
         primary_role = "Specialist"
         if candidate_prof and isinstance(candidate_prof.parsed_skills, dict):
@@ -253,38 +255,26 @@ For EACH milestone (day 1..7), include:
 
 Return ONLY a valid JSON array of objects with keys: skill_name, category, days_to_learn, milestones.
 """
-        resp_obj = None
-        if gemini_service.client:
-            try:
-                from google.genai import types
-                cfg = types.GenerateContentConfig(
-                    temperature=0.2,
-                    tools=[{"google_search": {}}],
-                )
-                resp = gemini_service.client.models.generate_content(
-                    model=gemini_service.model,
-                    contents=prompt,
-                    config=cfg,
-                )
-                resp_obj = resp.text
-            except Exception:
-                resp = gemini_service._call_gemini_with_retry(prompt, temperature=0.2)
-                resp_obj = getattr(resp, "text", None)
-
-        if resp_obj:
-            cleaned = resp_obj.strip()
-            if cleaned.startswith("```"):
-                import re as _re
-                cleaned = _re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=_re.I).strip()
-            try:
-                parsed = json.loads(cleaned)
-                if isinstance(parsed, list) and parsed:
-                    return parsed
-            except Exception:
-                pass
-            parsed_dict = safe_parse_json(resp_obj)
-            if isinstance(parsed_dict, list) and parsed_dict:
-                return parsed_dict
+        parsed = gemini_service.generate_json(
+            prompt,
+            task_type="action_plan",
+            model_tier="fast",
+            temperature=0.2,
+            tools=[{"google_search": {}}],
+            ttl_seconds=86400,
+        )
+        if not parsed:
+            parsed = gemini_service.generate_json(
+                prompt,
+                task_type="action_plan",
+                model_tier="fast",
+                temperature=0.2,
+                ttl_seconds=86400,
+            )
+        if isinstance(parsed, list) and parsed:
+            return parsed
+        if isinstance(parsed, dict) and isinstance(parsed.get("items"), list) and parsed["items"]:
+            return parsed["items"]
         raise ValueError("Invalid Gemini action plan JSON shape")
 
     def toggle_milestone(self, plan: SkillActionPlan, milestone_index: int, session: Session) -> SkillActionPlan:
@@ -300,16 +290,24 @@ Return ONLY a valid JSON array of objects with keys: skill_name, category, days_
         session.add(plan)
 
         if all_done:
-            self._ingest_mastered_skill(plan.skill_name, session)
+            self._ingest_mastered_skill(plan.skill_name, session, user_id=plan.user_id)
 
         session.commit()
         session.refresh(plan)
         return plan
 
-    def _ingest_mastered_skill(self, skill_name: str, session: Session) -> None:
+    def _ingest_mastered_skill(
+        self,
+        skill_name: str,
+        session: Session,
+        user_id: Optional[int] = None,
+    ) -> None:
         try:
+            stmt = select(CandidateProfile)
+            if user_id is not None:
+                stmt = stmt.where(CandidateProfile.user_id == user_id)
             candidate_prof = session.exec(
-                select(CandidateProfile).order_by(CandidateProfile.updated_at.desc())
+                stmt.order_by(CandidateProfile.updated_at.desc())
             ).first()
             if candidate_prof:
                 parsed = dict(candidate_prof.parsed_skills or {})
@@ -321,11 +319,13 @@ Return ONLY a valid JSON array of objects with keys: skill_name, category, days_
                     session.add(candidate_prof)
                     logger.info("Ingested mastered skill '%s' into CandidateProfile", skill_name)
 
-            gt = profile_repository.get_data()
+            owner_user = session.get(User, user_id) if user_id is not None else None
+            owner_email = owner_user.email if owner_user else None
+            gt = profile_repository.get_data(owner_email=owner_email, user_id=user_id)
             gt_core = gt.setdefault("skills", {}).setdefault("core", [])
             if skill_name not in gt_core:
                 gt_core.append(skill_name)
-                profile_repository.update_data(gt)
+                profile_repository.update_data(gt, owner_email=owner_email, user_id=user_id)
         except Exception as e:
             logger.warning(f"Error updating candidate profile with completed skill: {e}")
 

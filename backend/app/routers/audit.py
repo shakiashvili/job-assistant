@@ -4,13 +4,14 @@ from fastapi import APIRouter, HTTPException, Depends
 from sqlmodel import Session, select
 from ..db.database import engine, init_db
 from ..db.models import (
-    CandidateProfile,
     JobPosting,
+    UserJobMatch,
     User,
     JobAuditRequest,
     JobAuditResponse,
     PortalVacancyItem,
 )
+from ..db.profile_repository import ground_truth_store
 from ..services.audit_service import audit_service
 from ..services.auth_service import get_current_user
 from .jobs import _is_profile_uploaded_for_user
@@ -27,18 +28,34 @@ def list_portal_vacancies(current_user: User = Depends(get_current_user)):
     """
     init_db()
     with Session(engine) as session:
-        profile = session.exec(
-            select(CandidateProfile).order_by(CandidateProfile.updated_at.desc())
-        ).first()
+        profile = ground_truth_store.get_profile_record(
+            owner_email=current_user.email,
+            user_id=current_user.id,
+        )
         if not _is_profile_uploaded_for_user(profile, current_user.email):
             return []
 
         industry = str((profile.parsed_skills or {}).get("target_industry") or "qa_tech")
-        rows = session.exec(
-            select(JobPosting)
-            .where((JobPosting.status != "FILTERED_OUT") & (JobPosting.suitability_score >= 60.0))
-            .order_by(JobPosting.suitability_score.desc(), JobPosting.scraped_at.desc())
-        ).all()
+        is_guest = (current_user.email or "").strip().lower() == "guest@talentflow.local"
+        rows: List[JobPosting] = []
+        if not is_guest:
+            matched_pairs = session.exec(
+                select(JobPosting, UserJobMatch)
+                .join(UserJobMatch, UserJobMatch.job_posting_id == JobPosting.id)
+                .where(
+                    (UserJobMatch.user_id == current_user.id)
+                    & (UserJobMatch.status != "FILTERED_OUT")
+                    & (UserJobMatch.suitability_score >= 60.0)
+                )
+                .order_by(UserJobMatch.suitability_score.desc(), JobPosting.scraped_at.desc())
+            ).all()
+            rows = [jp for jp, _ in matched_pairs]
+        else:
+            rows = session.exec(
+                select(JobPosting)
+                .where((JobPosting.status != "FILTERED_OUT") & (JobPosting.suitability_score >= 60.0))
+                .order_by(JobPosting.suitability_score.desc(), JobPosting.scraped_at.desc())
+            ).all()
 
         items: List[PortalVacancyItem] = []
         seen_tc: set[tuple[str, str]] = set()
@@ -57,12 +74,11 @@ def list_portal_vacancies(current_user: User = Depends(get_current_user)):
                     company=r.company,
                     portal=r.portal,
                     industry=industry,
-                    location=r.market,
+                    location=r.market or "Remote",
                     salary=salary_str,
                     url=r.url,
-                    mock_url=r.url,
-                    company_reviews_count=10,
-                    company_rating=4.5,
+                    company_reviews_count=None,
+                    company_rating=None,
                     requires_motivational_letter=(r.portal == "dou.ua"),
                     description=r.description_raw,
                 )
@@ -71,11 +87,14 @@ def list_portal_vacancies(current_user: User = Depends(get_current_user)):
 
 
 @router.post("/audit-job", response_model=JobAuditResponse)
-async def audit_job_endpoint(request: JobAuditRequest):
+async def audit_job_endpoint(
+    request: JobAuditRequest,
+    current_user: User = Depends(get_current_user),
+):
     """
-    Audits a job posting from raw text or job URL across any industry, validates company reviews (3+ gate),
-    returns Skills / ATS / Recruiter match scores + Gaps, and generates a tailored
-    Human-Tone PDF & HTML CV in English ('en') or Georgian ('ka') based on candidate_skills.md.
+    Audits a job posting from raw text or job URL across any industry, enforces SSRF protection,
+    validates company reviews (3+ gate), returns Skills / ATS / Recruiter match scores + Gaps,
+    and generates a tailored Human-Tone PDF & DOCX CV in English ('en') or Georgian ('ka').
     """
     if not request.raw_text and not request.job_url:
         raise HTTPException(
@@ -90,8 +109,12 @@ async def audit_job_endpoint(request: JobAuditRequest):
             variant=request.variant or "qa_automation",
             skills_md_override=request.skills_md_override,
             cv_language=request.cv_language or "en",
+            owner_email=current_user.email,
+            user_id=current_user.id,
         )
         return response
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
         logger.error(f"Failed to audit job: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Job audit failed: {str(e)}")

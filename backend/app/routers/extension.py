@@ -1,7 +1,7 @@
 import logging
 import re
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
@@ -141,6 +141,7 @@ class PrepareApplicationResponse(BaseModel):
     company_intel: Dict[str, Any]
     tailored_cv: Dict[str, Any]
     cover_letter: str
+    motivational_letter: str = ""
     applicant_summary: str
     field_answers: List[FieldAnswerItem] = Field(default_factory=list)
 
@@ -160,7 +161,20 @@ class LogApplicationRequest(BaseModel):
 def get_extension_profile(current_user: User = Depends(require_extension_user)) -> Dict[str, Any]:
     """Returns the live CandidateProfile summary for the authenticated extension user."""
     live = load_live_candidate_profile(current_user.email)
-    gt = ground_truth_store.get_data()
+    uploaded = bool(live and live.get("user_uploaded", False))
+    if not uploaded:
+        return {
+            "user_email": current_user.email,
+            "full_name": current_user.full_name or "",
+            "primary_role": "",
+            "detected_industry": "",
+            "target_industry": "",
+            "years_of_experience": 0.0,
+            "verified_skills": [],
+            "profile_uploaded": False,
+        }
+
+    gt = ground_truth_store.get_data(owner_email=current_user.email)
     cand = gt.get("candidate", {})
     skills_md = live.get("skills_markdown") or gt.get("skills_md_raw") or ""
     parsed_md = ground_truth_store.parse_profile_from_md(skills_md) if skills_md else {}
@@ -173,7 +187,89 @@ def get_extension_profile(current_user: User = Depends(require_extension_user)) 
         "target_industry": live.get("target_industry") or "qa_tech",
         "years_of_experience": float(live.get("years_of_experience") or live.get("experience_years") or 1.5),
         "verified_skills": list(live.get("verified_skills") or live.get("all_skills") or parsed_md.get("skills") or [])[:25],
-        "profile_uploaded": bool(live.get("user_uploaded", bool(skills_md))),
+        "profile_uploaded": True,
+    }
+
+
+@router.post("/upload-skills")
+async def extension_upload_skills(
+    request: Request,
+    current_user: User = Depends(require_extension_user),
+) -> Dict[str, Any]:
+    """Allows the Chrome Extension user to upload or refresh their CV/profile (.pdf, .docx, .md, .txt)."""
+    import base64
+    from ..services.cv_parser_service import cv_parser_service
+
+    md_text = ""
+    raw_bytes: Optional[bytes] = None
+    filename = "skills.md"
+    content_type = (request.headers.get("content-type") or "").lower()
+
+    if "application/json" in content_type:
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        body = body or {}
+        filename = str(body.get("filename") or "skills.md")
+        if body.get("content_base64"):
+            b64_str = str(body.get("content_base64") or "")
+            if "," in b64_str and b64_str.startswith("data:"):
+                b64_str = b64_str.split(",", 1)[1]
+            try:
+                raw_bytes = base64.b64decode(b64_str)
+            except Exception as dec_err:
+                raise HTTPException(status_code=400, detail=f"Invalid base64 CV payload: {dec_err}")
+        else:
+            md_text = str(body.get("content") or "")
+    else:
+        form = await request.form()
+        uploaded_file = form.get("file")
+        if uploaded_file is not None and hasattr(uploaded_file, "read"):
+            filename = getattr(uploaded_file, "filename", None) or "skills.md"
+            raw_bytes = await uploaded_file.read()
+        elif form.get("content") is not None:
+            md_text = str(form.get("content") or "")
+
+    if raw_bytes is not None:
+        try:
+            md_text = cv_parser_service.extract_text_from_bytes(raw_bytes, filename=filename)
+        except ValueError as parse_err:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(parse_err))
+
+    if not md_text.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Please provide a non-empty .pdf, .docx, .md, or .txt CV/skills profile.",
+        )
+
+    profile = ground_truth_store.ingest_skills_markdown(
+        md_text,
+        owner_email=current_user.email,
+        user_id=current_user.id,
+    )
+    from ..services.cv_generator_service import cv_generator_service
+    synced_cv_versions = cv_generator_service.sync_user_cv_versions(
+        user_id=current_user.id,
+        owner_email=current_user.email,
+    )
+    gt = ground_truth_store.get_data(owner_email=current_user.email, user_id=current_user.id)
+    completeness_score, missing_fields = cv_parser_service.compute_missing_fields(gt)
+    ps = dict(profile.parsed_skills or {})
+    return {
+        "status": "success",
+        "user_email": current_user.email,
+        "full_name": profile.full_name,
+        "synced_cv_versions": synced_cv_versions,
+        "primary_role": ps.get("primary_role") or ps.get("headline") or "Specialist",
+        "detected_industry": ps.get("detected_industry") or "General Professional",
+        "target_industry": ps.get("target_industry") or "qa_tech",
+        "years_of_experience": float(profile.experience_years or 1.5),
+        "verified_skills": list(ps.get("verified_skills") or ps.get("all_skills") or [])[:25],
+        "profile_uploaded": True,
+        "filename": filename,
+        "completeness_score": completeness_score,
+        "missing_fields": missing_fields,
     }
 
 
@@ -191,6 +287,14 @@ def prepare_application(
     5. Builds tailored ATS PDF + DOCX resume for direct DataTransfer attachment.
     6. Generates grounded per-field answers matching form controls & select options.
     """
+    live_profile = load_live_candidate_profile(current_user.email)
+    if not live_profile or not bool(live_profile.get("user_uploaded", False)):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="PROFILE_REQUIRED: Please upload your skills.md profile before generating a tailored CV or cover letter.",
+            headers={"X-Profile-Required": "true"},
+        )
+
     portal = _infer_portal(req.url, req.portal)
     dom_title = (req.job_title or "").strip()
     dom_company = (req.company_name or "").strip()
@@ -211,9 +315,8 @@ def prepare_application(
         job_title = dom_title
         company_name = dom_company
 
-    live_profile = load_live_candidate_profile(current_user.email)
-    gt = dict(ground_truth_store.get_data())
-    skills_md = live_profile.get("skills_markdown") or gt.get("skills_md_raw") or ground_truth_store.get_skills_md()
+    gt = dict(ground_truth_store.get_data(owner_email=current_user.email))
+    skills_md = live_profile.get("skills_markdown") or gt.get("skills_md_raw") or ""
     gt["skills_md_raw"] = skills_md
 
     if live_profile:
@@ -322,12 +425,17 @@ def prepare_application(
         description=desc_text,
         cv_language=cv_lang,
     )
+    req_skills = matcher_service.extract_job_requirements(job_title, desc_text)
     job_details = {
         "title": job_title,
         "company": company_name,
         "industry": str(parsed_skills.get("target_industry") or "qa_tech"),
         "portal": portal,
-        "summary": desc_text[:1200],
+        "summary": desc_text[:1600],
+        "description": desc_text[:2000],
+        "required_skills": req_skills or matched_skills,
+        "work_history": gt.get("work_history") or [],
+        "education": gt.get("education") or [],
     }
     narratives = gemini_service.craft_human_tone_narratives(
         job_details=job_details,
@@ -350,6 +458,9 @@ def prepare_application(
         dou_motivational_letter=narratives["dou_motivational_letter"],
         skills_md_override=skills_md,
         cv_language=cv_lang,
+        required_skills=req_skills,
+        owner_email=current_user.email,
+        vault_override=gt,
     )
 
     # Per-field answers
@@ -376,7 +487,9 @@ def prepare_application(
         for f, ans_obj in zip(non_file_fields, raw_ans):
             val = str(ans_obj.get("answer", "")).strip() if isinstance(ans_obj, dict) else ""
             q_label = (f.label or f.placeholder or f.name or "").lower()
-            if any(k in q_label for k in ("cover letter", "motivation", "why us", "why do you want", "message to")) and len(val) < 120:
+            if any(k in q_label for k in ("cover letter", "motivational", "motivation letter", "სამოტივაციო")):
+                val = narratives["dou_motivational_letter"]
+            elif any(k in q_label for k in ("motivation", "why us", "why do you want", "message to")) and len(val) < 120:
                 val = narratives["dou_motivational_letter"]
             elif any(k in q_label for k in ("summary", "about yourself", "headline")) and len(val) < 80:
                 val = narratives["human_tone_summary"]
@@ -416,7 +529,8 @@ def prepare_application(
             "docx_url": cv_res.get("docx_url"),
             "cv_language": cv_lang,
         },
-        cover_letter=narratives["dou_motivational_letter"],
+        cover_letter=narratives.get("cover_letter") or narratives["dou_motivational_letter"],
+        motivational_letter=narratives["dou_motivational_letter"],
         applicant_summary=narratives["human_tone_summary"],
         field_answers=field_answers,
     )
@@ -429,7 +543,7 @@ def log_extension_application(
 ) -> Dict[str, Any]:
     """Records a completed human-reviewed external/Easy-Apply submission in the user's Kanban tracker."""
     init_db()
-    allowed_statuses = {"STAGED", "APPLIED", "HR_SCREEN", "TECH_INTERVIEW", "FINAL_ROUND", "OFFER", "REJECTED"}
+    allowed_statuses = {"SAVED", "STAGED", "APPLIED", "HR_SCREEN", "TECH_INTERVIEW", "FINAL_ROUND", "OFFER", "REJECTED"}
     target_status = req.status.upper() if req.status and req.status.upper() in allowed_statuses else "APPLIED"
 
     with Session(engine) as session:

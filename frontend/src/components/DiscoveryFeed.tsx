@@ -11,6 +11,10 @@ import {
   Sparkles,
   Landmark,
   Target,
+  Search,
+  Star,
+  Globe,
+  X,
 } from 'lucide-react';
 import { DbJobPosting } from '../types';
 import { BACKEND_ORIGIN } from '../services/api';
@@ -72,6 +76,7 @@ interface DiscoveryFeedProps {
   totalJobs?: number;
   onPageChange?: (page: number) => void;
   scrapeStats: { total: number; staged: number; filteredOut: number } | null;
+  scrapeTaskInfo?: { status: string; progressPct: number; errorMessage?: string | null } | null;
   preparedEmailPkg: PreparedEmailPkg | null;
   onDismissEmailPkg: () => void;
   draftingJobId: number | null;
@@ -80,6 +85,18 @@ interface DiscoveryFeedProps {
   onSelectJob: (job: DbJobPosting) => void;
   onOpenFillForm?: (job: DbJobPosting) => void;
   onDraftInGmail: (job: DbJobPosting) => void;
+  searchQuery?: string;
+  onSearchQueryChange?: (q: string) => void;
+  remoteTypeFilter?: string;
+  onRemoteTypeFilterChange?: (mode: string) => void;
+  onlySavedFilter?: boolean;
+  onOnlySavedFilterChange?: (val: boolean) => void;
+  b2bOnlyFilter?: boolean;
+  onB2bOnlyFilterChange?: (val: boolean) => void;
+  geoEligibleOnlyFilter?: boolean;
+  onGeoEligibleOnlyFilterChange?: (val: boolean) => void;
+  savedJobIds?: Set<number>;
+  onToggleSaveJob?: (job: DbJobPosting) => void;
 }
 
 function formatSalaryDisplay(job: DbJobPosting): string | null {
@@ -117,6 +134,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
   totalJobs,
   onPageChange,
   scrapeStats,
+  scrapeTaskInfo,
   preparedEmailPkg,
   onDismissEmailPkg,
   draftingJobId,
@@ -125,6 +143,18 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
   onSelectJob,
   onOpenFillForm,
   onDraftInGmail,
+  searchQuery = '',
+  onSearchQueryChange,
+  remoteTypeFilter = 'ALL',
+  onRemoteTypeFilterChange,
+  onlySavedFilter = false,
+  onOnlySavedFilterChange,
+  b2bOnlyFilter = false,
+  onB2bOnlyFilterChange,
+  geoEligibleOnlyFilter = false,
+  onGeoEligibleOnlyFilterChange,
+  savedJobIds,
+  onToggleSaveJob,
 }) => {
   const [localTierTab, setLocalTierTab] = useState<'ALL' | 'DIRECT' | 'ADJACENT' | 'PUBLIC_INTERNSHIP'>('ALL');
   const tierTab = controlledTierTab ?? localTierTab;
@@ -154,16 +184,31 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
   const adjacentRoles = candidateProfile?.adjacent_roles || [];
   const eduList = candidateProfile?.education || [];
 
-  const portals = ['ALL', 'jobs.ge', 'hr.ge', 'headhunter.ge', 'hr.gov.ge', 'linkedin.com', 'djinni.co', 'dou.ua', 'justjoin.it'];
+  const portals = [
+    'ALL',
+    'jobs.ge',
+    'hr.ge',
+    'headhunter.ge',
+    'hr.gov.ge',
+    'remotive.com',
+    'himalayas.app',
+    'remoteok.com',
+    'linkedin.com',
+    'djinni.co',
+    'dou.ua',
+    'justjoin.it',
+    'greenhouse.io',
+    'lever.co',
+  ];
 
   return (
     <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl space-y-4">
       {/* Dynamic Domain-Agnostic Role Header */}
       {profileUploaded && (
-        <div className="p-3.5 rounded-xl bg-slate-950/90 border border-sky-500/30 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
+        <div className="p-3.5 rounded-xl bg-slate-950/90 border border-emerald-500/30 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
           <div className="space-y-1">
             <div className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="inline-flex items-center gap-1 font-bold text-sky-300">
+              <span className="inline-flex items-center gap-1 font-bold text-emerald-300">
                 <Compass className="w-3.5 h-3.5" />
                 Candidate:
               </span>
@@ -220,15 +265,26 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
             <Database className="w-4 h-4 text-emerald-400" />
             Universal Multi-Tier Optimal Opportunity Feed
           </h3>
-          <p className="text-xs text-slate-400">
-            Adapts dynamically to any uploaded <code>skills.md</code> across <strong>Jobs.ge</strong>, <strong>HR.ge</strong>, <strong>HeadHunter.ge</strong>, <strong>HR.gov.ge</strong>, <strong>Djinni.co</strong>, <strong>DOU.ua</strong> &amp; <strong>JustJoin.it</strong>.
+          <p className="text-xs text-slate-300">
+            Adapts dynamically to your <code>skills.md</code> across Georgian portals (<strong>Jobs.ge</strong>, <strong>HR.ge</strong>, <strong>HeadHunter.ge</strong>, <strong>HR.gov.ge</strong>) and global Remote B2B boards (<strong>Remotive</strong>, <strong>Himalayas</strong>, <strong>RemoteOK</strong>, <strong>Djinni</strong>, <strong>JustJoin</strong>).
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           <button
+            type="button"
+            onClick={onUploadClick}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 text-xs font-bold transition-all"
+            title="Upload or replace your CV (.pdf, .docx, .md, .txt)"
+          >
+            <Upload className="w-3.5 h-3.5" />
+            <span>{profileUploaded ? 'Update CV / skills.md' : 'Upload CV / skills.md'}</span>
+          </button>
+
+          <button
+            type="button"
             onClick={onRunScrapers}
-            disabled={isScraping || !profileUploaded}
+            disabled={isScraping}
             className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-md shadow-emerald-600/20 transition-all disabled:opacity-50"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isScraping ? 'animate-spin' : ''}`} />
@@ -241,7 +297,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
               onClick={() => onSelectStatusFilter(st)}
               className={`text-[11px] px-2.5 py-1.5 rounded-lg font-semibold transition-colors ${
                 dbStatusFilter === st
-                  ? 'bg-sky-600 text-white'
+                  ? 'bg-emerald-600 text-white'
                   : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
               }`}
             >
@@ -302,25 +358,133 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
         </button>
       </div>
 
-      {/* Portal Filter Chips */}
-      {visibleJobs.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-slate-800/60">
-          <span className="text-[10px] font-bold uppercase text-slate-500 mr-1">Portals:</span>
+      {/* Portal Filter Chips + Search & Work Mode Bar */}
+      <div className="space-y-2.5 pt-2 border-t border-slate-800/60">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5">
+          {/* Live Keyword Search Input */}
+          {onSearchQueryChange && (
+            <div className="relative flex-1 max-w-md">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" aria-hidden="true" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => onSearchQueryChange(e.target.value)}
+                aria-label="Search vacancies by role, company, or skill"
+                placeholder="Search by role, company, or skill (e.g. QA, Python, API, TBC)..."
+                className="w-full pl-8 pr-8 py-1.5 rounded-xl bg-slate-950 border border-slate-700 focus:border-emerald-400 focus:outline-none text-xs text-white placeholder-slate-400"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => onSearchQueryChange('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                  aria-label="Clear search"
+                  title="Clear search"
+                >
+                  <X className="w-3.5 h-3.5" aria-hidden="true" />
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Work Mode, Georgia/B2B Eligibility & Saved Jobs Filter Pills */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {onRemoteTypeFilterChange && (
+              <>
+                <span className="text-[10px] font-bold uppercase text-slate-300 mr-1 inline-flex items-center gap-1">
+                  <Globe className="w-3 h-3" aria-hidden="true" /> Mode:
+                </span>
+                {[
+                  { id: 'ALL', label: 'All Modes' },
+                  { id: 'REMOTE', label: 'Remote' },
+                  { id: 'HYBRID', label: 'Hybrid' },
+                  { id: 'ONSITE', label: 'On-Site' },
+                ].map((mode) => (
+                  <button
+                    key={mode.id}
+                    type="button"
+                    aria-pressed={remoteTypeFilter === mode.id}
+                    onClick={() => onRemoteTypeFilterChange(mode.id)}
+                    className={`text-[11px] px-2.5 py-1 rounded-lg font-medium transition-colors ${
+                      remoteTypeFilter === mode.id
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-slate-950 text-slate-300 hover:text-white border border-slate-800'
+                    }`}
+                  >
+                    {mode.label}
+                  </button>
+                ))}
+              </>
+            )}
+
+            {onB2bOnlyFilterChange && (
+              <button
+                type="button"
+                aria-pressed={b2bOnlyFilter}
+                onClick={() => onB2bOnlyFilterChange(!b2bOnlyFilter)}
+                className={`inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg font-semibold transition-colors ${
+                  b2bOnlyFilter
+                    ? 'bg-teal-600/30 border border-teal-400/70 text-teal-200'
+                    : 'bg-slate-950 text-slate-300 hover:text-teal-200 border border-slate-800'
+                }`}
+              >
+                <span>B2B Remote Contracts</span>
+              </button>
+            )}
+
+            {onGeoEligibleOnlyFilterChange && (
+              <button
+                type="button"
+                aria-pressed={geoEligibleOnlyFilter}
+                onClick={() => onGeoEligibleOnlyFilterChange(!geoEligibleOnlyFilter)}
+                className={`inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg font-semibold transition-colors ${
+                  geoEligibleOnlyFilter
+                    ? 'bg-emerald-600/30 border border-emerald-400/70 text-emerald-200'
+                    : 'bg-slate-950 text-slate-300 hover:text-emerald-200 border border-slate-800'
+                }`}
+              >
+                <span>Georgia Eligible</span>
+              </button>
+            )}
+
+            {onOnlySavedFilterChange && (
+              <button
+                type="button"
+                aria-pressed={onlySavedFilter}
+                onClick={() => onOnlySavedFilterChange(!onlySavedFilter)}
+                className={`inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg font-semibold transition-colors ${
+                  onlySavedFilter
+                    ? 'bg-amber-500/20 border border-amber-400/70 text-amber-200'
+                    : 'bg-slate-950 text-slate-300 hover:text-amber-200 border border-slate-800'
+                }`}
+              >
+                <Star className={`w-3 h-3 ${onlySavedFilter ? 'fill-amber-400 text-amber-400' : ''}`} aria-hidden="true" />
+                <span>Saved ({savedJobIds ? savedJobIds.size : 0})</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Portal Filter Chips */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[10px] font-bold uppercase text-slate-300 mr-1">Portals:</span>
           {portals.map((p) => (
             <button
               key={p}
+              type="button"
+              aria-pressed={selectedPortalFilter === p}
               onClick={() => onSelectPortalFilter(p)}
               className={`text-[11px] px-2.5 py-1 rounded-lg font-medium transition-colors ${
                 selectedPortalFilter === p
-                  ? 'bg-sky-600 text-white'
-                  : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-slate-950 text-slate-300 hover:text-white border border-slate-800'
               }`}
             >
               {p}
             </button>
           ))}
         </div>
-      )}
+      </div>
 
       {/* Prepared Gmail Package Banner */}
       {preparedEmailPkg && (
@@ -328,14 +492,14 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
           className={`p-4 rounded-xl border text-xs space-y-2.5 ${
             preparedEmailPkg.gmail_draft_saved
               ? 'bg-emerald-950/35 border-emerald-700/60'
-              : 'bg-sky-950/35 border-sky-700/60'
+              : 'bg-emerald-950/35 border-emerald-700/60'
           }`}
         >
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div>
               <span
                 className={`text-[10px] font-bold uppercase block ${
-                  preparedEmailPkg.gmail_draft_saved ? 'text-emerald-400' : 'text-sky-400'
+                  preparedEmailPkg.gmail_draft_saved ? 'text-emerald-400' : 'text-emerald-400'
                 }`}
               >
                 {preparedEmailPkg.gmail_draft_saved
@@ -344,7 +508,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
               </span>
               <span className="text-white font-semibold">
                 {preparedEmailPkg.title} ({preparedEmailPkg.company}) &mdash; Subject:{' '}
-                <code className="text-sky-300">{preparedEmailPkg.subject}</code>
+                <code className="text-emerald-300">{preparedEmailPkg.subject}</code>
               </span>
               {preparedEmailPkg.draft_error && !preparedEmailPkg.gmail_draft_saved && (
                 <p className="text-[11px] text-amber-300 mt-1">{preparedEmailPkg.draft_error}</p>
@@ -392,12 +556,40 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
         </div>
       )}
 
+      {/* Async Background Scan Status Bar */}
+      {scrapeTaskInfo && ['PENDING', 'PROCESSING', 'FAILED'].includes(scrapeTaskInfo.status) && (
+        <div
+          className={`text-xs px-3.5 py-2.5 rounded-xl border space-y-1.5 ${
+            scrapeTaskInfo.status === 'FAILED'
+              ? 'bg-rose-950/40 border-rose-800 text-rose-300'
+              : 'bg-emerald-950/40 border-emerald-800/70 text-emerald-200'
+          }`}
+        >
+          <div className="flex items-center justify-between gap-2 font-semibold">
+            <span>
+              {scrapeTaskInfo.status === 'FAILED'
+                ? `Scan Failed: ${scrapeTaskInfo.errorMessage || 'Check portal network status'}`
+                : `Portal Scan (${scrapeTaskInfo.status}) — scoring remote & local matches...`}
+            </span>
+            <span className="font-mono">{scrapeTaskInfo.progressPct}%</span>
+          </div>
+          {scrapeTaskInfo.status !== 'FAILED' && (
+            <div className="w-full h-1.5 rounded-full bg-slate-800 overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-sky-500 to-emerald-400 transition-all duration-300"
+                style={{ width: `${Math.min(100, Math.max(8, scrapeTaskInfo.progressPct))}%` }}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Synchronized Feed Stats Banner */}
       {(Boolean(totalJobs) || visibleJobs.length > 0 || Boolean(scrapeStats)) && (
         <div className="text-xs bg-emerald-950/30 border border-emerald-800/60 text-emerald-300 px-3.5 py-2 rounded-xl flex items-center justify-between flex-wrap gap-2">
           <span>
             ✅ Found <strong>{totalJobs ?? visibleJobs.length}</strong> suitable opportunities ({tierCounts?.DIRECT ?? directJobs.length} Direct • {tierCounts?.ADJACENT ?? adjacentJobs.length} Adjacent • {tierCounts?.PUBLIC_INTERNSHIP ?? publicJobs.length} Public/Intern)
-            <span className="text-sky-300 ml-1.5">(showing {visibleJobs.length} on page {page} of {totalPages})</span>
+            <span className="text-emerald-300 ml-1.5">(showing {visibleJobs.length} on page {page} of {totalPages})</span>
             {scrapeStats && scrapeStats.filteredOut > 0 && (
               <span className="text-slate-400 ml-1.5">
                 ({Math.max(0, scrapeStats.filteredOut)} filtered out by location/seniority gates)
@@ -419,11 +611,11 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 Upload your skills.md file to scan tailored live vacancies
               </h4>
               <p className="text-xs text-slate-400 max-w-md mx-auto">
-                Your discovery feed adapts automatically to any domain. Upload <code className="text-sky-300">skills.md</code> to discover Direct Matches, Adjacent Transferable Roles, and Public Sector Internships.
+                Your discovery feed adapts automatically to any domain. Upload <code className="text-emerald-300">skills.md</code> to discover Direct Matches, Adjacent Transferable Roles, and Public Sector Internships.
               </p>
               <button
                 onClick={onUploadClick}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold shadow-md transition-colors"
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-md transition-colors"
               >
                 <Upload className="w-3.5 h-3.5" />
                 <span>Upload skills.md Now</span>
@@ -445,7 +637,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 <button
                   type="button"
                   onClick={() => onSelectPortalFilter('ALL')}
-                  className="px-3.5 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold"
+                  className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold"
                 >
                   View All Portals
                 </button>
@@ -479,29 +671,63 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
           return (
             <div
               key={`${job.portal}-${job.external_id}`}
+              role="button"
+              tabIndex={0}
               onClick={() => onSelectJob(job)}
-              className={`p-3.5 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onSelectJob(job);
+                }
+              }}
+              aria-label={`Inspect ${job.title} at ${job.company}`}
+              className={`p-3.5 rounded-xl border cursor-pointer transition-all flex flex-col justify-between text-left ${
                 isStaged
-                  ? 'bg-slate-950 border-emerald-700/60 hover:border-emerald-500'
+                  ? 'bg-slate-950 border-emerald-700/60 hover:border-emerald-400'
                   : tier === 'ADJACENT'
-                  ? 'bg-slate-950 border-indigo-700/60 hover:border-indigo-500'
-                  : 'bg-slate-950/70 border-slate-800 hover:border-slate-700'
+                  ? 'bg-slate-950 border-indigo-700/60 hover:border-indigo-400'
+                  : 'bg-slate-950/70 border-slate-800 hover:border-slate-600'
               }`}
             >
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between gap-1 flex-wrap">
-                  <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-slate-900 text-sky-400 border border-slate-700">
+                  <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-slate-900 text-emerald-300 border border-slate-700">
                     {job.portal} • {job.market}
                   </span>
-                  <span
-                    className={`text-[10px] font-bold px-2 py-0.5 rounded ${
-                      isStaged
-                        ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
-                        : 'bg-amber-950 text-amber-300 border border-amber-800'
-                    }`}
-                  >
-                    {job.status} ({job.suitability_score}%)
-                  </span>
+                  <div className="flex items-center gap-1">
+                    {onToggleSaveJob && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onToggleSaveJob(job);
+                        }}
+                        aria-label={savedJobIds?.has(job.id) ? `Unsave ${job.title}` : `Save ${job.title}`}
+                        className={`p-1 rounded-md border transition-colors ${
+                          savedJobIds?.has(job.id)
+                            ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
+                            : 'bg-slate-900 border-slate-800 text-slate-300 hover:text-amber-300'
+                        }`}
+                        title={savedJobIds?.has(job.id) ? 'Remove from Saved Jobs' : 'Bookmark / Save Job for later'}
+                      >
+                        <Star
+                          className={`w-3 h-3 ${
+                            savedJobIds?.has(job.id) ? 'fill-amber-400 text-amber-400' : ''
+                          }`}
+                          aria-hidden="true"
+                        />
+                      </button>
+                    )}
+                    <span
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                        isStaged
+                          ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                          : 'bg-amber-950 text-amber-300 border border-amber-800'
+                      }`}
+                    >
+                      {job.status} ({job.suitability_score}%)
+                    </span>
+                  </div>
                 </div>
 
                 {tier === 'ADJACENT' && (
@@ -515,9 +741,30 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 )}
 
                 {tier === 'PUBLIC_INTERNSHIP' && (
-                  <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-cyan-950/90 text-cyan-300 border border-cyan-700/60">
-                    <Landmark className="w-2.5 h-2.5" />
+                  <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-cyan-950/90 text-cyan-200 border border-cyan-700/60">
+                    <Landmark className="w-2.5 h-2.5" aria-hidden="true" />
                     <span>Public Sector / Internship</span>
+                  </div>
+                )}
+
+                {job.contract_mode && (
+                  <div
+                    title={job.eligibility_note || ''}
+                    className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-md border ${
+                      job.contract_mode === 'REMOTE_B2B'
+                        ? 'bg-teal-950/80 text-teal-200 border-teal-700/60'
+                        : job.contract_mode === 'GE_LOCAL'
+                        ? 'bg-emerald-950/80 text-emerald-200 border-emerald-700/60'
+                        : 'bg-amber-950/70 text-amber-200 border-amber-700/60'
+                    }`}
+                  >
+                    <span>
+                      {job.contract_mode === 'REMOTE_B2B'
+                        ? 'Global B2B (1% Tax Eligible)'
+                        : job.contract_mode === 'GE_LOCAL'
+                        ? 'Georgia Market'
+                        : 'Region Check Needed'}
+                    </span>
                   </div>
                 )}
 
@@ -525,36 +772,54 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 <div className="text-[11px] text-slate-300 font-medium">{job.company}</div>
 
                 {salaryStr ? (
-                  <div className="flex items-center gap-1.5 text-[11px] pt-0.5">
+                  <div className="flex items-center gap-1.5 text-[11px] pt-0.5 flex-wrap">
                     <span className="text-emerald-300 font-semibold">{salaryStr}</span>
-                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-900 text-slate-300 border border-slate-700">
-                      📄 Stated
-                    </span>
+                    {job.salary_source === 'ai_estimated' || job.salary_estimated_by_ai ? (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-950/70 text-amber-200 border border-amber-800/70">
+                        AI Estimated
+                      </span>
+                    ) : (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-950/70 text-emerald-200 border border-emerald-800/70">
+                        Verified
+                      </span>
+                    )}
                   </div>
                 ) : (
-                  <div className="text-[10px] text-slate-500 pt-0.5">
-                    {(job.description_raw || '').includes('არ ითვალისწინებს ანაზღაურებას') ||
-                    (job.description_raw || '').toLowerCase().includes('unpaid')
-                      ? 'Salary: Unpaid Internship'
-                      : 'Salary not specified'}
+                  <div className="text-[10px] text-slate-300 pt-0.5 flex items-center gap-1.5">
+                    <span>
+                      {(job.description_raw || '').includes('არ ითვალისწინებს ანაზღაურებას') ||
+                      (job.description_raw || '').toLowerCase().includes('unpaid')
+                        ? 'Salary: Unpaid Internship'
+                        : 'Salary: Not Listed'}
+                    </span>
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-900 text-slate-300 border border-slate-700">
+                      Not Listed
+                    </span>
                   </div>
                 )}
 
-                {job.deadline_text && (
-                  <div className="text-[10px] text-amber-300 bg-amber-950/40 border border-amber-800/60 px-2 py-0.5 rounded-md inline-block">
-                    📅 Deadline: {job.deadline_text}
-                  </div>
-                )}
+                <div className="flex items-center gap-2 flex-wrap">
+                  {(job.posting_date || job.scraped_at) && (
+                    <span className="text-[10px] text-slate-300">
+                      Posted: {job.posting_date || new Date(job.scraped_at).toLocaleDateString()}
+                    </span>
+                  )}
+                  {job.deadline_text && (
+                    <span className="text-[10px] text-amber-200 bg-amber-950/50 border border-amber-800/60 px-2 py-0.5 rounded-md">
+                      Deadline: {job.deadline_text}
+                    </span>
+                  )}
+                </div>
 
-                <div className="text-[10px] text-slate-400 line-clamp-2 pt-1 border-t border-slate-800/60">
+                <div className="text-[10px] text-slate-300 line-clamp-2 pt-1 border-t border-slate-800/60">
                   <span>{job.match_rationale}</span>
                 </div>
               </div>
 
               <div className="pt-2 mt-2 border-t border-slate-800/60 space-y-2 text-[10px]">
                 <div className="flex items-center justify-between">
-                  <span className="text-sky-400 font-semibold">Load into Auditor</span>
-                  <span className="text-slate-500">Lang: {job.language_requirements.join(', ')}</span>
+                  <span className="text-emerald-300 font-semibold">View Details &amp; Tailor CV</span>
+                  <span className="text-slate-300">Lang: {job.language_requirements.join(', ')}</span>
                 </div>
 
                 <div className="flex items-center gap-1.5 pt-1">
@@ -583,7 +848,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                           onSelectJob(job);
                         }
                       }}
-                      className="flex-1 flex items-center justify-center gap-1 py-1 px-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold transition-colors"
+                      className="flex-1 flex items-center justify-center gap-1 py-1 px-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold transition-colors"
                     >
                       <Play className="w-3 h-3" />
                       <span>Open &amp; Fill Form</span>
@@ -595,10 +860,11 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                     target="_blank"
                     rel="noopener noreferrer"
                     onClick={(e) => e.stopPropagation()}
-                    className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700"
+                    className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700"
+                    aria-label={`Open original posting for ${job.title}`}
                     title="Open live job page in new tab"
                   >
-                    <ExternalLink className="w-3 h-3" />
+                    <ExternalLink className="w-3 h-3" aria-hidden="true" />
                   </a>
                 </div>
               </div>
@@ -630,7 +896,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 onClick={() => onPageChange(pNum)}
                 className={`px-2.5 py-1.5 rounded-lg font-semibold ${
                   pNum === page
-                    ? 'bg-sky-600 text-white'
+                    ? 'bg-emerald-600 text-white'
                     : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
                 }`}
               >

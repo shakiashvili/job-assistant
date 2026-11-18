@@ -164,11 +164,13 @@ export const ActionPlanView: React.FC = () => {
                     </span>
                   )}
                   <button
+                    type="button"
                     onClick={() => handleDelete(plan.id)}
-                    className="text-slate-500 hover:text-rose-400 p-1"
+                    aria-label={`Delete roadmap for ${plan.skill_name}`}
+                    className="text-slate-400 hover:text-rose-400 p-1"
                     title="Delete Roadmap"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
+                    <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
                   </button>
                 </div>
               </div>
@@ -222,7 +224,7 @@ export const ActionPlanView: React.FC = () => {
                         <span className="font-bold text-[10px] text-indigo-400 uppercase">
                           Day {m.day}:
                         </span>
-                        <span className={m.completed ? 'line-through text-slate-500' : 'text-slate-200'}>
+                        <span className={m.completed ? 'line-through text-slate-400' : 'text-slate-200'}>
                           {m.task}
                         </span>
                       </div>
@@ -233,7 +235,7 @@ export const ActionPlanView: React.FC = () => {
                             target="_blank"
                             rel="noopener noreferrer"
                             onClick={(e) => e.stopPropagation()}
-                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-sky-950/70 border border-sky-800/70 text-[10px] text-sky-300 hover:text-sky-200"
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-950/70 border border-emerald-800/70 text-[10px] text-emerald-300 hover:text-emerald-200"
                           >
                             <span>Official Docs</span>
                             <ExternalLink className="w-2.5 h-2.5" />
@@ -308,7 +310,7 @@ export const ActionPlanView: React.FC = () => {
           <button
             onClick={handleGenerate}
             disabled={generating}
-            className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-xs font-semibold text-white inline-flex items-center gap-1.5"
+            className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white inline-flex items-center gap-1.5"
           >
             <Sparkles className="w-3.5 h-3.5" />
             <span>Generate Roadmaps</span>

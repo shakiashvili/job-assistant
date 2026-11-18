@@ -78,7 +78,11 @@ async function tryRefreshSession(cfg) {
 
 async function apiRequest(path, { method = "GET", body = null, requiresAuth = true } = {}) {
   const cfg = await getConfig();
-  if (requiresAuth && !cfg.jwtToken) {
+  let activeToken = cfg.jwtToken;
+  if (requiresAuth && !activeToken && cfg.refreshToken) {
+    activeToken = await tryRefreshSession(cfg);
+  }
+  if (requiresAuth && !activeToken) {
     return {
       ok: false,
       status: 401,
@@ -99,7 +103,7 @@ async function apiRequest(path, { method = "GET", body = null, requiresAuth = tr
   };
 
   try {
-    let resp = await execute(cfg.jwtToken);
+    let resp = await execute(activeToken);
 
     if (resp.status === 401 && requiresAuth && path !== "/api/auth/refresh") {
       const nextToken = await tryRefreshSession(cfg);
@@ -280,7 +284,31 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
-  if (type === "LOGOUT") {
+  if (type === "SYNC_WEB_AUTH") {
+    (async () => {
+      const token = (message.token || "").trim();
+      const refreshToken = (message.refreshToken || "").trim();
+      if (!token && !refreshToken) {
+        sendResponse({ ok: false });
+        return;
+      }
+      const updates = {
+        jwtToken: token,
+        refreshToken: refreshToken,
+        userEmail: message.userEmail || "",
+        userName: message.userName || "Candidate",
+      };
+      await chrome.storage.local.set(updates);
+      const rawBase = (message.apiBaseUrl || "").trim().replace(/\/+$/, "");
+      if (rawBase && /^https?:\/\//i.test(rawBase)) {
+        await chrome.storage.sync.set({ apiBaseUrl: rawBase });
+      }
+      sendResponse({ ok: true, synced: true });
+    })();
+    return true;
+  }
+
+  if (type === "LOGOUT" || type === "SYNC_WEB_LOGOUT") {
     chrome.storage.local.remove(["jwtToken", "refreshToken", "userEmail", "userName", "lastPreparedApp"], () => {
       sendResponse({ ok: true, authenticated: false });
     });
@@ -296,6 +324,32 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       });
       if (res.ok && res.data) {
         await chrome.storage.local.set({ lastPreparedApp: res.data });
+      }
+      sendResponse(res);
+    })();
+    return true;
+  }
+
+  if (type === "UPLOAD_SKILLS_MD") {
+    (async () => {
+      const payload = {
+        filename: message.filename || "skills.md",
+      };
+      if (message.contentBase64) {
+        payload.content_base64 = message.contentBase64;
+      } else {
+        payload.content = message.content || "";
+      }
+      const res = await apiRequest("/api/extension/upload-skills", {
+        method: "POST",
+        body: payload,
+        requiresAuth: true,
+      });
+      if (res.ok && res.data?.user_email) {
+        await chrome.storage.local.set({
+          userEmail: res.data.user_email,
+          userName: res.data.full_name || "Candidate",
+        });
       }
       sendResponse(res);
     })();
@@ -336,6 +390,69 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (type === "GET_LAST_PREPARED") {
     getConfig().then((cfg) => sendResponse({ ok: true, data: cfg.lastPreparedApp }));
+    return true;
+  }
+
+  if (type === "SYNC_FROM_OPEN_WEB_TAB") {
+    (async () => {
+      try {
+        const tabs = await chrome.tabs.query({});
+        const webTab = tabs.find(
+          (t) =>
+            t.url &&
+            (t.url.startsWith("http://localhost:5173") ||
+              t.url.startsWith("http://127.0.0.1:5173") ||
+              t.url.includes("talentflow") ||
+              t.url.includes("vercel.app") ||
+              t.url.includes("pages.dev") ||
+              t.url.includes("onrender.com"))
+        );
+        if (!webTab || !webTab.id) {
+          sendResponse({
+            ok: false,
+            error: "Open the TalentFlow Web Portal (http://localhost:5173) in a tab first, or sign in with email & password.",
+          });
+          return;
+        }
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: webTab.id },
+          func: () => ({
+            token: localStorage.getItem("talentflow_token") || "",
+            refreshToken: localStorage.getItem("talentflow_refresh_token") || "",
+            userRaw: localStorage.getItem("talentflow_user") || "",
+          }),
+        });
+        const extracted = results?.[0]?.result;
+        if (!extracted || !extracted.token) {
+          sendResponse({
+            ok: false,
+            error: "No active login token found in the open Web Portal tab. Please sign in on the web portal first.",
+          });
+          return;
+        }
+        let parsedUser = {};
+        try {
+          parsedUser = extracted.userRaw ? JSON.parse(extracted.userRaw) : {};
+        } catch (_e) {}
+        await chrome.storage.local.set({
+          jwtToken: extracted.token,
+          refreshToken: extracted.refreshToken || "",
+          userEmail: parsedUser.email || "",
+          userName: parsedUser.full_name || "",
+        });
+        const prof = await apiRequest("/api/extension/profile", { method: "GET", requiresAuth: true });
+        sendResponse({
+          ok: true,
+          authenticated: true,
+          profile: prof.ok ? prof.data : null,
+        });
+      } catch (err) {
+        sendResponse({
+          ok: false,
+          error: `Could not sync from web tab: ${err?.message || String(err)}`,
+        });
+      }
+    })();
     return true;
   }
 

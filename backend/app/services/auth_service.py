@@ -1,4 +1,5 @@
 import logging
+import secrets
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
@@ -124,11 +125,35 @@ def decode_refresh_token(token: str) -> Optional[dict]:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         if payload.get("token_type") != "refresh":
-            logger.debug("Rejected non-refresh token in refresh endpoint")
             return None
         return payload
     except JWTError as e:
         logger.debug(f"Refresh JWT decode error: {e}")
+        return None
+
+
+def create_oauth_state_token(user_id: Optional[int], email: str) -> str:
+    """Signs short-lived HS256 OAuth state linking callback tokens safely to the initiating user."""
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": email,
+        "uid": user_id,
+        "nonce": secrets.token_urlsafe(12),
+        "token_type": "oauth_state",
+        "iat": now,
+        "exp": now + timedelta(minutes=15),
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def decode_oauth_state_token(token: str) -> Optional[dict]:
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("token_type") != "oauth_state":
+            return None
+        return payload
+    except JWTError as e:
+        logger.debug(f"OAuth state token invalid: {e}")
         return None
 
 

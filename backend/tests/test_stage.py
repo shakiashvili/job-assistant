@@ -1,15 +1,15 @@
 import pytest
 from fastapi.testclient import TestClient
 from app.main import app
-from app.config import MOCK_PORTALS_DIR
+from app.config import TEST_FORMS_DIR
 
 client = TestClient(app)
 
 
 def test_stage_application_endpoint():
-    mock_url = (MOCK_PORTALS_DIR / "greenhouse_sample.html").as_uri()
+    sample_url = (TEST_FORMS_DIR / "greenhouse_sample.html").as_uri()
     payload = {
-        "job_url": mock_url,
+        "job_url": sample_url,
         "variant": "qa_automation",
         "headless": True,
         "timeout_seconds": 3

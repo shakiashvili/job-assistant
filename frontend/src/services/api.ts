@@ -17,6 +17,9 @@ import {
   InterviewBrief,
   PlatformMetrics,
   AdminUser,
+  CVVersionItem,
+  CandidateAnalyticsResponse,
+  AIMetricsResponse,
 } from '../types';
 
 export const BACKEND_ORIGIN = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
@@ -115,24 +118,31 @@ export async function fetchVacancies(): Promise<PortalVacancyItem[]> {
 }
 
 export async function fetchGroundTruth(): Promise<GroundTruth> {
-  const res = await fetch(`${API_BASE}/ground-truth`);
+  const res = await apiFetch(`${API_BASE}/ground-truth`, { headers: getAuthHeaders() });
   if (!res.ok) throw new Error('Failed to fetch ground truth');
   return res.json();
 }
 
 export async function saveGroundTruth(data: GroundTruth): Promise<GroundTruth> {
-  const res = await fetch(`${API_BASE}/ground-truth`, {
+  const res = await apiFetch(`${API_BASE}/ground-truth`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify(data),
   });
   if (!res.ok) throw new Error('Failed to update ground truth');
   const json = await res.json();
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('talentflow:profile-updated', {
+        detail: { syncedCvVersions: json.synced_cv_versions || 0 },
+      })
+    );
+  }
   return json.data;
 }
 
 export async function fetchSkillsMd(): Promise<{ filename: string; content: string; extracted_skills: string[] }> {
-  const res = await fetch(`${API_BASE}/skills-md`);
+  const res = await apiFetch(`${API_BASE}/skills-md`, { headers: getAuthHeaders() });
   if (!res.ok) throw new Error('Failed to load skills.md');
   return res.json();
 }
@@ -175,15 +185,24 @@ export async function uploadSkillsMdFile(file: File): Promise<{
   content: string;
   extracted_skills: string[];
   parsed_skills?: ParsedSkillsTaxonomy;
+  scrape_summary?: any;
   message: string;
 }> {
   const formData = new FormData();
   formData.append('file', file);
+  formData.append('run_live_scrape', 'false');
   const res = await apiFetch(`${API_BASE}/profile/upload-skills`, {
     method: 'POST',
     body: formData,
   });
-  if (!res.ok) throw new Error('Failed to upload .md file');
+  if (!res.ok) {
+    let errMsg = 'Failed to upload .md file';
+    try {
+      const errData = await res.json();
+      if (errData?.detail) errMsg = errData.detail;
+    } catch {}
+    throw new Error(errMsg);
+  }
   const data = await res.json();
   const allSkills: string[] = data.parsed_skills?.all_skills || [];
   return {
@@ -192,6 +211,7 @@ export async function uploadSkillsMdFile(file: File): Promise<{
     content: data.raw_markdown || '',
     extracted_skills: allSkills,
     parsed_skills: data.parsed_skills,
+    scrape_summary: data.scrape_summary,
     message: `Uploaded ${file.name} into SQLite CandidateProfile (${allSkills.length} skills indexed)!`,
   };
 }
@@ -217,6 +237,12 @@ export async function fetchScrapedJobs(params?: {
   status?: string;
   min_score?: number;
   tier?: string;
+  search?: string;
+  remote_type?: string;
+  only_new?: boolean;
+  only_saved?: boolean;
+  b2b_only?: boolean;
+  geo_eligible_only?: boolean;
 } | string): Promise<PaginatedJobsResponse> {
   const qs = new URLSearchParams();
   if (typeof params === 'string') {
@@ -228,6 +254,12 @@ export async function fetchScrapedJobs(params?: {
     if (params.status && params.status !== 'ALL') qs.set('status', params.status);
     if (params.min_score !== undefined) qs.set('min_score', String(params.min_score));
     if (params.tier && params.tier !== 'ALL') qs.set('tier', params.tier);
+    if (params.search && params.search.trim()) qs.set('search', params.search.trim());
+    if (params.remote_type && params.remote_type !== 'ALL') qs.set('remote_type', params.remote_type);
+    if (params.only_new) qs.set('only_new', 'true');
+    if (params.only_saved) qs.set('only_saved', 'true');
+    if (params.b2b_only) qs.set('b2b_only', 'true');
+    if (params.geo_eligible_only) qs.set('geo_eligible_only', 'true');
   }
   const queryStr = qs.toString() ? `?${qs.toString()}` : '';
   const res = await apiFetch(`${API_BASE}/jobs${queryStr}`, {
@@ -258,8 +290,40 @@ export async function triggerMultiPortalScrape(allowNetwork = true): Promise<{
   return res.json();
 }
 
+export async function triggerAsyncScrape(allowNetwork = true): Promise<{
+  task_id: string;
+  status: string;
+  deduplicated?: boolean;
+}> {
+  const res = await apiFetch(`${API_BASE}/jobs/scrape/async`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ allow_network: allowNetwork }),
+  });
+  if (!res.ok) throw new Error('Failed to start background scraper');
+  return res.json();
+}
+
+export async function fetchScrapeTaskStatus(taskId: string): Promise<{
+  task_id: string;
+  status: string;
+  progress_pct?: number;
+  total_processed: number;
+  staged_count: number;
+  filtered_out_count: number;
+  error_message?: string | null;
+}> {
+  const res = await apiFetch(`${API_BASE}/jobs/scrape/status/${encodeURIComponent(taskId)}`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to check scrape task status');
+  return res.json();
+}
+
 export async function fetchGeneratedResumes(): Promise<Array<{ filename: string; url: string; docx_url?: string | null; html_url?: string | null; size_kb: number }>> {
-  const res = await fetch(`${API_BASE}/resumes/generated`);
+  const res = await apiFetch(`${API_BASE}/resumes/generated`, {
+    headers: getAuthHeaders(),
+  });
   if (!res.ok) return [];
   return res.json();
 }
@@ -308,11 +372,16 @@ export async function generateCvEdition(params: {
   title: string;
   subject: string;
   cover_letter: string;
+  motivational_letter?: string;
   cv_language: string;
   docx_filename: string;
   docx_url: string;
   pdf_filename: string;
   pdf_url: string;
+  html_preview_url?: string;
+  cv_version_id?: number | null;
+  cv_sections?: Record<string, any>;
+  rendered_html?: string;
 }> {
   const res = await apiFetch(`${API_BASE}/resumes/generate-edition`, {
     method: 'POST',
@@ -335,6 +404,7 @@ export async function prepareJobEmailPackage(
   recipient_email: string;
   subject: string;
   cover_letter: string;
+  motivational_letter?: string;
   cv_language: string;
   docx_filename: string;
   docx_url: string;
@@ -365,9 +435,9 @@ export async function auditJob(params: {
   skills_md_override?: string;
   cv_language?: 'en' | 'ka';
 }): Promise<JobAuditResponse> {
-  const res = await fetch(`${API_BASE}/audit-job`, {
+  const res = await apiFetch(`${API_BASE}/audit-job`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify(params),
   });
   if (!res.ok) {
@@ -386,9 +456,9 @@ export async function generateAnswers(params: {
   variant?: string;
   cv_language?: 'en' | 'ka';
 }): Promise<GenerateAnswersResponse> {
-  const res = await fetch(`${API_BASE}/generate-answers`, {
+  const res = await apiFetch(`${API_BASE}/generate-answers`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify(params),
   });
   if (!res.ok) throw new Error('Failed to generate screening answers');
@@ -408,9 +478,9 @@ export async function stageApplication(params: {
   auto_submit?: boolean;
   headless?: boolean;
 }): Promise<StageApplicationResponse> {
-  const res = await fetch(`${API_BASE}/stage-application`, {
+  const res = await apiFetch(`${API_BASE}/stage-application`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify(params),
   });
   if (!res.ok) {
@@ -421,15 +491,41 @@ export async function stageApplication(params: {
 }
 
 export async function fetchApplications(): Promise<ApplicationItem[]> {
-  const res = await fetch(`${API_BASE}/applications`);
+  const res = await apiFetch(`${API_BASE}/applications`, {
+    headers: getAuthHeaders(),
+  });
   if (!res.ok) throw new Error('Failed to fetch applications');
   return res.json();
 }
 
+export async function fetchApplicationAnalytics(): Promise<{
+  total_tracked: number;
+  applications_submitted: number;
+  awaiting_response: number;
+  interviews_received: number;
+  offers_received: number;
+  rejections: number;
+  withdrawn: number;
+  response_rate_pct: number;
+  interview_conversion_rate_pct: number;
+  offer_rate_pct: number;
+  by_status: Record<string, number>;
+}> {
+  const res = await apiFetch(`${API_BASE}/applications/analytics`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to fetch tracker analytics');
+  return res.json();
+}
+
+export function getExportApplicationsUrl(format: 'json' | 'csv' = 'csv'): string {
+  return `${API_BASE}/applications/export?format=${format}`;
+}
+
 export async function createApplication(app: Partial<ApplicationItem>): Promise<ApplicationItem> {
-  const res = await fetch(`${API_BASE}/applications`, {
+  const res = await apiFetch(`${API_BASE}/applications`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify(app),
   });
   if (!res.ok) throw new Error('Failed to create application');
@@ -437,9 +533,9 @@ export async function createApplication(app: Partial<ApplicationItem>): Promise<
 }
 
 export async function updateApplication(id: string, update: Partial<ApplicationItem>): Promise<ApplicationItem> {
-  const res = await fetch(`${API_BASE}/applications/${id}`, {
+  const res = await apiFetch(`${API_BASE}/applications/${id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify(update),
   });
   if (!res.ok) throw new Error('Failed to update application');
@@ -452,6 +548,57 @@ export async function deleteApplication(id: string): Promise<void> {
     headers: getAuthHeaders(),
   });
   if (!res.ok) throw new Error('Failed to delete application');
+}
+
+export async function fetchGoogleCalendarStatus(): Promise<{
+  connected: boolean;
+  google_oauth_configured: boolean;
+  email: string;
+  auth_url: string;
+}> {
+  const res = await apiFetch(`${API_BASE}/applications/calendar/status`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to fetch Google Calendar status');
+  return res.json();
+}
+
+export async function fetchGoogleOAuthConsentUrl(): Promise<{ authorization_url: string }> {
+  const res = await apiFetch(`${API_BASE}/auth/google/login`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to obtain Google OAuth consent URL');
+  return res.json();
+}
+
+export async function createApplicationCalendarEvent(
+  appId: string,
+  payload: {
+    interview_date?: string;
+    duration_minutes?: number;
+    summary?: string;
+    description?: string;
+    location?: string;
+    attendee_email?: string;
+  }
+): Promise<{
+  created_in_google_calendar: boolean;
+  oauth_connected: boolean;
+  needs_oauth: boolean;
+  event_id?: string | null;
+  html_link: string;
+  google_calendar_template_url: string;
+  start_iso: string;
+  end_iso: string;
+  message: string;
+}> {
+  const res = await apiFetch(`${API_BASE}/applications/${appId}/calendar-event`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error('Failed to schedule interview in Google Calendar');
+  return res.json();
 }
 
 // --- Authentication & User API ---
@@ -540,7 +687,11 @@ export async function fetchCurrentUser(): Promise<UserProfile> {
   const res = await apiFetch(`${API_BASE}/auth/me`, {
     headers: { 'Content-Type': 'application/json' },
   });
-  if (!res.ok) throw new Error('Unauthorized');
+  if (!res.ok) {
+    const err = new Error(res.status === 401 ? 'Unauthorized' : `Auth check failed (${res.status})`) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
+  }
   return res.json();
 }
 
@@ -665,11 +816,181 @@ export async function toggleMilestone(planId: number, milestoneIndex: number): P
   return res.json();
 }
 
+export async function saveJob(jobId: number, notes: string = ''): Promise<{ status: string; saved_id: number; job_posting_id: number }> {
+  const res = await apiFetch(`${API_BASE}/jobs/${jobId}/save`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ notes }),
+  });
+  if (!res.ok) throw new Error('Failed to bookmark job');
+  return res.json();
+}
+
+export async function unsaveJob(jobId: number): Promise<{ status: string; job_posting_id: number }> {
+  const res = await apiFetch(`${API_BASE}/jobs/${jobId}/save`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to remove job bookmark');
+  return res.json();
+}
+
+export async function fetchSavedJobs(): Promise<{ items: Array<{ saved_id: number; notes: string; saved_at: string; job: DbJobPosting }> }> {
+  const res = await apiFetch(`${API_BASE}/jobs/saved`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) return { items: [] };
+  return res.json();
+}
+
+export async function fetchSavedSearches(): Promise<{ items: Array<{ id: number; name: string; filters: Record<string, any>; notify_on_new: boolean }> }> {
+  const res = await apiFetch(`${API_BASE}/saved-searches`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) return { items: [] };
+  return res.json();
+}
+
+export async function createSavedSearch(name: string, filters: Record<string, any>, notify_on_new: boolean = true): Promise<any> {
+  const res = await apiFetch(`${API_BASE}/saved-searches`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ name, filters, notify_on_new }),
+  });
+  if (!res.ok) throw new Error('Failed to save search preset');
+  return res.json();
+}
+
+export async function deleteSavedSearch(searchId: number): Promise<void> {
+  await apiFetch(`${API_BASE}/saved-searches/${searchId}`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+}
+
+
 export async function deleteActionPlan(planId: number): Promise<void> {
   const res = await apiFetch(`${API_BASE}/action-plans/${planId}`, {
     method: 'DELETE',
     headers: getAuthHeaders(),
   });
   if (!res.ok) throw new Error('Failed to delete action plan');
+}
+
+// --- Candidate Analytics, Admin AI Observability & CV Studio Versions ---
+
+export async function fetchCandidateAnalytics(): Promise<CandidateAnalyticsResponse> {
+  const res = await apiFetch(`${API_BASE}/analytics/candidate`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to load candidate dashboard analytics');
+  return res.json();
+}
+
+export async function fetchAdminAiMetrics(): Promise<AIMetricsResponse> {
+  const res = await apiFetch(`${API_BASE}/admin/ai-metrics`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to load AI telemetry metrics');
+  return res.json();
+}
+
+export async function fetchCvVersions(): Promise<{ items: CVVersionItem[] }> {
+  const res = await apiFetch(`${API_BASE}/cv-versions`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) return { items: [] };
+  return res.json();
+}
+
+export async function createCvVersion(payload: {
+  title: string;
+  target_company?: string;
+  target_role?: string;
+  edition?: string;
+  language?: string;
+  structured_json?: Record<string, any>;
+}): Promise<CVVersionItem> {
+  const res = await apiFetch(`${API_BASE}/cv-versions`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error('Failed to save CV version');
+  return res.json();
+}
+
+export async function patchCvVersion(
+  versionId: number,
+  payload: {
+    title?: string;
+    target_company?: string;
+    target_role?: string;
+    language?: string;
+    structured_json?: Record<string, any>;
+  }
+): Promise<CVVersionItem> {
+  const res = await apiFetch(`${API_BASE}/cv-versions/${versionId}`, {
+    method: 'PATCH',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error('Failed to update & re-render CV version');
+  return res.json();
+}
+
+export async function deleteCvVersion(versionId: number): Promise<void> {
+  const res = await apiFetch(`${API_BASE}/cv-versions/${versionId}`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to delete CV version');
+}
+
+export async function calculateB2BTax(payload: {
+  amount: number;
+  currency: 'USD' | 'EUR' | 'GBP' | 'GEL';
+  billing_period: 'monthly' | 'hourly' | 'annual';
+  hours_per_month?: number;
+  custom_fx_to_gel?: number;
+  include_pension_for_labor?: boolean;
+  transfer_fee_pct?: number;
+}): Promise<import('../types').B2BTaxCalculatorResponse> {
+  const res = await apiFetch(`${API_BASE}/b2b/tax-calculator`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error('Failed to calculate B2B take-home pay');
+  return res.json();
+}
+
+export async function fetchTimezoneMatrix(
+  workStartGet = 11,
+  workEndGet = 19
+): Promise<import('../types').TimezoneMatrixResponse> {
+  const res = await apiFetch(
+    `${API_BASE}/b2b/timezone-matrix?work_start_get=${workStartGet}&work_end_get=${workEndGet}`,
+    { headers: getAuthHeaders() }
+  );
+  if (!res.ok) throw new Error('Failed to load timezone overlap matrix');
+  return res.json();
+}
+
+export async function generateB2BProposal(payload: {
+  target_role: string;
+  target_company: string;
+  client_region: string;
+  contract_rate?: string;
+  requirements_snippet?: string;
+  language: 'en' | 'ka';
+}): Promise<import('../types').B2BProposalResponse> {
+  const res = await apiFetch(`${API_BASE}/b2b/proposal`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error('Failed to generate B2B proposal');
+  return res.json();
 }
 

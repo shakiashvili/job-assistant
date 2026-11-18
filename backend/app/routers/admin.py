@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlmodel import Session, select, func
 
 from ..db.database import get_session
-from ..db.models import User, ApplicationTracker, JobPosting
+from ..db.models import User, ApplicationTracker, JobPosting, AIOperationLog, AICacheEntry
 from ..services.auth_service import get_current_admin
 from ..services.gemini_service import gemini_service
 
@@ -165,3 +165,89 @@ def delete_user(
     session.add(target)
     session.commit()
     return {"status": "success", "message": f"User {target.email} has been deactivated."}
+
+
+@router.get("/ai-metrics")
+def get_ai_observability_metrics(
+    session: Session = Depends(get_session),
+    admin: User = Depends(get_current_admin),
+):
+    """Admin-only endpoint: AI telemetry, cache hit rate, latency, token usage, and estimated cost."""
+    logs = session.exec(
+        select(AIOperationLog).order_by(AIOperationLog.created_at.desc()).limit(500)
+    ).all()
+    cache_rows = session.exec(select(AICacheEntry)).all()
+
+    total = len(logs)
+    success_cnt = sum(1 for l in logs if l.status == "SUCCESS")
+    cache_hits = sum(1 for l in logs if l.cache_hit)
+    rate_limited = sum(1 for l in logs if l.status == "RATE_LIMITED")
+    failed_cnt = sum(1 for l in logs if l.status in ("FAILED", "VALIDATION_ERROR"))
+    unconfigured_cnt = sum(1 for l in logs if l.status == "UNCONFIGURED")
+
+    latencies = sorted(l.duration_ms for l in logs if l.duration_ms is not None)
+    avg_latency = round(sum(latencies) / len(latencies), 1) if latencies else 0.0
+    p95_latency = latencies[int(0.95 * (len(latencies) - 1))] if latencies else 0
+
+    prompt_tokens_total = sum(l.input_tokens for l in logs if l.input_tokens is not None)
+    output_tokens_total = sum(l.output_tokens for l in logs if l.output_tokens is not None)
+    total_tokens_sum = sum(l.total_tokens for l in logs if l.total_tokens is not None)
+    cost_known = [l.estimated_cost_usd for l in logs if l.estimated_cost_usd is not None]
+    estimated_cost_total = round(sum(cost_known), 6) if cost_known else None
+
+    by_task: Dict[str, Dict[str, Any]] = {}
+    for l in logs:
+        bucket = by_task.setdefault(
+            l.operation_type,
+            {"count": 0, "success": 0, "cache_hits": 0, "errors": 0, "avg_latency_ms": 0.0, "_lat_sum": 0},
+        )
+        bucket["count"] += 1
+        if l.status == "SUCCESS":
+            bucket["success"] += 1
+        elif l.status in ("FAILED", "VALIDATION_ERROR", "RATE_LIMITED"):
+            bucket["errors"] += 1
+        if l.cache_hit:
+            bucket["cache_hits"] += 1
+        bucket["_lat_sum"] += int(l.duration_ms or 0)
+    for b in by_task.values():
+        b["avg_latency_ms"] = round(b.pop("_lat_sum") / max(1, b["count"]), 1)
+
+    recent_logs = [
+        {
+            "id": l.id,
+            "task_type": l.operation_type,
+            "model_name": l.model_name,
+            "status": l.status,
+            "latency_ms": l.duration_ms,
+            "cache_hit": l.cache_hit,
+            "prompt_tokens": l.input_tokens,
+            "output_tokens": l.output_tokens,
+            "total_tokens": l.total_tokens,
+            "estimated_cost_usd": l.estimated_cost_usd,
+            "error_type": l.error_category,
+            "created_at": l.created_at.isoformat() if l.created_at else "",
+        }
+        for l in logs[:25]
+    ]
+
+    return {
+        "gemini_configured": gemini_service.is_available,
+        "quality_model": gemini_service.model_name,
+        "fast_model": gemini_service.fast_model_name,
+        "total_requests": total,
+        "success_count": success_cnt,
+        "cache_hits": cache_hits,
+        "cache_hit_rate": round((cache_hits / total) * 100.0, 1) if total else 0.0,
+        "active_cache_entries": len(cache_rows),
+        "rate_limited_count": rate_limited,
+        "failed_count": failed_cnt,
+        "unconfigured_count": unconfigured_cnt,
+        "avg_latency_ms": avg_latency,
+        "p95_latency_ms": p95_latency,
+        "prompt_tokens": prompt_tokens_total,
+        "output_tokens": output_tokens_total,
+        "total_tokens": total_tokens_sum,
+        "estimated_cost_usd": estimated_cost_total,
+        "by_task": by_task,
+        "recent_logs": recent_logs,
+    }

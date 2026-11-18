@@ -1,77 +1,119 @@
-# 🚀 TalentFlow AI — Universal Multi-Industry Job Application & Bilingual (EN / KA ქართული) CV Platform
+# TalentFlow AI — Georgia Local & Global Remote B2B Job Seeker Platform
 
-A production-ready, Human-in-the-Loop AI Job Application & CV Synthesis SaaS platform powered by **FastAPI**, **Google Gemini 2.5 Flash**, **Playwright**, **React + Vite + Tailwind CSS**, and a **Manifest V3 Chrome Extension**.
+TalentFlow AI is a full-stack job search, resume tailoring, and remote B2B contracting platform built with **FastAPI**, **SQLModel / SQLAlchemy**, **React 18 + TypeScript**, **Tailwind CSS**, **Gemini AI**, **Playwright**, and a **Chrome Extension (Manifest V3)**.
 
----
-
-## 🌟 Key Capabilities (B2B & Candidate Suite)
-
-### 1. Universal Multi-Industry Support
-Works across technical and non-technical professions out of the box with 1-click `.md` profile templates:
-- 💻 **QA Automation & Software Engineering** (Playwright, Cypress, Python, TypeScript, CI/CD, SDET)
-- 🏨 **Hotel Receptionist & Hospitality** (Front Desk Operations, Opera PMS, Fidelio, Booking.com/Expedia Extranet, VIP Guest Relations, POS Billing)
-- 🎧 **Customer Service & Client Care** (Omnichannel Support, Zendesk, Intercom, Salesforce CRM, Conflict De-escalation, CSAT/NPS)
-- 🏥 **Hospital & Healthcare Administration** (Patient Registration, Medical Reception, EMR/EHR Systems, Health Insurance Verification, Triage & Scheduling)
-
-### 2. Bilingual CV Generation: English (`🇬🇧 EN`) & Georgian (`🇬🇪 KA ქართული ენა`)
-- Upload or edit your `candidate_skills.md` in **English or Georgian**.
-- Click **🇬🇧 Audit & Generate English CV** or **🇬🇪 Audit & Generate ქართული CV** to synthesize a natural, human-tone PDF CV (`CV_<Company>_<Role>_EN.pdf` or `CV_<Company>_<Role>_KA.pdf`) plus a crisp printable HTML version rendered with full Georgian Unicode typography (`Sylfaen` / `Noto Sans Georgian`).
-
-### 3. 3-Dimensional Match Audit + Employer 3+ Reviews Gate
-- Returns **Skills Match (%)**, **ATS Match (%)**, **Recruiter Match (%)**, and **Identified Gaps + Bridge Strategy**.
-- Validates employer reputation across job portals (**3+ verified employee reviews gate**) before staging an application.
-
-### 4. Multi-Portal Vacancy Feed & Playwright Live Form Stager
-- Supports **Jobs.ge**, **HR.ge**, **HeadHunter.ge**, **DOU.ua** (with mandatory DOU Motivational Letter), **Djinni.co**, **JustJoin.it**, **Greenhouse**, and **Lever**.
-- Launches a live Chromium window to pre-fill contact info, **Applicant Summary**, **Motivational Letter**, **Salary Expectation**, **Default 1-Week Start Date** (`1 week after offer` / `1 კვირა შეთავაზებიდან`), attaches the tailored PDF CV, checks CAPTCHA, and pauses for human review.
+Designed specifically for job seekers in **Georgia (Tbilisi, `UTC+4`)** and global remote engineers, TalentFlow combines live local portal discovery (**Jobs.ge**, **HR.ge**, **HeadHunter.ge**, **HR.gov.ge**) with global remote B2B contract boards (**Remotive**, **Himalayas**, **RemoteOK**, **Djinni**, **DOU**, **JustJoin.it**, **Greenhouse**, **Lever**), bilingual English / Georgian (`ქართული`, Sylfaen font support) CV & cover letter generation, application tracking, and remote contractor financial/timezone planning.
 
 ---
 
-## 🛠️ Quick Start
+## Core Capabilities
 
-### 1. Start the FastAPI Backend (`:8000`)
-```powershell
+### 1. Live Multi-Portal Discovery & Per-User Match Isolation
+- **Georgian & Regional Boards**: `jobs.ge`, `hr.ge`, `headhunter.ge`, `hr.gov.ge`, `djinni.co`, `dou.ua`, `justjoin.it`, `greenhouse.io`, `lever.co`, and `linkedin.com`.
+- **Global Remote B2B Boards**: Live JSON integrations for **Remotive**, **Himalayas**, and **RemoteOK**, automatically classified for **Georgia eligibility** (`REMOTE_B2B`, `GE_LOCAL`, or `REGION_LOCKED` detection for strict "US-only" / country-restricted roles).
+- **Multi-User Score Isolation**: Every authenticated candidate receives personalized match scores and statuses via `UserJobMatch` without overwriting shared `JobPosting` rows across accounts.
+- **Filter Controls**: Filter by work mode (`Remote` / `Hybrid` / `On-Site`), `B2B Remote Contracts`, `Georgia Eligible`, portal source, match score tier, and saved bookmarks.
+
+### 2. Georgia Remote B2B Market Hub
+- **Georgia 1% Small Business vs. 20%+2% Labor Net Calculator** (`POST /api/b2b/tax-calculator`): Compares monthly & annual net take-home pay in USD, EUR, and GEL across Georgia's **Individual Entrepreneur Small Business Status (1% up to 500,000 GEL / 3% above threshold)** versus standard **20% Personal Income Tax + 2% Funded Pension** employment contracts.
+- **Tbilisi `UTC+4` Timezone Overlap Matrix** (`GET /api/b2b/timezone-matrix`): Maps synchronous collaboration windows across London (`UTC+0`), Berlin/CET (`UTC+1`), Dubai (`UTC+4`), Tel Aviv (`UTC+2`), New York EST (`UTC-5`), and San Francisco PST (`UTC-8`).
+- **B2B Contractor Readiness Checklist**: Interactive persistent tracker covering Georgian Revenue Service (`rs.ge`) IE & Small Business registration, TBC/BOG multi-currency SWIFT accounts, Wise/Payoneer USD/EUR rails, MSA + IP assignment templates, and W-8BEN tax forms.
+- **B2B Client Proposal Generator** (`POST /api/b2b/proposal`): Drafts tailored direct-outreach proposals grounded in your verified skills in English or Georgian (`ქართული`).
+
+### 3. Profile Vault, Grounded Bilingual CVs (EN / KA) & Cover Letters
+- Upload `skills.md`, `.pdf`, or `.docx` resumes to extract structured skills, work history, academic degrees, and target roles (`POST /api/profile/upload-skills`).
+- Generate ATS-friendly Word (`.docx`) and PDF CVs + tailored cover letters in **English** or **Georgian (`ქართული` with Sylfaen font support)** grounded strictly in verified candidate facts.
+- Interactive Canvas & Version Manager (`CVVariantManager`) and Kanban Application Tracker (`Saved -> Applied -> Interviewing -> Offer / Rejected`) with drag-and-drop and Google Calendar interview scheduling helpers.
+
+### 4. Real Email Dispatch & RFC 2822 `.eml` Transport
+- Supports real **Gmail OAuth 2.0** drafts and direct **Gmail SMTP** dispatch with your tailored CV attached.
+- When SMTP/OAuth credentials are not configured, TalentFlow generates a standard downloadable **RFC 2822 `.eml` file** (`status="needs_transport"`) with your CV attachment already bundled so you never receive false "sent" confirmations.
+
+### 5. Chrome Extension (Manifest V3)
+- Located under [`extension/`](./extension/manifest.json) with real-time DOM job extraction across Georgian, European, and global ATS/remote portals (`jobs.ge`, `hr.ge`, `remotive.com`, `himalayas.app`, `remoteok.com`, `greenhouse.io`, `lever.co`, `linkedin.com`, `djinni.co`, `justjoin.it`, etc.).
+- Auto-fills portal application forms, syncs JWT auth seamlessly with your local or deployed backend URL (`chrome.storage.sync`), and pauses whenever CAPTCHAs are present for human completion.
+
+### 6. Accessibility (WCAG 2.1 AA) & Human-Centered UX
+- High-contrast obsidian surface palette paired with emerald & teal accents designed to keep job-search sessions calm and legible (`Plus Jakarta Sans`, `Inter`, `Noto Sans Georgian`, and `JetBrains Mono`).
+- Full keyboard accessibility (`Skip to main content`, `Escape`-closable dialogs with `role="dialog"` / `aria-modal="true"`, visible emerald focus rings, accessible form labels, and `prefers-reduced-motion` support).
+
+---
+
+## Project Structure
+
+```text
+job-application-assistant/
+├── backend/                  # FastAPI API, SQLModel models, scrapers, AI & PDF services
+│   ├── app/
+│   │   ├── routers/          # auth, profile, audit, b2b, jobs, tracker, stage, interviews, admin
+│   │   ├── services/         # CV/PDF generator, Gemini wrapper, Gmail/SMTP, Playwright stager
+│   │   │   └── scrapers/     # jobs.ge, hr.ge, hr.gov.ge, headhunter.ge, remotive, himalayas, remoteok, etc.
+│   │   └── models/           # SQLModel relational schema & migrations
+│   └── tests/                # Pytest backend functional, unit & Playwright form integration tests
+├── frontend/                 # React 18 + TypeScript + Vite + Tailwind CSS
+│   └── src/components/       # DashboardHome, AuditPanel, DiscoveryFeed, B2BMarketHub, Tracker, CVStudio
+├── extension/                # Chrome Extension Manifest V3 (popup, background SW, content scripts)
+├── tests/non_functional/     # Playwright + axe-core WCAG 2.1 AA, performance & security probes
+└── docs/                     # Architecture, deployment, API & extension guides
+```
+
+---
+
+## Local Development Quickstart
+
+### Prerequisites
+- **Python 3.11+**
+- **Node.js 20+** and **npm**
+- **Playwright Chromium** (optional, for automated form staging and accessibility tests)
+
+### 1. Environment Setup
+Copy `.env.example` to `backend/.env` and configure your keys:
+```bash
+cp .env.example backend/.env
+```
+Key optional/required variables:
+- `SECRET_KEY`: Random hex secret for JWT signing
+- `GEMINI_API_KEY`: Enables Gemini-powered skill extraction, salary estimation, tailored CVs, and interview prep
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_APP_PASSWORD`: Enables real OTP/application email sending
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`: Enables real Gmail OAuth 2.0 & Calendar integration
+
+### 2. Run the Backend API (`:8000`)
+```bash
 cd backend
 pip install -r requirements.txt
-playwright install chromium
-python run.py
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
-- Backend API & Swagger Docs: `http://localhost:8000/docs`
 
-### 2. Start the React Web Dashboard (`:5173`)
-```powershell
+### 3. Run the Frontend App (`:5173`)
+```bash
 cd frontend
 npm install
-npm run dev -- --host
+npm run dev
 ```
-- Web Dashboard: `http://localhost:5173`
+For a production preview build:
+```bash
+cd frontend
+npm run build
+npm run preview -- --host 127.0.0.1 --port 5173
+```
 
-### 3. Load the Chrome Extension (Optional)
-1. Open Chrome and navigate to `chrome://extensions/`.
-2. Enable **Developer mode** (top-right toggle).
-3. Click **Load unpacked** and select the `extension/` folder.
+### 4. Load the Chrome Extension
+1. Open Chrome -> `chrome://extensions/`.
+2. Enable **Developer mode**.
+3. Click **Load unpacked** and select the `extension/` directory.
 
 ---
 
-## 🤝 How to Share This Repository on GitHub
+## Testing & Verification
 
-Run the following commands from the project root (`C:\Users\giorg\.gemini\antigravity\scratch\job-application-assistant`):
-
-```powershell
-cd "C:\Users\giorg\.gemini\antigravity\scratch\job-application-assistant"
-git init
-git add .
-git commit -m "feat: TalentFlow AI - Multi-Industry & Bilingual EN/KA Job Assistant"
-git branch -M main
-
-# Create a new repository at https://github.com/new (do not initialize with README), then run:
-git remote add origin https://github.com/YOUR_GITHUB_USERNAME/talentflow-ai-job-assistant.git
-git push -u origin main
+### Backend Unit & Integration Tests
+```bash
+cd backend
+pytest tests -q --tb=short
 ```
 
-### Sharing a Live Demo Link with Businesses Instantly
-To share your running local app (`http://localhost:5173`) with clients, recruiters, or businesses over HTTPS without deploying:
-```powershell
-npx localtunnel --port 5173
+### Accessibility (WCAG 2.1 AA), Mobile & Performance Tests
+With both backend (`:8000`) and frontend (`:5173`) running:
+```bash
+pytest tests/non_functional/test_a11y_and_perf.py -v
 ```
-*(Or click the **"Share Repo"** button in the top navigation bar of the web dashboard for 1-click copyable commands!)*

@@ -137,32 +137,48 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
     }
   };
 
+  useEffect(() => {
+    if (!isOpen || isGate) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [isOpen, isGate, onClose]);
+
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+    <div
+      className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="auth-modal-title"
+    >
       <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
         {!isGate && (
           <button
+            type="button"
             onClick={onClose}
-            className="absolute top-4 right-4 text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors"
+            aria-label="Close sign-in dialog"
+            className="absolute top-4 right-4 text-slate-300 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors"
           >
-            <X className="w-5 h-5" />
+            <X className="w-5 h-5" aria-hidden="true" />
           </button>
         )}
 
         <div className="flex items-center gap-2 mb-6">
-          <div className="w-9 h-9 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
-            <ShieldCheck className="w-5 h-5" />
+          <div className="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+            <ShieldCheck className="w-5 h-5" aria-hidden="true" />
           </div>
           <div>
-            <h2 className="text-lg font-bold text-white">
+            <h2 id="auth-modal-title" className="text-lg font-bold text-white">
               {mode === 'otp' ? 'Passwordless Sign In' : mode === 'login' ? 'Sign In with Password' : 'Create Candidate Account'}
             </h2>
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-slate-300">
               {mode === 'otp'
                 ? 'Sign in securely with a 6-digit one-time email code'
                 : mode === 'login'
-                ? 'Access your applications, action plans & admin controls'
-                : 'Join the platform to track and automate your career'}
+                ? 'Access your applications, action plans & job matcher'
+                : 'Join TalentFlow to manage CVs, local & B2B remote applications'}
             </p>
           </div>
         </div>
@@ -173,7 +189,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
             type="button"
             onClick={() => { setMode('register'); setError(null); setInfoMsg(null); }}
             className={`py-2 text-[11px] font-semibold rounded-lg transition-all flex items-center justify-center gap-1 ${
-              mode === 'register' ? 'bg-sky-600 text-white shadow' : 'text-slate-400 hover:text-white'
+              mode === 'register' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white'
             }`}
           >
             <User className="w-3 h-3" />
@@ -183,7 +199,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
             type="button"
             onClick={() => { setMode('login'); setError(null); setInfoMsg(null); }}
             className={`py-2 text-[11px] font-semibold rounded-lg transition-all flex items-center justify-center gap-1 ${
-              mode === 'login' ? 'bg-sky-600 text-white shadow' : 'text-slate-400 hover:text-white'
+              mode === 'login' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white'
             }`}
           >
             <Lock className="w-3 h-3" />
@@ -193,7 +209,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
             type="button"
             onClick={() => { setMode('otp'); setOtpStep('request'); setError(null); setInfoMsg(null); }}
             className={`py-2 text-[11px] font-semibold rounded-lg transition-all flex items-center justify-center gap-1 ${
-              mode === 'otp' ? 'bg-sky-600 text-white shadow' : 'text-slate-400 hover:text-white'
+              mode === 'otp' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white'
             }`}
           >
             <Sparkles className="w-3 h-3" />
@@ -216,7 +232,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
                     setError(null);
                     setInfoMsg('Switched to Sign In. Enter your password or switch to Email OTP.');
                   }}
-                  className="px-2.5 py-1 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold text-[11px] transition-colors"
+                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-[11px] transition-colors"
                 >
                   Switch to Sign In &rarr;
                 </button>
@@ -242,7 +258,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
                     setError(null);
                     setInfoMsg(null);
                   }}
-                  className="px-2.5 py-1 rounded-lg bg-sky-600/20 hover:bg-sky-600/30 border border-sky-500/40 text-sky-300 font-semibold text-[11px] transition-colors"
+                  className="px-2.5 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 font-semibold text-[11px] transition-colors"
                 >
                   New user? Create Account &rarr;
                 </button>
@@ -263,21 +279,22 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
           <div className="space-y-4">
             <form onSubmit={handleSendOtp} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                <label htmlFor="auth-otp-email" className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1">
                   Your Email Address
                 </label>
                 <div className="relative">
-                  <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
+                  <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-3" aria-hidden="true" />
                   <input
+                    id="auth-otp-email"
                     type="email"
                     required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="name@example.com"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2.5 text-xs text-white focus:outline-none focus:border-sky-500"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-9 pr-3 py-2.5 text-xs text-white placeholder-slate-400 focus:outline-none focus:border-emerald-400"
                   />
                 </div>
-                <p className="text-[11px] text-slate-500 mt-1.5">
+                <p className="text-[11px] text-slate-300 mt-1.5">
                   We will send a 6-digit verification code to your inbox. No password needed.
                 </p>
               </div>
@@ -285,7 +302,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
               <button
                 type="submit"
                 disabled={loading || !email}
-                className="w-full py-2.5 rounded-xl bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-lg shadow-sky-600/25 transition-all disabled:opacity-50"
+                className="w-full py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/25 transition-all disabled:opacity-50"
               >
                 <span>{loading ? 'Sending Verification Code...' : 'Send One-Time Code'}</span>
                 <ArrowRight className="w-4 h-4" />
@@ -297,7 +314,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
                 <button
                   type="button"
                   onClick={() => setShowSmtpSetup((v) => !v)}
-                  className="text-[11px] text-sky-400 hover:text-sky-300 flex items-center gap-1.5 font-medium"
+                  className="text-[11px] text-emerald-400 hover:text-emerald-300 flex items-center gap-1.5 font-medium"
                 >
                   <Settings2 className="w-3.5 h-3.5" />
                   <span>{showSmtpSetup ? 'Hide local Gmail SMTP setup' : 'Configure Gmail SMTP Sender (Local Only)'}</span>
@@ -306,7 +323,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
                 {showSmtpSetup && (
                   <form onSubmit={handleSaveSmtp} className="mt-3 p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5">
                     <p className="text-[11px] text-slate-400 leading-relaxed">
-                      Stored strictly in local gitignored <code className="text-sky-300">backend/.env</code> &mdash; never pushed to Git or logged. Requires a 16-char Google App Password.
+                      Stored strictly in local gitignored <code className="text-emerald-300">backend/.env</code> &mdash; never pushed to Git or logged. Requires a 16-char Google App Password.
                     </p>
                     <input
                       type="email"
@@ -314,7 +331,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
                       value={smtpUser || email}
                       onChange={(e) => setSmtpUser(e.target.value)}
                       placeholder="Sender Gmail address"
-                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500"
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
                     />
                     <input
                       type="password"
@@ -322,7 +339,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
                       value={smtpAppPassword}
                       onChange={(e) => setSmtpAppPassword(e.target.value)}
                       placeholder="16-char Google App Password"
-                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500"
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
                     />
                     <button
                       type="submit"
@@ -342,27 +359,28 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
           <form onSubmit={handleVerifyOtp} className="space-y-4">
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                <label htmlFor="auth-otp-code" className="block text-xs font-semibold uppercase tracking-wider text-slate-300">
                   Enter 6-Digit Code
                 </label>
                 <button
                   type="button"
                   onClick={() => setOtpStep('request')}
-                  className="text-[11px] text-sky-400 hover:underline"
+                  className="text-[11px] text-emerald-300 hover:underline"
                 >
                   Change Email
                 </button>
               </div>
               <div className="relative">
-                <KeyRound className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
+                <KeyRound className="w-4 h-4 text-slate-400 absolute left-3 top-3" aria-hidden="true" />
                 <input
+                  id="auth-otp-code"
                   type="text"
                   required
                   maxLength={6}
                   value={otpCode}
                   onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
                   placeholder="123456"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2.5 text-base tracking-widest text-center text-white focus:outline-none focus:border-sky-500 font-mono font-bold"
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-9 pr-3 py-2.5 text-base tracking-widest text-center text-white focus:outline-none focus:border-emerald-400 font-mono font-bold"
                 />
               </div>
               <p className="text-[11px] text-slate-400 mt-1.5 text-center">
@@ -384,7 +402,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
                 type="button"
                 onClick={handleSendOtp}
                 disabled={loading}
-                className="text-[11px] text-slate-400 hover:text-sky-300 underline"
+                className="text-[11px] text-slate-400 hover:text-emerald-300 underline"
               >
                 Resend code
               </button>
@@ -397,73 +415,77 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
           <form onSubmit={handlePasswordSubmit} className="space-y-4">
             {mode === 'register' && (
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                <label htmlFor="auth-full-name" className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1">
                   Full Name
                 </label>
                 <div className="relative">
-                  <User className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
+                  <User className="w-4 h-4 text-slate-400 absolute left-3 top-3" aria-hidden="true" />
                   <input
+                    id="auth-full-name"
                     type="text"
                     required
                     value={fullName}
                     onChange={(e) => setFullName(e.target.value)}
                     placeholder="Your Full Name"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2.5 text-xs text-white focus:outline-none focus:border-sky-500"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-9 pr-3 py-2.5 text-xs text-white placeholder-slate-400 focus:outline-none focus:border-emerald-400"
                   />
                 </div>
               </div>
             )}
 
             <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
+              <label htmlFor="auth-email-input" className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1">
                 Email Address
               </label>
               <div className="relative">
-                <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
+                <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-3" aria-hidden="true" />
                 <input
+                  id="auth-email-input"
                   type="email"
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="name@company.com"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2.5 text-xs text-white focus:outline-none focus:border-sky-500"
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-9 pr-3 py-2.5 text-xs text-white placeholder-slate-400 focus:outline-none focus:border-emerald-400"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
-                Password {mode === 'register' && <span className="text-slate-500 font-normal">(min 8 characters)</span>}
+              <label htmlFor="auth-password-input" className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1">
+                Password {mode === 'register' && <span className="text-slate-300 font-normal">(min 8 characters)</span>}
               </label>
               <div className="relative">
-                <Lock className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
+                <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3" aria-hidden="true" />
                 <input
+                  id="auth-password-input"
                   type="password"
                   required
                   minLength={8}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••••••"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2.5 text-xs text-white focus:outline-none focus:border-sky-500"
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-9 pr-3 py-2.5 text-xs text-white placeholder-slate-400 focus:outline-none focus:border-emerald-400"
                 />
               </div>
             </div>
 
             {mode === 'register' && (
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                <label htmlFor="auth-confirm-password" className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1">
                   Confirm Password
                 </label>
                 <div className="relative">
-                  <Lock className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
+                  <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3" aria-hidden="true" />
                   <input
+                    id="auth-confirm-password"
                     type="password"
                     required
                     minLength={8}
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     placeholder="••••••••••••"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2.5 text-xs text-white focus:outline-none focus:border-sky-500"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-9 pr-3 py-2.5 text-xs text-white placeholder-slate-400 focus:outline-none focus:border-emerald-400"
                   />
                 </div>
               </div>
@@ -472,17 +494,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-2.5 rounded-xl bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-lg shadow-sky-600/25 transition-all mt-6 disabled:opacity-50"
+              className="w-full py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/25 transition-all mt-6 disabled:opacity-50"
             >
               <span>{loading ? 'Authenticating...' : mode === 'login' ? 'Sign In' : 'Create Account'}</span>
-              <ArrowRight className="w-4 h-4" />
+              <ArrowRight className="w-4 h-4" aria-hidden="true" />
             </button>
           </form>
         )}
 
         <div className="mt-4 text-center">
-          <p className="text-[11px] text-slate-500">
-            Protected with bcrypt hashing, HS256 tokens & rate-limited brute force protection.
+          <p className="text-[11px] text-slate-300">
+            Protected with bcrypt hashing, HS256 tokens &amp; rate-limited brute force protection.
           </p>
         </div>
       </div>

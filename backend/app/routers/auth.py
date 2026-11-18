@@ -20,6 +20,8 @@ from ..services.auth_service import (
     create_refresh_token,
     decode_access_token,
     decode_refresh_token,
+    create_oauth_state_token,
+    decode_oauth_state_token,
     get_current_user,
     get_user_by_email,
     security_bearer,
@@ -100,19 +102,20 @@ def sanitize_email(email: str) -> str:
 
 
 def _sync_profile_owner_on_auth(session: Session, clean_email: str, force_reset: bool = False) -> None:
-    """Ensures a newly registered user or switched account starts with an empty feed until skills.md upload."""
-    for prof in session.exec(select(CandidateProfile)).all():
-        skills_copy = dict(prof.parsed_skills or {})
-        if force_reset or skills_copy.get("owner_email") != clean_email:
-            skills_copy["user_uploaded"] = False
-            skills_copy["owner_email"] = clean_email
-            prof.parsed_skills = skills_copy
-            session.add(prof)
-            for stale_job in session.exec(select(JobPosting).where(JobPosting.status != "APPLIED")).all():
-                delete_job_posting_cascade(session, stale_job)
-    if force_reset:
-        for stale_job in session.exec(select(JobPosting).where(JobPosting.status != "APPLIED")).all():
-            delete_job_posting_cascade(session, stale_job)
+    """Preserves each user's uploaded skills.md profile and shared job catalog across logins/registrations."""
+    all_profiles = session.exec(select(CandidateProfile)).all()
+    user_has_profile = any(
+        str((p.parsed_skills or {}).get("owner_email") or "").strip().lower() == clean_email
+        for p in all_profiles
+    )
+    if force_reset and not user_has_profile:
+        for prof in all_profiles:
+            skills_copy = dict(prof.parsed_skills or {})
+            row_owner = str(skills_copy.get("owner_email") or "").strip().lower()
+            if not row_owner:
+                skills_copy["user_uploaded"] = False
+                prof.parsed_skills = skills_copy
+                session.add(prof)
     session.commit()
 
 
@@ -438,10 +441,23 @@ def get_me(current_user: User = Depends(get_current_user)):
 
 
 @router.get("/google/login")
-def google_login(state: Optional[str] = "talentflow_oauth"):
-    """Returns Google OAuth consent URL for user authentication & Gmail dispatch permissions."""
+def google_login(
+    state: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+):
+    """Returns Google OAuth consent URL with cryptographic user-bound state for Gmail & Calendar permissions."""
     from ..services.gmail_service import gmail_service
-    url = gmail_service.get_authorization_url(state=state or "talentflow_oauth")
+
+    if not gmail_service.is_configured():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Google OAuth credentials (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET) are not configured. "
+                "Configure them in backend/.env or use Gmail SMTP App Password."
+            ),
+        )
+    signed_state = create_oauth_state_token(current_user.id, current_user.email)
+    url = gmail_service.get_authorization_url(state=signed_state)
     return {"authorization_url": url}
 
 
@@ -451,18 +467,32 @@ def google_callback(
     state: Optional[str] = None,
     session: Session = Depends(get_session),
 ):
-    """Exchanges code for Google OAuth tokens and links to the active user profile."""
+    """Verifies signed OAuth state, exchanges code for Google OAuth tokens, and links to the initiating user."""
     from fastapi.responses import RedirectResponse
     from ..services.gmail_service import gmail_service
     from ..config import FRONTEND_URL
 
+    if not state:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing OAuth state parameter.")
+    claims = decode_oauth_state_token(state)
+    if not claims:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired OAuth state parameter.")
+
+    user: Optional[User] = None
+    uid = claims.get("uid")
+    sub_email = claims.get("sub")
+    if uid is not None:
+        user = session.get(User, int(uid))
+    if not user and sub_email:
+        user = get_user_by_email(session, str(sub_email))
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target user for OAuth callback not found.")
+
     token_data = gmail_service.exchange_code_for_token(code)
-    user = session.exec(select(User).order_by(User.id.asc())).first()
-    if user:
-        user.gmail_oauth_token = token_data
-        session.add(user)
-        session.commit()
-        logger.info(f"Stored Google OAuth token for user '{mask_email(user.email)}'")
+    user.gmail_oauth_token = token_data
+    session.add(user)
+    session.commit()
+    logger.info(f"Stored Google OAuth token for user '{mask_email(user.email)}'")
 
     return RedirectResponse(url=f"{FRONTEND_URL}?google_auth=success")
 

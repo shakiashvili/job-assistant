@@ -13,6 +13,7 @@ from typing import Optional, Dict, Any, Tuple, List
 from urllib.parse import urlencode
 
 from ..config import (
+    BACKEND_URL,
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
     GOOGLE_REDIRECT_URI,
@@ -28,8 +29,10 @@ logger = logging.getLogger(__name__)
 GMAIL_SCOPES = [
     "https://www.googleapis.com/auth/gmail.compose",
     "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/calendar.events",
     "https://www.googleapis.com/auth/userinfo.email",
 ]
+GOOGLE_WORKSPACE_SCOPES = GMAIL_SCOPES
 
 
 class GmailService:
@@ -41,15 +44,11 @@ class GmailService:
         return bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
 
     def get_authorization_url(self, state: str) -> str:
-        """Returns the Google OAuth consent URL or a simulated local auth link if credentials are unset."""
+        """Returns the real Google OAuth 2.0 consent URL using configured GCP credentials."""
         if not self.is_configured():
-            # Return local simulated callback for sandbox testing
-            query = urlencode({
-                "state": state,
-                "code": "simulated_local_google_oauth_code",
-                "simulated": "true",
-            })
-            return f"http://localhost:8000/api/auth/google/callback?{query}"
+            raise ValueError(
+                "Google OAuth credentials (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET) are not configured."
+            )
 
         params = {
             "client_id": GOOGLE_CLIENT_ID,
@@ -63,16 +62,9 @@ class GmailService:
         return f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
 
     def exchange_code_for_token(self, code: str) -> Dict[str, Any]:
-        """Exchanges auth code for OAuth token dictionary."""
-        if not self.is_configured() or code == "simulated_local_google_oauth_code":
-            return {
-                "access_token": "ya29.simulated_talentflow_token",
-                "refresh_token": "simulated_refresh_token",
-                "token_type": "Bearer",
-                "expires_in": 3600,
-                "email": "connected.candidate@gmail.com",
-                "simulated": True,
-            }
+        """Exchanges an authorization code for real Google OAuth tokens."""
+        if not self.is_configured():
+            return {"error": "Google OAuth credentials are not configured on the server."}
 
         try:
             import requests
@@ -325,7 +317,9 @@ class GmailService:
                     return {
                         "status": "success",
                         "mode": "send",
+                        "channel": "gmail_oauth",
                         "message_id": sent.get("id"),
+                        "thread_id": sent.get("threadId"),
                         "recipient": recipient_email,
                         "subject": subject,
                         "pdf_attached": bool(pdf_path),
@@ -366,20 +360,29 @@ class GmailService:
                     "note": detail,
                 }
 
-        # Verified MIME simulation (allows instant local staging without mandatory GCP credentials)
-        action_name = "Draft Created in Gmail" if mode == "draft" else "Application Dispatched"
+        # Build downloadable RFC 2822 .eml draft file so user can open directly in any mail client with CV attached
+        import uuid
+        eml_filename = f"application_{uuid.uuid4().hex[:8]}.eml"
+        GENERATED_RESUMES_DIR.mkdir(parents=True, exist_ok=True)
+        eml_path = GENERATED_RESUMES_DIR / eml_filename
+        eml_path.write_bytes(mime_msg.as_bytes())
         return {
-            "status": "success",
+            "status": "needs_transport",
             "mode": mode,
-            "action": action_name,
+            "action": "Prepared Downloadable .eml Draft (Configure Gmail OAuth or SMTP App Password for 1-Click Send)",
             "recipient": recipient_email,
             "subject": subject,
             "pdf_attached": bool(pdf_path and Path(pdf_path).exists()),
             "attached_filename": Path(pdf_path).name if pdf_path else None,
+            "eml_filename": eml_filename,
+            "eml_url": f"/api/resumes/generated/{eml_filename}",
             "gmail_account": user.email,
             "message_size_bytes": len(raw_base64),
-            "simulated": not bool(self.is_configured() and token_data),
-            "note": "RFC 2822 MIME packet verified and pre-staged." if not self.is_configured() else "Dispatched via Gmail API.",
+            "simulated": False,
+            "note": (
+                "No simulated transmission: download the pre-assembled .eml file (with CV attached) "
+                "or connect Gmail OAuth / SMTP App Password to send directly."
+            ),
         }
 
     def verify_smtp_credentials(
@@ -519,13 +522,182 @@ class GmailService:
         subject: str,
         body_text: str,
         pdf_path: Optional[str] = None,
+        user: Optional[User] = None,
     ) -> Dict[str, Any]:
-        """Direct email dispatch helper for transactional or application messages."""
+        """Direct email dispatch helper: prefers the user's connected Google OAuth token, falling back to SMTP."""
+        if user and user.gmail_oauth_token and not user.gmail_oauth_token.get("simulated") and self.is_configured():
+            dispatched = self.dispatch_email(
+                user=user,
+                recipient_email=to_email,
+                subject=subject,
+                body_text=body_text,
+                pdf_path=pdf_path,
+                mode="send",
+            )
+            if dispatched.get("channel") == "gmail_oauth":
+                return {
+                    "delivered": True,
+                    "channel": "gmail_oauth",
+                    "smtp_configured": get_smtp_config()["configured"],
+                    "message_id": dispatched.get("message_id"),
+                    "thread_id": dispatched.get("thread_id"),
+                    "error": None,
+                }
+
         cfg = get_smtp_config()
         if not cfg["configured"]:
-            return {"delivered": False, "smtp_configured": False, "error": "SMTP not configured"}
+            return {"delivered": False, "smtp_configured": False, "error": "Neither Google OAuth nor SMTP is configured"}
         ok, detail = self.send_email_smtp(to_email=to_email, subject=subject, body_text=body_text, pdf_path=pdf_path)
-        return {"delivered": ok, "smtp_configured": True, "error": None if ok else detail}
+        return {"delivered": ok, "channel": "smtp", "smtp_configured": True, "error": None if ok else detail}
+
+    @staticmethod
+    def _parse_interview_window(start_iso: Optional[str], duration_minutes: int = 45):
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        start_dt = None
+        if start_iso:
+            raw = str(start_iso).strip()
+            for fmt in ("%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S"):
+                try:
+                    start_dt = datetime.strptime(raw[:19], fmt)
+                    break
+                except ValueError:
+                    continue
+            if start_dt is None:
+                try:
+                    start_dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                except ValueError:
+                    start_dt = None
+        if start_dt is None:
+            start_dt = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
+        end_dt = start_dt + timedelta(minutes=max(15, int(duration_minutes or 45)))
+        return start_dt, end_dt
+
+    def build_google_calendar_template_url(
+        self,
+        *,
+        summary: str,
+        description: str = "",
+        location: str = "",
+        start_iso: Optional[str] = None,
+        duration_minutes: int = 45,
+    ) -> str:
+        """Builds an instant one-click pre-filled Google Calendar event creation URL."""
+        start_dt, end_dt = self._parse_interview_window(start_iso, duration_minutes)
+        fmt = "%Y%m%dT%H%M%S"
+        start_str = start_dt.strftime(fmt)
+        end_str = end_dt.strftime(fmt)
+        params = {
+            "action": "TEMPLATE",
+            "text": summary,
+            "dates": f"{start_str}/{end_str}",
+            "details": description or "Scheduled via TalentFlow AI",
+        }
+        if location:
+            params["location"] = location
+        return f"https://calendar.google.com/calendar/render?{urlencode(params)}"
+
+    def create_calendar_event(
+        self,
+        *,
+        user: Optional[User],
+        summary: str,
+        description: str = "",
+        location: str = "",
+        start_iso: Optional[str] = None,
+        duration_minutes: int = 45,
+        attendee_email: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Creates a Google Calendar event using connected Google OAuth tokens (when calendar.events scope is authorized)
+        and always returns a pre-filled Google Calendar popup link as an instant universal fallback.
+        """
+        start_dt, end_dt = self._parse_interview_window(start_iso, duration_minutes)
+        template_url = self.build_google_calendar_template_url(
+            summary=summary,
+            description=description,
+            location=location,
+            start_iso=start_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+            duration_minutes=duration_minutes,
+        )
+
+        token_dict = (user.gmail_oauth_token if user else None) or {}
+        has_live_oauth = bool(
+            token_dict
+            and not token_dict.get("simulated")
+            and token_dict.get("access_token")
+            and self.is_configured()
+        )
+        if not has_live_oauth:
+            return {
+                "created_in_google_calendar": False,
+                "oauth_connected": False,
+                "needs_oauth": True,
+                "event_id": None,
+                "html_link": template_url,
+                "google_calendar_template_url": template_url,
+                "start_iso": start_dt.isoformat(),
+                "end_iso": end_dt.isoformat(),
+                "message": "Google OAuth is not connected yet — open the pre-filled Google Calendar link or connect your Google account in Settings.",
+            }
+
+        try:
+            from google.oauth2.credentials import Credentials
+            from google.auth.transport.requests import Request
+            from googleapiclient.discovery import build
+
+            creds = Credentials(
+                token=token_dict.get("access_token"),
+                refresh_token=token_dict.get("refresh_token"),
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=GOOGLE_CLIENT_ID,
+                client_secret=GOOGLE_CLIENT_SECRET,
+                scopes=GMAIL_SCOPES,
+            )
+            if creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+
+            service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+            start_rfc = start_dt.isoformat() + ("Z" if start_dt.tzinfo is None else "")
+            end_rfc = end_dt.isoformat() + ("Z" if end_dt.tzinfo is None else "")
+            event_body: Dict[str, Any] = {
+                "summary": summary,
+                "description": description or "Scheduled via TalentFlow AI",
+                "start": {"dateTime": start_rfc},
+                "end": {"dateTime": end_rfc},
+            }
+            if location:
+                event_body["location"] = location
+            if attendee_email and "@" in attendee_email:
+                event_body["attendees"] = [{"email": attendee_email}]
+
+            created = service.events().insert(calendarId="primary", body=event_body).execute()
+            return {
+                "created_in_google_calendar": True,
+                "oauth_connected": True,
+                "needs_oauth": False,
+                "event_id": created.get("id"),
+                "html_link": created.get("htmlLink") or template_url,
+                "google_calendar_template_url": template_url,
+                "start_iso": start_dt.isoformat(),
+                "end_iso": end_dt.isoformat(),
+                "message": "Interview added directly to your Google Calendar.",
+            }
+        except Exception as exc:
+            logger.warning("Google Calendar API insert fallback to template link: %s", exc)
+            return {
+                "created_in_google_calendar": False,
+                "oauth_connected": True,
+                "needs_oauth": "insufficient" in str(exc).lower() or "scope" in str(exc).lower(),
+                "event_id": None,
+                "html_link": template_url,
+                "google_calendar_template_url": template_url,
+                "start_iso": start_dt.isoformat(),
+                "end_iso": end_dt.isoformat(),
+                "error": str(exc),
+                "message": "Could not write via Calendar API automatically (re-authorize Google Calendar scope or use the quick Google Calendar link).",
+            }
 
 
 gmail_service = GmailService()

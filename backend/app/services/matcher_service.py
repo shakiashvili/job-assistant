@@ -2,8 +2,7 @@ import json
 import logging
 import re
 from typing import Dict, Any, List, Optional, Tuple
-from ..config import GEMINI_API_KEY, GEMINI_MODEL
-from .gemini_service import MULTI_INDUSTRY_SKILLS
+from .gemini_service import MULTI_INDUSTRY_SKILLS, gemini_service
 
 logger = logging.getLogger(__name__)
 
@@ -151,17 +150,13 @@ class MatcherService:
     """
 
     def __init__(self):
-        self.api_key = GEMINI_API_KEY
-        self.model = GEMINI_MODEL
-        self.client = None
-        if self.api_key:
-            try:
-                from google import genai
-                self.client = genai.Client(api_key=self.api_key)
-            except Exception as e:
-                logger.warning(f"MatcherService Gemini init fallback: {e}")
+        pass
 
-    def parse_skills_markdown(self, raw_markdown: str) -> Dict[str, Any]:
+    @property
+    def client(self):
+        return gemini_service.client
+
+    def parse_skills_markdown(self, raw_markdown: str, enrich_with_ai: bool = False) -> Dict[str, Any]:
         """
         Parses raw_markdown (from skills.md) into structured taxonomy for CandidateProfile.parsed_skills.
         Uses Gemini 2.5 Flash if available, enriched with deterministic taxonomy matching.
@@ -281,15 +276,13 @@ class MatcherService:
                         all_skills.append(token)
 
         all_skills = dedupe_skills_case_insensitive(all_skills)
-        taxonomy["frameworks"] = dedupe_skills_case_insensitive(taxonomy["qa_automation"] + ["PyTest", "Playwright", "Cypress"])
-        taxonomy["tools"] = dedupe_skills_case_insensitive(taxonomy["api_and_performance"] + taxonomy["cicd_and_devops"] + ["Jira", "Git"])
+        taxonomy["frameworks"] = dedupe_skills_case_insensitive(list(taxonomy["qa_automation"]))
+        taxonomy["tools"] = dedupe_skills_case_insensitive(list(taxonomy["api_and_performance"]) + list(taxonomy["cicd_and_devops"]))
         taxonomy["all_skills"] = all_skills
 
-        # Optionally enrich via Gemini 2.5 Flash if live key is present
-        if self.client:
-            try:
-                from google.genai import types
-                prompt = f"""Parse this candidate skills markdown into a JSON object with keys:
+        # Optional AI enrichment only when explicitly requested (avoids double Gemini calls on upload)
+        if enrich_with_ai and gemini_service.is_available:
+            prompt = f"""Parse this candidate skills markdown into a JSON object with keys:
 - qa_automation (list of strings)
 - manual_qa (list of strings)
 - languages (list of programming languages)
@@ -300,22 +293,18 @@ class MatcherService:
 Markdown:
 {text[:3000]}
 """
-                resp = self.client.models.generate_content(
-                    model=self.model,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        temperature=0.1,
-                    ),
-                )
-                if resp and resp.text:
-                    gem_data = json.loads(resp.text)
-                    for k in ["qa_automation", "manual_qa", "languages", "api_and_performance", "cicd_and_devops"]:
-                        if isinstance(gem_data.get(k), list):
-                            merged = list(dict.fromkeys(taxonomy[k] + [str(x) for x in gem_data[k]]))
-                            taxonomy[k] = merged
-            except Exception as e:
-                logger.warning(f"Gemini skills taxonomy enrichment fallback: {e}")
+            gem_data = gemini_service.generate_json(
+                prompt,
+                task_type="skills_taxonomy",
+                model_tier="fast",
+                temperature=0.1,
+                ttl_seconds=3600,
+            )
+            if isinstance(gem_data, dict):
+                for k in ["qa_automation", "manual_qa", "languages", "api_and_performance", "cicd_and_devops"]:
+                    if isinstance(gem_data.get(k), list):
+                        merged = list(dict.fromkeys(taxonomy[k] + [str(x) for x in gem_data[k]]))
+                        taxonomy[k] = merged
 
         return taxonomy
 

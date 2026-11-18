@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .config import MOCK_PORTALS_DIR, GEMINI_MODEL, DATABASE_URL, FRONTEND_URL, ENABLE_PLAYWRIGHT
+from .config import GEMINI_MODEL, DATABASE_URL, FRONTEND_URL, ENABLE_PLAYWRIGHT
 from .db.database import init_db
 from .services.gemini_service import gemini_service
 from .routers.audit import router as audit_router
@@ -19,6 +19,7 @@ from .routers.auth import router as auth_router
 from .routers.admin import router as admin_router
 from .routers.plans import router as plans_router
 from .routers.extension import router as extension_router
+from .routers.b2b import router as b2b_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -96,6 +97,7 @@ app.include_router(stage_router)
 app.include_router(ground_truth_router)
 app.include_router(tracker_router)
 app.include_router(extension_router)
+app.include_router(b2b_router)
 
 @app.get("/")
 def root():

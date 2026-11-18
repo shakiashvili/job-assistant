@@ -77,31 +77,47 @@ export const InterviewPrepModal: React.FC<InterviewPrepModalProps> = ({
     }
   };
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+    <div
+      className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="interview-prep-dialog-title"
+    >
       <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-3xl w-full max-h-[92vh] flex flex-col shadow-2xl overflow-hidden my-auto">
         {/* Header */}
         <div className="p-4 sm:p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/80 gap-3">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-sky-500 to-indigo-600 flex items-center justify-center text-white flex-shrink-0 shadow-md shadow-sky-500/20">
-              <Sparkles className="w-5 h-5" />
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-600 flex items-center justify-center text-white flex-shrink-0 shadow-md shadow-emerald-500/20">
+              <Sparkles className="w-5 h-5" aria-hidden="true" />
             </div>
             <div className="min-w-0">
-              <h2 className="text-base sm:text-lg font-bold text-white truncate">
+              <h2 id="interview-prep-dialog-title" className="text-base sm:text-lg font-bold text-white truncate">
                 Interview Copilot: {companyName}
               </h2>
-              <p className="text-xs text-slate-400 truncate">
-                Role: <span className="text-slate-200">{jobTitle}</span>
+              <p className="text-xs text-slate-300 truncate">
+                Role: <span className="text-slate-100">{jobTitle}</span>
               </p>
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 flex-shrink-0"
+            aria-label="Close interview preparation dialog"
+            className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 flex-shrink-0"
           >
-            <X className="w-5 h-5" />
+            <X className="w-5 h-5" aria-hidden="true" />
           </button>
         </div>
 
@@ -117,7 +133,7 @@ export const InterviewPrepModal: React.FC<InterviewPrepModalProps> = ({
               onClick={() => setRoundType(tab.id)}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
                 roundType === tab.id
-                  ? 'bg-sky-600 text-white shadow-sm'
+                  ? 'bg-emerald-600 text-white shadow-sm'
                   : 'text-slate-400 hover:text-white hover:bg-slate-900'
               }`}
             >
@@ -130,7 +146,7 @@ export const InterviewPrepModal: React.FC<InterviewPrepModalProps> = ({
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5">
           {loading && (
             <div className="py-16 text-center space-y-3">
-              <Sparkles className="w-8 h-8 text-sky-400 animate-spin mx-auto" />
+              <Sparkles className="w-8 h-8 text-emerald-400 animate-spin mx-auto" />
               <div className="text-sm font-semibold text-white">Synthesizing Company Intel & 10 Questions...</div>
               <p className="text-xs text-slate-400">Analyzing engineering stack clues and generating STAR frameworks</p>
             </div>
@@ -147,7 +163,7 @@ export const InterviewPrepModal: React.FC<InterviewPrepModalProps> = ({
             <>
               {/* Company Intel Overview */}
               <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5">
-                <div className="flex items-center gap-2 text-xs font-bold text-sky-400 uppercase tracking-wider">
+                <div className="flex items-center gap-2 text-xs font-bold text-emerald-400 uppercase tracking-wider">
                   <Building2 className="w-4 h-4" />
                   <span>Company Intelligence & Engineering Culture</span>
                 </div>
@@ -182,7 +198,7 @@ export const InterviewPrepModal: React.FC<InterviewPrepModalProps> = ({
                           className="w-full text-left p-3.5 flex items-start justify-between gap-3 hover:bg-slate-800/40"
                         >
                           <div className="flex items-start gap-2.5 min-w-0">
-                            <span className="text-[11px] font-bold text-sky-400 font-mono pt-0.5">
+                            <span className="text-[11px] font-bold text-emerald-400 font-mono pt-0.5">
                               #{q.id}
                             </span>
                             <div className="min-w-0">
@@ -226,7 +242,7 @@ export const InterviewPrepModal: React.FC<InterviewPrepModalProps> = ({
                               </div>
 
                               <div className="p-2.5 rounded-lg bg-slate-950/80 border border-slate-800">
-                                <span className="font-bold text-sky-400 uppercase text-[10px] block mb-0.5">
+                                <span className="font-bold text-emerald-400 uppercase text-[10px] block mb-0.5">
                                   Task (Objective)
                                 </span>
                                 <span className="text-slate-300 leading-relaxed">
@@ -278,7 +294,7 @@ export const InterviewPrepModal: React.FC<InterviewPrepModalProps> = ({
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
                   placeholder="Draft questions to ask the interviewer, notes on tech stack, salary negotiation points..."
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white focus:outline-none focus:border-sky-500 leading-relaxed"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white focus:outline-none focus:border-emerald-500 leading-relaxed"
                 />
                 <div className="flex justify-end">
                   <button
@@ -299,7 +315,7 @@ export const InterviewPrepModal: React.FC<InterviewPrepModalProps> = ({
         <div className="p-4 bg-slate-950/80 border-t border-slate-800 flex justify-end">
           <button
             onClick={onClose}
-            className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-semibold text-xs"
+            className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs"
           >
             Done
           </button>

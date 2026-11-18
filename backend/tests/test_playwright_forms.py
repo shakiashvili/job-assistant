@@ -1,13 +1,13 @@
 import pytest
 from app.services.playwright_service import playwright_service
-from app.config import MOCK_PORTALS_DIR, GENERATED_RESUMES_DIR
+from app.config import TEST_FORMS_DIR, GENERATED_RESUMES_DIR
 
 
 @pytest.mark.asyncio
 async def test_playwright_dou_ua_staging():
-    mock_url = (MOCK_PORTALS_DIR / "dou_sample.html").as_uri()
+    sample_url = (TEST_FORMS_DIR / "dou_sample.html").as_uri()
     result = await playwright_service.stage_application(
-        job_url=mock_url,
+        job_url=sample_url,
         variant="qa_automation",
         headless=True,
         timeout_seconds=3,
@@ -27,9 +27,9 @@ async def test_playwright_dou_ua_staging():
 
 @pytest.mark.asyncio
 async def test_playwright_greenhouse_staging():
-    mock_url = (MOCK_PORTALS_DIR / "greenhouse_sample.html").as_uri()
+    sample_url = (TEST_FORMS_DIR / "greenhouse_sample.html").as_uri()
     result = await playwright_service.stage_application(
-        job_url=mock_url,
+        job_url=sample_url,
         variant="qa_automation",
         headless=True,
         timeout_seconds=3,
@@ -47,9 +47,9 @@ async def test_playwright_greenhouse_staging():
 
 @pytest.mark.asyncio
 async def test_playwright_lever_staging():
-    mock_url = (MOCK_PORTALS_DIR / "lever_sample.html").as_uri()
+    sample_url = (TEST_FORMS_DIR / "lever_sample.html").as_uri()
     result = await playwright_service.stage_application(
-        job_url=mock_url,
+        job_url=sample_url,
         variant="qa_automation",
         headless=True,
         timeout_seconds=3,

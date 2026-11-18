@@ -49,8 +49,22 @@ export interface WorkHistoryItem {
 export interface EducationItem {
   degree: string;
   institution: string;
-  graduation_year: number;
-  focus: string;
+  location?: string;
+  dates?: string;
+  graduation_year?: number;
+  gpa?: string;
+  modules?: string[];
+  focus?: string;
+  field_of_study?: string;
+  start_year?: string;
+  end_year?: string;
+}
+
+export interface ProjectItem {
+  title: string;
+  organization?: string;
+  dates?: string;
+  highlights: string[];
 }
 
 export interface CVVariant {
@@ -88,9 +102,30 @@ export interface GroundTruth {
   };
   work_history: WorkHistoryItem[];
   education: EducationItem[];
+  projects?: ProjectItem[];
+  certifications?: string[];
   cv_variants: Record<string, CVVariant>;
   faq_bank: FAQItem[];
   skills_md_raw?: string;
+}
+
+export interface GoogleCalendarStatus {
+  connected: boolean;
+  google_oauth_configured: boolean;
+  email: string;
+  auth_url: string;
+}
+
+export interface GoogleCalendarEventResponse {
+  created_in_google_calendar: boolean;
+  oauth_connected: boolean;
+  needs_oauth: boolean;
+  event_id?: string | null;
+  html_link: string;
+  google_calendar_template_url: string;
+  start_iso: string;
+  end_iso: string;
+  message: string;
 }
 
 export interface JobDetails {
@@ -129,6 +164,8 @@ export interface DbJobPosting {
   salary_max: number | null;
   salary_currency: string | null;
   salary_estimated_by_ai: boolean;
+  salary_source?: 'verified' | 'ai_estimated' | 'missing' | string;
+  posting_date?: string | null;
   suitability_score: number;
   match_rationale: string;
   match_tier?: 'DIRECT' | 'ADJACENT' | 'PUBLIC_INTERNSHIP' | string;
@@ -141,6 +178,10 @@ export interface DbJobPosting {
   target_email?: string | null;
   email_subject?: string | null;
   scraped_at: string;
+  contract_mode?: 'GE_LOCAL' | 'REMOTE_B2B' | 'REGION_LOCKED' | string;
+  georgia_eligible?: boolean;
+  b2b_ready?: boolean;
+  eligibility_note?: string;
 }
 
 export interface ParsedSkillsTaxonomy {
@@ -217,7 +258,10 @@ export interface TailoredCVResult {
   human_tone_summary: string;
   applicant_summary: string;
   motivation_statement: string;
+  cover_letter?: string;
   dou_motivational_letter: string;
+  cv_sections?: Record<string, any>;
+  rendered_html?: string;
   tailored_highlights: string[];
   ats_keywords_covered: string[];
   start_date_default: string;
@@ -263,7 +307,6 @@ export interface PortalVacancyItem {
   location: string;
   salary: string;
   url: string;
-  mock_url: string;
   company_reviews_count: number;
   company_rating: number;
   requires_motivational_letter: boolean;
@@ -424,5 +467,140 @@ export interface AdminUser {
   created_at: string;
   application_count: number;
   has_gmail_oauth: boolean;
+}
+
+export interface CVVersionItem {
+  id: number;
+  title: string;
+  target_company?: string | null;
+  target_role?: string | null;
+  edition: string;
+  language: string;
+  structured_json: Record<string, any>;
+  rendered_html?: string;
+  pdf_filename?: string | null;
+  docx_filename?: string | null;
+  pdf_url?: string | null;
+  docx_url?: string | null;
+  html_preview_url?: string | null;
+  version_number: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CandidateAnalyticsResponse {
+  profile_uploaded: boolean;
+  completeness_score: number;
+  missing_fields: string[];
+  detected_industry?: string;
+  primary_role?: string;
+  matching_jobs_count: number;
+  remote_b2b_matches_count?: number;
+  local_georgia_matches_count?: number;
+  ready_to_apply_count?: number;
+  tier_breakdown: Record<string, number>;
+  saved_jobs_count: number;
+  active_applications_count: number;
+  applied_count: number;
+  interviews_count: number;
+  offers_count: number;
+  cv_versions_count?: number;
+  response_rate_pct: number;
+  applications_by_status: Record<string, number>;
+  upcoming_interviews: Array<{
+    id: number;
+    application_id: number;
+    round_type: string;
+    scheduled_at?: string | null;
+    interviewer?: string | null;
+  }>;
+}
+
+export interface AIMetricsResponse {
+  gemini_configured: boolean;
+  quality_model: string;
+  fast_model: string;
+  total_requests: number;
+  success_count: number;
+  cache_hits: number;
+  cache_hit_rate: number;
+  active_cache_entries?: number;
+  rate_limited_count: number;
+  failed_count: number;
+  unconfigured_count?: number;
+  avg_latency_ms: number;
+  p95_latency_ms: number;
+  prompt_tokens?: number;
+  output_tokens?: number;
+  total_tokens: number;
+  estimated_cost_usd: number | null;
+  by_task: Record<
+    string,
+    {
+      count: number;
+      success: number;
+      cache_hits: number;
+      errors: number;
+      avg_latency_ms: number;
+    }
+  >;
+  recent_logs: Array<{
+    id: number;
+    task_type: string;
+    model_name: string;
+    cache_hit: boolean;
+    latency_ms: number;
+    status: string;
+    error_type?: string | null;
+    total_tokens?: number | null;
+    estimated_cost_usd?: number | null;
+    created_at: string;
+  }>;
+}
+
+export interface B2BTaxCalculatorResponse {
+  currency: string;
+  fx_to_gel: number;
+  monthly_gross_orig: number;
+  monthly_gross_gel: number;
+  annual_gross_gel: number;
+  under_500k_cap: boolean;
+  b2b_small_business: {
+    tax_rate_pct: number;
+    tax_gel: number;
+    transfer_fee_gel: number;
+    net_gel: number;
+    net_orig: number;
+    hourly_net_orig: number;
+  };
+  standard_labor_contract: {
+    pension_gel: number;
+    income_tax_gel: number;
+    net_gel: number;
+    net_orig: number;
+  };
+  monthly_b2b_advantage_gel: number;
+  cap_usage_pct: number;
+  notes: string[];
+}
+
+export interface TimezoneMatrixResponse {
+  base_timezone: string;
+  selected_shift_get: string;
+  regions: Array<{
+    region: string;
+    hours_behind_tbilisi: number;
+    client_hours_tbilisi_time: string;
+    overlap_hours_count: number;
+    overlap_window_get: string;
+    recommended_shift_get: string;
+  }>;
+}
+
+export interface B2BProposalResponse {
+  subject: string;
+  proposal_text: string;
+  language: string;
 }
 

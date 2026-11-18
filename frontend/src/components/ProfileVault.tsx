@@ -12,14 +12,51 @@ import {
   CheckCircle2,
   AlertCircle,
   UploadCloud,
-  FileText
+  FileText,
+  GraduationCap,
+  RefreshCw,
 } from 'lucide-react';
-import { fetchGroundTruth, saveGroundTruth, uploadSkillsMdFile } from '../services/api';
+import { fetchGroundTruth, saveGroundTruth, uploadSkillsMdFile, fetchCandidateAnalytics } from '../services/api';
 import { GroundTruth } from '../types';
 
+const DEFAULT_GROUND_TRUTH: GroundTruth = {
+  candidate: {
+    first_name: '',
+    last_name: '',
+    full_name: '',
+    email: '',
+    phone: '',
+    headline: '',
+    location: { city: '', country: '', open_to_relocation: false, remote_preference: 'Remote' },
+    links: { linkedin: '', github: '', portfolio: '' },
+    work_authorization: {
+      citizenship: [],
+      eu_work_permit: false,
+      requires_eu_visa: false,
+      us_work_authorization: '',
+      requires_us_visa_sponsorship: false,
+      uk_work_authorization: '',
+      security_clearance: false,
+    },
+    languages: [],
+    compensation: {
+      expected_salary_eur: 0,
+      min_salary_eur: 0,
+      expected_salary_usd: 0,
+      notice_period: '',
+    },
+  },
+  skills: { core: [], secondary: [] },
+  work_history: [],
+  education: [],
+  cv_variants: {},
+  faq_bank: [],
+};
+
 export const ProfileVault: React.FC = () => {
-  const [data, setData] = useState<GroundTruth | null>(null);
-  const [activeTab, setActiveTab] = useState<'personal' | 'auth' | 'skills' | 'history' | 'faq'>('personal');
+  const [data, setData] = useState<GroundTruth>(DEFAULT_GROUND_TRUTH);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [activeTab, setActiveTab] = useState<'personal' | 'auth' | 'skills' | 'history' | 'education' | 'faq'>('personal');
   const [isSaving, setIsSaving] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -31,6 +68,7 @@ export const ProfileVault: React.FC = () => {
   const [newFaqTags, setNewFaqTags] = useState('');
   const [isDragging, setIsDragging] = useState(false);
   const [isUploadingSkills, setIsUploadingSkills] = useState(false);
+  const [completeness, setCompleteness] = useState<{ score: number; missing: string[] } | null>(null);
   const dropInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const handleSkillsFileDrop = async (file: File) => {
@@ -40,10 +78,11 @@ export const ProfileVault: React.FC = () => {
     try {
       const res = await uploadSkillsMdFile(file);
       await loadData();
-      setSuccessMsg(`Successfully parsed ${file.name} into CandidateProfile with ${res.extracted_skills.length} clean skills!`);
+      window.dispatchEvent(new CustomEvent('talentflow:profile-updated'));
+      setSuccessMsg(`Successfully parsed ${file.name} into CandidateProfile (${res.extracted_skills.length} skills) & synced saved CVs!`);
       setTimeout(() => setSuccessMsg(null), 4000);
     } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to upload and parse skills file');
+      setErrorMsg(err.message || 'Failed to upload and parse CV / skills file');
     } finally {
       setIsUploadingSkills(false);
     }
@@ -54,11 +93,26 @@ export const ProfileVault: React.FC = () => {
   }, []);
 
   const loadData = async () => {
+    setIsLoading(true);
+    setErrorMsg(null);
     try {
-      const gt = await fetchGroundTruth();
-      setData(gt);
+      const [gt, analytics] = await Promise.all([
+        fetchGroundTruth(),
+        fetchCandidateAnalytics().catch(() => null),
+      ]);
+      if (gt && typeof gt === 'object') {
+        setData({ ...DEFAULT_GROUND_TRUTH, ...gt });
+      }
+      if (analytics) {
+        setCompleteness({
+          score: analytics.completeness_score,
+          missing: analytics.missing_fields || [],
+        });
+      }
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to load ground truth');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -71,8 +125,8 @@ export const ProfileVault: React.FC = () => {
     try {
       const updated = await saveGroundTruth(data);
       setData(updated);
-      setSuccessMsg('Candidate Ground Truth saved successfully to disk!');
-      setTimeout(() => setSuccessMsg(null), 3500);
+      setSuccessMsg('Profile saved & synced automatically across all generated Word/PDF CVs!');
+      setTimeout(() => setSuccessMsg(null), 4000);
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to save');
     } finally {
@@ -133,14 +187,6 @@ export const ProfileVault: React.FC = () => {
     });
   };
 
-  if (!data) {
-    return (
-      <div className="p-12 text-center text-slate-400">
-        Loading Candidate Profile Vault...
-      </div>
-    );
-  }
-
   const candidate = data.candidate || ({} as GroundTruth['candidate']);
   const links = candidate.links || { linkedin: '', github: '', portfolio: '' };
   const workAuth = candidate.work_authorization || {
@@ -160,30 +206,75 @@ export const ProfileVault: React.FC = () => {
   };
   const skillsCore = data.skills?.core || [];
   const work_history = Array.isArray(data.work_history) ? data.work_history : [];
+  const educationList = Array.isArray(data.education) ? data.education : [];
+  const certifications = Array.isArray((data as any).parsed_skills_taxonomy?.courses_and_certifications)
+    ? (data as any).parsed_skills_taxonomy.courses_and_certifications
+    : [];
   const faq_bank = Array.isArray(data.faq_bank) ? data.faq_bank : [];
 
   return (
     <div className="space-y-6">
+      <input
+        ref={dropInputRef}
+        type="file"
+        accept=".pdf,.docx,.doc,.md,.txt,.markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = '';
+          if (file) handleSkillsFileDrop(file);
+        }}
+      />
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900 border border-slate-800 p-6 rounded-2xl">
         <div>
           <h2 className="text-xl font-bold text-white flex items-center gap-2">
-            <User className="w-5 h-5 text-sky-400" />
+            <User className="w-5 h-5 text-emerald-400" />
             Candidate Profile Vault (Ground Truth)
+            {isLoading && (
+              <span className="inline-flex items-center gap-1 text-xs font-normal text-emerald-400 ml-2">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Syncing...
+              </span>
+            )}
           </h2>
           <p className="text-sm text-slate-400 mt-1">
             Single Source of Truth for all automated screening answers and resume tailoring.
           </p>
         </div>
 
-        <button
-          onClick={handleSave}
-          disabled={isSaving}
-          className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-xs text-white bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 shadow-lg shadow-sky-600/25 transition-all disabled:opacity-50"
-        >
-          <Save className="w-4 h-4" />
-          <span>{isSaving ? 'Saving...' : 'Save Ground Truth'}</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => dropInputRef.current?.click()}
+            disabled={isUploadingSkills}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-xs text-emerald-300 bg-emerald-950/60 hover:bg-sky-900/60 border border-emerald-700/60 transition-all disabled:opacity-50"
+          >
+            <UploadCloud className={`w-4 h-4 ${isUploadingSkills ? 'animate-bounce' : ''}`} />
+            <span>{isUploadingSkills ? 'Parsing CV...' : 'Upload CV (.pdf / .docx / .md)'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={loadData}
+            disabled={isLoading}
+            className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl font-semibold text-xs text-slate-300 bg-slate-950 hover:bg-slate-800 border border-slate-800 transition-all disabled:opacity-50"
+            title="Reload Ground Truth from database"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+            <span>Reload</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={isSaving}
+            className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-xs text-white bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 shadow-lg shadow-emerald-600/25 transition-all disabled:opacity-50"
+          >
+            <Save className="w-4 h-4" />
+            <span>{isSaving ? 'Saving...' : 'Save Ground Truth'}</span>
+          </button>
+        </div>
       </div>
 
       {successMsg && (
@@ -200,14 +291,45 @@ export const ProfileVault: React.FC = () => {
         </div>
       )}
 
+      {completeness && (
+        <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 text-xs font-bold text-white">
+              <span>Vault Completeness: {completeness.score}%</span>
+              {completeness.missing.length === 0 && (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800">
+                  Ready
+                </span>
+              )}
+            </div>
+            {completeness.missing.length > 0 ? (
+              <p className="text-[11px] text-amber-300">
+                Missing fields (never guessed or fabricated): {completeness.missing.join(', ')}
+              </p>
+            ) : (
+              <p className="text-[11px] text-slate-400">
+                All core identity, skills, history, and education fields are verified in your vault.
+              </p>
+            )}
+          </div>
+          <div className="w-full sm:w-44 h-2 bg-slate-800 rounded-full overflow-hidden">
+            <div
+              className={`h-full ${completeness.score >= 80 ? 'bg-emerald-500' : 'bg-amber-500'}`}
+              style={{ width: `${Math.min(100, Math.max(5, completeness.score))}%` }}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Vault Sub-navigation */}
       <div className="flex overflow-x-auto gap-2 border-b border-slate-800 pb-3">
         {[
           { id: 'personal', label: 'Personal & Contact', icon: User },
           { id: 'auth', label: 'Visas & Work Auth', icon: Shield },
-          { id: 'skills', label: 'Verified Skills', icon: Code },
-          { id: 'history', label: 'Work History', icon: Briefcase },
-          { id: 'faq', label: 'FAQ Bank', icon: MessageSquare },
+          { id: 'skills', label: `Verified Skills (${skillsCore.length})`, icon: Code },
+          { id: 'history', label: `Work History (${work_history.length})`, icon: Briefcase },
+          { id: 'education', label: `Education & Certs (${educationList.length + certifications.length})`, icon: GraduationCap },
+          { id: 'faq', label: `FAQ Bank (${faq_bank.length})`, icon: MessageSquare },
         ].map((tab) => {
           const Icon = tab.icon;
           return (
@@ -216,7 +338,7 @@ export const ProfileVault: React.FC = () => {
               onClick={() => setActiveTab(tab.id as any)}
               className={`min-h-[44px] flex-shrink-0 flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-medium whitespace-nowrap transition-all ${
                 activeTab === tab.id
-                  ? 'bg-slate-800 text-sky-400 border border-slate-700'
+                  ? 'bg-slate-800 text-emerald-400 border border-slate-700'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
               }`}
             >
@@ -238,7 +360,7 @@ export const ProfileVault: React.FC = () => {
                 type="text"
                 value={candidate.first_name || ''}
                 onChange={(e) => setData({ ...data, candidate: { ...candidate, first_name: e.target.value } })}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
               />
             </div>
             <div>
@@ -247,7 +369,7 @@ export const ProfileVault: React.FC = () => {
                 type="text"
                 value={candidate.last_name || ''}
                 onChange={(e) => setData({ ...data, candidate: { ...candidate, last_name: e.target.value } })}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
               />
             </div>
             <div>
@@ -256,7 +378,7 @@ export const ProfileVault: React.FC = () => {
                 type="email"
                 value={candidate.email || ''}
                 onChange={(e) => setData({ ...data, candidate: { ...candidate, email: e.target.value } })}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
               />
             </div>
             <div>
@@ -265,7 +387,7 @@ export const ProfileVault: React.FC = () => {
                 type="text"
                 value={candidate.phone || ''}
                 onChange={(e) => setData({ ...data, candidate: { ...candidate, phone: e.target.value } })}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
               />
             </div>
             <div className="md:col-span-2">
@@ -274,7 +396,7 @@ export const ProfileVault: React.FC = () => {
                 type="text"
                 value={candidate.headline || ''}
                 onChange={(e) => setData({ ...data, candidate: { ...candidate, headline: e.target.value } })}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
               />
             </div>
           </div>
@@ -287,7 +409,7 @@ export const ProfileVault: React.FC = () => {
                 type="text"
                 value={links.linkedin || ''}
                 onChange={(e) => setData({ ...data, candidate: { ...candidate, links: { ...links, linkedin: e.target.value } } })}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-sky-500 font-mono text-[11px]"
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 font-mono text-[11px]"
               />
             </div>
             <div>
@@ -296,7 +418,7 @@ export const ProfileVault: React.FC = () => {
                 type="text"
                 value={links.github || ''}
                 onChange={(e) => setData({ ...data, candidate: { ...candidate, links: { ...links, github: e.target.value } } })}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-sky-500 font-mono text-[11px]"
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 font-mono text-[11px]"
               />
             </div>
             <div>
@@ -305,7 +427,7 @@ export const ProfileVault: React.FC = () => {
                 type="text"
                 value={links.portfolio || ''}
                 onChange={(e) => setData({ ...data, candidate: { ...candidate, links: { ...links, portfolio: e.target.value } } })}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-sky-500 font-mono text-[11px]"
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 font-mono text-[11px]"
               />
             </div>
           </div>
@@ -343,7 +465,7 @@ export const ProfileVault: React.FC = () => {
                     },
                   })
                 }
-                className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
+                className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
               />
               <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
                 <input
@@ -383,7 +505,7 @@ export const ProfileVault: React.FC = () => {
                     },
                   })
                 }
-                className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
+                className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
               />
               <p className="text-[11px] text-slate-400">
                 Audits prioritize verified skills and only flag roles requiring explicit citizenship or security clearance.
@@ -394,7 +516,7 @@ export const ProfileVault: React.FC = () => {
               <label className="block text-xs font-semibold uppercase text-slate-400 mb-2">Compensation & Notice Preferences</label>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
-                  <span className="text-[10px] text-slate-500 uppercase block mb-1">Expected Salary (EUR)</span>
+                  <span className="text-[10px] text-slate-400 uppercase block mb-1">Expected Salary (EUR)</span>
                   <input
                     type="number"
                     min={0}
@@ -412,7 +534,7 @@ export const ProfileVault: React.FC = () => {
                   />
                 </div>
                 <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
-                  <span className="text-[10px] text-slate-500 uppercase block mb-1">Expected Salary (USD)</span>
+                  <span className="text-[10px] text-slate-400 uppercase block mb-1">Expected Salary (USD)</span>
                   <input
                     type="number"
                     min={0}
@@ -430,7 +552,7 @@ export const ProfileVault: React.FC = () => {
                   />
                 </div>
                 <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
-                  <span className="text-[10px] text-slate-500 uppercase block mb-1">Notice Period</span>
+                  <span className="text-[10px] text-slate-400 uppercase block mb-1">Notice Period</span>
                   <input
                     type="text"
                     placeholder="e.g. 1 week after offer"
@@ -469,28 +591,18 @@ export const ProfileVault: React.FC = () => {
             onClick={() => dropInputRef.current?.click()}
             className={`border-2 border-dashed rounded-2xl p-6 text-center cursor-pointer transition-all ${
               isDragging
-                ? 'border-sky-400 bg-sky-950/40 shadow-lg shadow-sky-500/20'
+                ? 'border-emerald-400 bg-emerald-950/40 shadow-lg shadow-emerald-500/20'
                 : 'border-slate-800 hover:border-slate-700 bg-slate-950/50'
             }`}
           >
-            <input
-              ref={dropInputRef}
-              type="file"
-              accept=".md,.txt,.markdown"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) handleSkillsFileDrop(file);
-              }}
-            />
             <div className="flex flex-col items-center justify-center space-y-2">
-              <div className="w-10 h-10 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
+              <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
                 <UploadCloud className={`w-5 h-5 ${isUploadingSkills ? 'animate-bounce' : ''}`} />
               </div>
               <div className="text-xs font-semibold text-slate-200">
                 {isUploadingSkills ? 'Parsing skills.md...' : 'Drag & drop skills.md here, or click to browse'}
               </div>
-              <p className="text-[11px] text-slate-500 max-w-sm">
+              <p className="text-[11px] text-slate-400 max-w-sm">
                 Uploads and extracts clean technical competencies into the encrypted database and refreshes verified skills instantly.
               </p>
             </div>
@@ -505,11 +617,11 @@ export const ProfileVault: React.FC = () => {
                 value={newSkill}
                 onChange={(e) => setNewSkill(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && addCoreSkill()}
-                className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
+                className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
               />
               <button
                 onClick={addCoreSkill}
-                className="px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-medium"
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-medium"
               >
                 <Plus className="w-4 h-4" />
               </button>
@@ -520,14 +632,16 @@ export const ProfileVault: React.FC = () => {
             {skillsCore.map((skill) => (
               <span
                 key={skill}
-                className="flex items-center gap-1.5 bg-slate-950 text-sky-300 border border-slate-800 px-3 py-1.5 rounded-xl text-xs font-medium"
+                className="flex items-center gap-1.5 bg-slate-950 text-emerald-300 border border-slate-800 px-3 py-1.5 rounded-xl text-xs font-medium"
               >
                 <span>{skill}</span>
                 <button
+                  type="button"
                   onClick={() => removeCoreSkill(skill)}
-                  className="text-slate-500 hover:text-rose-400 transition-colors"
+                  aria-label={`Remove ${skill}`}
+                  className="text-slate-400 hover:text-rose-400 transition-colors"
                 >
-                  <Trash2 className="w-3 h-3" />
+                  <Trash2 className="w-3 h-3" aria-hidden="true" />
                 </button>
               </span>
             ))}
@@ -550,8 +664,8 @@ export const ProfileVault: React.FC = () => {
                   <div className="flex items-start justify-between">
                     <div>
                       <h4 className="text-sm font-semibold text-white">{job.role || 'Role'}</h4>
-                      <span className="text-xs text-sky-400 font-medium">{job.company || 'Organization'}</span>
-                      {job.location && <span className="text-xs text-slate-500"> • {job.location}</span>}
+                      <span className="text-xs text-emerald-400 font-medium">{job.company || 'Organization'}</span>
+                      {job.location && <span className="text-xs text-slate-400"> • {job.location}</span>}
                     </div>
                     {(job.start_date || job.end_date) && (
                       <span className="text-xs text-slate-400 font-mono bg-slate-900 px-2 py-0.5 rounded">
@@ -568,6 +682,109 @@ export const ProfileVault: React.FC = () => {
                   </ul>
                 </div>
               ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Tab 4.5: Education & Certifications */}
+      {activeTab === 'education' && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-6">
+          <div>
+            <h3 className="text-base font-semibold text-white">Academic Degrees &amp; Education</h3>
+            <p className="text-xs text-slate-400 mt-1">
+              Automatically parsed from your uploaded <code>skills.md</code> and used to unlock graduate &amp; adjacent roles.
+            </p>
+          </div>
+          {educationList.length === 0 ? (
+            <div className="text-xs text-slate-400 py-6 text-center bg-slate-950 rounded-xl border border-slate-800">
+              No education entries parsed yet. Upload your skills.md with an Education section.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {educationList.map((edu, idx) => {
+                const dateBadge =
+                  edu.dates ||
+                  (edu.start_year || edu.end_year
+                    ? [edu.start_year, edu.end_year].filter(Boolean).join(' – ')
+                    : edu.graduation_year
+                    ? String(edu.graduation_year)
+                    : '');
+                const degreeTitle = edu.degree || edu.field_of_study || edu.focus || 'Academic Program';
+                const institutionLine =
+                  edu.institution && edu.institution.toLowerCase() !== degreeTitle.toLowerCase()
+                    ? edu.institution + (edu.location ? ` • ${edu.location}` : '')
+                    : '';
+                const modulesList = Array.isArray(edu.modules) && edu.modules.length > 0
+                  ? edu.modules
+                  : (edu.field_of_study || edu.focus) &&
+                    (edu.field_of_study || edu.focus) !== degreeTitle &&
+                    (edu.field_of_study || edu.focus) !== edu.institution
+                  ? String(edu.field_of_study || edu.focus)
+                      .split(/[;,]+/)
+                      .map((m) => m.trim())
+                      .filter(Boolean)
+                  : [];
+
+                return (
+                  <div key={idx} className="bg-slate-950/80 p-4 rounded-xl border border-slate-800 space-y-2.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <h4 className="text-sm font-semibold text-white leading-snug">{degreeTitle}</h4>
+                        {institutionLine && (
+                          <div className="text-xs text-emerald-400 font-medium mt-0.5">{institutionLine}</div>
+                        )}
+                      </div>
+                      {dateBadge && (
+                        <span className="text-[11px] text-slate-300 font-mono bg-slate-900 px-2 py-0.5 rounded border border-slate-800 flex-shrink-0">
+                          {dateBadge}
+                        </span>
+                      )}
+                    </div>
+
+                    {edu.gpa && (
+                      <div className="inline-flex items-center gap-1.5 text-[11px] font-medium text-teal-300 bg-teal-950/40 border border-teal-800/50 px-2 py-0.5 rounded">
+                        <span>Cumulative GPA:</span>
+                        <span className="font-mono font-bold">{edu.gpa}</span>
+                      </div>
+                    )}
+
+                    {modulesList.length > 0 && (
+                      <div className="pt-1 border-t border-slate-800/70">
+                        <div className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1.5">
+                          Studying Subjects &amp; Core Modules
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {modulesList.map((mod, mIdx) => (
+                            <span
+                              key={mIdx}
+                              className="text-[11px] text-slate-300 bg-slate-900 border border-slate-800 px-2 py-0.5 rounded-md"
+                            >
+                              {mod}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {certifications.length > 0 && (
+            <div className="pt-4 border-t border-slate-800 space-y-3">
+              <h4 className="text-sm font-semibold text-white">Courses, Bootcamps &amp; Certifications</h4>
+              <div className="flex flex-wrap gap-2">
+                {certifications.map((cert: string, i: number) => (
+                  <span
+                    key={i}
+                    className="px-3 py-1.5 rounded-xl bg-cyan-950/60 border border-cyan-800/60 text-cyan-200 text-xs font-medium"
+                  >
+                    🎓 {cert}
+                  </span>
+                ))}
+              </div>
             </div>
           )}
         </div>
@@ -590,14 +807,14 @@ export const ProfileVault: React.FC = () => {
                 value={newFaqTrigger}
                 onChange={(e) => setNewFaqTrigger(e.target.value)}
                 placeholder="Question keyword trigger (e.g. work authorization / notice period)"
-                className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
+                className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
               />
               <input
                 type="text"
                 value={newFaqTags}
                 onChange={(e) => setNewFaqTags(e.target.value)}
                 placeholder="Tags (comma-separated, e.g. remote, b2b)"
-                className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
+                className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
               />
             </div>
             <div className="flex gap-2">
@@ -606,12 +823,12 @@ export const ProfileVault: React.FC = () => {
                 value={newFaqAnswer}
                 onChange={(e) => setNewFaqAnswer(e.target.value)}
                 placeholder="Standard candidate answer..."
-                className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
+                className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
               />
               <button
                 type="button"
                 onClick={addFaqItem}
-                className="min-h-[44px] px-3.5 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1"
+                className="min-h-[44px] px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Add FAQ</span>
@@ -635,7 +852,7 @@ export const ProfileVault: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => removeFaqItem(idx)}
-                      className="min-h-[44px] min-w-[44px] sm:min-h-[32px] sm:min-w-[32px] flex items-center justify-center text-slate-500 hover:text-rose-400"
+                      className="min-h-[44px] min-w-[44px] sm:min-h-[32px] sm:min-w-[32px] flex items-center justify-center text-slate-400 hover:text-rose-400"
                       title="Delete FAQ entry"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
