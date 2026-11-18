@@ -14,7 +14,9 @@ from app.config import DATABASE_URL  # noqa: E402
 from app.db import models  # noqa: F401, E402
 
 config = context.config
-config.set_main_option("sqlalchemy.url", DATABASE_URL.replace("%", "%%"))
+existing_url = config.get_main_option("sqlalchemy.url")
+if not existing_url or existing_url == "driver://user:pass@localhost/dbname":
+    config.set_main_option("sqlalchemy.url", DATABASE_URL.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name, disable_existing_loggers=False)

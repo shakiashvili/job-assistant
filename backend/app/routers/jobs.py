@@ -7,7 +7,7 @@ from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query, Depends
 from pydantic import BaseModel
 from sqlalchemy import func, case
-from sqlmodel import Session, select, or_
+from sqlmodel import Session, select, or_, and_
 
 from ..db.database import engine, init_db
 from ..db.models import (
@@ -407,9 +407,35 @@ async def list_scraped_jobs(
                 )
             )
         if country and country.strip():
-            base_conds.append(JobPosting.market.ilike(f"%{_esc_like(country.strip())}%", escape="\\"))
+            c_clean = country.strip()
+            ckw = f"%{_esc_like(c_clean)}%"
+            c_missing = or_(JobPosting.country.is_(None), JobPosting.country == "")
+            c_fallbacks = [JobPosting.market.ilike(ckw, escape="\\")]
+            if c_clean.lower() in ("georgia", "ge", "sakartvelo"):
+                c_fallbacks.append(JobPosting.market.ilike("GE%", escape="\\"))
+                c_fallbacks.append(JobPosting.country.ilike("%GE%", escape="\\"))
+            base_conds.append(
+                or_(
+                    JobPosting.country.ilike(ckw, escape="\\"),
+                    and_(c_missing, or_(*c_fallbacks)),
+                )
+            )
         if city and city.strip():
-            base_conds.append(JobPosting.market.ilike(f"%{_esc_like(city.strip())}%", escape="\\"))
+            city_clean = city.strip()
+            city_kw = f"%{_esc_like(city_clean)}%"
+            city_missing = or_(JobPosting.city.is_(None), JobPosting.city == "")
+            base_conds.append(
+                or_(
+                    JobPosting.city.ilike(city_kw, escape="\\"),
+                    and_(
+                        city_missing,
+                        or_(
+                            JobPosting.market.ilike(city_kw, escape="\\"),
+                            JobPosting.description_raw.ilike(city_kw, escape="\\"),
+                        ),
+                    ),
+                )
+            )
         if remote_type and remote_type.upper() != "ALL":
             rt_up = remote_type.strip().upper()
             if rt_up == "REMOTE":
@@ -445,6 +471,128 @@ async def list_scraped_jobs(
                     JobPosting.market.in_(["GLOBAL_REMOTE", "INT_REMOTE", "EU_REMOTE"]),
                 )
             )
+
+        def _serialize_job_row(entry: Any) -> Dict[str, Any]:
+            if use_user_matches:
+                r, um = entry
+                dumped = r.model_dump(mode="json")
+                if um is not None:
+                    dumped["suitability_score"] = um.suitability_score
+                    dumped["match_score"] = um.match_score
+                    dumped["match_tier"] = um.match_tier or dumped.get("match_tier")
+                    dumped["adjacent_role_tag"] = um.adjacent_role_tag
+                    dumped["skill_overlap_pct"] = um.skill_overlap_pct
+                    dumped["status"] = um.status
+                    dumped["match_rationale"] = um.match_rationale or dumped.get("match_rationale")
+            else:
+                r = entry
+                dumped = r.model_dump(mode="json")
+
+            if str(dumped.get("salary_currency") or "").lower() in ("gel", "ლარი", "ᲚᲐᲠᲘ", "₾"):
+                dumped["salary_currency"] = "GEL"
+            dumped["company"] = sanitize_company_name(
+                dumped.get("company"),
+                target_email=dumped.get("target_email"),
+                fallback="Employer",
+            )
+            if dumped.get("portal") == "djinni.co" and dumped.get("title"):
+                raw_t = str(dumped["title"])
+                clean_t = _re.sub(r"🔥+", "", raw_t)
+                clean_t = _re.sub(r"\bResponds Quickly\b.*$", "", clean_t, flags=_re.I)
+                clean_t = _re.sub(r"\s+(?:up\s+to|to|from)\s+[\$€£]\s*\d[\d,]*.*$", "", clean_t, flags=_re.I)
+                if dumped.get("company") and len(dumped["company"]) > 2:
+                    ci = clean_t.find(f" {dumped['company']}")
+                    if ci > 4:
+                        clean_t = clean_t[:ci]
+                dumped["title"] = _re.sub(r"\s+", " ", clean_t).strip() or raw_t
+                if dumped.get("salary_min") is None:
+                    sal_ex = salary_service.extract_explicit_salary(f"{raw_t}\n{dumped.get('description_raw', '')}")
+                    if sal_ex:
+                        dumped["salary_min"], dumped["salary_max"], dumped["salary_currency"] = sal_ex
+                        dumped["salary_is_estimated"] = False
+                        dumped["salary_estimated_by_ai"] = False
+            if dumped.get("salary_min") is None and dumped.get("salary_max") is None:
+                dumped["salary_source"] = "missing"
+            elif dumped.get("salary_is_estimated") or dumped.get("salary_estimated_by_ai"):
+                dumped["salary_source"] = "ai_estimated"
+            else:
+                dumped["salary_source"] = "verified"
+            dumped["posting_date"] = dumped.get("scraped_at")
+
+            loc_parts = [str(dumped.get(k) or "").strip() for k in ("city", "country", "market") if dumped.get(k)]
+            geo_info = classify_georgia_b2b_suitability(
+                title=str(dumped.get("title") or ""),
+                description=str(dumped.get("description_raw") or ""),
+                location_text=", ".join(loc_parts),
+                portal=str(dumped.get("portal") or ""),
+                market=str(dumped.get("market") or ""),
+                salary_currency=dumped.get("salary_currency"),
+            )
+            dumped.update(geo_info)
+            return dumped
+
+        if geo_eligible_only:
+            if use_user_matches:
+                base_stmt = select(JobPosting, UserJobMatch).outerjoin(
+                    UserJobMatch,
+                    (UserJobMatch.job_posting_id == JobPosting.id) & (UserJobMatch.user_id == uid),
+                )
+            else:
+                base_stmt = select(JobPosting)
+            if base_conds:
+                base_stmt = base_stmt.where(*base_conds)
+            base_stmt = base_stmt.order_by(score_col.desc(), JobPosting.scraped_at.desc())
+            all_geo_items = [
+                dumped
+                for entry in session.exec(base_stmt).all()
+                if (dumped := _serialize_job_row(entry)).get("georgia_eligible")
+            ]
+
+            tier_counts = {
+                "ALL": len(all_geo_items),
+                "DIRECT": sum(1 for it in all_geo_items if it.get("match_tier") == "DIRECT"),
+                "ADJACENT": sum(1 for it in all_geo_items if it.get("match_tier") == "ADJACENT"),
+                "PUBLIC_INTERNSHIP": sum(
+                    1
+                    for it in all_geo_items
+                    if it.get("match_tier") == "PUBLIC_INTERNSHIP" or it.get("portal") == "hr.gov.ge"
+                ),
+            }
+            status_counts = {
+                "ALL": len(all_geo_items),
+                "STAGED": sum(1 for it in all_geo_items if it.get("status") == "STAGED"),
+                "AUDITED": sum(1 for it in all_geo_items if it.get("status") == "AUDITED"),
+            }
+
+            eligible_filtered = all_geo_items
+            if status and status.upper() != "ALL":
+                eligible_filtered = [it for it in eligible_filtered if it.get("status") == status]
+            if tier and tier.upper() != "ALL":
+                t_low = tier.strip().lower()
+                if t_low == "direct":
+                    eligible_filtered = [it for it in eligible_filtered if it.get("match_tier") == "DIRECT"]
+                elif t_low == "adjacent":
+                    eligible_filtered = [it for it in eligible_filtered if it.get("match_tier") == "ADJACENT"]
+                elif t_low in ("internship", "public_internship"):
+                    eligible_filtered = [
+                        it
+                        for it in eligible_filtered
+                        if it.get("match_tier") == "PUBLIC_INTERNSHIP" or it.get("portal") == "hr.gov.ge"
+                    ]
+
+            total = len(eligible_filtered)
+            total_pages = max(1, math.ceil(total / limit))
+            offset = (page - 1) * limit
+            items = eligible_filtered[offset : offset + limit]
+            return {
+                "items": items,
+                "total": total,
+                "page": page,
+                "limit": limit,
+                "total_pages": total_pages,
+                "tier_counts": tier_counts,
+                "status_counts": status_counts,
+            }
 
         agg_stmt = select(
             func.count().label("all_cnt"),
@@ -524,67 +672,7 @@ async def list_scraped_jobs(
             .limit(limit)
         )
         rows = session.exec(stmt).all()
-
-        items: List[Dict[str, Any]] = []
-        for entry in rows:
-            if use_user_matches:
-                r, um = entry
-                dumped = r.model_dump(mode="json")
-                if um is not None:
-                    dumped["suitability_score"] = um.suitability_score
-                    dumped["match_score"] = um.match_score
-                    dumped["match_tier"] = um.match_tier or dumped.get("match_tier")
-                    dumped["adjacent_role_tag"] = um.adjacent_role_tag
-                    dumped["skill_overlap_pct"] = um.skill_overlap_pct
-                    dumped["status"] = um.status
-                    dumped["match_rationale"] = um.match_rationale or dumped.get("match_rationale")
-            else:
-                r = entry
-                dumped = r.model_dump(mode="json")
-
-            if str(dumped.get("salary_currency") or "").lower() in ("gel", "ლარი", "ᲚᲐᲠᲘ", "₾"):
-                dumped["salary_currency"] = "GEL"
-            dumped["company"] = sanitize_company_name(
-                dumped.get("company"),
-                target_email=dumped.get("target_email"),
-                fallback="Employer",
-            )
-            if dumped.get("portal") == "djinni.co" and dumped.get("title"):
-                raw_t = str(dumped["title"])
-                clean_t = _re.sub(r"🔥+", "", raw_t)
-                clean_t = _re.sub(r"\bResponds Quickly\b.*$", "", clean_t, flags=_re.I)
-                clean_t = _re.sub(r"\s+(?:up\s+to|to|from)\s+[\$€£]\s*\d[\d,]*.*$", "", clean_t, flags=_re.I)
-                if dumped.get("company") and len(dumped["company"]) > 2:
-                    ci = clean_t.find(f" {dumped['company']}")
-                    if ci > 4:
-                        clean_t = clean_t[:ci]
-                dumped["title"] = _re.sub(r"\s+", " ", clean_t).strip() or raw_t
-                if dumped.get("salary_min") is None:
-                    sal_ex = salary_service.extract_explicit_salary(f"{raw_t}\n{dumped.get('description_raw', '')}")
-                    if sal_ex:
-                        dumped["salary_min"], dumped["salary_max"], dumped["salary_currency"] = sal_ex
-                        dumped["salary_is_estimated"] = False
-                        dumped["salary_estimated_by_ai"] = False
-            if dumped.get("salary_min") is None and dumped.get("salary_max") is None:
-                dumped["salary_source"] = "missing"
-            elif dumped.get("salary_is_estimated") or dumped.get("salary_estimated_by_ai"):
-                dumped["salary_source"] = "ai_estimated"
-            else:
-                dumped["salary_source"] = "verified"
-            dumped["posting_date"] = dumped.get("scraped_at")
-
-            geo_info = classify_georgia_b2b_suitability(
-                title=str(dumped.get("title") or ""),
-                description=str(dumped.get("description_raw") or ""),
-                location_text=str(dumped.get("market") or ""),
-                portal=str(dumped.get("portal") or ""),
-                market=str(dumped.get("market") or ""),
-                salary_currency=dumped.get("salary_currency"),
-            )
-            dumped.update(geo_info)
-            if geo_eligible_only and not geo_info["georgia_eligible"]:
-                continue
-            items.append(dumped)
+        items = [_serialize_job_row(entry) for entry in rows]
 
         return {
             "items": items,

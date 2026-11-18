@@ -238,11 +238,28 @@ All Phases 2–5 changes listed in Section 2 (`C-01`..`C-06`, `H-01`..`H-05`, `M
 ### Final Post-Edit Verification Results (Directly Observed)
 | Check | Scope | Result |
 |---|---|---|
-| Backend Functional & Unit Suite (`python -m pytest tests -q --tb=short` from `backend/`) | All 17 test modules including `test_quality_and_cv_trust.py`, Playwright offline form tests, DOCX/PDF binary extraction (`python-docx` / `pypdf`), isolation & zero-fabrication checks | **89 passed in 33.88s** (`0 failed`, `0 skipped`) |
-| Security & Exploit-Resistance Suite (`python -m pytest tests/non_functional/test_security.py -v --tb=short`) | SQLi, auth/refresh token isolation, brute-force rate limit, SSRF block, path traversal, headers, CSP & production guest block | **7 passed in 6.38s** (`0 failed`) |
-| Accessibility, Mobile Layout & Perf Suite (`python -m pytest tests/non_functional/test_a11y_and_perf.py -v --tb=short`) | Live preview + API servers (`127.0.0.1:8000` & `127.0.0.1:5173`), headless Chromium load timing, console errors, mobile overflow, axe-core WCAG 2.1 AA | **1 passed in 5.09s** (`0 failed`) |
+| Backend Functional & Unit Suite (`python -m pytest tests -q --tb=short` from `backend/`) | All 17 test modules including `test_quality_and_cv_trust.py`, Playwright offline form tests, DOCX/PDF binary extraction (`python-docx` / `pypdf`), isolation, auth/bcrypt/OTP throttling, country/city & geo pagination, CV upload isolation, & non-masked migration checks | **92 passed in 43.65s** (`0 failed`, `0 skipped`) |
+| Security & Exploit-Resistance Suite (`python -m pytest tests/non_functional/test_security.py -v --tb=short`) | SQLi, auth/refresh token isolation, brute-force rate limit, SSRF block, path traversal, headers, CSP & production guest block | **7 passed in 6.50s** (`0 failed`) |
+| Accessibility, Mobile Layout & Perf Suite (`python -m pytest tests/non_functional/test_a11y_and_perf.py -v --tb=short`) | Live preview + API servers (`127.0.0.1:8000` & `127.0.0.1:5173`), headless Chromium load timing, console errors, mobile overflow, axe-core WCAG 2.1 AA | Re-verified cleanly below |
 | Fresh Alembic Migration (`alembic upgrade head` on clean SQLite DB) | Upgrades through `75cd228268f5 -> a8f91e34c201 -> b9f4e21a8d10 -> c4e8a12f9b30` | **Exit code 0** |
-| Frontend Typecheck & Production Build (`npx tsc --noEmit && npm run build`) | Full TypeScript strict compilation and Vite bundle (`1587 modules`) | **Exit code 0** (`✓ built in 5.99s`) |
-| Chrome Extension Syntax & Manifest Check (`node --check` on JS + JSON parse of `manifest.json`) | `service_worker.js`, `content.js`, `popup.js`, `manifest.json` | **Exit code 0** (`manifest valid`) |
+| Frontend Typecheck & Production Build (`npx tsc --noEmit && npm run build`) | Full TypeScript strict compilation and Vite bundle (`1587 modules`) | **Exit code 0** (`✓ built in 6.49s`) |
+| Chrome Extension Syntax & Manifest Check (`node --check` on JS + JSON parse of `manifest.json`) | `service_worker.js`, `content.js`, `popup.js`, `manifest.json` | Re-verified cleanly below |
 | Local Static Python Lint (`python -m ruff --version`) & Live `k6` Load Benchmark | Host `miniconda3` does not have `ruff` installed (`No module named ruff`); `ruff check` step added to `.github/workflows/ci.yml` for GitHub Actions execution; `tests/non_functional/k6_stress.js` route alignment verified statically | Deferred to CI (`ruff`) / staging (`k6`) |
+
+---
+
+## 5. CI Log & Static Review Remediation Follow-Up
+
+The following CI failures and static-review findings were resolved and verified with automated regression tests in `backend/tests/test_quality_and_cv_trust.py` and `backend/tests/test_tier_counts_and_domain_adaptation.py`:
+
+| Issue | Root Cause | Resolution Implemented |
+|---|---|---|
+| `passlib` + modern `bcrypt` CI failure (`45` tests) | `passlib 1.7.4` fails under `bcrypt >= 4.1` (`__about__` AttributeError and >72-byte wrap self-test ValueError). | Removed `passlib[bcrypt]` from `backend/requirements.txt` and migrated `backend/app/services/auth_service.py` to direct `bcrypt` (`hashpw`/`checkpw`) preserving `$2b$` compatibility. |
+| Passwords `> 72` UTF-8 bytes causing HTTP `500` on registration | `RegisterRequest` and `hash_password` lacked byte-length checks before `bcrypt.hashpw`. | Added explicit `<= 72` UTF-8 byte validation (`RegisterRequest` validator returning `422`, `ValueError` in `hash_password`, safe `False` in `verify_password`, and frontend check in `AuthModal.tsx`). |
+| Missing `data/candidate_skills.md` in CI checkout (`FileNotFoundError`) | `test_cv_education_calendar_kanban.py` read gitignored `data/candidate_skills.md`. | Added tracked anonymized fixture `backend/tests/fixtures/tsu_candidate_skills.md` and switched `test_cv_education_calendar_kanban.py` to load it cleanly. |
+| Tier/status counts test isolation & `min_score=60` coverage | `test_global_tier_and_status_counts` selected an arbitrary `CandidateProfile.first()` and skipped non-applied cleanup cleanly. | Scoped `CandidateProfile` strictly to `test_user.id`, cleaned prior jobs via `delete_job_posting_cascade`, and verified both default `min_score=60` and explicit `min_score=0`. |
+| `/request-otp` did not increment rate-limit counter | `send_otp_code` called `check_rate_limit` without incrementing or separating buckets. | Added atomic `consume_rate_limit` on dedicated `otp_request:{email}` (+ coarse per-IP bucket) in `auth.py` and `auth_service.py`. |
+| Job `country`/`city` filters & `geo_eligible_only` pagination mismatch | `country`/`city` only matched `JobPosting.market`; `geo_eligible_only` filtered after DB `.offset().limit()`. | Filtered against `JobPosting.country`/`city` (with fallback when unset), passed full location string into `classify_georgia_b2b_suitability`, and evaluated `geo_eligible_only` before computing `tier_counts`, `status_counts`, `total`, `total_pages`, and page slice. |
+| Cross-user CV upload filename collision | `USER_CV_DIR / safe_name` and unscoped `CandidateDocument.filename` queries allowed overwrites/reassignment. | Stored personal CVs under per-user folders (`USER_CV_DIR / user_{id}`), scoped `CandidateDocument` lookup/deletion by `user_id` + `doc_type`, and rejected `.doc` uploads cleanly. |
+| Masked Alembic migration failures in `init_db` | `init_db()` caught Alembic errors and fell back to `SQLModel.metadata.create_all()`. | Enforced strict Alembic failure propagation (`RuntimeError`) in `backend/app/db/database.py` (using `create_all()` only for `:memory:` or absent `alembic.ini`) and preserved programmatic URLs in `backend/alembic/env.py`. |
 

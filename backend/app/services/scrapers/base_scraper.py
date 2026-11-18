@@ -495,6 +495,8 @@ def classify_georgia_b2b_suitability(
         r"\bunited states only\b",
         r"\bmust be (?:located|based|resident) in (?:the )?(?:us|usa|canada|uk|eu|germany|poland)\b",
         r"\bauthorized to work in the (?:us|united states|uk|canada)\b",
+        r"\bus citizenship required\b",
+        r"\bus citizen required\b",
         r"\bno visa sponsorship\b.*\bus citizens?\b",
         r"\bw-?2 only\b",
     ]

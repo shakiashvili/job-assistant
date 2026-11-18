@@ -4,9 +4,9 @@ import secrets
 from datetime import timedelta, timezone
 from pathlib import Path
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlmodel import Session, select
 
 from ..config import BASE_DIR, reload_env_files, get_smtp_config, IS_PRODUCTION
@@ -14,6 +14,8 @@ from ..db.database import get_session, delete_job_posting_cascade
 from ..db.models import User, UserOTP, CandidateProfile, JobPosting, utc_now
 from ..services.crypto_service import blind_index, mask_email
 from ..services.auth_service import (
+    MAX_OTP_REQUESTS,
+    MAX_PASSWORD_BYTES,
     hash_password,
     verify_password,
     create_access_token,
@@ -26,18 +28,27 @@ from ..services.auth_service import (
     get_user_by_email,
     security_bearer,
     check_rate_limit,
+    consume_rate_limit,
     record_login_failure,
     reset_login_attempts,
 )
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/auth", tags=["Authentication & RBAC"])
+_HTTP_422 = getattr(status, "HTTP_422_UNPROCESSABLE_CONTENT", 422)
 
 
 class RegisterRequest(BaseModel):
     email: str = Field(..., min_length=5, description="Valid email address")
-    password: str = Field(..., min_length=8, description="Password must be at least 8 characters")
+    password: str = Field(..., min_length=8, description="Password must be 8+ chars and <= 72 UTF-8 bytes")
     full_name: str = Field("Candidate", min_length=2)
+
+    @field_validator("password")
+    @classmethod
+    def _validate_password_byte_length(cls, v: str) -> str:
+        if len(v.encode("utf-8")) > MAX_PASSWORD_BYTES:
+            raise ValueError(f"Password must not exceed {MAX_PASSWORD_BYTES} UTF-8 bytes.")
+        return v
 
 
 class LoginRequest(BaseModel):
@@ -104,7 +115,7 @@ def sanitize_email(email: str) -> str:
     clean = (email or "").strip().lower()
     if len(clean) > 254 or not _EMAIL_PATTERN.match(clean):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=_HTTP_422,
             detail="Please provide a valid email address.",
         )
     return clean
@@ -142,11 +153,19 @@ def register_user(req: RegisterRequest, session: Session = Depends(get_session))
     # Secure password validation
     if len(req.password) < 8:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=_HTTP_422,
             detail="Password must be at least 8 characters long.",
         )
+    if len(req.password.encode("utf-8")) > MAX_PASSWORD_BYTES:
+        raise HTTPException(
+            status_code=_HTTP_422,
+            detail=f"Password must not exceed {MAX_PASSWORD_BYTES} UTF-8 bytes.",
+        )
 
-    hashed = hash_password(req.password)
+    try:
+        hashed = hash_password(req.password)
+    except ValueError as err:
+        raise HTTPException(status_code=_HTTP_422, detail=str(err))
     user = User(
         email=clean_email,
         hashed_password=hashed,
@@ -275,14 +294,29 @@ def configure_smtp_sender(
 
 @router.post("/request-otp")
 @router.post("/send-otp")
-def send_otp_code(req: SendOTPRequest, session: Session = Depends(get_session)):
+def send_otp_code(
+    req: SendOTPRequest,
+    request: Request,
+    session: Session = Depends(get_session),
+):
     """
     Generates a secure 6-digit numeric OTP code for passwordless Gmail/email authentication.
-    Valid for 10 minutes. Dispatches via Gmail/SMTP (never logged in plaintext).
+    Valid for 10 minutes. Strictly rate-limited per email and client IP before dispatch.
     """
     clean_email = sanitize_email(req.email)
     email_digest = blind_index(clean_email)
-    check_rate_limit(clean_email)
+    client_host = (request.client.host if request and request.client else "") or "unknown"
+    consume_rate_limit(
+        f"otp_request:{clean_email}",
+        max_attempts=MAX_OTP_REQUESTS,
+        error_detail="Too many OTP requests for this email. Please wait {remaining} seconds before retrying.",
+    )
+    if client_host not in ("unknown", "testclient"):
+        consume_rate_limit(
+            f"otp_ip:{client_host}",
+            max_attempts=20,
+            error_detail="Too many OTP requests from this network. Please wait {remaining} seconds before retrying.",
+        )
 
     # Invalidate previous unused OTPs for this email
     prev_otps = session.exec(
