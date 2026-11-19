@@ -53,7 +53,11 @@ def list_portal_vacancies(current_user: User = Depends(get_current_user)):
         else:
             rows = session.exec(
                 select(JobPosting)
-                .where((JobPosting.status != "FILTERED_OUT") & (JobPosting.suitability_score >= 60.0))
+                .where(
+                    (JobPosting.user_id.is_(None) | (JobPosting.user_id == current_user.id))
+                    & (JobPosting.status != "FILTERED_OUT")
+                    & (JobPosting.suitability_score >= 60.0)
+                )
                 .order_by(JobPosting.suitability_score.desc(), JobPosting.scraped_at.desc())
             ).all()
 

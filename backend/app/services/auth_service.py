@@ -160,8 +160,8 @@ def create_refresh_token(data: dict, expires_delta: Optional[timedelta] = None) 
 def decode_access_token(token: str) -> Optional[dict]:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        if payload.get("token_type") == "refresh":
-            logger.debug("Rejected refresh token presented as access token")
+        if payload.get("token_type") != "access":
+            logger.debug("Rejected non-access token presented as Bearer access token")
             return None
         return payload
     except JWTError as e:

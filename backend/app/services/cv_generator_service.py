@@ -20,6 +20,16 @@ from ..config import GENERATED_RESUMES_DIR, FONTS_DIR
 from ..db.profile_repository import ground_truth_store, filter_spoken_language_entries
 from ..services.gemini_service import GEORGIAN_SKILL_TRANSLATIONS
 from ..services.scrapers.base_scraper import sanitize_company_name
+from .ats_checker import check_pdf_ats_parseability
+from .cv_formatting_utils import (
+    GEORGIAN_PDF_FONT_NAME,
+    UNICODE_FONT_NAME,
+    clean_bullets,
+    clean_foreign_script_text as _clean_foreign_script_text,
+    format_pdf_mixed_script as _format_pdf_mixed_script,
+    normalize_contact_href,
+    register_unicode_font as _register_unicode_font,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -176,16 +186,7 @@ def ascii_filename_slug(text: str, default: str = "Item", max_len: int = 24) -> 
     return (slug[:max_len].strip("_")) or default
 
 
-def clean_bullets(highlights: Optional[List[Any]]) -> List[str]:
-    """Filters out blank bullets and Markdown divider artifacts such as '--' or '---'."""
-    if not highlights:
-        return []
-    result = []
-    for h in highlights:
-        s = str(h or "").strip()
-        if s and not re.fullmatch(r"[-*_•–—.\s]+", s):
-            result.append(s)
-    return result
+# Core bullet filtering and mixed-script PDF helpers live in cv_formatting_utils.py
 
 
 def _resolve_ats_role_tag(parsed_skills: Dict[str, Any], candidate_headline: str) -> str:
@@ -217,176 +218,31 @@ def _extract_override_profile_taxonomy(skills_md: str) -> tuple[Dict[str, Any], 
 
 
 def resolve_candidate_headline(candidate: Dict[str, Any], skills: List[str], parsed_skills: Dict[str, Any]) -> str:
-    """Returns candidate's true professional seniority/headline across ANY domain without QA bias."""
+    """Returns the candidate's verified headline/primary_role strictly without forcing a QA/SDET title."""
     ps = parsed_skills or {}
     industry = str(ps.get("target_industry") or "").lower()
     primary_role = str(ps.get("primary_role") or "").strip()
     raw_hl = str(candidate.get("headline") or "").strip()
-    skills_blob = " ".join(skills).lower()
 
     if raw_hl and not any(w in raw_hl.lower() for w in ["intern", "trainee", "სტაჟიორ"]):
-        if industry == "qa_tech" and any(k in skills_blob for k in ["playwright", "pytest", "selenium", "cypress"]) and "qa" in raw_hl.lower():
-            return "QA Automation Engineer & SDET | Playwright • Python • API • CI/CD"
         return raw_hl
     if primary_role:
         return primary_role
-    if industry == "qa_tech" or any(k in skills_blob for k in ["playwright", "pytest", "selenium", "cypress"]):
-        return "QA Automation Engineer & SDET | Playwright • Python • API • CI/CD"
+    if industry == "qa_tech":
+        return "QA Engineer"
     return raw_hl or "Specialist"
 
-RESUME_STRATEGIST_SYSTEM_PROMPT = """You are an elite technical CV strategist specializing in QA Automation and SDET careers.
-Your goal is to tailor the candidate's existing experience to the provided vacancy description for maximum ATS keyword alignment and recruiter impact.
+
+RESUME_STRATEGIST_SYSTEM_PROMPT = """You are a Top 1% Executive CV Strategist and ATS Career Architect across technology and business disciplines.
+Your goal is to tailor the candidate's verified experience to the provided vacancy description for maximum ATS keyword alignment and recruiter readability.
 
 STRICT CONSTRAINTS (ZERO TOLERANCE FOR FABRICATION):
-1. TRUTHFUL GROUNDING: Every bullet point, tool, framework, company, and timeline MUST come strictly from the candidate's verified profile. NEVER invent skills, tools, degrees, or certifications that the candidate does not possess.
-2. NATURAL HUMANIZED TONE: Use an active, confident, and natural tone (implied first person: "Architected", "Implemented", "Automated", "Stabilized"). Avoid generic AI buzzwords ("visionary", "spearheaded synergy", "passionate maven").
-3. ATS TERMINOLOGY MIRRORING: If the vacancy mentions "End-to-End UI Testing" and the candidate has "E2E Playwright Automation", match the vacancy's exact phrasing while retaining factual truth.
-4. METRICS & IMPACT: Format technical achievements using Google's X-Y-Z formula: Accomplished [X] measured by [Y] by doing [Z] (e.g., "Reduced regression test cycle time by 45% by architecting parallelized Playwright suites in GitHub Actions").
-5. CLEAN ATS FORMAT:
-   - Header (Contact Info, Location, GitHub, LinkedIn)
-   - Professional Summary (3 lines maximum: QA seniority, core automation framework, domain focus)
-   - Technical Skill Matrix (Languages, Test Automation, API, CI/CD, Methodologies)
-   - Professional Experience (Reverse chronological; 3-5 concise, metric-driven bullets per role)
-   - Education & Certifications"""
+1. TRUTHFUL GROUNDING: Every bullet point, tool, skill, company, degree, and timeline MUST come strictly from the candidate's verified profile. NEVER invent skills, honors, awards, tools, or certifications.
+2. NATURAL HUMANIZED TONE: Use active, factual phrasing without generic AI clichés or unrequested availability timing.
+3. CLEAN ATS FORMAT: Header, Concise Summary, Core Skill Matrix, Verified Experience, Education & Certifications."""
 
 
-def _register_unicode_font(prefer_georgian: bool = False) -> str:
-    """
-    Registers a Unicode TrueType font family (Normal, Bold, Italic, BoldItalic) in ReportLab
-    with cross-platform support. Prioritizes Sylfaen when prefer_georgian=True for crisp Georgian rendering.
-    """
-    family_candidates: List[tuple[str, str, Optional[str], Optional[str], Optional[str]]] = []
-
-    # 1. Check project assets/fonts directory for bundled fonts (Linux/Docker/Windows)
-    if FONTS_DIR.exists():
-        for f in sorted(FONTS_DIR.glob("*.ttf")):
-            if any(tag in f.stem.lower() for tag in ("-bold", "-italic", "-oblique", "bold", "italic")):
-                continue
-            stem_base = f.stem.replace("-Regular", "")
-            bold_c = next(
-                (p for p in [f.with_name(f"{stem_base}-Bold.ttf"), f.with_name(f"{stem_base}Bold.ttf")] if p.exists()),
-                None,
-            )
-            italic_c = next(
-                (p for p in [f.with_name(f"{stem_base}-Italic.ttf"), f.with_name(f"{stem_base}-Oblique.ttf")] if p.exists()),
-                None,
-            )
-            bi_c = next(
-                (p for p in [f.with_name(f"{stem_base}-BoldItalic.ttf"), f.with_name(f"{stem_base}-BoldOblique.ttf")] if p.exists()),
-                None,
-            )
-            family_candidates.append((f.stem, str(f), str(bold_c) if bold_c else None, str(italic_c) if italic_c else None, str(bi_c) if bi_c else None))
-
-    sylfaen_tuple = (
-        "Sylfaen",
-        "C:/Windows/Fonts/sylfaen.ttf",
-        None,
-        None,
-        None,
-    )
-    segoe_tuple = (
-        "SegoeUI",
-        "C:/Windows/Fonts/segoeui.ttf",
-        "C:/Windows/Fonts/segoeuib.ttf",
-        "C:/Windows/Fonts/segoeuii.ttf",
-        "C:/Windows/Fonts/segoeuiz.ttf",
-    )
-    # 2. Cross-platform OS font families
-    if prefer_georgian:
-        family_candidates.extend([
-            sylfaen_tuple,
-            segoe_tuple,
-        ])
-    else:
-        family_candidates.extend([
-            segoe_tuple,
-            sylfaen_tuple,
-        ])
-
-    family_candidates.extend([
-        (
-            "ArialUnicode",
-            "C:/Windows/Fonts/arial.ttf",
-            "C:/Windows/Fonts/arialbd.ttf",
-            "C:/Windows/Fonts/ariali.ttf",
-            "C:/Windows/Fonts/arialbi.ttf",
-        ),
-        # Linux / Docker (FreeSans covers both Latin & Georgian Mkhedruli cleanly in one TTF)
-        (
-            "FreeSans",
-            "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
-            "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
-            "/usr/share/fonts/truetype/freefont/FreeSansOblique.ttf",
-            "/usr/share/fonts/truetype/freefont/FreeSansBoldOblique.ttf",
-        ),
-        (
-            "DejaVuSans",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf",
-        ),
-        (
-            "NotoSansGeorgian",
-            "/usr/share/fonts/truetype/noto/NotoSansGeorgian-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansGeorgian-Bold.ttf",
-            None,
-            None,
-        ),
-        (
-            "LiberationSans",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-BoldItalic.ttf",
-        ),
-        # macOS
-        (
-            "ArialUnicodeMac",
-            "/Library/Fonts/Arial Unicode.ttf",
-            None,
-            None,
-            None,
-        ),
-        (
-            "ArialMac",
-            "/System/Library/Fonts/Supplemental/Arial.ttf",
-            "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-            "/System/Library/Fonts/Supplemental/Arial Italic.ttf",
-            "/System/Library/Fonts/Supplemental/Arial Bold Italic.ttf",
-        ),
-    ])
-
-    for font_name, normal_path, bold_path, italic_path, bi_path in family_candidates:
-        if not Path(normal_path).exists():
-            continue
-        try:
-            if font_name not in pdfmetrics.getRegisteredFontNames():
-                pdfmetrics.registerFont(TTFont(font_name, normal_path))
-            bold_name = f"{font_name}-Bold"
-            italic_name = f"{font_name}-Italic"
-            bi_name = f"{font_name}-BoldItalic"
-            b_file = bold_path if (bold_path and Path(bold_path).exists()) else normal_path
-            i_file = italic_path if (italic_path and Path(italic_path).exists()) else normal_path
-            bi_file = bi_path if (bi_path and Path(bi_path).exists()) else b_file
-            for sub_name, sub_path in [(bold_name, b_file), (italic_name, i_file), (bi_name, bi_file)]:
-                if sub_name not in pdfmetrics.getRegisteredFontNames():
-                    pdfmetrics.registerFont(TTFont(sub_name, sub_path))
-            pdfmetrics.registerFontFamily(
-                font_name,
-                normal=font_name,
-                bold=bold_name,
-                italic=italic_name,
-                boldItalic=bi_name,
-            )
-            return font_name
-        except Exception as e:
-            logger.debug(f"Could not register TTF family {font_name} ({normal_path}): {e}")
-    return "Helvetica"
-
-
-UNICODE_FONT_NAME = _register_unicode_font(prefer_georgian=False)
-GEORGIAN_PDF_FONT_NAME = _register_unicode_font(prefer_georgian=True)
+# Font registration and mixed-script PDF helpers live cleanly in cv_formatting_utils.py
 
 
 def safe_unicode_slug(text: str, default: str = "item", max_len: int = 24) -> str:
@@ -577,20 +433,23 @@ class CVGeneratorService:
             override_ps, override_skills, _ = _extract_override_profile_taxonomy(skills_md)
             ps = override_ps
 
-        candidate = dict(gt.get("candidate", {}))
+        candidate = dict(gt.get("candidate", {})) if not has_explicit_md_override else {}
         for fld in ("full_name", "headline", "email", "phone"):
             if has_explicit_md_override:
                 candidate[fld] = parsed_md.get(fld) or ""
             elif not candidate.get(fld) and parsed_md.get(fld):
                 candidate[fld] = parsed_md[fld]
-        if parsed_md.get("location") and (has_explicit_md_override or not _format_candidate_location(candidate.get("location"))):
+        if has_explicit_md_override:
+            if parsed_md.get("location"):
+                loc_parts = [p.strip() for p in str(parsed_md["location"]).split(",", 1)]
+                candidate["location"] = {"city": loc_parts[0], "country": loc_parts[1] if len(loc_parts) > 1 else ""}
+            else:
+                candidate["location"] = {}
+        elif parsed_md.get("location") and not _format_candidate_location(candidate.get("location")):
             loc_parts = [p.strip() for p in str(parsed_md["location"]).split(",", 1)]
-            candidate["location"] = {
-                "city": loc_parts[0],
-                "country": loc_parts[1] if len(loc_parts) > 1 else "",
-            }
+            candidate["location"] = {"city": loc_parts[0], "country": loc_parts[1] if len(loc_parts) > 1 else ""}
 
-        cand_links = dict(candidate.get("links") or {})
+        cand_links = {} if has_explicit_md_override else dict(candidate.get("links") or {})
         if skills_md:
             gh_m = re.search(r"(https?://(?:www\.)?github\.com/[A-Za-z0-9._-]+/?)", skills_md, re.I)
             li_m = re.search(r"(https?://(?:www\.)?linkedin\.com/in/[A-Za-z0-9._-]+/?)", skills_md, re.I)
@@ -601,11 +460,11 @@ class CVGeneratorService:
         candidate["links"] = cand_links
 
         if has_explicit_md_override:
-            core_skills = parsed_md.get("skills") or override_skills or (gt.get("skills", {}) or {}).get("core", []) or []
-            raw_work_history = parsed_md.get("work_history") or gt.get("work_history", [])
-            education = parsed_md.get("education") or gt.get("education", [])
-            projects = parsed_md.get("projects") or gt.get("projects", [])
-            certifications = parsed_md.get("certifications") or gt.get("certifications") or ps.get("courses_and_certifications") or []
+            core_skills = parsed_md.get("skills") or override_skills or []
+            raw_work_history = parsed_md.get("work_history") or []
+            education = parsed_md.get("education") or []
+            projects = parsed_md.get("projects") or []
+            certifications = parsed_md.get("certifications") or []
         else:
             core_skills = (gt.get("skills", {}) or {}).get("core") or parsed_md.get("skills") or []
             raw_work_history = gt.get("work_history") if gt.get("work_history") else (parsed_md.get("work_history") or [])
@@ -617,18 +476,37 @@ class CVGeneratorService:
         clean_job_title = _clean_foreign_script_text(job_title, cv_language) or "Specialist"
         clean_summary = _clean_foreign_script_text(human_summary, cv_language)
 
-        # Tailor bullet ordering per job description & matched requirements (ZERO fabrication)
+        # Tailor bullet ordering per job description & matched requirements with immutable source_bullet_id evidence tracking
         target_kws = list(dict.fromkeys((matched_skills or []) + (required_skills or []) + re.findall(r"[A-Za-z]{3,}", clean_job_title or "")))
         prioritized_wh: List[Dict[str, Any]] = []
-        for job in raw_work_history:
+        source_bullet_records: List[Dict[str, Any]] = []
+        for job_idx, job in enumerate(raw_work_history):
             j_copy = dict(job)
-            j_copy["role"] = _clean_foreign_script_text(j_copy.get("role") or "", cv_language)
-            j_copy["company"] = _clean_foreign_script_text(j_copy.get("company") or "", cv_language)
-            j_copy["highlights"] = [
-                _clean_foreign_script_text(b, cv_language)
-                for b in _prioritize_job_highlights(j_copy.get("highlights") or [], target_kws)
-            ]
-            j_copy["highlights"] = [b for b in j_copy["highlights"] if b]
+            clean_role = _clean_foreign_script_text(j_copy.get("role") or "", cv_language)
+            clean_comp = _clean_foreign_script_text(j_copy.get("company") or "", cv_language)
+            j_copy["role"] = clean_role
+            j_copy["company"] = clean_comp
+            raw_highlights = clean_bullets(j_copy.get("highlights") or [])
+            orig_id_map: Dict[str, tuple[str, int]] = {}
+            cleaned_candidates: List[str] = []
+            for b_idx, raw_b in enumerate(raw_highlights):
+                c_b = _clean_foreign_script_text(raw_b, cv_language)
+                if c_b:
+                    src_id = f"exp-{job_idx}-b-{b_idx}"
+                    cleaned_candidates.append(c_b)
+                    orig_id_map.setdefault(c_b, (src_id, b_idx))
+                    source_bullet_records.append({
+                        "source_bullet_id": src_id,
+                        "job_idx": job_idx,
+                        "orig_idx": b_idx,
+                        "company": clean_comp,
+                        "role": clean_role,
+                        "original_text": str(raw_b).strip(),
+                        "cleaned_text": c_b,
+                    })
+            reordered = _prioritize_job_highlights(cleaned_candidates, target_kws)
+            j_copy["highlights"] = [b for b in reordered if b]
+            j_copy["_source_bullet_meta"] = [orig_id_map.get(b, (f"exp-{job_idx}-b-{idx}", idx)) for idx, b in enumerate(j_copy["highlights"])]
             prioritized_wh.append(j_copy)
 
         # Enforce 100% single-language work history when Georgian CV is explicitly built
@@ -645,6 +523,33 @@ class CVGeneratorService:
                 work_history.append(j_copy)
         else:
             work_history = prioritized_wh
+
+        bullet_diffs: List[Dict[str, Any]] = []
+        src_by_id = {rec["source_bullet_id"]: rec for rec in source_bullet_records}
+        for job in work_history:
+            meta_list = job.pop("_source_bullet_meta", [])
+            final_bullets = job.get("highlights") or []
+            for new_idx, final_text in enumerate(final_bullets):
+                src_id, orig_idx = meta_list[new_idx] if new_idx < len(meta_list) else (f"exp-x-b-{new_idx}", new_idx)
+                rec = src_by_id.get(src_id, {})
+                orig_text = rec.get("original_text", final_text)
+                matched_in_b = [kw for kw in target_kws if kw.lower() in f"{orig_text} {final_text}".lower()][:5]
+                if cv_language == "ka" and final_text != orig_text:
+                    action = "translated_ka"
+                elif new_idx != orig_idx:
+                    action = "prioritized"
+                else:
+                    action = "preserved"
+                bullet_diffs.append({
+                    "source_bullet_id": src_id,
+                    "company": rec.get("company") or job.get("company") or "",
+                    "role": rec.get("role") or job.get("role") or "",
+                    "original_text": orig_text,
+                    "tailored_text": final_text,
+                    "action": action,
+                    "matched_keywords": matched_in_b,
+                    "verified_source": src_id in src_by_id,
+                })
 
         # Order genuine skills so matched ATS keywords appear first (NO FABRICATION)
         matched_lower = {s.lower() for s in matched_skills}
@@ -760,6 +665,13 @@ class CVGeneratorService:
             f"€{int(exp_eur):,}/yr" if exp_eur else (f"${int(exp_usd):,}/yr" if exp_usd else "")
         )
 
+        ats_parse_report = check_pdf_ats_parseability(
+            pdf_path,
+            candidate_name=str(candidate.get("full_name") or ""),
+            expected_email=str(candidate.get("email") or ""),
+            expected_keywords=matched_skills or display_skills[:8],
+        )
+
         cv_sections = {
             "candidate": {
                 "full_name": candidate.get("full_name", "Candidate"),
@@ -781,6 +693,8 @@ class CVGeneratorService:
             "target_company": safe_company or company,
             "cv_language": cv_language,
             "cv_style": cv_style,
+            "bullet_diffs": bullet_diffs,
+            "ats_parse_report": ats_parse_report,
         }
 
         return {
@@ -798,11 +712,14 @@ class CVGeneratorService:
             "target_role": candidate_headline,
             "human_tone_summary": human_summary,
             "applicant_summary": human_summary,
+            "cover_letter": motivation_statement,
             "motivation_statement": motivation_statement,
             "dou_motivational_letter": dou_motivational_letter,
             "cv_sections": cv_sections,
             "tailored_highlights": tailored_highlights,
             "ats_keywords_covered": matched_skills or display_skills[:8],
+            "bullet_diffs": bullet_diffs,
+            "ats_parse_report": ats_parse_report,
             "start_date_default": start_date_str,
             "expected_salary": expected_salary_str,
         }
@@ -901,6 +818,13 @@ class CVGeneratorService:
             languages_line=languages_line,
         )
 
+        ats_parse_report = check_pdf_ats_parseability(
+            pdf_path,
+            candidate_name=str(cand.get("full_name") or ""),
+            expected_email=str(cand.get("email") or ""),
+            expected_keywords=display_skills[:8],
+        )
+
         return {
             "pdf_filename": pdf_filename,
             "docx_filename": docx_filename,
@@ -909,6 +833,7 @@ class CVGeneratorService:
             "docx_url": f"/api/resumes/generated/{docx_filename}",
             "html_preview_url": f"/api/resumes/generated/{html_filename}",
             "rendered_html": html_content,
+            "ats_parse_report": ats_parse_report,
         }
 
     def sync_user_cv_versions(
@@ -1356,15 +1281,15 @@ class CVGeneratorService:
 
         # 1. Header (ALWAYS showcase true candidate persona headline without ugly tags)
         role_display = _clean_foreign_script_text(candidate_headline or str(candidate.get("headline") or "Specialist"), cv_language) or "Specialist"
-        story.append(Paragraph(f"<b>{full_name}</b>", header_style))
-        story.append(Paragraph(escape(role_display), role_style))
+        story.append(Paragraph(f"<b>{_format_pdf_mixed_script(str(candidate.get('full_name', 'Candidate')), font_name, GEORGIAN_PDF_FONT_NAME)}</b>", header_style))
+        story.append(Paragraph(_format_pdf_mixed_script(role_display, font_name, GEORGIAN_PDF_FONT_NAME), role_style))
         if pdf_links:
             story.append(Paragraph("  |  ".join(x for x in pdf_links if x), contact_style))
         story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#0284c7"), spaceAfter=6))
 
         # 2. Summary
         story.append(Paragraph(f"<b>{lbl_summary}</b>", sec_title_style))
-        story.append(Paragraph(escape(_clean_foreign_script_text(human_summary, cv_language)), body_style))
+        story.append(Paragraph(_format_pdf_mixed_script(_clean_foreign_script_text(human_summary, cv_language), font_name, GEORGIAN_PDF_FONT_NAME), body_style))
 
         # 3. Technical Skills Matrix (grouped by ATS domains)
         story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#cbd5e1"), spaceBefore=4, spaceAfter=4))
@@ -1372,22 +1297,22 @@ class CVGeneratorService:
         grouped_pdf = group_skills_into_ats_buckets(display_skills[:60], cv_language=cv_language)
         if grouped_pdf:
             for b_title, b_items in grouped_pdf:
-                items_esc = ", ".join(escape(x) for x in b_items)
-                story.append(Paragraph(f"<b>{escape(b_title)}:</b> {items_esc}", body_style))
+                items_esc = ", ".join(_format_pdf_mixed_script(x, font_name, GEORGIAN_PDF_FONT_NAME) for x in b_items)
+                story.append(Paragraph(f"<b>{_format_pdf_mixed_script(b_title, font_name, GEORGIAN_PDF_FONT_NAME)}:</b> {items_esc}", body_style))
         else:
-            skills_text = " • ".join(escape(s) for s in display_skills[:20])
+            skills_text = " • ".join(_format_pdf_mixed_script(s, font_name, GEORGIAN_PDF_FONT_NAME) for s in display_skills[:20])
             story.append(Paragraph(skills_text, body_style))
 
         # 4. Work Experience
         story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#cbd5e1"), spaceBefore=4, spaceAfter=4))
         story.append(Paragraph(f"<b>{lbl_exp}</b>", sec_title_style))
         for job in work_history[:4]:
-            r_title = escape(str(job.get("role", "")))
-            r_comp = escape(str(job.get("company", "")))
-            r_dates = escape(f"{job.get('start_date', '')} - {job.get('end_date', '')}".strip(" -"))
+            r_title = _format_pdf_mixed_script(str(job.get("role", "")), font_name, GEORGIAN_PDF_FONT_NAME)
+            r_comp = _format_pdf_mixed_script(str(job.get("company", "")), font_name, GEORGIAN_PDF_FONT_NAME)
+            r_dates = _format_pdf_mixed_script(f"{job.get('start_date', '')} - {job.get('end_date', '')}".strip(" -"), font_name, GEORGIAN_PDF_FONT_NAME)
             story.append(Paragraph(f"<b>{r_title}</b> | {r_comp} ({r_dates})", body_style))
             for b in clean_bullets(job.get("highlights"))[:4]:
-                story.append(Paragraph(f"• {escape(str(b))}", bullet_style))
+                story.append(Paragraph(f"• {_format_pdf_mixed_script(str(b), font_name, GEORGIAN_PDF_FONT_NAME)}", bullet_style))
             story.append(Spacer(1, 3))
 
         # 5. Relevant Projects (when present)
@@ -1397,9 +1322,9 @@ class CVGeneratorService:
             for proj in projects[:3]:
                 if not isinstance(proj, dict):
                     continue
-                p_t = escape(_clean_foreign_script_text(proj.get("title") or "", cv_language))
-                p_org = escape(_clean_foreign_script_text(proj.get("organization") or "", cv_language))
-                p_dt = escape(_clean_foreign_script_text(proj.get("dates") or "", cv_language))
+                p_t = _format_pdf_mixed_script(_clean_foreign_script_text(proj.get("title") or "", cv_language), font_name, GEORGIAN_PDF_FONT_NAME)
+                p_org = _format_pdf_mixed_script(_clean_foreign_script_text(proj.get("organization") or "", cv_language), font_name, GEORGIAN_PDF_FONT_NAME)
+                p_dt = _format_pdf_mixed_script(_clean_foreign_script_text(proj.get("dates") or "", cv_language), font_name, GEORGIAN_PDF_FONT_NAME)
                 hdr = f"<b>{p_t}</b>"
                 if p_org:
                     hdr += f" | {p_org}"
@@ -1407,7 +1332,7 @@ class CVGeneratorService:
                     hdr += f" ({p_dt})"
                 story.append(Paragraph(hdr, body_style))
                 for b in clean_bullets(proj.get("highlights"))[:3]:
-                    story.append(Paragraph(f"• {escape(_clean_foreign_script_text(b, cv_language))}", bullet_style))
+                    story.append(Paragraph(f"• {_format_pdf_mixed_script(_clean_foreign_script_text(b, cv_language), font_name, GEORGIAN_PDF_FONT_NAME)}", bullet_style))
 
         # 6. Grouped Education & Specialized Training
         if education or certifications:
@@ -1416,21 +1341,21 @@ class CVGeneratorService:
             for edu in (education or []):
                 row = _format_education_row(edu, is_ka)
                 if row["title"]:
-                    txt = f"• <b>{escape(row['title'])}</b>"
+                    txt = f"• <b>{_format_pdf_mixed_script(row['title'], font_name, GEORGIAN_PDF_FONT_NAME)}</b>"
                     if row["detail"]:
-                        txt += f" — {escape(row['detail'])}"
+                        txt += f" — {_format_pdf_mixed_script(row['detail'], font_name, GEORGIAN_PDF_FONT_NAME)}"
                     story.append(Paragraph(txt, body_style))
             for cert in (certifications or [])[:4]:
                 cert_c = _clean_foreign_script_text(cert, cv_language)
                 if cert_c:
-                    story.append(Paragraph(f"• {escape(cert_c)}", body_style))
+                    story.append(Paragraph(f"• {_format_pdf_mixed_script(cert_c, font_name, GEORGIAN_PDF_FONT_NAME)}", body_style))
 
         # 7. Spoken Languages ONLY
         lang_line = languages_line or _format_candidate_languages(candidate, "", is_ka)
         if lang_line:
             story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#cbd5e1"), spaceBefore=4, spaceAfter=4))
             story.append(Paragraph(f"<b>{lbl_lang}</b>", sec_title_style))
-            story.append(Paragraph(escape(lang_line), body_style))
+            story.append(Paragraph(_format_pdf_mixed_script(lang_line, font_name, GEORGIAN_PDF_FONT_NAME), body_style))
 
         doc.build(story)
 
@@ -1992,6 +1917,8 @@ class CVGeneratorService:
             "html_preview_url": cv_res.get("html_preview_url"),
             "rendered_html": cv_res.get("rendered_html"),
             "cv_sections": cv_res.get("cv_sections"),
+            "bullet_diffs": cv_res.get("bullet_diffs") or [],
+            "ats_parse_report": cv_res.get("ats_parse_report") or {},
             "docx_path": cv_res["docx_path"],
             "pdf_path": cv_res["pdf_path"],
         }

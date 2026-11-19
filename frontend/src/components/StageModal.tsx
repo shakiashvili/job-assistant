@@ -63,7 +63,11 @@ export const StageModal: React.FC<StageModalProps> = ({
   }, [isOpen, onClose]);
 
   useEffect(() => {
-    if (jobUrl) setUrlInput(jobUrl);
+    if (!isOpen) return;
+    setResult(null);
+    setError(null);
+    setAutoSubmit(false);
+    setUrlInput(jobUrl || '');
     if (tailoredCv) {
       setApplicantSummary(tailoredCv.applicant_summary || tailoredCv.human_tone_summary || '');
       const isDou = (jobUrl || '').toLowerCase().includes('dou');
@@ -72,10 +76,15 @@ export const StageModal: React.FC<StageModalProps> = ({
           ? tailoredCv.dou_motivational_letter || tailoredCv.motivation_statement
           : tailoredCv.motivation_statement || tailoredCv.dou_motivational_letter
       );
-      if (tailoredCv.expected_salary) setExpectedSalary(tailoredCv.expected_salary);
+      setExpectedSalary(tailoredCv.expected_salary || '');
       setStartDate(tailoredCv.start_date_default || '');
+    } else {
+      setApplicantSummary('');
+      setMotivationLetter('');
+      setExpectedSalary('');
+      setStartDate('');
     }
-  }, [jobUrl, tailoredCv]);
+  }, [isOpen, jobUrl, tailoredCv]);
 
   if (!isOpen) return null;
 

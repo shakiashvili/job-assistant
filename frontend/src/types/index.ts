@@ -246,6 +246,32 @@ export interface CompanyValidation {
   cons: string[];
 }
 
+export interface BulletDiffItem {
+  source_bullet_id: string;
+  company: string;
+  role: string;
+  original_text: string;
+  tailored_text: string;
+  action: 'preserved' | 'prioritized' | 'translated_ka' | string;
+  matched_keywords?: string[];
+  verified_source?: boolean;
+}
+
+export interface ATSParseReport {
+  status: 'PASS' | 'WARN' | 'FAIL' | string;
+  score: number;
+  page_count: number;
+  selectable_text_ok: boolean;
+  extracted_char_count: number;
+  candidate_name_present?: boolean;
+  contact_present?: boolean;
+  mojibake_free?: boolean;
+  single_column_layout_ok?: boolean;
+  sections_detected?: string[];
+  keywords_extracted?: string[];
+  warnings?: string[];
+}
+
 export interface TailoredCVResult {
   pdf_filename: string;
   pdf_url: string;
@@ -264,6 +290,8 @@ export interface TailoredCVResult {
   rendered_html?: string;
   tailored_highlights: string[];
   ats_keywords_covered: string[];
+  bullet_diffs?: BulletDiffItem[];
+  ats_parse_report?: ATSParseReport;
   start_date_default: string;
   expected_salary: string;
 }
@@ -567,6 +595,8 @@ export interface B2BTaxCalculatorResponse {
   monthly_gross_orig: number;
   monthly_gross_gel: number;
   annual_gross_gel: number;
+  ytd_revenue_gel?: number;
+  cumulative_annual_gel?: number;
   under_500k_cap: boolean;
   b2b_small_business: {
     tax_rate_pct: number;

@@ -88,8 +88,8 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-# Tight CORS configuration: explicit allowlisted origins + Chrome Extension protocol only
-CORS_ALLOWED_ORIGINS = [
+# Tight CORS configuration: strict production allowlist, localhost only outside production, explicit extension IDs
+CORS_ALLOWED_ORIGINS = [] if IS_PRODUCTION else [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://localhost:3000",
@@ -97,7 +97,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:8000",
     "http://127.0.0.1:8000",
 ]
-if FRONTEND_URL and FRONTEND_URL not in CORS_ALLOWED_ORIGINS:
+if FRONTEND_URL and FRONTEND_URL.rstrip("/") not in CORS_ALLOWED_ORIGINS:
     CORS_ALLOWED_ORIGINS.append(FRONTEND_URL.rstrip("/"))
 for _env_key in ("CORS_ORIGINS", "ALLOWED_ORIGINS"):
     _extra_origins = os.getenv(_env_key, "")
@@ -106,8 +106,23 @@ for _env_key in ("CORS_ORIGINS", "ALLOWED_ORIGINS"):
         if _orig and _orig not in CORS_ALLOWED_ORIGINS:
             CORS_ALLOWED_ORIGINS.append(_orig)
 
+_ext_ids_raw = os.getenv("CORS_ALLOWED_EXTENSION_IDS", "")
+_has_explicit_ext_ids = False
+for _ext_id in _ext_ids_raw.split(","):
+    _clean_eid = _ext_id.strip().lower()
+    if _clean_eid:
+        _has_explicit_ext_ids = True
+        _ext_origin = f"chrome-extension://{_clean_eid}"
+        if _ext_origin not in CORS_ALLOWED_ORIGINS:
+            CORS_ALLOWED_ORIGINS.append(_ext_origin)
+
 _custom_cors_regex = os.getenv("CORS_ALLOW_REGEX", "").strip()
-CORS_ORIGIN_REGEX = _custom_cors_regex or r"^chrome-extension://[a-z0-9]+$"
+if _custom_cors_regex:
+    CORS_ORIGIN_REGEX = _custom_cors_regex
+elif IS_PRODUCTION or _has_explicit_ext_ids:
+    CORS_ORIGIN_REGEX = None
+else:
+    CORS_ORIGIN_REGEX = r"^chrome-extension://[a-z0-9]{16,64}$"
 
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(

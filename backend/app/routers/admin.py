@@ -48,24 +48,28 @@ def list_all_users(
     session: Session = Depends(get_session),
     admin: User = Depends(get_current_admin),
 ):
-    """Admin-only endpoint: Lists all registered accounts and their application statistics."""
+    """Admin-only endpoint: Lists all registered accounts and their application statistics using aggregated SQL counts."""
     users = session.exec(select(User).order_by(User.id.desc())).all()
-    results = []
-    for u in users:
-        app_count = len(session.exec(select(ApplicationTracker).where(ApplicationTracker.user_id == u.id, ApplicationTracker.is_deleted == False)).all())
-        results.append(
-            AdminUserOut(
-                id=u.id,
-                email=u.email,
-                full_name=u.full_name,
-                is_active=u.is_active,
-                is_admin=u.is_admin,
-                created_at=u.created_at,
-                application_count=app_count,
-                has_gmail_oauth=bool(u.gmail_oauth_token),
-            )
+    counts_rows = session.exec(
+        select(ApplicationTracker.user_id, func.count(ApplicationTracker.id))
+        .where(ApplicationTracker.is_deleted == False)
+        .group_by(ApplicationTracker.user_id)
+    ).all()
+    counts_by_uid = {uid: int(cnt) for uid, cnt in counts_rows if uid is not None}
+
+    return [
+        AdminUserOut(
+            id=u.id,
+            email=u.email,
+            full_name=u.full_name,
+            is_active=u.is_active,
+            is_admin=u.is_admin,
+            created_at=u.created_at,
+            application_count=counts_by_uid.get(u.id, 0),
+            has_gmail_oauth=bool(u.gmail_oauth_token),
         )
-    return results
+        for u in users
+    ]
 
 
 @router.get("/metrics", response_model=PlatformMetricsOut)
@@ -73,24 +77,23 @@ def get_platform_metrics(
     session: Session = Depends(get_session),
     admin: User = Depends(get_current_admin),
 ):
-    """Admin-only endpoint: Computes aggregate platform health, user engagement, and conversion metrics."""
-    users = session.exec(select(User)).all()
-    total_users = len(users)
-    active_users = sum(1 for u in users if u.is_active)
-    admin_users = sum(1 for u in users if u.is_admin)
+    """Admin-only endpoint: Computes aggregate platform health and conversion metrics via SQL GROUP BY."""
+    total_users = int(session.exec(select(func.count(User.id))).one() or 0)
+    active_users = int(session.exec(select(func.count(User.id)).where(User.is_active == True)).one() or 0)
+    admin_users = int(session.exec(select(func.count(User.id)).where(User.is_admin == True)).one() or 0)
 
-    apps = session.exec(select(ApplicationTracker).where(ApplicationTracker.is_deleted == False)).all()
-    total_apps = len(apps)
-
-    status_counts: Dict[str, int] = {}
-    interview_count = 0
-    for a in apps:
-        status_counts[a.status] = status_counts.get(a.status, 0) + 1
-        if a.status in ["HR_SCREEN", "TECH_INTERVIEW", "FINAL_ROUND", "OFFER", "Interviewing", "Technical Interview", "Offer"]:
-            interview_count += 1
+    status_rows = session.exec(
+        select(ApplicationTracker.status, func.count(ApplicationTracker.id))
+        .where(ApplicationTracker.is_deleted == False)
+        .group_by(ApplicationTracker.status)
+    ).all()
+    status_counts: Dict[str, int] = {str(st): int(cnt) for st, cnt in status_rows}
+    total_apps = sum(status_counts.values())
+    interview_statuses = {"HR_SCREEN", "TECH_INTERVIEW", "FINAL_ROUND", "OFFER", "Interviewing", "Technical Interview", "Offer"}
+    interview_count = sum(cnt for st, cnt in status_counts.items() if st in interview_statuses)
 
     conversion_rate = round((interview_count / total_apps * 100), 1) if total_apps > 0 else 0.0
-    discovered_jobs_count = len(session.exec(select(JobPosting)).all())
+    discovered_jobs_count = int(session.exec(select(func.count(JobPosting.id))).one() or 0)
 
     return PlatformMetricsOut(
         total_users=total_users,

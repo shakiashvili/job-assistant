@@ -5,9 +5,10 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import Session, select, delete
 
+from ..db.document_repository import record_candidate_document  # noqa: F401 - re-exported for backward compatibility
 from ..db.profile_repository import ground_truth_store, PROFESSION_MD_PRESETS
 from ..db.models import (
     User,
@@ -76,62 +77,6 @@ def _user_cv_dir(user_id: Optional[int]) -> Path:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user storage directory.")
     d.mkdir(parents=True, exist_ok=True)
     return d
-
-
-def record_candidate_document(
-    user_id: Optional[int],
-    filename: str,
-    file_path: Path,
-    doc_type: str = "generated_pdf",
-    target_company: str = "",
-    target_role: str = "",
-    original_filename: Optional[str] = None,
-) -> Optional[CandidateDocument]:
-    if not file_path.exists():
-        return None
-    try:
-        raw_bytes = file_path.read_bytes()
-        sha = hashlib.sha256(raw_bytes).hexdigest()
-        size_b = len(raw_bytes)
-        with Session(engine) as session:
-            stmt = select(CandidateDocument).where(
-                CandidateDocument.filename == filename,
-                CandidateDocument.doc_type == doc_type,
-            )
-            if user_id is not None:
-                stmt = stmt.where(CandidateDocument.user_id == user_id)
-            else:
-                stmt = stmt.where(CandidateDocument.user_id.is_(None))
-            existing = session.exec(stmt).first()
-            if existing:
-                existing.storage_path = str(file_path)
-                existing.size_bytes = size_b
-                existing.sha256_hash = sha
-                if original_filename:
-                    existing.original_filename = original_filename
-                existing.version_number = (existing.version_number or 1) + 1
-                session.add(existing)
-                session.commit()
-                session.refresh(existing)
-                return existing
-
-            doc = CandidateDocument(
-                user_id=user_id,
-                doc_type=doc_type,
-                filename=filename,
-                original_filename=original_filename or filename,
-                storage_path=str(file_path),
-                size_bytes=size_b,
-                sha256_hash=sha,
-                version_number=1,
-            )
-            session.add(doc)
-            session.commit()
-            session.refresh(doc)
-            return doc
-    except Exception as e:
-        logger.debug(f"Could not record CandidateDocument for {filename}: {e}")
-        return None
 
 
 _SAFE_DOC_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,180}\.(pdf|docx|html|eml|md|txt)$", re.IGNORECASE)
@@ -396,12 +341,11 @@ async def upload_skills_md_file(
 ):
     """Accepts .pdf, .docx, .md, or .txt resume/skills uploads, parses profile & computes missing fields."""
     from ..services.cv_parser_service import cv_parser_service
+    from ..services.upload_utils import read_upload_bounded
 
-    raw_bytes = await file.read()
+    raw_bytes = await read_upload_bounded(file, MAX_UPLOAD_SIZE_BYTES)
     if len(raw_bytes) == 0:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-    if len(raw_bytes) > MAX_UPLOAD_SIZE_BYTES:
-        raise HTTPException(status_code=413, detail="Uploaded file exceeds 10 MB maximum size limit.")
     filename = file.filename or "candidate_skills.md"
     try:
         md_text = cv_parser_service.extract_text_from_bytes(raw_bytes, filename=filename)
@@ -505,15 +449,14 @@ async def upload_personal_cv(
 ):
     """Uploads a personal resume (.pdf, .docx, .md, .txt) into isolated per-user storage and optionally parses it."""
     from ..services.cv_parser_service import cv_parser_service
+    from ..services.upload_utils import read_upload_bounded
 
     safe_name = _sanitize_uploaded_cv_name(file.filename)
     ext = Path(safe_name).suffix.lower()
 
-    content = await file.read()
+    content = await read_upload_bounded(file, MAX_UPLOAD_SIZE_BYTES)
     if len(content) == 0:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-    if len(content) > MAX_UPLOAD_SIZE_BYTES:
-        raise HTTPException(status_code=413, detail="Uploaded file exceeds 10 MB maximum size limit.")
     if ext == ".pdf" and not content.startswith(b"%PDF-"):
         raise HTTPException(status_code=400, detail="Invalid PDF file header.")
     if ext == ".docx" and not content.startswith(b"PK"):
@@ -741,7 +684,7 @@ class CVVersionCreateRequest(BaseModel):
     edition: str = "tailored"
     language: str = "en"
     job_posting_id: Optional[int] = None
-    structured_json: Dict[str, Any] = {}
+    structured_json: Dict[str, Any] = Field(default_factory=dict)
 
 
 class CVVersionPatchRequest(BaseModel):
@@ -790,6 +733,35 @@ def list_cv_versions(current_user: User = Depends(get_current_user)):
         return {"items": [_serialize_cv_version(r) for r in rows]}
 
 
+@router.get("/cv-versions/{version_id}/ats-check")
+def check_cv_version_ats_parseability(
+    version_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    """Runs deterministic pypdf ATS parseability checks on a user-owned CV version PDF."""
+    from ..services.ats_checker import check_pdf_ats_parseability
+
+    with Session(engine) as session:
+        ver = session.get(CVVersion, version_id)
+        if not ver or ver.user_id != current_user.id:
+            raise HTTPException(status_code=404, detail="CV version not found.")
+        if not ver.pdf_filename:
+            raise HTTPException(status_code=400, detail="No generated PDF exists for this CV version yet.")
+        safe_pdf = _sanitize_safe_filename(ver.pdf_filename)
+        pdf_path = (GENERATED_RESUMES_DIR / safe_pdf).resolve()
+        if not pdf_path.is_relative_to(GENERATED_RESUMES_DIR.resolve()) or not pdf_path.is_file():
+            raise HTTPException(status_code=404, detail="Generated PDF file not found on disk.")
+        sec = ver.structured_content or {}
+        cand = sec.get("candidate") or {}
+        report = check_pdf_ats_parseability(
+            pdf_path,
+            candidate_name=str(cand.get("full_name") or current_user.full_name or ""),
+            expected_email=str(cand.get("email") or current_user.email or ""),
+            expected_keywords=[str(s) for s in (sec.get("skills") or [])[:12]],
+        )
+        return {"version_id": ver.id, "pdf_filename": safe_pdf, **report}
+
+
 @router.post("/cv-versions")
 def create_cv_version(
     req: CVVersionCreateRequest,
@@ -815,6 +787,8 @@ def create_cv_version(
         }
 
     rendered = cv_generator_service.render_cv_from_sections(sections)
+    if rendered.get("ats_parse_report"):
+        sections["ats_parse_report"] = rendered["ats_parse_report"]
     for fname in (rendered.get("pdf_filename"), rendered.get("docx_filename")):
         if fname:
             record_candidate_document(
@@ -881,6 +855,8 @@ def update_cv_version(
             sections,
             base_name_override=ver.pdf_filename,
         )
+        if rendered.get("ats_parse_report"):
+            sections["ats_parse_report"] = rendered["ats_parse_report"]
         for fname in (rendered.get("pdf_filename"), rendered.get("docx_filename")):
             if fname:
                 record_candidate_document(

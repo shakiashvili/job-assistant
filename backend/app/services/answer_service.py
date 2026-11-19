@@ -32,8 +32,13 @@ def load_live_candidate_profile(user_email: Optional[str] = None) -> Dict[str, A
                     if owner == target_low:
                         chosen = p
                         break
-            elif profiles:
-                chosen = profiles[0]
+            else:
+                for p in profiles:
+                    ps = p.parsed_skills or {}
+                    owner = str(ps.get("owner_email") or "").strip().lower()
+                    if not owner and p.user_id is None:
+                        chosen = p
+                        break
             if chosen:
                 ps = dict(chosen.parsed_skills or {})
                 ps["experience_years"] = chosen.experience_years

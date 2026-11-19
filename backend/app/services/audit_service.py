@@ -15,6 +15,7 @@ from ..services.gemini_service import gemini_service
 from ..services.portal_detector import detect_portal_from_html, detect_portal_from_url
 from ..services.company_validator import company_validator
 from ..services.cv_generator_service import cv_generator_service
+from ..services.matcher_service import skills_match_token
 from ..services.salary_service import salary_service
 from ..services.scrapers.base_scraper import evaluate_remote_and_language_gate
 from ..db.models import (
@@ -24,7 +25,7 @@ from ..db.models import (
 logger = logging.getLogger(__name__)
 
 
-def validate_safe_external_url(url: str) -> str:
+def validate_safe_external_url(url: str, require_dns: bool = False) -> str:
     """
     Validates that a user-supplied URL does not target loopback, RFC1918 private networks,
     link-local cloud metadata endpoints (169.254.169.254), or arbitrary local files (SSRF protection).
@@ -95,14 +96,15 @@ def validate_safe_external_url(url: str) -> str:
             if "SSRF Protection" in str(dns_ve):
                 raise
         except socket.gaierror:
-            pass
+            if require_dns:
+                raise ValueError("SSRF Protection: Target hostname could not be resolved safely.")
 
     return clean
 
 
 def _fetch_spa_html_with_playwright(url: str) -> str:
     """Isolated headless Playwright fallback for client-side hydrated SPA job boards."""
-    validate_safe_external_url(url)
+    validate_safe_external_url(url, require_dns=True)
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -120,10 +122,10 @@ class AuditService:
         """
         Hybrid fetching strategy for job pages with SSRF protection:
         1. Validates URL against SSRF blocklist (loopback, RFC1918 private IPs, cloud metadata, file://).
-        2. Fast HTTP fetch via httpx with realistic browser headers.
+        2. Fast HTTP fetch via httpx with realistic browser headers and per-hop redirect SSRF validation.
         3. Optional headless Playwright fallback if ENABLE_PLAYWRIGHT=true and body text < 150 chars.
         """
-        validate_safe_external_url(url)
+        validate_safe_external_url(url, require_dns=True)
         html_text = ""
         headers = {
             "User-Agent": (
@@ -133,15 +135,20 @@ class AuditService:
             "Accept-Language": "en-US,en;q=0.9,ka;q=0.8",
         }
         try:
+            current_url = url
             async with httpx.AsyncClient(timeout=10.0, follow_redirects=False, headers=headers) as client:
-                resp = await client.get(url)
-                if resp.status_code in (301, 302, 303, 307, 308):
-                    redirect_target = resp.headers.get("location", "")
-                    if redirect_target:
-                        resolved_redirect = urllib.parse.urljoin(url, redirect_target)
-                        validate_safe_external_url(resolved_redirect)
-                        resp = await client.get(resolved_redirect)
-                if resp.status_code == 200:
+                resp = None
+                for _ in range(5):
+                    validate_safe_external_url(current_url, require_dns=True)
+                    resp = await client.get(current_url)
+                    if resp.status_code in (301, 302, 303, 307, 308):
+                        redirect_target = resp.headers.get("location", "")
+                        if not redirect_target:
+                            break
+                        current_url = urllib.parse.urljoin(current_url, redirect_target)
+                        continue
+                    break
+                if resp is not None and resp.status_code == 200:
                     html_text = resp.text
         except ValueError:
             raise
@@ -183,7 +190,7 @@ class AuditService:
         """
         is_fetchable_url = bool(job_url and ("://" in job_url or not raw_text))
         if is_fetchable_url and job_url:
-            validate_safe_external_url(job_url)
+            validate_safe_external_url(job_url, require_dns=not bool(raw_text))
 
         ground_truth = ground_truth_store.get_data(owner_email=owner_email, user_id=user_id)
         candidate = ground_truth.get("candidate", {})
@@ -254,8 +261,7 @@ class AuditService:
         is_ka = cv_language == "ka"
 
         for req in req_skills:
-            req_l = req.lower()
-            if any(req_l in c or c in req_l for c in all_candidate_skills) or req_l in skills_md_lower:
+            if skills_match_token(req, all_candidate_skills, skills_md_lower):
                 matched.append(req)
             else:
                 missing.append(req)
@@ -276,8 +282,7 @@ class AuditService:
 
         matched_nice_count = 0
         for nice in nice_skills:
-            nice_l = nice.lower()
-            if any(nice_l in c or c in nice_l for c in all_candidate_skills) or nice_l in skills_md_lower:
+            if skills_match_token(nice, all_candidate_skills, skills_md_lower):
                 matched_nice_count += 1
                 if nice not in matched:
                     matched.append(nice)
@@ -398,7 +403,7 @@ class AuditService:
             tailored_cv.expected_salary = details.salary_range
 
         if user_id is not None and tailored_cv.pdf_filename:
-            from ..routers.ground_truth import record_candidate_document
+            from ..db.document_repository import record_candidate_document
             record_candidate_document(
                 user_id=user_id,
                 filename=tailored_cv.pdf_filename,

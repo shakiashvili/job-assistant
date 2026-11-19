@@ -169,18 +169,25 @@ def validate_live_html_content(url: str, html: str) -> Tuple[bool, str]:
 async def fetch_and_validate_live_vacancy(url: str, timeout: float = 4.0) -> Tuple[bool, str, str]:
     """
     Performs an asynchronous HTTP GET request to a vacancy URL and verifies:
-    1. HTTP status code is 200 OK.
-    2. Response HTML contains non-empty, active vacancy content (discarding blank/expired pages).
+    1. Every URL and redirect hop passes SSRF validation (fail closed).
+    2. HTTP status code is 200 OK.
+    3. Response HTML contains non-empty, active vacancy content (discarding blank/expired pages).
     Returns (is_live_and_valid, extracted_clean_text, raw_html).
     """
     if not url or not url.strip():
         return False, "", ""
 
-    clean_url = url.strip()
-    if clean_url.startswith(("http://localhost", "http://127.0.0.1")):
-        return True, "Local health endpoint", ""
+    import urllib.parse
+    from .audit_service import validate_safe_external_url
 
+    clean_url = url.strip()
     if any(d in clean_url for d in ["example.com", "fakejob.ge", "testportal.local", "dummy"]):
+        return False, "", ""
+
+    try:
+        validate_safe_external_url(clean_url, require_dns=True)
+    except ValueError as ssrf_err:
+        logger.warning(f"Blocked unsafe vacancy link {clean_url}: {ssrf_err}")
         return False, "", ""
 
     headers = {
@@ -193,18 +200,33 @@ async def fetch_and_validate_live_vacancy(url: str, timeout: float = 4.0) -> Tup
     }
 
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
-            resp = await client.get(clean_url)
-            if resp.status_code != 200 or not resp.text:
-                logger.info(f"Vacancy link rejected (HTTP {resp.status_code}): {clean_url}")
+        current_url = clean_url
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, headers=headers) as client:
+            resp = None
+            for _ in range(5):
+                validate_safe_external_url(current_url, require_dns=True)
+                resp = await client.get(current_url)
+                if resp.status_code in (301, 302, 303, 307, 308):
+                    location = resp.headers.get("location", "")
+                    if not location:
+                        return False, "", ""
+                    current_url = urllib.parse.urljoin(current_url, location)
+                    continue
+                break
+            if resp is None or resp.status_code != 200 or not resp.text:
+                code = resp.status_code if resp is not None else "no-response"
+                logger.info(f"Vacancy link rejected (HTTP {code}): {clean_url}")
                 return False, "", ""
 
-            is_valid, clean_text = validate_live_html_content(clean_url, resp.text)
+            is_valid, clean_text = validate_live_html_content(current_url, resp.text)
             if not is_valid:
                 logger.info(f"Vacancy link rejected (blank/expired HTML body): {clean_url}")
                 return False, "", ""
 
             return True, clean_text, resp.text
+    except ValueError as ssrf_err:
+        logger.warning(f"Blocked unsafe redirect on vacancy link {clean_url}: {ssrf_err}")
+        return False, "", ""
     except Exception as e:
         logger.debug(f"Live GET health check failed for {clean_url}: {e}")
         return False, "", ""

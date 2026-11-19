@@ -40,6 +40,22 @@ class GmailService:
     Manages Google OAuth2 flow, RFC 2822 MIME email preparation, and Gmail API draft/send dispatch.
     """
 
+    @staticmethod
+    def _resolve_safe_attachment_path(fpath: Optional[str]) -> Optional[Path]:
+        """Restricts outbound email/draft attachments strictly to files inside GENERATED_RESUMES_DIR."""
+        if not fpath or "\x00" in str(fpath):
+            return None
+        gen_root = GENERATED_RESUMES_DIR.resolve()
+        raw = Path(str(fpath).strip())
+        if raw.is_absolute():
+            candidate = raw.resolve()
+        else:
+            candidate = (gen_root / raw.name).resolve()
+        if not candidate.is_relative_to(gen_root) or not candidate.is_file():
+            logger.warning("Blocked or missing email attachment path outside generated resumes dir: %s", fpath)
+            return None
+        return candidate
+
     def is_configured(self) -> bool:
         return bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
 
@@ -115,10 +131,8 @@ class GmailService:
                     all_files.append(ap)
 
         for fpath in all_files:
-            p = Path(fpath)
-            if not p.is_absolute():
-                p = GENERATED_RESUMES_DIR / p.name
-            if p.exists():
+            p = self._resolve_safe_attachment_path(fpath)
+            if p is not None:
                 with open(p, "rb") as f:
                     ext = p.suffix.lower()
                     subtype = "pdf" if ext == ".pdf" else (
@@ -129,7 +143,7 @@ class GmailService:
                     msg.attach(part)
                 logger.info(f"Attached resume '{p.name}' to outgoing MIME email.")
             else:
-                logger.warning(f"Resume attachment '{fpath}' not found on disk; skipping attachment.")
+                logger.warning(f"Resume attachment '{fpath}' rejected or not found inside generated resumes directory; skipping.")
 
         return msg
 
@@ -167,10 +181,8 @@ class GmailService:
         """
         resolved_files: List[str] = []
         for fpath in (attachment_paths or []):
-            p = Path(fpath)
-            if not p.is_absolute():
-                p = GENERATED_RESUMES_DIR / p.name
-            if p.exists():
+            p = self._resolve_safe_attachment_path(fpath)
+            if p is not None:
                 resolved_files.append(str(p))
 
         # Path 1: Connected Google OAuth API
@@ -448,10 +460,8 @@ class GmailService:
             msg.attach(email.mime.text.MIMEText(body_text, "plain", "utf-8"))
 
         if pdf_path:
-            p = Path(pdf_path)
-            if not p.is_absolute():
-                p = GENERATED_RESUMES_DIR / p.name
-            if p.exists():
+            p = self._resolve_safe_attachment_path(pdf_path)
+            if p is not None:
                 with open(p, "rb") as f:
                     part = email.mime.application.MIMEApplication(f.read(), _subtype="pdf")
                     part.add_header("Content-Disposition", "attachment", filename=p.name)
@@ -491,7 +501,7 @@ class GmailService:
                 "error": "Gmail SMTP credentials (GMAIL_USER & GMAIL_APP_PASSWORD) are not configured in backend/.env.",
             }
 
-        subject = f"Your TalentFlow AI Verification Code: {code}"
+        subject = "Your TalentFlow AI Sign-In Verification Code"
         body_text = (
             f"Hello,\n\n"
             f"Your 6-digit verification code for TalentFlow AI is:\n\n"

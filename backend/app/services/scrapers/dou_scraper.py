@@ -89,7 +89,7 @@ class DouScraper(BasePortalScraper):
         """Fetches full DOU vacancy body so English/language requirements evaluate accurately."""
         html = await self.fetch_html(item["url"], timeout=8.0)
         if not html:
-            return item
+            return None
 
         soup = self.make_soup(html)
         desc_el = soup.select_one("div.b-typo.vacancy-section, div.l-vacancy")

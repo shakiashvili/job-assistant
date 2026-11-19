@@ -50,19 +50,29 @@ class PlaywrightStagerService:
         self._active_sessions: Dict[str, Dict[str, Any]] = {}
 
     def get_resume_path(self, variant: str, custom_pdf_filename: Optional[str] = None) -> Optional[Path]:
+        gen_root = GENERATED_RESUMES_DIR.resolve()
+        res_root = RESUMES_DIR.resolve()
         if custom_pdf_filename:
-            gen_path = GENERATED_RESUMES_DIR / custom_pdf_filename
-            if gen_path.exists():
+            raw_cand = str(custom_pdf_filename).strip()
+            cand_path = Path(raw_cand)
+            if cand_path.is_absolute() or ".." in cand_path.parts or "/" in raw_cand or "\\" in raw_cand:
+                resolved = cand_path.resolve()
+                if (resolved.is_relative_to(gen_root) or resolved.is_relative_to(res_root)) and resolved.is_file():
+                    return resolved
+                return None
+            gen_path = (gen_root / raw_cand).resolve()
+            if gen_path.is_relative_to(gen_root) and gen_path.is_file():
                 return gen_path
-            direct_path = RESUMES_DIR / custom_pdf_filename
-            if direct_path.exists():
+            direct_path = (res_root / raw_cand).resolve()
+            if direct_path.is_relative_to(res_root) and direct_path.is_file():
                 return direct_path
+            return None
 
         variants = ground_truth_store.get_cv_variants()
         variant_data = variants.get(variant, {})
-        filename = variant_data.get("resume_file", f"resume_{variant}.pdf")
-        path = RESUMES_DIR / filename
-        if path.exists():
+        filename = Path(str(variant_data.get("resume_file") or f"resume_{variant}.pdf")).name
+        path = (res_root / filename).resolve()
+        if path.is_relative_to(res_root) and path.is_file():
             return path
         resumes = list(GENERATED_RESUMES_DIR.glob("*.pdf")) + list(RESUMES_DIR.glob("*.pdf"))
         return resumes[0] if resumes else None
@@ -91,7 +101,7 @@ class PlaywrightStagerService:
 
         portal_type = detect_portal_from_url(job_url)
         try:
-            validate_safe_external_url(job_url)
+            validate_safe_external_url(job_url, require_dns=ENABLE_PLAYWRIGHT)
         except ValueError as ssrf_err:
             raise ValueError(str(ssrf_err)) from ssrf_err
 
@@ -142,6 +152,8 @@ class PlaywrightStagerService:
             logger.info(f"Navigating to {job_url} (Portal: {portal_type}, Headless: {headless})...")
             await page.goto(job_url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
             await page.wait_for_timeout(300)
+            if page.url and not str(page.url).startswith("file://"):
+                validate_safe_external_url(page.url)
 
             page_title = await page.title()
             html_body = await page.content()
@@ -151,7 +163,7 @@ class PlaywrightStagerService:
                 portal_type = detected_portal
 
             detected_company = html_meta.get("company") or "Hiring Company"
-            detected_role = html_meta.get("title") or page_title or "Senior QA Automation Engineer"
+            detected_role = html_meta.get("title") or page_title or "Specialist"
 
             # 1. Company Reputation Gate
             comp_val = company_validator.validate_company(detected_company, html_body)
@@ -169,14 +181,19 @@ class PlaywrightStagerService:
                     page_title=page_title,
                 )
 
-            # 2. AI Market Salary Estimation
+            # 2. AI Market Salary Estimation (only when explicitly stated)
             sal_est = salary_service.estimate_salary(
                 title=detected_role,
                 description=html_meta.get("description_text", ""),
                 market="GE_DOMESTIC" if portal_type in ("jobs.ge", "hr.ge") else "GLOBAL_REMOTE",
                 portal=portal_type,
             )
-            salary_text = expected_salary or f"{sal_est['min_salary']:g} - {sal_est['max_salary']:g} {sal_est['currency']}/mo"
+            if expected_salary:
+                salary_text = expected_salary
+            elif sal_est.get("min_salary") is not None and sal_est.get("max_salary") is not None:
+                salary_text = f"{sal_est['min_salary']:g} - {sal_est['max_salary']:g} {sal_est.get('currency') or 'USD'}/mo"
+            else:
+                salary_text = ""
 
             # 3. Grounded Human-Tone Narratives & Single-Column ATS Resume
             narratives = gemini_service.craft_human_tone_narratives(
@@ -282,7 +299,7 @@ class PlaywrightStagerService:
                 re.compile(r"current\s*company|organization|employer", re.I),
                 re.compile(r"company|organization", re.I),
                 "input[name='org'], input[name*='company']",
-                (ground_truth.get("work_history") or [{}])[0].get("company") or "Independent Specialist",
+                (ground_truth.get("work_history") or [{}])[0].get("company") or "",
                 "current_company",
             )
             await fill_semantic_cascade(
@@ -359,21 +376,29 @@ class PlaywrightStagerService:
                 "framework_experience",
             )
 
-            # Work authorization dropdown ONLY if explicitly confirmed in candidate ground truth
+            # Separate work-authorization eligibility vs visa-sponsorship-needed so we NEVER invert "Yes"/"No"
             wa_info = candidate.get("work_authorization") if isinstance(candidate.get("work_authorization"), dict) else {}
             has_verified_auth = bool(
                 wa_info.get("eu_work_permit")
-                or wa_info.get("us_work_authorization")
-                or wa_info.get("uk_work_authorization")
-                or wa_info.get("citizenship")
+                or str(wa_info.get("us_work_authorization") or "").strip().lower() in ("authorized", "citizen", "green card", "yes")
+                or str(wa_info.get("uk_work_authorization") or "").strip().lower() in ("authorized", "citizen", "yes")
             )
-            auth_select = page.get_by_label(re.compile(r"authorized\s*to\s*work|sponsorship", re.I))
-            if has_verified_auth and await auth_select.count() > 0:
-                try:
-                    await auth_select.first.select_option(value="yes")
-                    fields_filled.append("work_auth_select")
-                except Exception:
-                    pass
+            sponsorship_select = page.get_by_label(re.compile(r"require.*sponsorship|need.*sponsorship|visa\s*sponsorship", re.I))
+            if await sponsorship_select.count() > 0:
+                if has_verified_auth and wa_info.get("requires_eu_visa") is False and wa_info.get("requires_us_visa_sponsorship") is False:
+                    try:
+                        await sponsorship_select.first.select_option(value="no")
+                        fields_filled.append("visa_sponsorship_no")
+                    except Exception:
+                        pass
+            else:
+                auth_select = page.get_by_label(re.compile(r"authorized\s*to\s*work|legally\s*eligible|work\s*permit", re.I))
+                if has_verified_auth and await auth_select.count() > 0:
+                    try:
+                        await auth_select.first.select_option(value="yes")
+                        fields_filled.append("work_auth_select")
+                    except Exception:
+                        pass
 
             # 5. Attach Single-Column ATS PDF Resume
             file_locator = page.get_by_label(re.compile(r"resume|cv|attach|upload", re.I))
@@ -406,12 +431,21 @@ class PlaywrightStagerService:
                 except Exception as sc_err:
                     logger.debug(f"CAPTCHA screenshot note: {sc_err}")
 
-            # 7. Auto-submit only if explicitly requested AND no CAPTCHA is present
+            # 7. Auto-submit only if explicitly requested, no CAPTCHA is present, and real form submit succeeds
+            form_actually_submitted = False
             if auto_submit and captcha_status == "none_detected":
-                submit_btn = page.get_by_role("button", name=re.compile(r"submit|apply|send", re.I))
+                submit_btn = page.locator("form button[type='submit'], form input[type='submit']").filter(
+                    has_text=re.compile(r"submit|apply|send", re.I)
+                )
+                if await submit_btn.count() == 0:
+                    submit_btn = page.get_by_role("button", name=re.compile(r"^(?:submit\s*(?:application|form)|apply\s*now|send\s*application)$", re.I))
                 if await submit_btn.count() > 0:
-                    await submit_btn.first.click()
-                    fields_filled.append("form_submitted")
+                    try:
+                        await submit_btn.first.click()
+                        form_actually_submitted = True
+                        fields_filled.append("form_submitted")
+                    except Exception as sub_err:
+                        logger.warning(f"Form submit click failed cleanly (staying staged): {sub_err}")
 
             # 8. In-page HITL HUD Banner
             banner_js = """
@@ -452,7 +486,7 @@ class PlaywrightStagerService:
                 pass
 
             response_obj = StageApplicationResponse(
-                status="submitted" if (auto_submit and captcha_status == "none_detected") else "staged",
+                status="submitted" if form_actually_submitted else "staged",
                 portal_detected=portal_type,
                 fields_filled=list(dict.fromkeys(fields_filled)),
                 captcha_status=captcha_status,

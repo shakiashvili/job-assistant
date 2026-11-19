@@ -91,7 +91,7 @@ def _match_select_option(raw_answer: str, options: List[str]) -> str:
         opt_l = opt.strip().lower()
         if opt_l and (opt_l in ans_low or ans_low in opt_l):
             return opt
-    return options[0]
+    return ""
 
 
 class FormFieldSchema(BaseModel):
@@ -309,13 +309,15 @@ def prepare_application(
     if not dom_title or not dom_company or dom_title.lower() in ("unknown", "unknown title") or dom_company.lower() in ("unknown", "unknown company"):
         fallback_blob = "\n".join(x for x in [dom_title, f"Company: {dom_company}" if dom_company else "", desc_text] if x)
         extracted = gemini_service.extract_job_details(fallback_blob or req.url, portal=portal)
-        job_title = dom_title or extracted.get("title") or "Unknown Title"
-        company_name = dom_company or extracted.get("company") or "Unknown Company"
-        extraction_failed = bool(
-            extracted.get("extraction_failed")
-            or job_title == "Unknown Title"
-            or company_name == "Unknown Company"
-        )
+        raw_title = (dom_title if dom_title.lower() not in ("unknown", "unknown title") else "") or str(extracted.get("title") or "").strip()
+        raw_company = (dom_company if dom_company.lower() not in ("unknown", "unknown company") else "") or str(extracted.get("company") or "").strip()
+        if raw_title.lower() in ("unknown", "unknown title"):
+            raw_title = ""
+        if raw_company.lower() in ("unknown", "unknown company"):
+            raw_company = ""
+        extraction_failed = bool(extracted.get("extraction_failed") or not raw_title or not raw_company)
+        job_title = raw_title
+        company_name = raw_company
     else:
         job_title = dom_title
         company_name = dom_company
@@ -424,11 +426,15 @@ def prepare_application(
         }
 
     # Company Intel & Narratives
-    company_intel = gemini_service.research_company_intel(
-        company=company_name,
-        job_title=job_title,
-        description=desc_text,
-        cv_language=cv_lang,
+    company_intel = (
+        gemini_service.research_company_intel(
+            company=company_name,
+            job_title=job_title,
+            description=desc_text,
+            cv_language=cv_lang,
+        )
+        if company_name
+        else {"summary": "", "culture_notes": [], "unverified": True}
     )
     req_skills = matcher_service.extract_job_requirements(job_title, desc_text)
     job_details = {
@@ -501,7 +507,7 @@ def prepare_application(
             if f.options and f.field_type in ("select", "radio"):
                 val = _match_select_option(val, f.options)
             elif f.field_type == "checkbox":
-                val = "true" if any(w in q_label for w in ("agree", "consent", "privacy", "terms", "authorized", "confirm")) or val.lower().startswith("yes") else "false"
+                val = "true" if val.lower().startswith(("yes", "true", "დიახ")) else "false"
             field_answers.append(
                 FieldAnswerItem(
                     field_id=f.field_id,

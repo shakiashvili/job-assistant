@@ -158,15 +158,15 @@ class LinkedInScraper(BasePortalScraper):
 
         return results
 
-    async def _enrich_card_details(self, job: Dict[str, Any], max_allowed_years: float = 2.0) -> Dict[str, Any]:
-        """Best-effort fetch of LinkedIn guest jobPosting detail HTML to inspect full requirements & salary."""
+    async def _enrich_card_details(self, job: Dict[str, Any], max_allowed_years: float = 2.0) -> Optional[Dict[str, Any]]:
+        """Fetches LinkedIn guest jobPosting detail HTML to inspect full requirements & salary; returns None on failure."""
         raw_id = job.get("raw_job_id")
         if not raw_id:
-            return job
+            return None
         detail_url = f"https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{raw_id}"
         html = await self.fetch_html(detail_url, timeout=8.0)
         if not html:
-            return job
+            return None
 
         soup = self.make_soup(html)
         desc_el = soup.select_one(
@@ -221,13 +221,23 @@ class LinkedInScraper(BasePortalScraper):
         if not raw_jobs:
             return []
 
-        # Enrich top non-filtered cards with full descriptions (polite concurrency)
+        # Enrich top non-filtered cards with full descriptions (polite concurrency) and drop failed detail fetches
         candidates = [j for j in raw_jobs if j.get("status") != "FILTERED_OUT"][:6]
         if candidates:
-            await asyncio.gather(
+            enriched_results = await asyncio.gather(
                 *(self._enrich_card_details(j, max_allowed_years=max_allowed_years) for j in candidates),
                 return_exceptions=True,
             )
+            verified_ids = {
+                res["external_id"]
+                for res in enriched_results
+                if isinstance(res, dict) and res.get("external_id")
+            }
+            candidate_ids = {c.get("external_id") for c in candidates}
+            raw_jobs = [
+                j for j in raw_jobs
+                if j.get("external_id") not in candidate_ids or j.get("external_id") in verified_ids
+            ]
 
         for j in raw_jobs:
             j.pop("raw_job_id", None)

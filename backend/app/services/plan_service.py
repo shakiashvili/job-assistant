@@ -10,7 +10,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from ..db.models import User, SkillActionPlan, CandidateProfile, JobPosting
 from ..db.profile_repository import profile_repository
 from ..services.gemini_service import gemini_service, safe_parse_json
-from ..services.matcher_service import matcher_service
+from ..services.matcher_service import matcher_service, skills_match_token
 
 logger = logging.getLogger(__name__)
 
@@ -159,16 +159,20 @@ class PlanService:
                     session.delete(ep)
             session.commit()
 
-        # Compare CandidateProfile against missing requirements across live JobPosting rows
+        # Compare CandidateProfile against missing requirements across live public or user-matched JobPosting rows
         gap_counts: Counter = Counter()
         market_jobs = session.exec(
-            select(JobPosting).where(JobPosting.status != "FILTERED_OUT").limit(35)
+            select(JobPosting)
+            .where(
+                (JobPosting.status != "FILTERED_OUT")
+                & (JobPosting.user_id.is_(None) | (JobPosting.user_id == user.id))
+            )
+            .limit(35)
         ).all()
         for job in market_jobs:
             reqs = matcher_service.extract_job_requirements(job.title, job.description_raw)
             for req in reqs:
-                rl = req.lower()
-                if not any(rl in ex or ex in rl for ex in existing_lower):
+                if not skills_match_token(req, existing_lower):
                     gap_counts[req] += 1
 
         top_gaps = [skill for skill, _ in gap_counts.most_common(6)]

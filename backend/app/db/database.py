@@ -96,7 +96,10 @@ def init_db(force: bool = False) -> None:
             from alembic.config import Config
 
             cfg = Config(str(alembic_ini))
-            cfg.set_main_option("sqlalchemy.url", str(engine.url).replace("%", "%%"))
+            cfg.set_main_option(
+                "sqlalchemy.url",
+                engine.url.render_as_string(hide_password=False).replace("%", "%%"),
+            )
             command.upgrade(cfg, "head")
             _MIGRATION_RUN_DONE = True
             return

@@ -238,6 +238,7 @@ class SavedJob(SQLModel, table=True):
     user_id: int = Field(foreign_key="users.id", index=True)
     job_posting_id: int = Field(foreign_key="job_postings.id", index=True)
     notes: Optional[str] = Field(default=None)
+    jd_snapshot: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON, nullable=True))
     created_at: datetime = Field(default_factory=utc_now, index=True)
 
 
@@ -260,6 +261,7 @@ class ApplicationTracker(SQLModel, table=True):
     cv_pdf_path: Optional[str] = None
     cv_version_id: Optional[int] = Field(default=None, foreign_key="candidate_documents.id")
     cover_letter_text: Optional[str] = None
+    jd_snapshot: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON, nullable=True))
     outcome: Optional[str] = None
     applied_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
@@ -321,9 +323,9 @@ class InterviewRound(SQLModel, table=True):
     round_type: str = Field(default="HR_SCREEN")  # HR_SCREEN, TECH_INTERVIEW, FINAL_ROUND, SYSTEM_DESIGN
     scheduled_at: Optional[datetime] = None
     company_intel_summary: Optional[str] = None
-    predicted_questions: Optional[List[Dict[str, Any]]] = Field(default=[], sa_column=Column(JSON))
-    technical_glossary: Optional[List[Dict[str, Any]]] = Field(default=[], sa_column=Column(JSON))
-    follow_up_questions: Optional[List[str]] = Field(default=[], sa_column=Column(JSON))
+    predicted_questions: Optional[List[Dict[str, Any]]] = Field(default_factory=list, sa_column=Column(JSON))
+    technical_glossary: Optional[List[Dict[str, Any]]] = Field(default_factory=list, sa_column=Column(JSON))
+    follow_up_questions: Optional[List[str]] = Field(default_factory=list, sa_column=Column(JSON))
     candidate_notes: Optional[str] = None
     reflection_notes: Optional[str] = None
     status: str = Field(default="SCHEDULED")  # SCHEDULED, COMPLETED, CANCELLED
@@ -352,7 +354,7 @@ class SkillActionPlan(SQLModel, table=True):
     skill_name: str = Field(index=True)
     category: str = Field(default="AUTOMATION")
     days_to_learn: int = Field(default=7)
-    milestones: List[Dict[str, Any]] = Field(default=[], sa_column=Column(JSON))
+    milestones: List[Dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
     is_completed: bool = Field(default=False)
     created_at: datetime = Field(default_factory=utc_now)
 

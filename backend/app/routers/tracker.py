@@ -86,20 +86,47 @@ def get_or_create_app_tracker(
     uid = current_user.id if current_user else None
 
     rec = session.get(ApplicationRecord, app_id)
-    if rec and rec.user_id is not None and uid is not None and not is_guest and rec.user_id != uid:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden: application belongs to another user",
-        )
+    if rec:
+        if rec.user_id is not None:
+            if uid is None or (rec.user_id != uid):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Forbidden: application belongs to another user",
+                )
+        elif not is_guest:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Forbidden: application belongs to another user",
+            )
 
     app_tracker = session.get(ApplicationTracker, app_id)
-    if app_tracker and app_tracker.user_id is not None and uid is not None and not is_guest and app_tracker.user_id != uid:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden: application belongs to another user",
-        )
+    if rec and app_tracker and app_tracker.user_id != rec.user_id:
+        app_tracker = None
+        if rec.job_posting_id is not None:
+            app_tracker = session.exec(
+                select(ApplicationTracker).where(
+                    ApplicationTracker.user_id == rec.user_id,
+                    ApplicationTracker.job_posting_id == rec.job_posting_id,
+                    ApplicationTracker.is_deleted == False,
+                )
+            ).first()
+
+    if app_tracker and not rec:
+        if app_tracker.user_id is not None:
+            if uid is None or (app_tracker.user_id != uid):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Forbidden: application belongs to another user",
+                )
+        elif not is_guest:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Forbidden: application belongs to another user",
+            )
 
     if not app_tracker:
+        if not rec:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found.")
         job = session.get(JobPosting, rec.job_posting_id) if rec and rec.job_posting_id else None
         cv_path = (rec.custom_cv_path or rec.cv_pdf_path) if rec else None
         if cv_path and not Path(cv_path).is_absolute():
@@ -107,8 +134,9 @@ def get_or_create_app_tracker(
             if candidate_file.exists():
                 cv_path = str(candidate_file)
 
+        safe_pk = app_id if session.get(ApplicationTracker, app_id) is None else None
         app_tracker = ApplicationTracker(
-            id=app_id,
+            id=safe_pk,
             user_id=rec.user_id if rec and rec.user_id is not None else uid,
             job_posting_id=rec.job_posting_id if rec else None,
             company_name=job.company if job else "Hiring Company",
@@ -281,14 +309,14 @@ def send_or_draft_application_email(
     Builds an RFC 2822 MIME email package containing recipient HR email, custom subject line,
     cover letter body, and generated PDF resume attachment.
     """
-    app_tracker = get_or_create_app_tracker(app_id, session, current_user=current_user)
-
     recipient = (req.recipient_email or "").strip()
     if not recipient or "@" not in recipient:
         raise HTTPException(
             status_code=400,
             detail="A valid recipient HR email address is required.",
         )
+
+    app_tracker = get_or_create_app_tracker(app_id, session, current_user=current_user)
     subject = req.subject or f"Application: {app_tracker.job_title} — {current_user.full_name}"
     body = req.body_text or (
         f"Dear {app_tracker.company_name} Hiring Team,\n\n"
@@ -312,7 +340,7 @@ def send_or_draft_application_email(
     )
 
     if result.get("eml_filename"):
-        from .ground_truth import record_candidate_document
+        from ..db.document_repository import record_candidate_document
         eml_fname = result["eml_filename"]
         record_candidate_document(
             user_id=current_user.id,
