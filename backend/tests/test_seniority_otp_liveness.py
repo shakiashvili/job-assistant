@@ -130,11 +130,30 @@ def test_link_validator_and_deadline_expiration():
     assert dl_str == "28.12.2026"
     assert is_expired is False
 
-    # 3. English deadline format
+    # 3. English deadline format (ISO and day-first/month-first named months)
     text_en = "Apply before: 2026-11-30. Seniority: Mid-level."
     dl_date, dl_str, is_expired = parse_vacancy_deadline(text_en)
     assert dl_str == "2026-11-30"
     assert is_expired is False
+
+    dl_date, dl_str, is_expired = parse_vacancy_deadline("Apply before 15 January 2024")
+    assert dl_date == datetime(2024, 1, 15, 23, 59, 59, tzinfo=timezone.utc)
+    assert dl_str == "15 January 2024"
+    assert is_expired is True
+
+    dl_date, dl_str, is_expired = parse_vacancy_deadline("Deadline: January 15, 2024")
+    assert dl_date == datetime(2024, 1, 15, 23, 59, 59, tzinfo=timezone.utc)
+    assert is_expired is True
+
+    dl_date, dl_str, is_expired = parse_vacancy_deadline("ბოლო ვადა: 15 იანვარი 2024")
+    assert dl_date == datetime(2024, 1, 15, 23, 59, 59, tzinfo=timezone.utc)
+    assert is_expired is True
+
+    dl_date, dl_str, is_expired = parse_vacancy_deadline("Closing date: 30 Dec 2027")
+    assert dl_date == datetime(2027, 12, 30, 23, 59, 59, tzinfo=timezone.utc)
+    assert is_expired is False
+
+    assert parse_vacancy_deadline("Published on 15 January 2024") == (None, None, False)
 
 
 @pytest.mark.asyncio

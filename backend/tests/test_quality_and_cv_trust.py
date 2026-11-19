@@ -244,10 +244,28 @@ def test_cv_parser_security_invalid_tracker_id_portal_detector_and_lifecycle():
     updated_item = tracker_store.update(saved_item.id, ApplicationUpdate(status="Applied"), user_id=uid_l)
     assert updated_item.applied_date is not None
 
-    # 5. PortalDetector never invents fake title/company
+    # 5. PortalDetector never invents fake title/company and rejects cross-origin/substring spoofing
     _, meta = detect_portal_from_html("<html><body><p>Generic notice</p></body></html>", "https://example.org/job")
     assert meta["title"] == ""
     assert meta["company"] == ""
+
+    spoof_html = (
+        '<html><head><title>Greenhouse</title>'
+        '<link rel="canonical" href="https://boards.greenhouse.io/fake">'
+        '</head><body><input id="first_name" name="job_application[first_name]"></body></html>'
+    )
+    spoof_portal, _ = detect_portal_from_html(spoof_html, "https://evil.example.com/page")
+    assert spoof_portal == "custom"
+
+    other_hr_html = (
+        '<html><head><title>otherhr.ge Vacancies</title>'
+        '<link rel="canonical" href="https://otherhr.ge/job/1">'
+        '</head><body><a href="https://otherhr.ge/apply">Apply</a></body></html>'
+    )
+    other_hr_portal, _ = detect_portal_from_html(other_hr_html, "https://otherhr.ge/job/1")
+    assert other_hr_portal == "custom"
+    other_hr_no_url, _ = detect_portal_from_html(other_hr_html)
+    assert other_hr_no_url == "custom"
 
     # 6. LinkedInScraper adaptive seniority allows senior role when max_allowed_years > 2.5
     li_html = """
