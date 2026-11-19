@@ -23,7 +23,7 @@ import {
   deleteCvVersion,
   BACKEND_ORIGIN,
 } from '../services/api';
-import { DbJobPosting, CVVersionItem } from '../types';
+import { DbJobPosting, CVVersionItem, BulletDiffItem, ATSParseReport } from '../types';
 
 export const CVVariantManager: React.FC = () => {
   const [myCvs, setMyCvs] = useState<Array<{ filename: string; url: string; ext: string; size_kb: number }>>([]);
@@ -49,6 +49,8 @@ export const CVVariantManager: React.FC = () => {
     pdf_filename: string;
     pdf_url: string;
     cv_version_id?: number | null;
+    bullet_diffs?: BulletDiffItem[];
+    ats_parse_report?: ATSParseReport;
   } | null>(null);
   const [letterTab, setLetterTab] = useState<'cover' | 'motivational'>('cover');
   const [cvVersions, setCvVersions] = useState<CVVersionItem[]>([]);
@@ -215,6 +217,8 @@ export const CVVariantManager: React.FC = () => {
         pdf_filename: res.pdf_filename,
         pdf_url: res.pdf_url,
         cv_version_id: res.cv_version_id,
+        bullet_diffs: res.bullet_diffs || (res.cv_sections?.bullet_diffs as BulletDiffItem[] | undefined),
+        ats_parse_report: res.ats_parse_report || (res.cv_sections?.ats_parse_report as ATSParseReport | undefined),
       });
 
       const versionsRes = await fetchCvVersions().catch(() => ({ items: [] as CVVersionItem[] }));
@@ -708,6 +712,73 @@ export const CVVariantManager: React.FC = () => {
                 : generatedOutput.cover_letter}
             </pre>
           </div>
+
+          {/* ATS PDF Parseability Report & Evidence-Linked Bullet Diffs */}
+          {(generatedOutput.ats_parse_report || (generatedOutput.bullet_diffs && generatedOutput.bullet_diffs.length > 0)) && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {generatedOutput.ats_parse_report && (
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <ShieldCheck className="w-4 h-4 text-cyan-400" />
+                      ATS PDF Parseability Audit
+                    </span>
+                    <span
+                      className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full ${
+                        generatedOutput.ats_parse_report.status === 'PASS'
+                          ? 'bg-emerald-950 text-emerald-300 border border-emerald-700'
+                          : 'bg-amber-950 text-amber-300 border border-amber-700'
+                      }`}
+                    >
+                      {generatedOutput.ats_parse_report.status} · {generatedOutput.ats_parse_report.score}/100
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-slate-300 flex flex-wrap gap-3">
+                    <span>Pages: <strong>{generatedOutput.ats_parse_report.page_count}</strong></span>
+                    <span>Extracted Text: <strong>{generatedOutput.ats_parse_report.extracted_char_count} chars</strong></span>
+                    <span>Sections: <strong>{(generatedOutput.ats_parse_report.sections_detected || []).join(', ') || 'None'}</strong></span>
+                  </div>
+                  {generatedOutput.ats_parse_report.warnings && generatedOutput.ats_parse_report.warnings.length > 0 && (
+                    <ul className="text-[11px] text-amber-300 list-disc pl-4 space-y-0.5">
+                      {generatedOutput.ats_parse_report.warnings.map((w, i) => (
+                        <li key={i}>{w}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+
+              {generatedOutput.bullet_diffs && generatedOutput.bullet_diffs.length > 0 && (
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2 max-h-64 overflow-y-auto">
+                  <div className="text-xs font-bold text-white">
+                    Verified Evidence Bullet Diff ({generatedOutput.bullet_diffs.length})
+                  </div>
+                  <div className="space-y-2">
+                    {generatedOutput.bullet_diffs.slice(0, 8).map((bd, idx) => (
+                      <div key={`${bd.source_bullet_id}-${idx}`} className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 space-y-1 text-[11px]">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-cyan-300">
+                            {bd.source_bullet_id}
+                          </span>
+                          <span className="text-[10px] uppercase font-semibold text-emerald-300">
+                            {bd.action}
+                          </span>
+                        </div>
+                        <div className="text-slate-400">
+                          <span className="font-semibold text-slate-300">Source:</span> {bd.original_text}
+                        </div>
+                        {bd.tailored_text !== bd.original_text && (
+                          <div className="text-emerald-200">
+                            <span className="font-semibold">Tailored:</span> {bd.tailored_text}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -837,20 +908,32 @@ export const CVVariantManager: React.FC = () => {
                 </div>
               </div>
 
-              {/* Right: Live HTML Preview */}
-              <div className="bg-white rounded-xl overflow-hidden border border-slate-700 min-h-[420px]">
-                {activeVersion.rendered_html ? (
-                  <iframe
-                    title="CV Live Preview"
-                    srcDoc={activeVersion.rendered_html}
-                    className="w-full h-full min-h-[420px] border-0"
-                    sandbox="allow-same-origin"
-                  />
-                ) : (
-                  <div className="h-full flex items-center justify-center text-xs text-slate-400 p-6">
-                    Click Save &amp; Re-Render to preview HTML layout.
+              {/* Right: Live HTML Preview + Active Version ATS/Evidence Status */}
+              <div className="space-y-3">
+                {activeVersion.structured_json?.ats_parse_report && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-[11px]">
+                    <span className="text-slate-300 font-semibold">
+                      ATS PDF Check: <strong className="text-emerald-300">{activeVersion.structured_json.ats_parse_report.status}</strong> ({activeVersion.structured_json.ats_parse_report.score}/100)
+                    </span>
+                    <span className="text-slate-400">
+                      {activeVersion.structured_json.ats_parse_report.page_count} page(s) · {activeVersion.structured_json.ats_parse_report.extracted_char_count} selectable chars
+                    </span>
                   </div>
                 )}
+                <div className="bg-white rounded-xl overflow-hidden border border-slate-700 min-h-[420px]">
+                  {activeVersion.rendered_html ? (
+                    <iframe
+                      title="CV Live Preview"
+                      srcDoc={activeVersion.rendered_html}
+                      className="w-full h-full min-h-[420px] border-0"
+                      sandbox="allow-same-origin"
+                    />
+                  ) : (
+                    <div className="h-full flex items-center justify-center text-xs text-slate-400 p-6">
+                      Click Save &amp; Re-Render to preview HTML layout.
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           )}

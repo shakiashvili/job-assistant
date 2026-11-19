@@ -20,6 +20,7 @@ from ..config import GENERATED_RESUMES_DIR, FONTS_DIR
 from ..db.profile_repository import ground_truth_store, filter_spoken_language_entries
 from ..services.gemini_service import GEORGIAN_SKILL_TRANSLATIONS
 from ..services.scrapers.base_scraper import sanitize_company_name
+from .ats_checker import check_pdf_ats_parseability
 from .cv_formatting_utils import (
     GEORGIAN_PDF_FONT_NAME,
     UNICODE_FONT_NAME,
@@ -475,18 +476,37 @@ class CVGeneratorService:
         clean_job_title = _clean_foreign_script_text(job_title, cv_language) or "Specialist"
         clean_summary = _clean_foreign_script_text(human_summary, cv_language)
 
-        # Tailor bullet ordering per job description & matched requirements (ZERO fabrication)
+        # Tailor bullet ordering per job description & matched requirements with immutable source_bullet_id evidence tracking
         target_kws = list(dict.fromkeys((matched_skills or []) + (required_skills or []) + re.findall(r"[A-Za-z]{3,}", clean_job_title or "")))
         prioritized_wh: List[Dict[str, Any]] = []
-        for job in raw_work_history:
+        source_bullet_records: List[Dict[str, Any]] = []
+        for job_idx, job in enumerate(raw_work_history):
             j_copy = dict(job)
-            j_copy["role"] = _clean_foreign_script_text(j_copy.get("role") or "", cv_language)
-            j_copy["company"] = _clean_foreign_script_text(j_copy.get("company") or "", cv_language)
-            j_copy["highlights"] = [
-                _clean_foreign_script_text(b, cv_language)
-                for b in _prioritize_job_highlights(j_copy.get("highlights") or [], target_kws)
-            ]
-            j_copy["highlights"] = [b for b in j_copy["highlights"] if b]
+            clean_role = _clean_foreign_script_text(j_copy.get("role") or "", cv_language)
+            clean_comp = _clean_foreign_script_text(j_copy.get("company") or "", cv_language)
+            j_copy["role"] = clean_role
+            j_copy["company"] = clean_comp
+            raw_highlights = clean_bullets(j_copy.get("highlights") or [])
+            orig_id_map: Dict[str, tuple[str, int]] = {}
+            cleaned_candidates: List[str] = []
+            for b_idx, raw_b in enumerate(raw_highlights):
+                c_b = _clean_foreign_script_text(raw_b, cv_language)
+                if c_b:
+                    src_id = f"exp-{job_idx}-b-{b_idx}"
+                    cleaned_candidates.append(c_b)
+                    orig_id_map.setdefault(c_b, (src_id, b_idx))
+                    source_bullet_records.append({
+                        "source_bullet_id": src_id,
+                        "job_idx": job_idx,
+                        "orig_idx": b_idx,
+                        "company": clean_comp,
+                        "role": clean_role,
+                        "original_text": str(raw_b).strip(),
+                        "cleaned_text": c_b,
+                    })
+            reordered = _prioritize_job_highlights(cleaned_candidates, target_kws)
+            j_copy["highlights"] = [b for b in reordered if b]
+            j_copy["_source_bullet_meta"] = [orig_id_map.get(b, (f"exp-{job_idx}-b-{idx}", idx)) for idx, b in enumerate(j_copy["highlights"])]
             prioritized_wh.append(j_copy)
 
         # Enforce 100% single-language work history when Georgian CV is explicitly built
@@ -503,6 +523,33 @@ class CVGeneratorService:
                 work_history.append(j_copy)
         else:
             work_history = prioritized_wh
+
+        bullet_diffs: List[Dict[str, Any]] = []
+        src_by_id = {rec["source_bullet_id"]: rec for rec in source_bullet_records}
+        for job in work_history:
+            meta_list = job.pop("_source_bullet_meta", [])
+            final_bullets = job.get("highlights") or []
+            for new_idx, final_text in enumerate(final_bullets):
+                src_id, orig_idx = meta_list[new_idx] if new_idx < len(meta_list) else (f"exp-x-b-{new_idx}", new_idx)
+                rec = src_by_id.get(src_id, {})
+                orig_text = rec.get("original_text", final_text)
+                matched_in_b = [kw for kw in target_kws if kw.lower() in f"{orig_text} {final_text}".lower()][:5]
+                if cv_language == "ka" and final_text != orig_text:
+                    action = "translated_ka"
+                elif new_idx != orig_idx:
+                    action = "prioritized"
+                else:
+                    action = "preserved"
+                bullet_diffs.append({
+                    "source_bullet_id": src_id,
+                    "company": rec.get("company") or job.get("company") or "",
+                    "role": rec.get("role") or job.get("role") or "",
+                    "original_text": orig_text,
+                    "tailored_text": final_text,
+                    "action": action,
+                    "matched_keywords": matched_in_b,
+                    "verified_source": src_id in src_by_id,
+                })
 
         # Order genuine skills so matched ATS keywords appear first (NO FABRICATION)
         matched_lower = {s.lower() for s in matched_skills}
@@ -618,6 +665,13 @@ class CVGeneratorService:
             f"€{int(exp_eur):,}/yr" if exp_eur else (f"${int(exp_usd):,}/yr" if exp_usd else "")
         )
 
+        ats_parse_report = check_pdf_ats_parseability(
+            pdf_path,
+            candidate_name=str(candidate.get("full_name") or ""),
+            expected_email=str(candidate.get("email") or ""),
+            expected_keywords=matched_skills or display_skills[:8],
+        )
+
         cv_sections = {
             "candidate": {
                 "full_name": candidate.get("full_name", "Candidate"),
@@ -639,6 +693,8 @@ class CVGeneratorService:
             "target_company": safe_company or company,
             "cv_language": cv_language,
             "cv_style": cv_style,
+            "bullet_diffs": bullet_diffs,
+            "ats_parse_report": ats_parse_report,
         }
 
         return {
@@ -662,6 +718,8 @@ class CVGeneratorService:
             "cv_sections": cv_sections,
             "tailored_highlights": tailored_highlights,
             "ats_keywords_covered": matched_skills or display_skills[:8],
+            "bullet_diffs": bullet_diffs,
+            "ats_parse_report": ats_parse_report,
             "start_date_default": start_date_str,
             "expected_salary": expected_salary_str,
         }
@@ -760,6 +818,13 @@ class CVGeneratorService:
             languages_line=languages_line,
         )
 
+        ats_parse_report = check_pdf_ats_parseability(
+            pdf_path,
+            candidate_name=str(cand.get("full_name") or ""),
+            expected_email=str(cand.get("email") or ""),
+            expected_keywords=display_skills[:8],
+        )
+
         return {
             "pdf_filename": pdf_filename,
             "docx_filename": docx_filename,
@@ -768,6 +833,7 @@ class CVGeneratorService:
             "docx_url": f"/api/resumes/generated/{docx_filename}",
             "html_preview_url": f"/api/resumes/generated/{html_filename}",
             "rendered_html": html_content,
+            "ats_parse_report": ats_parse_report,
         }
 
     def sync_user_cv_versions(
@@ -1851,6 +1917,8 @@ class CVGeneratorService:
             "html_preview_url": cv_res.get("html_preview_url"),
             "rendered_html": cv_res.get("rendered_html"),
             "cv_sections": cv_res.get("cv_sections"),
+            "bullet_diffs": cv_res.get("bullet_diffs") or [],
+            "ats_parse_report": cv_res.get("ats_parse_report") or {},
             "docx_path": cv_res["docx_path"],
             "pdf_path": cv_res["pdf_path"],
         }

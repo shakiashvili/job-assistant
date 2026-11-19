@@ -238,6 +238,7 @@ class SavedJob(SQLModel, table=True):
     user_id: int = Field(foreign_key="users.id", index=True)
     job_posting_id: int = Field(foreign_key="job_postings.id", index=True)
     notes: Optional[str] = Field(default=None)
+    jd_snapshot: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON, nullable=True))
     created_at: datetime = Field(default_factory=utc_now, index=True)
 
 
@@ -260,6 +261,7 @@ class ApplicationTracker(SQLModel, table=True):
     cv_pdf_path: Optional[str] = None
     cv_version_id: Optional[int] = Field(default=None, foreign_key="candidate_documents.id")
     cover_letter_text: Optional[str] = None
+    jd_snapshot: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON, nullable=True))
     outcome: Optional[str] = None
     applied_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)

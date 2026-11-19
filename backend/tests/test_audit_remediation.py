@@ -530,3 +530,126 @@ def test_phase3_modularization_admin_aggregates_and_b2b_precision():
     assert "(+1d)" in us_west["client_hours_tbilisi_time"]
 
 
+def test_phase4_ats_pdf_checker_evidence_diffs_and_immutable_jd_snapshots(monkeypatch):
+    from app.db.models import SavedJob, ApplicationTracker
+    from app.db.tracker_repository import tracker_store
+    from app.schemas.api_schemas import ApplicationCreate
+    from app.services.ats_checker import check_pdf_ats_parseability
+
+    monkeypatch.setattr(gemini_service, "generate_json", lambda *args, **kwargs: None)
+    monkeypatch.setattr(type(gemini_service), "is_available", property(lambda self: False))
+
+    email, hdrs = _register_headers("p4_feat")
+    skills_md = (
+        "# Giorgi Dev\n"
+        "Email: giorgi.dev@example.ge\n"
+        "Headline: Backend Engineer\n"
+        "## Core Technical Skills\n- Python, FastAPI, PostgreSQL, Docker\n"
+        "## Work Experience\n"
+        "### CloudCorp — Backend Developer (2022 - Present)\n"
+        "- Built FastAPI microservices handling 5k req/min.\n"
+        "- Optimized PostgreSQL indexes and Docker CI builds.\n"
+    )
+    up = client.post("/api/profile/upload-skills", headers=hdrs, data={"content": skills_md, "run_live_scrape": "false"})
+    assert up.status_code == 200
+
+    # 1. Generate tailored CV edition -> verifies bullet_diffs + ats_parse_report + GET /cv-versions/{id}/ats-check
+    gen = client.post(
+        "/api/resumes/generate-edition",
+        headers=hdrs,
+        json={
+            "edition": "tailored",
+            "target_role": "Backend Engineer",
+            "target_company": "DataFlow",
+            "job_description": "Seeking Backend Engineer with FastAPI, Python, and PostgreSQL experience.",
+            "cv_language": "en",
+        },
+    )
+    assert gen.status_code == 200, gen.text
+    gdata = gen.json()
+    try:
+        assert gdata["ats_parse_report"]["status"] == "PASS"
+        assert gdata["ats_parse_report"]["selectable_text_ok"] is True
+        assert gdata["ats_parse_report"]["score"] >= 75
+        diffs = gdata["bullet_diffs"]
+        assert len(diffs) >= 2
+        assert diffs[0]["source_bullet_id"].startswith("exp-0-b-")
+        assert diffs[0]["verified_source"] is True
+
+        ver_id = gdata["cv_version_id"]
+        assert ver_id is not None
+        ats_ep = client.get(f"/api/cv-versions/{ver_id}/ats-check", headers=hdrs)
+        assert ats_ep.status_code == 200, ats_ep.text
+        assert ats_ep.json()["status"] == "PASS"
+
+        direct_check = check_pdf_ats_parseability(Path(gdata["pdf_path"]), candidate_name="Giorgi Dev", expected_email="giorgi.dev@example.ge")
+        assert direct_check["candidate_name_present"] is True
+        assert "Experience" in direct_check["sections_detected"]
+    finally:
+        for fk in ("pdf_filename", "docx_filename", "html_filename"):
+            fn = gdata.get(fk)
+            if fn and (GENERATED_RESUMES_DIR / fn).exists():
+                (GENERATED_RESUMES_DIR / fn).unlink()
+
+    # 2. Immutable JD snapshot preservation on SavedJob and ApplicationTracker
+    with Session(engine) as session:
+        u = get_user_by_email(session, email)
+        assert u is not None
+        job = JobPosting(
+            external_id=f"snap-{uuid.uuid4().hex[:8]}",
+            portal="jobs.ge",
+            title="Original Backend Title",
+            company="Original Co",
+            url=f"https://jobs.ge/en/?view=jobs&id={uuid.uuid4().hex[:8]}",
+            description_raw="Original JD body requiring Python and FastAPI.",
+            suitability_score=85,
+            user_id=None,
+        )
+        session.add(job)
+        session.commit()
+        session.refresh(job)
+        job_id = job.id
+        job_url = job.url
+        u_id = u.id
+
+    save_res = client.post(f"/api/jobs/{job_id}/save", headers=hdrs)
+    assert save_res.status_code == 200, save_res.text
+    snap_saved = save_res.json()["jd_snapshot"]
+    assert snap_saved["title"] == "Original Backend Title"
+    assert "Original JD body" in snap_saved["description_raw"]
+
+    app_item = tracker_store.create(
+        ApplicationCreate(company="Original Co", role="Original Backend Title", portal="jobs.ge", url=job_url, status="Saved"),
+        user_id=u_id,
+    )
+    assert app_item.jd_snapshot is not None
+    assert app_item.jd_snapshot["title"] == "Original Backend Title"
+
+    try:
+        # Mutate/expire underlying JobPosting — snapshots stay immutable
+        with Session(engine) as session:
+            j = session.get(JobPosting, job_id)
+            j.title = "Altered Live Title"
+            j.description_raw = "Altered Live Body"
+            j.is_expired = True
+            session.add(j)
+            session.commit()
+
+            sj = session.exec(select(SavedJob).where(SavedJob.job_posting_id == job_id, SavedJob.user_id == u_id)).first()
+            assert sj is not None and sj.jd_snapshot["title"] == "Original Backend Title"
+
+        fetched_app = tracker_store.get_by_id(app_item.id, user_id=u_id, is_guest=False)
+        assert fetched_app is not None
+        assert fetched_app.jd_snapshot is not None
+        assert fetched_app.jd_snapshot["title"] == "Original Backend Title"
+    finally:
+        tracker_store.delete(app_item.id, user_id=u_id, is_guest=False)
+        from app.db.database import delete_job_posting_cascade
+        with Session(engine) as session:
+            j_del = session.get(JobPosting, job_id)
+            if j_del:
+                delete_job_posting_cascade(session, j_del)
+                session.commit()
+
+
+

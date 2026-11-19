@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import Session, select, delete
 
 from ..db.document_repository import record_candidate_document  # noqa: F401 - re-exported for backward compatibility
@@ -684,7 +684,7 @@ class CVVersionCreateRequest(BaseModel):
     edition: str = "tailored"
     language: str = "en"
     job_posting_id: Optional[int] = None
-    structured_json: Dict[str, Any] = {}
+    structured_json: Dict[str, Any] = Field(default_factory=dict)
 
 
 class CVVersionPatchRequest(BaseModel):
@@ -733,6 +733,35 @@ def list_cv_versions(current_user: User = Depends(get_current_user)):
         return {"items": [_serialize_cv_version(r) for r in rows]}
 
 
+@router.get("/cv-versions/{version_id}/ats-check")
+def check_cv_version_ats_parseability(
+    version_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    """Runs deterministic pypdf ATS parseability checks on a user-owned CV version PDF."""
+    from ..services.ats_checker import check_pdf_ats_parseability
+
+    with Session(engine) as session:
+        ver = session.get(CVVersion, version_id)
+        if not ver or ver.user_id != current_user.id:
+            raise HTTPException(status_code=404, detail="CV version not found.")
+        if not ver.pdf_filename:
+            raise HTTPException(status_code=400, detail="No generated PDF exists for this CV version yet.")
+        safe_pdf = _sanitize_safe_filename(ver.pdf_filename)
+        pdf_path = (GENERATED_RESUMES_DIR / safe_pdf).resolve()
+        if not pdf_path.is_relative_to(GENERATED_RESUMES_DIR.resolve()) or not pdf_path.is_file():
+            raise HTTPException(status_code=404, detail="Generated PDF file not found on disk.")
+        sec = ver.structured_content or {}
+        cand = sec.get("candidate") or {}
+        report = check_pdf_ats_parseability(
+            pdf_path,
+            candidate_name=str(cand.get("full_name") or current_user.full_name or ""),
+            expected_email=str(cand.get("email") or current_user.email or ""),
+            expected_keywords=[str(s) for s in (sec.get("skills") or [])[:12]],
+        )
+        return {"version_id": ver.id, "pdf_filename": safe_pdf, **report}
+
+
 @router.post("/cv-versions")
 def create_cv_version(
     req: CVVersionCreateRequest,
@@ -758,6 +787,8 @@ def create_cv_version(
         }
 
     rendered = cv_generator_service.render_cv_from_sections(sections)
+    if rendered.get("ats_parse_report"):
+        sections["ats_parse_report"] = rendered["ats_parse_report"]
     for fname in (rendered.get("pdf_filename"), rendered.get("docx_filename")):
         if fname:
             record_candidate_document(
@@ -824,6 +855,8 @@ def update_cv_version(
             sections,
             base_name_override=ver.pdf_filename,
         )
+        if rendered.get("ats_parse_report"):
+            sections["ats_parse_report"] = rendered["ats_parse_report"]
         for fname in (rendered.get("pdf_filename"), rendered.get("docx_filename")):
             if fname:
                 record_candidate_document(

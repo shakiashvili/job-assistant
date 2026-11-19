@@ -684,13 +684,33 @@ async def list_scraped_jobs(
         }
 
 
+def _build_jd_snapshot(job: JobPosting) -> Dict[str, Any]:
+    """Captures an immutable job description snapshot at bookmark/application time."""
+    from ..db.models import utc_now
+
+    return {
+        "job_id": job.id,
+        "portal": job.portal,
+        "title": job.title,
+        "company": job.company,
+        "url": job.url,
+        "market": job.market,
+        "location": ", ".join(x for x in (job.city, job.country) if x) or None,
+        "salary_min": job.salary_min,
+        "salary_max": job.salary_max,
+        "salary_currency": job.salary_currency,
+        "description_raw": job.description_raw,
+        "captured_at": utc_now().isoformat(),
+    }
+
+
 @router.post("/jobs/{job_id}/save")
 def save_job_bookmark(
     job_id: int,
     notes: str = "",
     current_user: User = Depends(get_current_user),
 ):
-    """Bookmarks a job posting for the current user."""
+    """Bookmarks a job posting for the current user with an immutable JD snapshot."""
     with Session(engine) as session:
         job = session.get(JobPosting, job_id)
         if not job:
@@ -702,12 +722,22 @@ def save_job_bookmark(
             )
         ).first()
         if existing:
-            return {"status": "saved", "id": existing.id, "job_id": job_id}
-        sj = SavedJob(user_id=current_user.id, job_posting_id=job_id, notes=notes)
+            if not existing.jd_snapshot:
+                existing.jd_snapshot = _build_jd_snapshot(job)
+                session.add(existing)
+                session.commit()
+                session.refresh(existing)
+            return {"status": "saved", "id": existing.id, "job_id": job_id, "jd_snapshot": existing.jd_snapshot}
+        sj = SavedJob(
+            user_id=current_user.id,
+            job_posting_id=job_id,
+            notes=notes,
+            jd_snapshot=_build_jd_snapshot(job),
+        )
         session.add(sj)
         session.commit()
         session.refresh(sj)
-        return {"status": "saved", "id": sj.id, "job_id": job_id}
+        return {"status": "saved", "id": sj.id, "job_id": job_id, "jd_snapshot": sj.jd_snapshot}
 
 
 @router.delete("/jobs/{job_id}/save")

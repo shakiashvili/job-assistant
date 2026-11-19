@@ -69,6 +69,8 @@ class TailoredCVResult(BaseModel):
     expected_salary: Optional[str] = ""
     document_id: Optional[int] = None
     version_number: int = 1
+    bullet_diffs: List[Dict[str, Any]] = Field(default_factory=list)
+    ats_parse_report: Dict[str, Any] = Field(default_factory=dict)
 
 
 class Blocker(BaseModel):
@@ -229,6 +231,7 @@ class ApplicationItem(BaseModel):
     recruiter_name: Optional[str] = None
     recruiter_email: Optional[str] = None
     company_reviews: Optional[int] = None
+    jd_snapshot: Optional[Dict[str, Any]] = None
     cv_pdf_url: Optional[str] = None
     cv_version_id: Optional[int] = None
     cover_letter_text: Optional[str] = None

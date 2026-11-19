@@ -93,11 +93,12 @@ class TrackerRepository:
         salary_str = None
         if job and job.salary_min and job.salary_max:
             salary_str = f"{int(job.salary_min):,}–{int(job.salary_max):,} {job.salary_currency or 'USD'}"
+        snap = (app_tracker.jd_snapshot or {}) if app_tracker and isinstance(app_tracker.jd_snapshot, dict) else {}
         interview_dt = rec.interview_date.strftime("%Y-%m-%d %H:%M") if rec.interview_date else None
-        company_val = (app_tracker.company_name if app_tracker and app_tracker.company_name else None) or (job.company if job else "Hiring Company")
-        role_val = (app_tracker.job_title if app_tracker and app_tracker.job_title else None) or (job.title if job else "Specialist")
-        portal_val = (app_tracker.portal if app_tracker and app_tracker.portal else None) or (job.portal if job else "generic")
-        url_val = (app_tracker.job_url if app_tracker and app_tracker.job_url else None) or (job.url if job else "")
+        company_val = (app_tracker.company_name if app_tracker and app_tracker.company_name else None) or (job.company if job else None) or snap.get("company") or "Hiring Company"
+        role_val = (app_tracker.job_title if app_tracker and app_tracker.job_title else None) or (job.title if job else None) or snap.get("title") or "Specialist"
+        portal_val = (app_tracker.portal if app_tracker and app_tracker.portal else None) or (job.portal if job else None) or snap.get("portal") or "generic"
+        url_val = (app_tracker.job_url if app_tracker and app_tracker.job_url else None) or (job.url if job else None) or snap.get("url") or ""
         return ApplicationItem(
             id=f"app-{rec.id}",
             user_id=rec.user_id,
@@ -117,6 +118,7 @@ class TrackerRepository:
             recruiter_name=rec.recruiter_name,
             recruiter_email=rec.recruiter_email,
             company_reviews=None,
+            jd_snapshot=app_tracker.jd_snapshot if app_tracker else None,
             cv_pdf_url=rec.custom_cv_path or rec.cv_pdf_path or None,
             cv_version_id=rec.cv_version_id,
             cover_letter_text=rec.cover_letter_text or rec.cover_letter or None,
@@ -251,6 +253,15 @@ class TrackerRepository:
                     follow_up_date=item_in.follow_up_date,
                     cv_pdf_path=item_in.cv_pdf_url,
                     cover_letter_text=item_in.cover_letter_text or item_in.notes,
+                    jd_snapshot={
+                        "job_id": job.id,
+                        "portal": job.portal,
+                        "title": job.title or item_in.role,
+                        "company": job.company or item_in.company,
+                        "url": job.url or url,
+                        "description_raw": job.description_raw or "",
+                        "captured_at": utc_now().isoformat(),
+                    },
                 )
                 session.add(app_t)
                 session.add(
@@ -308,6 +319,19 @@ class TrackerRepository:
                     job_url=job.url if job else None,
                     portal=job.portal if job else "generic",
                     status=rec.submission_status,
+                    jd_snapshot=(
+                        {
+                            "job_id": job.id,
+                            "portal": job.portal,
+                            "title": job.title,
+                            "company": job.company,
+                            "url": job.url,
+                            "description_raw": job.description_raw or "",
+                            "captured_at": utc_now().isoformat(),
+                        }
+                        if job
+                        else None
+                    ),
                 )
             old_status = rec.submission_status
 

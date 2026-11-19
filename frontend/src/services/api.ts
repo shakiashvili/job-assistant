@@ -381,6 +381,8 @@ export async function generateCvEdition(params: {
   cv_version_id?: number | null;
   cv_sections?: Record<string, any>;
   rendered_html?: string;
+  bullet_diffs?: import('../types').BulletDiffItem[];
+  ats_parse_report?: import('../types').ATSParseReport;
 }> {
   const res = await apiFetch(`${API_BASE}/resumes/generate-edition`, {
     method: 'POST',
