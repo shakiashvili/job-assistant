@@ -396,12 +396,11 @@ async def upload_skills_md_file(
 ):
     """Accepts .pdf, .docx, .md, or .txt resume/skills uploads, parses profile & computes missing fields."""
     from ..services.cv_parser_service import cv_parser_service
+    from ..services.upload_utils import read_upload_bounded
 
-    raw_bytes = await file.read()
+    raw_bytes = await read_upload_bounded(file, MAX_UPLOAD_SIZE_BYTES)
     if len(raw_bytes) == 0:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-    if len(raw_bytes) > MAX_UPLOAD_SIZE_BYTES:
-        raise HTTPException(status_code=413, detail="Uploaded file exceeds 10 MB maximum size limit.")
     filename = file.filename or "candidate_skills.md"
     try:
         md_text = cv_parser_service.extract_text_from_bytes(raw_bytes, filename=filename)
@@ -505,15 +504,14 @@ async def upload_personal_cv(
 ):
     """Uploads a personal resume (.pdf, .docx, .md, .txt) into isolated per-user storage and optionally parses it."""
     from ..services.cv_parser_service import cv_parser_service
+    from ..services.upload_utils import read_upload_bounded
 
     safe_name = _sanitize_uploaded_cv_name(file.filename)
     ext = Path(safe_name).suffix.lower()
 
-    content = await file.read()
+    content = await read_upload_bounded(file, MAX_UPLOAD_SIZE_BYTES)
     if len(content) == 0:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-    if len(content) > MAX_UPLOAD_SIZE_BYTES:
-        raise HTTPException(status_code=413, detail="Uploaded file exceeds 10 MB maximum size limit.")
     if ext == ".pdf" and not content.startswith(b"%PDF-"):
         raise HTTPException(status_code=400, detail="Invalid PDF file header.")
     if ext == ".docx" and not content.startswith(b"PK"):

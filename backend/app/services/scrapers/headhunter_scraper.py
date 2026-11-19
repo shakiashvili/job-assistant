@@ -138,7 +138,7 @@ class HeadhunterScraper(BasePortalScraper):
         """Fetches live detail page, extracts full description, contact email, and language gate."""
         html = await self.fetch_html(item["url"], timeout=8.0)
         if not html:
-            return item
+            return None
 
         soup = self.make_soup(html)
         desc_el = soup.select_one("[data-qa='vacancy-description']")

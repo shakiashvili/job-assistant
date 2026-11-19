@@ -1,3 +1,4 @@
+import re
 from typing import Dict, Any
 from ..db.models import CompanyValidation
 
@@ -141,22 +142,26 @@ class CompanyValidatorService:
         lower_text = (raw_text or "").lower()
 
         # Check explicit negative / blacklisted signals (e.g., <3 reviews or blacklisted company)
-        if any(w in lower_name or w in lower_text for w in ["0 reviews", "1 review", "2 reviews", "unverified", "stealth", "noreview", "blacklist"]):
+        # Explicit low-review disclosure or blacklisted company name (zero synthetic portal/rating fabrication)
+        explicit_low_reviews_m = re.search(r"\b([0-2])\s+reviews?\b", lower_text)
+        explicit_bad_name = any(w in lower_name for w in ("noreview", "blacklist"))
+        if explicit_low_reviews_m or explicit_bad_name:
+            reported_count = int(explicit_low_reviews_m.group(1)) if explicit_low_reviews_m else 0
             return CompanyValidation(
                 company_name=clean_name,
                 reputation="BLACKLISTED",
-                review_count=1,
-                reviews_count=1,
-                rating=2.5,
+                review_count=reported_count,
+                reviews_count=reported_count,
+                rating=None,
                 is_blacklisted=True,
                 passed_gate=False,
-                portals_checked=["Glassdoor", "Jobs.ge / HR.ge", "DOU.ua"],
+                portals_checked=[],
                 source_urls=[],
                 retrieved_at=now_iso,
                 verification_status="flagged_low_reviews",
-                verdict=f"⚠️ Blocked: {clean_name} has fewer than 3 verified reviews on job portals.",
+                verdict=f"⚠️ Blocked: {clean_name} indicates fewer than 3 public employee reviews ({reported_count}).",
                 pros=[],
-                cons=["Fewer than 3 public employee reviews", "Unverified work culture"]
+                cons=["Fewer than 3 public employee reviews", "Unverified employer reputation"]
             )
 
         # Match curated known reputable employers (labeled transparently as curated directory)

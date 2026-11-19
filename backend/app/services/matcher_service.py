@@ -1,10 +1,73 @@
 import json
 import logging
 import re
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, Iterable, List, Optional, Tuple
 from .gemini_service import MULTI_INDUSTRY_SKILLS, gemini_service
 
 logger = logging.getLogger(__name__)
+
+SKILL_MATCH_ALIASES: Dict[str, set[str]] = {
+    "js": {"javascript", "js"},
+    "javascript": {"javascript", "js"},
+    "ts": {"typescript", "ts"},
+    "typescript": {"typescript", "ts"},
+    "k8s": {"kubernetes", "k8s"},
+    "kubernetes": {"kubernetes", "k8s"},
+    "postgres": {"postgresql", "postgres"},
+    "postgresql": {"postgresql", "postgres"},
+    "rest api": {"rest api", "restful api", "restful apis", "rest apis"},
+    "restful api": {"rest api", "restful api", "restful apis", "rest apis"},
+    "ci/cd": {"ci/cd", "cicd", "continuous integration"},
+    "gitlab ci": {"gitlab ci", "gitlab"},
+    "github actions": {"github actions"},
+    "selenium webdriver": {"selenium webdriver", "selenium"},
+    "selenium": {"selenium", "selenium webdriver"},
+    "py": {"python", "py"},
+    "python": {"python", "py"},
+    "golang": {"go", "golang"},
+    "go": {"go", "golang"},
+    "csharp": {"c#", "csharp"},
+    "c#": {"c#", "csharp"},
+}
+
+
+def _contains_skill_token(haystack: str, term: str) -> bool:
+    if not haystack or not term:
+        return False
+    pattern = r"(?<![A-Za-z0-9_])" + re.escape(term) + r"(?![A-Za-z0-9_])"
+    return bool(re.search(pattern, haystack, re.IGNORECASE))
+
+
+def skills_match_token(
+    req_skill: str,
+    candidate_skills: Iterable[str],
+    cand_blob: str = "",
+) -> bool:
+    """Word/token-boundary and alias-aware skill matcher preventing accidental substring hits."""
+    req_clean = (req_skill or "").strip().lower()
+    if not req_clean:
+        return False
+    req_variants = SKILL_MATCH_ALIASES.get(req_clean, {req_clean})
+    cand_norm: set[str] = set()
+    for raw_c in (candidate_skills or []):
+        cl = str(raw_c or "").strip().lower()
+        if not cl:
+            continue
+        cand_norm.add(cl)
+        cand_norm.update(SKILL_MATCH_ALIASES.get(cl, ()))
+    if any(rv in cand_norm for rv in req_variants):
+        return True
+    for cl in cand_norm:
+        if any(_contains_skill_token(cl, rv) for rv in req_variants if len(rv) >= 2):
+            return True
+    if cand_blob:
+        blob_low = cand_blob.lower()
+        for rv in req_variants:
+            if len(rv) == 1 and rv not in ("r", "c"):
+                continue
+            if _contains_skill_token(blob_low, rv):
+                return True
+    return False
 
 QA_TAXONOMY_CATALOG: Dict[str, List[str]] = {
     "qa_automation": [
@@ -321,13 +384,8 @@ Markdown:
 
         for category, items in QA_TAXONOMY_CATALOG.items():
             for skill in items:
-                if skill == "Selenium WebDriver":
-                    continue
-                pattern = r"\b" + re.escape(skill.lower()) + r"\b"
-                if skill.lower() in ("c#", "k6"):
-                    if skill.lower() in combined and skill not in required:
-                        required.append(skill)
-                elif re.search(pattern, combined) and skill not in required:
+                pattern = r"(?<![A-Za-z0-9_])" + re.escape(skill.lower()) + r"(?![A-Za-z0-9_])"
+                if re.search(pattern, combined) and skill not in required:
                     required.append(skill)
 
         for spec in self.SPECIALIZED_PLATFORMS:
@@ -721,7 +779,7 @@ Markdown:
                 is_matched = True
             elif rl == "manual testing" and has_manual_stack:
                 is_matched = True
-            elif rl in cand_lower or rl in cand_blob or any(rl in c or c in rl for c in cand_lower):
+            elif skills_match_token(req, candidate_skills, cand_blob):
                 is_matched = True
 
             if is_matched:

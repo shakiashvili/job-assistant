@@ -132,9 +132,18 @@ GEORGIAN_SKILL_TRANSLATIONS = {
 
 
 class GeminiService:
-    # Gemini 3.x Flash published reference pricing per 1M tokens (USD) when token counts are returned.
+    # Published reference pricing per 1M tokens (USD) by model family when token counts are returned.
     _INPUT_COST_PER_1M = 0.30
     _OUTPUT_COST_PER_1M = 2.50
+    _MODEL_PRICING_PER_1M = {
+        "gemini-3.6-flash": (0.30, 2.50),
+        "gemini-3-flash": (0.30, 2.50),
+        "gemini-3.5-flash-lite": (0.10, 0.40),
+        "gemini-2.5-flash-lite": (0.10, 0.40),
+        "gemini-2.5-flash": (0.30, 2.50),
+        "gemini-3-pro": (1.25, 10.00),
+        "gemini-2.5-pro": (1.25, 10.00),
+    }
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.api_key = api_key or GEMINI_API_KEY or os.getenv("GEMINI_API_KEY", "")
@@ -187,17 +196,40 @@ class GeminiService:
         response_mime_type: str,
         user_id: Optional[int] = None,
         system_instruction: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_output_tokens: Optional[int] = None,
+        schema_tag: Optional[str] = None,
     ) -> str:
         normalized = re.sub(r"\s+", " ", (prompt or "").strip())
         # Strip volatile per-call nonce suffixes so genuine cache hits still match while scoping by tenant
         normalized = re.sub(r"((?:job_posting|job_requirements|candidate_skills))_[0-9a-f]{12}", r"\1", normalized)
         user_scope = f"u:{user_id}" if user_id is not None else "global"
         sys_norm = re.sub(r"\s+", " ", (system_instruction or "").strip())
-        digest_input = f"{user_scope}|{task_type}|{model_name}|{response_mime_type}|{sys_norm}|{normalized}"
+        temp_part = f"t:{temperature}" if temperature is not None else "t:default"
+        max_tok_part = f"max:{max_output_tokens}" if max_output_tokens is not None else "max:default"
+        schema_part = f"sch:{schema_tag}" if schema_tag else "sch:raw"
+        digest_input = (
+            f"{user_scope}|{task_type}|{model_name}|{temp_part}|{max_tok_part}|"
+            f"{schema_part}|{response_mime_type}|{sys_norm}|{normalized}"
+        )
         return hashlib.sha256(digest_input.encode("utf-8")).hexdigest()
 
+    @classmethod
+    def _resolve_pricing(cls, model_name: str) -> tuple[float, float]:
+        low = (model_name or "").lower()
+        for prefix, rates in cls._MODEL_PRICING_PER_1M.items():
+            if prefix in low:
+                return rates
+        if "flash-lite" in low:
+            return (0.10, 0.40)
+        if "pro" in low:
+            return (1.25, 10.00)
+        return (cls._INPUT_COST_PER_1M, cls._OUTPUT_COST_PER_1M)
+
     @staticmethod
-    def _extract_usage(response: Any) -> tuple[Optional[int], Optional[int], Optional[int], Optional[float]]:
+    def _extract_usage(
+        response: Any, model_name: str = ""
+    ) -> tuple[Optional[int], Optional[int], Optional[int], Optional[float]]:
         um = getattr(response, "usage_metadata", None)
         if not um:
             return None, None, None, None
@@ -206,9 +238,10 @@ class GeminiService:
         tt = getattr(um, "total_token_count", None)
         cost: Optional[float] = None
         if pt is not None or ot is not None:
+            in_rate, out_rate = GeminiService._resolve_pricing(model_name)
             cost = round(
-                (float(pt or 0) / 1_000_000.0) * GeminiService._INPUT_COST_PER_1M
-                + (float(ot or 0) / 1_000_000.0) * GeminiService._OUTPUT_COST_PER_1M,
+                (float(pt or 0) / 1_000_000.0) * in_rate
+                + (float(ot or 0) / 1_000_000.0) * out_rate,
                 6,
             )
         return pt, ot, tt, cost
@@ -351,9 +384,9 @@ class GeminiService:
             cfg["temperature"] = temperature
         if system_instruction:
             cfg["system_instruction"] = system_instruction
-        if response_mime_type:
+        if response_mime_type and not tools:
             cfg["response_mime_type"] = response_mime_type
-        if response_schema is not None:
+        if response_schema is not None and not tools:
             cfg["response_schema"] = response_schema
         if tools:
             cfg["tools"] = tools
@@ -406,7 +439,7 @@ class GeminiService:
             )
             return None
 
-        can_cache = use_cache and ttl_seconds > 0 and response_schema is None and not tools
+        can_cache = use_cache and ttl_seconds > 0 and not tools
         cache_key = (
             self._build_cache_key(
                 task_type,
@@ -415,6 +448,9 @@ class GeminiService:
                 response_mime_type,
                 user_id=user_id,
                 system_instruction=system_instruction,
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+                schema_tag=getattr(response_schema, "__name__", None),
             )
             if can_cache
             else ""
@@ -448,7 +484,7 @@ class GeminiService:
                 system_instruction=system_instruction,
             )
             text_out = getattr(resp, "text", None)
-            pt, ot, tt, cost = self._extract_usage(resp)
+            pt, ot, tt, cost = self._extract_usage(resp, target_model)
             retries = getattr(resp, "_tf_retry_count", 0)
             self._log_operation(
                 task_type=task_type,
@@ -502,6 +538,7 @@ class GeminiService:
         temperature: float = 0.1,
         response_schema=None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        max_output_tokens: Optional[int] = None,
         system_instruction: Optional[str] = None,
         use_cache: bool = True,
         ttl_seconds: int = 3600,
@@ -525,11 +562,14 @@ class GeminiService:
                 task_type,
                 target_model,
                 prompt,
-                f"{mime}:{getattr(response_schema, '__name__', 'raw')}",
+                mime,
                 user_id=user_id,
                 system_instruction=system_instruction,
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+                schema_tag=getattr(response_schema, "__name__", None),
             )
-            if (use_cache and ttl_seconds > 0)
+            if (use_cache and ttl_seconds > 0 and not tools)
             else ""
         )
         if cache_key:
@@ -576,12 +616,13 @@ class GeminiService:
                 temperature=temperature,
                 response_schema=response_schema,
                 model_name=target_model,
-                response_mime_type=mime or "application/json",
+                response_mime_type=mime,
                 tools=tools,
+                max_output_tokens=max_output_tokens,
                 system_instruction=system_instruction,
             )
             raw_text = getattr(resp, "text", None) or ""
-            pt, ot, tt, cost = self._extract_usage(resp)
+            pt, ot, tt, cost = self._extract_usage(resp, target_model)
             retries = getattr(resp, "_tf_retry_count", 0)
 
             parsed_val: Any = None
@@ -1119,8 +1160,14 @@ Questions JSON:
 
 Return STRICT JSON: {{"answers": [{{"index": 0, "answer": "..."}}]}}"""
 
-            resp = self._call_gemini_with_retry(prompt, system_instruction=sys_inst)
-            parsed = safe_parse_json(resp.text) if resp and resp.text else None
+            parsed = self.generate_json(
+                prompt,
+                task_type="grounded_answers",
+                model_tier="fast",
+                temperature=0.1,
+                system_instruction=sys_inst,
+                ttl_seconds=1800,
+            )
             if parsed and isinstance(parsed.get("answers"), list):
                 by_idx = {
                     int(item["index"]): str(item["answer"]).strip()

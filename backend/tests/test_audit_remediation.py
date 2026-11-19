@@ -281,3 +281,178 @@ def test_crit_06_and_07_zero_fabrication_cv_narratives_and_playwright(monkeypatc
 
     ka_out = gemini_service.translate_bullets_to_georgian(["Prepared croissant dough daily."])
     assert ka_out == ["Prepared croissant dough daily."]
+
+
+def test_high_02_03_04_cookie_refresh_ssrf_redirects_and_otp_safety(monkeypatch):
+    import asyncio
+    import socket
+    from app.db.models import UserOTP, utc_now
+    from datetime import timedelta
+    from app.services import link_validator
+    from app.services.audit_service import validate_safe_external_url
+    from app.services.crypto_service import blind_index
+
+    # HIGH-02: HttpOnly refresh cookie flow & /logout
+    email, _ = _register_headers("cookie_user")
+    login_res = client.post(
+        "/api/auth/login",
+        json={"email": email, "password": "StrongPassword123!"},
+    )
+    assert login_res.status_code == 200
+    assert "talentflow_refresh_token" in login_res.cookies
+
+    cookie_refresh = client.post("/api/auth/refresh", json={})
+    assert cookie_refresh.status_code == 200
+    assert cookie_refresh.json()["access_token"]
+
+    logout_res = client.post("/api/auth/logout")
+    assert logout_res.status_code == 200
+
+    # HIGH-03: DNS failure fails closed when require_dns=True & localhost bypass removed from link_validator
+    def _fail_dns(*args, **kwargs):
+        raise socket.gaierror("Name or service not known")
+
+    monkeypatch.setattr(socket, "getaddrinfo", _fail_dns)
+    try:
+        validate_safe_external_url("https://nonexistent.invalid/job", require_dns=True)
+        dns_blocked = False
+    except ValueError as err:
+        dns_blocked = "SSRF Protection" in str(err)
+    assert dns_blocked is True
+
+    ok_local, _, _ = asyncio.run(link_validator.fetch_and_validate_live_vacancy("http://localhost:8000/api/health"))
+    assert ok_local is False
+
+    # HIGH-04: OTP single-use atomic consume, pre-commit is_active check, and subject contains no OTP code
+    captured_subjects = []
+    monkeypatch.setattr(
+        "app.services.gmail_service.get_smtp_config",
+        lambda: {"configured": True, "user": "bot@example.com", "password": "app-password"},
+    )
+
+    from app.services.gmail_service import gmail_service as _gs
+    orig_send = _gs.send_email_smtp
+    try:
+        def _cap_send(to_email: str, subject: str, body_text: str, **kw):
+            captured_subjects.append(subject)
+            return True, "ok"
+        monkeypatch.setattr(_gs, "send_email_smtp", _cap_send)
+        _gs.send_otp_email("alice@example.com", "654321")
+        assert captured_subjects and "654321" not in captured_subjects[0]
+    finally:
+        monkeypatch.setattr(_gs, "send_email_smtp", orig_send)
+
+    with Session(engine) as session:
+        u = get_user_by_email(session, email)
+        assert u is not None
+        u.is_active = False
+        session.add(u)
+        otp_row = UserOTP(
+            email=email,
+            email_hash=blind_index(email),
+            otp_code="778899",
+            expires_at=utc_now() + timedelta(minutes=10),
+            is_used=False,
+        )
+        session.add(otp_row)
+        session.commit()
+        otp_id = otp_row.id
+
+    inactive_res = client.post("/api/auth/verify-otp", json={"email": email, "otp_code": "778899"})
+    assert inactive_res.status_code == 403
+    with Session(engine) as session:
+        check_otp = session.get(UserOTP, otp_id)
+        assert check_otp is not None and check_otp.is_used is False
+        u = get_user_by_email(session, email)
+        u.is_active = True
+        session.add(u)
+        session.commit()
+
+    first_ok = client.post("/api/auth/verify-otp", json={"email": email, "otp_code": "778899"})
+    assert first_ok.status_code == 200
+    replay = client.post("/api/auth/verify-otp", json={"email": email, "otp_code": "778899"})
+    assert replay.status_code == 400
+
+
+def test_high_05_06_09_11_12_14_backup_extension_cache_matching_and_uploads(tmp_path):
+    import asyncio
+    import io
+    from starlette.datastructures import UploadFile
+    from fastapi import HTTPException
+    from app.routers.extension import _match_select_option
+    from app.services.backup_service import backup_service
+    from app.services.company_validator import company_validator
+    from app.services.matcher_service import matcher_service, skills_match_token
+    from app.services.upload_utils import read_upload_bounded
+
+    # HIGH-05: Backup containment, required .meta.json, SHA-256 verification, and portable JSON backup
+    b_meta = backup_service.create_backup(target_dir=tmp_path, reason="high05_test", portable_json=True)
+    b_file = Path(b_meta["backup_path"])
+    assert b_file.exists() and b_file.with_suffix(".meta.json").exists()
+
+    outside = tmp_path.parent / "evil_outside.sqlite3"
+    outside.write_bytes(b"SQLite format 3\x00")
+    try:
+        try:
+            backup_service.restore_backup(outside, allowed_dir=tmp_path)
+            assert False, "Should block outside path"
+        except ValueError:
+            pass
+    finally:
+        if outside.exists():
+            outside.unlink()
+
+    # Corrupt SHA-256 detection
+    b_file.write_text('{"tampered": true}', encoding="utf-8")
+    try:
+        backup_service.restore_backup(b_file, allowed_dir=tmp_path)
+        assert False, "Should reject SHA-256 mismatch"
+    except ValueError as err:
+        assert "checksum" in str(err).lower()
+
+    # Missing .meta.json detection
+    b_file.with_suffix(".meta.json").unlink()
+    try:
+        backup_service.restore_backup(b_file, allowed_dir=tmp_path)
+        assert False, "Should reject missing .meta.json"
+    except ValueError as err:
+        assert "meta" in str(err).lower()
+
+    # HIGH-06: Select option matcher fails closed to "" instead of options[0]
+    assert _match_select_option("Relocation required", ["Yes", "No"]) == ""
+
+    # HIGH-09: Cache keys differentiate temperature, max_output_tokens, and schema + Lite pricing
+    k1 = gemini_service._build_cache_key("t", "gemini-3.6-flash", "prompt", "application/json", temperature=0.0, max_output_tokens=200)
+    k2 = gemini_service._build_cache_key("t", "gemini-3.6-flash", "prompt", "application/json", temperature=0.7, max_output_tokens=200)
+    k3 = gemini_service._build_cache_key("t", "gemini-3.6-flash", "prompt", "application/json", temperature=0.0, max_output_tokens=800)
+    assert len({k1, k2, k3}) == 3
+    assert gemini_service._resolve_pricing("gemini-3.5-flash-lite") == (0.10, 0.40)
+
+    # HIGH-11: Word/token boundary matching eliminates substring false positives & restores Selenium WebDriver
+    assert skills_match_token("Go", ["Django", "MongoDB"], "Built REST backends with Django and MongoDB") is False
+    assert skills_match_token("C", ["React"], "Frontend React engineer") is False
+    assert skills_match_token("Kubernetes", ["K8s"]) is True
+    assert skills_match_token("JavaScript", ["JS"]) is True
+    reqs = matcher_service.extract_job_requirements("QA Engineer", "Experience with Selenium WebDriver and PyTest")
+    assert "Selenium WebDriver" in reqs
+
+    # HIGH-12: Stealth/unverified words never fabricate blacklist or fake 2.5 rating
+    stealth_res = company_validator.validate_company("Stealth Health Tech", "Building an unverified internal prototype platform")
+    assert stealth_res.is_blacklisted is False
+    assert stealth_res.rating is None
+    assert stealth_res.verification_status == "unverified"
+    assert "Glassdoor" not in stealth_res.portals_checked
+
+    low_rev = company_validator.validate_company("TinyCo (1 review)", "Startup with 1 review")
+    assert low_rev.passed_gate is False
+    assert low_rev.rating is None
+    assert low_rev.portals_checked == []
+
+    # HIGH-14: Streaming chunked reader rejects > max_bytes with 413
+    oversized = UploadFile(filename="huge.pdf", file=io.BytesIO(b"x" * 2048))
+    try:
+        asyncio.run(read_upload_bounded(oversized, max_bytes=1024, chunk_size=256))
+        assert False, "Expected HTTP 413"
+    except HTTPException as exc:
+        assert exc.status_code == 413
+

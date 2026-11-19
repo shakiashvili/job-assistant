@@ -1,5 +1,5 @@
 const DEFAULT_API_BASE = "http://localhost:8000";
-const REQUEST_TIMEOUT_MS = 15000;
+const REQUEST_TIMEOUT_MS = 45000;
 
 // Configure Chrome Side Panel to dock beside web pages (LinkedIn Easy Apply, Workday, etc.)
 if (chrome.sidePanel && typeof chrome.sidePanel.setPanelBehavior === "function") {
@@ -22,9 +22,10 @@ if (chrome.action && chrome.action.onClicked) {
 
 async function getConfig() {
   const [syncData, localData] = await Promise.all([
-    chrome.storage.sync.get(["apiBaseUrl"]),
+    chrome.storage.sync.get(["apiBaseUrl", "webAppUrl"]),
     chrome.storage.local.get([
       "apiBaseUrl",
+      "webAppUrl",
       "jwtToken",
       "refreshToken",
       "userEmail",
@@ -33,8 +34,10 @@ async function getConfig() {
     ]),
   ]);
   const rawUrl = syncData.apiBaseUrl || localData.apiBaseUrl || DEFAULT_API_BASE;
+  const rawWebUrl = syncData.webAppUrl || localData.webAppUrl || "";
   return {
     apiBaseUrl: rawUrl.replace(/\/+$/, ""),
+    webAppUrl: rawWebUrl.replace(/\/+$/, ""),
     jwtToken: localData.jwtToken || "",
     refreshToken: localData.refreshToken || "",
     userEmail: localData.userEmail || "",
@@ -176,7 +179,7 @@ async function fetchPdfBase64(pdfUrl) {
     return { ok: true, base64, filename, fullUrl, mimeType: "application/pdf" };
   } catch (err) {
     if (err?.name === "AbortError") {
-      return { ok: false, error: "PDF download timed out after 15s. Please try again." };
+      return { ok: false, error: `PDF download timed out after ${REQUEST_TIMEOUT_MS / 1000}s. Please try again.` };
     }
     return { ok: false, error: `PDF fetch error: ${err.message}` };
   }
@@ -400,21 +403,33 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (type === "SYNC_FROM_OPEN_WEB_TAB") {
     (async () => {
       try {
+        const cfg = await getConfig();
+        const allowedOrigins = new Set([
+          "http://localhost:5173",
+          "http://127.0.0.1:5173",
+          "http://localhost:3000",
+          "http://127.0.0.1:3000",
+        ]);
+        for (const candidateUrl of [cfg.webAppUrl, cfg.apiBaseUrl]) {
+          if (candidateUrl) {
+            try {
+              allowedOrigins.add(new URL(candidateUrl).origin);
+            } catch (_err) {}
+          }
+        }
         const tabs = await chrome.tabs.query({});
-        const webTab = tabs.find(
-          (t) =>
-            t.url &&
-            (t.url.startsWith("http://localhost:5173") ||
-              t.url.startsWith("http://127.0.0.1:5173") ||
-              t.url.includes("talentflow") ||
-              t.url.includes("vercel.app") ||
-              t.url.includes("pages.dev") ||
-              t.url.includes("onrender.com"))
-        );
+        const webTab = tabs.find((t) => {
+          if (!t.url) return false;
+          try {
+            return allowedOrigins.has(new URL(t.url).origin);
+          } catch (_err) {
+            return false;
+          }
+        });
         if (!webTab || !webTab.id) {
           sendResponse({
             ok: false,
-            error: "Open the TalentFlow Web Portal (http://localhost:5173) in a tab first, or sign in with email & password.",
+            error: "Open the TalentFlow Web Portal in a configured origin tab first, or sign in with email & password.",
           });
           return;
         }
@@ -422,7 +437,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           target: { tabId: webTab.id },
           func: () => ({
             token: localStorage.getItem("talentflow_token") || "",
-            refreshToken: localStorage.getItem("talentflow_refresh_token") || "",
             userRaw: localStorage.getItem("talentflow_user") || "",
           }),
         });
@@ -440,7 +454,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         } catch (_e) {}
         await chrome.storage.local.set({
           jwtToken: extracted.token,
-          refreshToken: extracted.refreshToken || "",
           userEmail: parsedUser.email || "",
           userName: parsedUser.full_name || "",
         });

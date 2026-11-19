@@ -446,12 +446,23 @@ class ScraperOrchestrator:
                         "company": company,
                         "reason": rej_msg,
                     })
-                    if existing and existing.status not in ("APPLIED", "REJECTED"):
-                        delete_job_posting_cascade(session, existing)
-                        if url and url in by_url:
-                            by_url.pop(url, None)
-                        if ext_id and (portal, ext_id) in by_portal_ext:
-                            by_portal_ext.pop((portal, ext_id), None)
+                    if existing:
+                        if is_expired:
+                            existing.is_expired = True
+                            existing.status = "FILTERED_OUT"
+                            existing.filter_out_reason = rej_msg
+                            session.add(existing)
+                        elif (
+                            existing.user_id is not None
+                            and resolved_uid is not None
+                            and existing.user_id == resolved_uid
+                            and existing.status not in ("APPLIED", "REJECTED")
+                        ):
+                            delete_job_posting_cascade(session, existing)
+                            if url and url in by_url:
+                                by_url.pop(url, None)
+                            if ext_id and (portal, ext_id) in by_portal_ext:
+                                by_portal_ext.pop((portal, ext_id), None)
                     continue
                 elif final_status == "STAGED":
                     staged_count += 1

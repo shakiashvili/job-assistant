@@ -501,7 +501,7 @@ class GmailService:
                 "error": "Gmail SMTP credentials (GMAIL_USER & GMAIL_APP_PASSWORD) are not configured in backend/.env.",
             }
 
-        subject = f"Your TalentFlow AI Verification Code: {code}"
+        subject = "Your TalentFlow AI Sign-In Verification Code"
         body_text = (
             f"Hello,\n\n"
             f"Your 6-digit verification code for TalentFlow AI is:\n\n"

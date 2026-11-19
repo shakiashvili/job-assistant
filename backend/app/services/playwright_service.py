@@ -101,7 +101,7 @@ class PlaywrightStagerService:
 
         portal_type = detect_portal_from_url(job_url)
         try:
-            validate_safe_external_url(job_url)
+            validate_safe_external_url(job_url, require_dns=ENABLE_PLAYWRIGHT)
         except ValueError as ssrf_err:
             raise ValueError(str(ssrf_err)) from ssrf_err
 

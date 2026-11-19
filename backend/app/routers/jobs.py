@@ -30,6 +30,7 @@ from ..services.scrapers.scraper_orchestrator import scraper_orchestrator
 from ..services.scrapers.base_scraper import sanitize_company_name, classify_georgia_b2b_suitability
 from ..services.salary_service import salary_service
 from ..services.backup_service import backup_service
+from ..services.upload_utils import read_upload_bounded
 from .ground_truth import _purge_stale_unapplied_jobs, MAX_UPLOAD_SIZE_BYTES, record_candidate_document
 from ..config import GENERATED_RESUMES_DIR
 
@@ -80,11 +81,9 @@ async def upload_skills_profile(
     filename = "skills.md"
     if file is not None:
         filename = file.filename or "skills.md"
-        raw_bytes = await file.read()
+        raw_bytes = await read_upload_bounded(file, MAX_UPLOAD_SIZE_BYTES)
         if len(raw_bytes) == 0:
             raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-        if len(raw_bytes) > MAX_UPLOAD_SIZE_BYTES:
-            raise HTTPException(status_code=413, detail="Uploaded file exceeds 10 MB maximum size limit.")
         try:
             md_text = cv_parser_service.extract_text_from_bytes(raw_bytes, filename=filename)
         except ValueError as parse_err:
@@ -385,7 +384,7 @@ async def list_scraped_jobs(
         status_col = func.coalesce(UserJobMatch.status, JobPosting.status) if use_user_matches else JobPosting.status
         tier_col = func.coalesce(UserJobMatch.match_tier, JobPosting.match_tier) if use_user_matches else JobPosting.match_tier
 
-        base_conds = []
+        base_conds = [JobPosting.is_expired == False]
         if not include_filtered:
             base_conds.append(status_col != "FILTERED_OUT")
         if portal and portal.upper() != "ALL":
@@ -866,7 +865,10 @@ def list_database_backups(current_user: User = Depends(get_current_admin)):
 
 
 @router.post("/salary/estimate")
-def estimate_job_salary(req: SalaryEstimateRequest):
+def estimate_job_salary(
+    req: SalaryEstimateRequest,
+    current_user: User = Depends(get_current_user),
+):
     """Estimates or extracts salary range without asking the user for input."""
     return salary_service.estimate_salary(
         title=req.title,

@@ -141,7 +141,7 @@ class DjinniScraper(BasePortalScraper):
         """Fetches the live Djinni detail page for deep skill/language/salary/location inspection."""
         html = await self.fetch_html(item["url"], timeout=8.0)
         if not html:
-            return item
+            return None
 
         soup = self.make_soup(html)
         desc_el = soup.select_one("div.job-post__description, main, article")

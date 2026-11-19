@@ -32,9 +32,8 @@ function saveAuthTokens(data: AuthResponse): void {
   if (data.access_token) {
     localStorage.setItem(ACCESS_TOKEN_KEY, data.access_token);
   }
-  if (data.refresh_token) {
-    localStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token);
-  }
+  // Web refresh tokens are held in HttpOnly cookies set by /api/auth/*; never persist them in localStorage
+  localStorage.removeItem(REFRESH_TOKEN_KEY);
 }
 
 export function getAuthHeaders(): HeadersInit {
@@ -51,15 +50,15 @@ let inFlightRefresh: Promise<boolean> | null = null;
 export async function refreshAccessToken(): Promise<boolean> {
   if (inFlightRefresh) return inFlightRefresh;
 
-  const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
-  if (!refreshToken) return false;
+  const legacyRefreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
 
   inFlightRefresh = (async () => {
     try {
       const res = await fetch(`${API_BASE}/auth/refresh`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: refreshToken }),
+        body: legacyRefreshToken ? JSON.stringify({ refresh_token: legacyRefreshToken }) : '{}',
       });
       if (!res.ok) return false;
       const data: AuthResponse = await res.json();
@@ -622,6 +621,7 @@ export async function createApplicationCalendarEvent(
 export async function loginUser(email: string, password: string): Promise<AuthResponse> {
   const res = await fetch(`${API_BASE}/auth/login`, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),
   });
@@ -637,6 +637,7 @@ export async function loginUser(email: string, password: string): Promise<AuthRe
 export async function registerUser(email: string, password: string, full_name: string): Promise<AuthResponse> {
   const res = await fetch(`${API_BASE}/auth/register`, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password, full_name }),
   });
@@ -665,6 +666,7 @@ export async function sendOtp(email: string): Promise<{ status: string; delivere
 export async function verifyOtp(email: string, otp_code: string): Promise<AuthResponse> {
   const res = await fetch(`${API_BASE}/auth/verify-otp`, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, otp_code }),
   });
@@ -714,6 +716,10 @@ export async function fetchCurrentUser(): Promise<UserProfile> {
 export function logoutUser(): void {
   localStorage.removeItem(ACCESS_TOKEN_KEY);
   localStorage.removeItem(REFRESH_TOKEN_KEY);
+  fetch(`${API_BASE}/auth/logout`, {
+    method: 'POST',
+    credentials: 'include',
+  }).catch(() => {});
 }
 
 // --- Dedicated Admin API ---

@@ -4,9 +4,10 @@ import secrets
 from datetime import timedelta, timezone
 from pathlib import Path
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import update
 from sqlmodel import Session, select
 
 from ..config import BASE_DIR, reload_env_files, get_smtp_config, IS_PRODUCTION
@@ -80,7 +81,7 @@ class UserOut(BaseModel):
 
 
 class RefreshTokenRequest(BaseModel):
-    refresh_token: str = Field(..., min_length=10, description="Valid refresh token for sliding session renewal")
+    refresh_token: Optional[str] = Field(default=None, description="Valid refresh token for sliding session renewal")
 
 
 class AuthResponse(BaseModel):
@@ -90,12 +91,43 @@ class AuthResponse(BaseModel):
     user: UserOut
 
 
-def _build_auth_response(user: User) -> AuthResponse:
+_REFRESH_COOKIE_NAME = "talentflow_refresh_token"
+_REFRESH_COOKIE_MAX_AGE = 14 * 24 * 3600
+
+
+def _set_refresh_cookie(response: Response, refresh_token: Optional[str]) -> None:
+    if not refresh_token:
+        return
+    response.set_cookie(
+        key=_REFRESH_COOKIE_NAME,
+        value=refresh_token,
+        httponly=True,
+        secure=IS_PRODUCTION,
+        samesite="lax",
+        path="/api/auth",
+        max_age=_REFRESH_COOKIE_MAX_AGE,
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=_REFRESH_COOKIE_NAME,
+        httponly=True,
+        secure=IS_PRODUCTION,
+        samesite="lax",
+        path="/api/auth",
+    )
+
+
+def _build_auth_response(user: User, response: Optional[Response] = None) -> AuthResponse:
     """Issues a fresh Access Token (60m) and Refresh Token (14d) for an authenticated user."""
     claims = {"sub": user.email, "is_admin": user.is_admin, "user_id": user.id}
+    refresh_tok = create_refresh_token(claims)
+    if response is not None:
+        _set_refresh_cookie(response, refresh_tok)
     return AuthResponse(
         access_token=create_access_token(claims),
-        refresh_token=create_refresh_token(claims),
+        refresh_token=refresh_tok,
         token_type="bearer",
         user=UserOut(
             id=user.id,
@@ -140,7 +172,7 @@ def _sync_profile_owner_on_auth(session: Session, clean_email: str, force_reset:
 
 
 @router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
-def register_user(req: RegisterRequest, session: Session = Depends(get_session)):
+def register_user(req: RegisterRequest, response: Response, session: Session = Depends(get_session)):
     clean_email = sanitize_email(req.email)
 
     existing = get_user_by_email(session, clean_email)
@@ -178,11 +210,11 @@ def register_user(req: RegisterRequest, session: Session = Depends(get_session))
     session.refresh(user)
 
     _sync_profile_owner_on_auth(session, clean_email, force_reset=True)
-    return _build_auth_response(user)
+    return _build_auth_response(user, response=response)
 
 
 @router.post("/login", response_model=AuthResponse)
-def login_user(req: LoginRequest, session: Session = Depends(get_session)):
+def login_user(req: LoginRequest, response: Response, session: Session = Depends(get_session)):
     clean_email = sanitize_email(req.email)
     check_rate_limit(clean_email)
 
@@ -204,7 +236,7 @@ def login_user(req: LoginRequest, session: Session = Depends(get_session)):
 
     reset_login_attempts(clean_email)
     _sync_profile_owner_on_auth(session, clean_email, force_reset=False)
-    return _build_auth_response(user)
+    return _build_auth_response(user, response=response)
 
 
 @router.get("/smtp-status")
@@ -374,7 +406,7 @@ def send_otp_code(
 
 
 @router.post("/verify-otp", response_model=AuthResponse)
-def verify_otp_code(req: VerifyOTPRequest, session: Session = Depends(get_session)):
+def verify_otp_code(req: VerifyOTPRequest, response: Response, session: Session = Depends(get_session)):
     """
     Verifies the 6-digit OTP code with strict brute-force rate limiting and returns signed JWT tokens.
     Automatically creates a candidate User record if signing in for the first time.
@@ -410,14 +442,28 @@ def verify_otp_code(req: VerifyOTPRequest, session: Session = Depends(get_sessio
             detail="Invalid or expired verification code. Please request a new OTP.",
         )
 
+    user = get_user_by_email(session, clean_email)
+    if user and not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account has been deactivated. Please contact an administrator.",
+        )
+
+    consume_res = session.exec(
+        update(UserOTP)
+        .where(UserOTP.id == otp_record.id, UserOTP.is_used == False)
+        .values(is_used=True)
+    )
+    if (consume_res.rowcount or 0) != 1:
+        session.rollback()
+        record_login_failure(otp_key)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired verification code. Please request a new OTP.",
+        )
+
     reset_login_attempts(otp_key)
 
-    # Mark OTP as consumed
-    otp_record.is_used = True
-    session.add(otp_record)
-
-    # Find or auto-provision user
-    user = get_user_by_email(session, clean_email)
     if not user:
         candidate_name = clean_email.split("@")[0].replace(".", " ").title()
         user = User(
@@ -432,24 +478,33 @@ def verify_otp_code(req: VerifyOTPRequest, session: Session = Depends(get_sessio
     session.commit()
     session.refresh(user)
 
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="This account has been deactivated. Please contact an administrator.",
-        )
-
     reset_login_attempts(clean_email)
     _sync_profile_owner_on_auth(session, clean_email, force_reset=False)
-    return _build_auth_response(user)
+    return _build_auth_response(user, response=response)
 
 
 @router.post("/refresh", response_model=AuthResponse)
-def refresh_session(req: RefreshTokenRequest, session: Session = Depends(get_session)):
+def refresh_session(
+    request: Request,
+    response: Response,
+    req: Optional[RefreshTokenRequest] = Body(default=None),
+    session: Session = Depends(get_session),
+):
     """
-    Exchanges a valid Refresh Token (14 days) for a fresh Access Token (60 mins)
-    and a rotated sliding Refresh Token so active users stay signed in seamlessly.
+    Exchanges a valid Refresh Token (14 days, from body or HttpOnly cookie) for a fresh
+    Access Token (60 mins) and rotated sliding Refresh Token.
     """
-    payload = decode_refresh_token(req.refresh_token.strip())
+    raw_refresh = (req.refresh_token.strip() if req and req.refresh_token else "") or (
+        request.cookies.get(_REFRESH_COOKIE_NAME) or ""
+    ).strip()
+    if len(raw_refresh) < 10:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired refresh token. Please sign in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    payload = decode_refresh_token(raw_refresh)
     if not payload:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -478,7 +533,14 @@ def refresh_session(req: RefreshTokenRequest, session: Session = Depends(get_ses
             detail="Account is inactive or disabled by admin.",
         )
 
-    return _build_auth_response(user)
+    return _build_auth_response(user, response=response)
+
+
+@router.post("/logout")
+def logout_session(response: Response):
+    """Clears the HttpOnly refresh cookie."""
+    _clear_refresh_cookie(response)
+    return {"status": "ok"}
 
 
 @router.get("/me", response_model=UserOut)

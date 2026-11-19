@@ -188,6 +188,26 @@ def clean_bullets(highlights: Optional[List[Any]]) -> List[str]:
     return result
 
 
+def _format_pdf_mixed_script(text: str, base_font: str, georgian_font: str) -> str:
+    """
+    XML-escapes text and switches font runs inline so Georgian glyphs (Mkhedruli) always
+    render in georgian_font even inside English CVs (and Latin spans keep base_font).
+    """
+    raw = str(text or "")
+    if not raw or base_font == georgian_font or georgian_font == "Helvetica":
+        return escape(raw)
+    parts: List[str] = []
+    for chunk in re.split(r"([\u10A0-\u10FF]+)", raw):
+        if not chunk:
+            continue
+        esc_chunk = escape(chunk)
+        if re.search(r"[\u10A0-\u10FF]", chunk):
+            parts.append(f'<font name="{georgian_font}">{esc_chunk}</font>')
+        else:
+            parts.append(esc_chunk)
+    return "".join(parts)
+
+
 def _resolve_ats_role_tag(parsed_skills: Dict[str, Any], candidate_headline: str) -> str:
     """
     Computes the canonical ASCII filename role tag for ATS and Recruiter editions from the
@@ -1351,15 +1371,15 @@ class CVGeneratorService:
 
         # 1. Header (ALWAYS showcase true candidate persona headline without ugly tags)
         role_display = _clean_foreign_script_text(candidate_headline or str(candidate.get("headline") or "Specialist"), cv_language) or "Specialist"
-        story.append(Paragraph(f"<b>{full_name}</b>", header_style))
-        story.append(Paragraph(escape(role_display), role_style))
+        story.append(Paragraph(f"<b>{_format_pdf_mixed_script(str(candidate.get('full_name', 'Candidate')), font_name, GEORGIAN_PDF_FONT_NAME)}</b>", header_style))
+        story.append(Paragraph(_format_pdf_mixed_script(role_display, font_name, GEORGIAN_PDF_FONT_NAME), role_style))
         if pdf_links:
             story.append(Paragraph("  |  ".join(x for x in pdf_links if x), contact_style))
         story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#0284c7"), spaceAfter=6))
 
         # 2. Summary
         story.append(Paragraph(f"<b>{lbl_summary}</b>", sec_title_style))
-        story.append(Paragraph(escape(_clean_foreign_script_text(human_summary, cv_language)), body_style))
+        story.append(Paragraph(_format_pdf_mixed_script(_clean_foreign_script_text(human_summary, cv_language), font_name, GEORGIAN_PDF_FONT_NAME), body_style))
 
         # 3. Technical Skills Matrix (grouped by ATS domains)
         story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#cbd5e1"), spaceBefore=4, spaceAfter=4))
@@ -1367,22 +1387,22 @@ class CVGeneratorService:
         grouped_pdf = group_skills_into_ats_buckets(display_skills[:60], cv_language=cv_language)
         if grouped_pdf:
             for b_title, b_items in grouped_pdf:
-                items_esc = ", ".join(escape(x) for x in b_items)
-                story.append(Paragraph(f"<b>{escape(b_title)}:</b> {items_esc}", body_style))
+                items_esc = ", ".join(_format_pdf_mixed_script(x, font_name, GEORGIAN_PDF_FONT_NAME) for x in b_items)
+                story.append(Paragraph(f"<b>{_format_pdf_mixed_script(b_title, font_name, GEORGIAN_PDF_FONT_NAME)}:</b> {items_esc}", body_style))
         else:
-            skills_text = " • ".join(escape(s) for s in display_skills[:20])
+            skills_text = " • ".join(_format_pdf_mixed_script(s, font_name, GEORGIAN_PDF_FONT_NAME) for s in display_skills[:20])
             story.append(Paragraph(skills_text, body_style))
 
         # 4. Work Experience
         story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#cbd5e1"), spaceBefore=4, spaceAfter=4))
         story.append(Paragraph(f"<b>{lbl_exp}</b>", sec_title_style))
         for job in work_history[:4]:
-            r_title = escape(str(job.get("role", "")))
-            r_comp = escape(str(job.get("company", "")))
-            r_dates = escape(f"{job.get('start_date', '')} - {job.get('end_date', '')}".strip(" -"))
+            r_title = _format_pdf_mixed_script(str(job.get("role", "")), font_name, GEORGIAN_PDF_FONT_NAME)
+            r_comp = _format_pdf_mixed_script(str(job.get("company", "")), font_name, GEORGIAN_PDF_FONT_NAME)
+            r_dates = _format_pdf_mixed_script(f"{job.get('start_date', '')} - {job.get('end_date', '')}".strip(" -"), font_name, GEORGIAN_PDF_FONT_NAME)
             story.append(Paragraph(f"<b>{r_title}</b> | {r_comp} ({r_dates})", body_style))
             for b in clean_bullets(job.get("highlights"))[:4]:
-                story.append(Paragraph(f"• {escape(str(b))}", bullet_style))
+                story.append(Paragraph(f"• {_format_pdf_mixed_script(str(b), font_name, GEORGIAN_PDF_FONT_NAME)}", bullet_style))
             story.append(Spacer(1, 3))
 
         # 5. Relevant Projects (when present)
@@ -1392,9 +1412,9 @@ class CVGeneratorService:
             for proj in projects[:3]:
                 if not isinstance(proj, dict):
                     continue
-                p_t = escape(_clean_foreign_script_text(proj.get("title") or "", cv_language))
-                p_org = escape(_clean_foreign_script_text(proj.get("organization") or "", cv_language))
-                p_dt = escape(_clean_foreign_script_text(proj.get("dates") or "", cv_language))
+                p_t = _format_pdf_mixed_script(_clean_foreign_script_text(proj.get("title") or "", cv_language), font_name, GEORGIAN_PDF_FONT_NAME)
+                p_org = _format_pdf_mixed_script(_clean_foreign_script_text(proj.get("organization") or "", cv_language), font_name, GEORGIAN_PDF_FONT_NAME)
+                p_dt = _format_pdf_mixed_script(_clean_foreign_script_text(proj.get("dates") or "", cv_language), font_name, GEORGIAN_PDF_FONT_NAME)
                 hdr = f"<b>{p_t}</b>"
                 if p_org:
                     hdr += f" | {p_org}"
@@ -1402,7 +1422,7 @@ class CVGeneratorService:
                     hdr += f" ({p_dt})"
                 story.append(Paragraph(hdr, body_style))
                 for b in clean_bullets(proj.get("highlights"))[:3]:
-                    story.append(Paragraph(f"• {escape(_clean_foreign_script_text(b, cv_language))}", bullet_style))
+                    story.append(Paragraph(f"• {_format_pdf_mixed_script(_clean_foreign_script_text(b, cv_language), font_name, GEORGIAN_PDF_FONT_NAME)}", bullet_style))
 
         # 6. Grouped Education & Specialized Training
         if education or certifications:
@@ -1411,21 +1431,21 @@ class CVGeneratorService:
             for edu in (education or []):
                 row = _format_education_row(edu, is_ka)
                 if row["title"]:
-                    txt = f"• <b>{escape(row['title'])}</b>"
+                    txt = f"• <b>{_format_pdf_mixed_script(row['title'], font_name, GEORGIAN_PDF_FONT_NAME)}</b>"
                     if row["detail"]:
-                        txt += f" — {escape(row['detail'])}"
+                        txt += f" — {_format_pdf_mixed_script(row['detail'], font_name, GEORGIAN_PDF_FONT_NAME)}"
                     story.append(Paragraph(txt, body_style))
             for cert in (certifications or [])[:4]:
                 cert_c = _clean_foreign_script_text(cert, cv_language)
                 if cert_c:
-                    story.append(Paragraph(f"• {escape(cert_c)}", body_style))
+                    story.append(Paragraph(f"• {_format_pdf_mixed_script(cert_c, font_name, GEORGIAN_PDF_FONT_NAME)}", body_style))
 
         # 7. Spoken Languages ONLY
         lang_line = languages_line or _format_candidate_languages(candidate, "", is_ka)
         if lang_line:
             story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#cbd5e1"), spaceBefore=4, spaceAfter=4))
             story.append(Paragraph(f"<b>{lbl_lang}</b>", sec_title_style))
-            story.append(Paragraph(escape(lang_line), body_style))
+            story.append(Paragraph(_format_pdf_mixed_script(lang_line, font_name, GEORGIAN_PDF_FONT_NAME), body_style))
 
         doc.build(story)
 

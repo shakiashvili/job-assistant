@@ -138,14 +138,49 @@ def test_link_validator_and_deadline_expiration():
 
 
 @pytest.mark.asyncio
-async def test_link_liveness_verifier():
-    # Local and known endpoints are validated
-    live = await verify_vacancy_liveness("http://localhost:8000/api/health")
-    assert live is True
+async def test_link_liveness_verifier(monkeypatch):
+    import socket
+    import httpx
+    from app.services import link_validator
+
+    # HIGH-03: Loopback / localhost URLs must NEVER bypass SSRF checks
+    loopback = await verify_vacancy_liveness("http://localhost:8000/api/health")
+    assert loopback is False
 
     # Dummy fake domains return False
     not_live = await verify_vacancy_liveness("https://example.com/not-a-real-job-url")
     assert not_live is False
+
+    # Valid external URL with live HTML passes, while open-redirect to metadata IP is blocked
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda host, *args, **kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))],
+    )
+
+    valid_html = (
+        "<html><body><table class='dtable'>"
+        "<tr><td>დასახელება: QA Automation Engineer</td></tr>"
+        "<tr><td>მომწოდებელი: Acme Corp Georgia</td></tr>"
+        "<tr><td>Detailed requirements include Python, Playwright, pytest, REST API testing, CI/CD pipelines and Agile QA workflows.</td></tr>"
+        "</table></body></html>"
+    )
+
+    def _mock_handler(request: httpx.Request) -> httpx.Response:
+        if "redirect-ssrf" in str(request.url):
+            return httpx.Response(302, headers={"location": "http://169.254.169.254/latest/meta-data/"})
+        return httpx.Response(200, text=valid_html)
+
+    transport = httpx.MockTransport(_mock_handler)
+    orig_client_cls = link_validator.httpx.AsyncClient
+    monkeypatch.setattr(
+        link_validator.httpx,
+        "AsyncClient",
+        lambda **kw: orig_client_cls(transport=transport, **{k: v for k, v in kw.items() if k != "transport"}),
+    )
+
+    assert await verify_vacancy_liveness("https://jobs.ge/en/?view=jobs&id=549201") is True
+    assert await verify_vacancy_liveness("https://jobs.ge/redirect-ssrf") is False
 
 
 def test_pii_encryption_at_rest():

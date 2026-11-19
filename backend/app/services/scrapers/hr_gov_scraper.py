@@ -119,7 +119,7 @@ class HrGovScraper(BasePortalScraper):
         """Fetches live vacancy.hr.gov.ge detail page to extract salary, requirements, and verified deadline."""
         html = await self.fetch_html(item["url"], timeout=10.0)
         if not html:
-            return item
+            return None
 
         soup = self.make_soup(html)
         for tag in soup(["script", "style", "noscript"]):
