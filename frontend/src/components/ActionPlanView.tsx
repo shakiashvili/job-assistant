@@ -14,10 +14,21 @@ import {
 import { fetchActionPlans, generateActionPlans, toggleMilestone, deleteActionPlan } from '../services/api';
 import { SkillActionPlan } from '../types';
 
+function isSafeHttpUrl(rawUrl?: string | null): boolean {
+  if (!rawUrl) return false;
+  try {
+    const parsed = new URL(rawUrl.trim());
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 export const ActionPlanView: React.FC = () => {
   const [plans, setPlans] = useState<SkillActionPlan[]>([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -79,7 +90,7 @@ export const ActionPlanView: React.FC = () => {
   };
 
   const handleDelete = async (planId: number) => {
-    if (!window.confirm('Are you sure you want to delete this action plan?')) return;
+    setConfirmDeleteId(null);
     try {
       await deleteActionPlan(planId);
       setPlans((prev) => prev.filter((p) => p.id !== planId));
@@ -165,15 +176,34 @@ export const ActionPlanView: React.FC = () => {
                       {plan.days_to_learn} Days Plan
                     </span>
                   )}
-                  <button
-                    type="button"
-                    onClick={() => handleDelete(plan.id)}
-                    aria-label={`Delete roadmap for ${plan.skill_name}`}
-                    className="text-slate-400 hover:text-rose-400 p-1"
-                    title="Delete Roadmap"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                  </button>
+                  {confirmDeleteId === plan.id ? (
+                    <span className="inline-flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(plan.id)}
+                        className="px-2 py-0.5 rounded bg-rose-700 hover:bg-rose-600 text-[10px] font-bold text-white"
+                      >
+                        Confirm
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteId(null)}
+                        className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[10px] text-slate-300"
+                      >
+                        Cancel
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteId(plan.id)}
+                      aria-label={`Delete roadmap for ${plan.skill_name}`}
+                      className="text-slate-400 hover:text-rose-400 p-1"
+                      title="Delete Roadmap"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -237,7 +267,7 @@ export const ActionPlanView: React.FC = () => {
                         </span>
                       </button>
                       <div className="flex flex-wrap items-center gap-2 mt-1.5 pl-6">
-                        {m.resource_url && (
+                        {isSafeHttpUrl(m.resource_url) && (
                           <a
                             href={m.resource_url}
                             target="_blank"
@@ -249,7 +279,7 @@ export const ActionPlanView: React.FC = () => {
                             <ExternalLink className="w-2.5 h-2.5" />
                           </a>
                         )}
-                        {(m.youtube_videos || []).slice(0, 2).map((yt, yIdx) => (
+                        {(m.youtube_videos || []).slice(0, 2).filter((yt) => isSafeHttpUrl(yt.url)).map((yt, yIdx) => (
                           <a
                             key={`yt-${yIdx}`}
                             href={yt.url}
@@ -263,7 +293,7 @@ export const ActionPlanView: React.FC = () => {
                             <ExternalLink className="w-2.5 h-2.5" />
                           </a>
                         ))}
-                        {(m.blog_posts || []).slice(0, 2).map((bp, bIdx) => (
+                        {(m.blog_posts || []).slice(0, 2).filter((bp) => isSafeHttpUrl(bp.url)).map((bp, bIdx) => (
                           <a
                             key={`blog-${bIdx}`}
                             href={bp.url}
@@ -277,7 +307,7 @@ export const ActionPlanView: React.FC = () => {
                             <ExternalLink className="w-2.5 h-2.5" />
                           </a>
                         ))}
-                        {!m.youtube_videos?.length && !m.blog_posts?.length && m.tutorial_url && (
+                        {!m.youtube_videos?.length && !m.blog_posts?.length && isSafeHttpUrl(m.tutorial_url) && (
                           <a
                             href={m.tutorial_url}
                             target="_blank"

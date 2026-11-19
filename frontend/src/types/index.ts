@@ -567,6 +567,8 @@ export interface B2BTaxCalculatorResponse {
   monthly_gross_orig: number;
   monthly_gross_gel: number;
   annual_gross_gel: number;
+  ytd_revenue_gel?: number;
+  cumulative_annual_gel?: number;
   under_500k_cap: boolean;
   b2b_small_business: {
     tax_rate_pct: number;

@@ -67,6 +67,7 @@ export const B2BMarketHub: React.FC = () => {
   const [billingPeriod, setBillingPeriod] = useState<'monthly' | 'hourly' | 'annual'>('monthly');
   const [fxOverride, setFxOverride] = useState<string>('');
   const [transferFeePct, setTransferFeePct] = useState<number>(0.5);
+  const [ytdRevenueGel, setYtdRevenueGel] = useState<number>(0);
   const [taxResult, setTaxResult] = useState<B2BTaxCalculatorResponse | null>(null);
   const [taxLoading, setTaxLoading] = useState<boolean>(false);
 
@@ -116,6 +117,7 @@ export const B2BMarketHub: React.FC = () => {
         billing_period: billingPeriod,
         custom_fx_to_gel: !Number.isNaN(parsedFx) && parsedFx > 0 ? parsedFx : undefined,
         transfer_fee_pct: transferFeePct,
+        ytd_revenue_gel: Math.max(0, ytdRevenueGel || 0),
       });
       setTaxResult(res);
     } catch {
@@ -126,8 +128,11 @@ export const B2BMarketHub: React.FC = () => {
   };
 
   useEffect(() => {
-    void runTaxCalc();
-  }, [amount, currency, billingPeriod, fxOverride, transferFeePct]);
+    const timer = setTimeout(() => {
+      void runTaxCalc();
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [amount, currency, billingPeriod, fxOverride, transferFeePct, ytdRevenueGel]);
 
   useEffect(() => {
     fetchTimezoneMatrix(shiftStart, shiftStart + 8)
@@ -315,6 +320,21 @@ export const B2BMarketHub: React.FC = () => {
             </div>
           </div>
 
+          <div>
+            <label htmlFor="b2b-ytd" className="block text-xs font-semibold text-slate-300 mb-1">
+              {isKa ? 'მიმდინარე წლის დაგროვილი შემოსავალი (GEL, rs.ge 500k ლიმიტი)' : 'Cumulative YTD Revenue Already Billed (GEL · rs.ge 500k cap check)'}
+            </label>
+            <input
+              id="b2b-ytd"
+              type="number"
+              min={0}
+              step={1000}
+              value={ytdRevenueGel}
+              onChange={(e) => setYtdRevenueGel(Math.max(0, Number(e.target.value) || 0))}
+              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white font-mono"
+            />
+          </div>
+
           {taxResult && (
             <div className="space-y-3 pt-2" aria-live="polite">
               <div className="grid grid-cols-2 gap-3">
@@ -376,7 +396,7 @@ export const B2BMarketHub: React.FC = () => {
                       {isKa ? '500,000 ₾ წლიური ლიმიტის გამოყენება:' : '500,000 GEL Annual 1% Cap Usage:'}
                     </span>
                     <span className={`font-mono font-bold ${taxResult.under_500k_cap ? 'text-emerald-300' : 'text-amber-300'}`}>
-                      {taxResult.annual_gross_gel.toLocaleString()} ₾ ({taxResult.cap_usage_pct}%)
+                      {(taxResult.cumulative_annual_gel ?? taxResult.annual_gross_gel).toLocaleString()} ₾ ({taxResult.cap_usage_pct}%)
                     </span>
                   </div>
                   <div className="w-full h-2 rounded-full bg-slate-800 overflow-hidden">

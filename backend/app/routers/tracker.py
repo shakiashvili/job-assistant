@@ -100,7 +100,18 @@ def get_or_create_app_tracker(
             )
 
     app_tracker = session.get(ApplicationTracker, app_id)
-    if app_tracker:
+    if rec and app_tracker and app_tracker.user_id != rec.user_id:
+        app_tracker = None
+        if rec.job_posting_id is not None:
+            app_tracker = session.exec(
+                select(ApplicationTracker).where(
+                    ApplicationTracker.user_id == rec.user_id,
+                    ApplicationTracker.job_posting_id == rec.job_posting_id,
+                    ApplicationTracker.is_deleted == False,
+                )
+            ).first()
+
+    if app_tracker and not rec:
         if app_tracker.user_id is not None:
             if uid is None or (app_tracker.user_id != uid):
                 raise HTTPException(
@@ -123,8 +134,9 @@ def get_or_create_app_tracker(
             if candidate_file.exists():
                 cv_path = str(candidate_file)
 
+        safe_pk = app_id if session.get(ApplicationTracker, app_id) is None else None
         app_tracker = ApplicationTracker(
-            id=app_id,
+            id=safe_pk,
             user_id=rec.user_id if rec and rec.user_id is not None else uid,
             job_posting_id=rec.job_posting_id if rec else None,
             company_name=job.company if job else "Hiring Company",
@@ -328,7 +340,7 @@ def send_or_draft_application_email(
     )
 
     if result.get("eml_filename"):
-        from .ground_truth import record_candidate_document
+        from ..db.document_repository import record_candidate_document
         eml_fname = result["eml_filename"]
         record_candidate_document(
             user_id=current_user.id,

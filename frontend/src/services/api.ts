@@ -999,6 +999,7 @@ export async function calculateB2BTax(payload: {
   custom_fx_to_gel?: number;
   include_pension_for_labor?: boolean;
   transfer_fee_pct?: number;
+  ytd_revenue_gel?: number;
 }): Promise<import('../types').B2BTaxCalculatorResponse> {
   const res = await apiFetch(`${API_BASE}/b2b/tax-calculator`, {
     method: 'POST',

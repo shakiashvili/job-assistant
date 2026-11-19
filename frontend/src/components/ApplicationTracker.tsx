@@ -57,9 +57,10 @@ export const ApplicationTracker: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
 
-  // Modal states for Copilot & Email
+  // Modal states for Copilot, Email & Inline Delete Confirm
   const [prepModalApp, setPrepModalApp] = useState<ApplicationItem | null>(null);
   const [emailModalApp, setEmailModalApp] = useState<ApplicationItem | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   // Interview Notes & Google Calendar Modal State
   const [editingApp, setEditingApp] = useState<ApplicationItem | null>(null);
@@ -197,7 +198,7 @@ export const ApplicationTracker: React.FC = () => {
   };
 
   const handleDelete = async (appId: string) => {
-    if (!window.confirm('Are you sure you want to delete this tracked application?')) return;
+    setConfirmDeleteId(null);
     try {
       await deleteApplication(appId);
       setApplications(applications.filter((a) => a.id !== appId));
@@ -461,18 +462,20 @@ export const ApplicationTracker: React.FC = () => {
                           <button
                             onClick={() => setPrepModalApp(app)}
                             title="Interview Copilot (10 Questions & STAR Frameworks)"
+                            aria-label={`Open Interview Copilot for ${app.role} at ${app.company}`}
                             className="min-h-[44px] min-w-[44px] sm:min-h-[32px] sm:min-w-[32px] p-1.5 rounded-lg hover:bg-slate-800 text-indigo-400 hover:text-indigo-300 transition-colors flex items-center justify-center"
                           >
-                            <Sparkles className="w-3.5 h-3.5" />
+                            <Sparkles className="w-3.5 h-3.5" aria-hidden="true" />
                           </button>
 
                           {/* Gmail Dispatch Button */}
                           <button
                             onClick={() => setEmailModalApp(app)}
                             title="Save as Gmail Draft or Send via Email"
+                            aria-label={`Send or draft email for ${app.role} at ${app.company}`}
                             className="min-h-[44px] min-w-[44px] sm:min-h-[32px] sm:min-w-[32px] p-1.5 rounded-lg hover:bg-slate-800 text-rose-400 hover:text-rose-300 transition-colors flex items-center justify-center"
                           >
-                            <Mail className="w-3.5 h-3.5" />
+                            <Mail className="w-3.5 h-3.5" aria-hidden="true" />
                           </button>
 
                           {/* Resume Download */}
@@ -482,9 +485,10 @@ export const ApplicationTracker: React.FC = () => {
                               target="_blank"
                               rel="noopener noreferrer"
                               title="Download Tailored ATS PDF Resume"
+                              aria-label={`Download tailored PDF CV for ${app.role} at ${app.company}`}
                               className="min-h-[44px] min-w-[44px] sm:min-h-[32px] sm:min-w-[32px] p-1.5 rounded-lg hover:bg-slate-800 text-sky-400 transition-colors flex items-center justify-center"
                             >
-                              <Download className="w-3.5 h-3.5" />
+                              <Download className="w-3.5 h-3.5" aria-hidden="true" />
                             </a>
                           )}
 
@@ -492,19 +496,40 @@ export const ApplicationTracker: React.FC = () => {
                           <button
                             onClick={() => openInterviewModal(app)}
                             title="Edit Notes & Interview Date"
+                            aria-label={`Edit notes and interview date for ${app.role} at ${app.company}`}
                             className="min-h-[44px] min-w-[44px] sm:min-h-[32px] sm:min-w-[32px] p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors flex items-center justify-center"
                           >
-                            <Calendar className="w-3.5 h-3.5" />
+                            <Calendar className="w-3.5 h-3.5" aria-hidden="true" />
                           </button>
 
-                          {/* Delete */}
-                          <button
-                            onClick={() => handleDelete(app.id)}
-                            title="Remove from board"
-                            className="min-h-[44px] min-w-[44px] sm:min-h-[32px] sm:min-w-[32px] p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-rose-400 transition-colors flex items-center justify-center"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          {/* Inline Delete Confirm */}
+                          {confirmDeleteId === app.id ? (
+                            <div className="flex items-center gap-1 ml-1">
+                              <button
+                                onClick={() => handleDelete(app.id)}
+                                aria-label={`Confirm delete ${app.role} at ${app.company}`}
+                                className="px-2 py-1 rounded bg-rose-700 hover:bg-rose-600 text-[10px] font-bold text-white"
+                              >
+                                Delete
+                              </button>
+                              <button
+                                onClick={() => setConfirmDeleteId(null)}
+                                aria-label="Cancel delete"
+                                className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[10px] text-slate-300"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => setConfirmDeleteId(app.id)}
+                              title="Remove from board"
+                              aria-label={`Remove ${app.role} at ${app.company} from board`}
+                              className="min-h-[44px] min-w-[44px] sm:min-h-[32px] sm:min-w-[32px] p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-rose-400 transition-colors flex items-center justify-center"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                            </button>
+                          )}
                         </div>
 
                         {/* 1-Click Stage Shift Arrows */}
@@ -513,18 +538,20 @@ export const ApplicationTracker: React.FC = () => {
                             <button
                               onClick={() => handleStageShift(app.id, stage, 'backward')}
                               title={`Move back to ${KANBAN_STAGES[stageIdx - 1]}`}
+                              aria-label={`Move ${app.role} back to ${KANBAN_STAGES[stageIdx - 1]}`}
                               className="min-h-[44px] min-w-[44px] sm:min-h-[32px] sm:min-w-[32px] p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors flex items-center justify-center"
                             >
-                              <ChevronLeft className="w-3.5 h-3.5" />
+                              <ChevronLeft className="w-3.5 h-3.5" aria-hidden="true" />
                             </button>
                           )}
                           {stageIdx < KANBAN_STAGES.length - 1 && (
                             <button
                               onClick={() => handleStageShift(app.id, stage, 'forward')}
                               title={`Advance to ${KANBAN_STAGES[stageIdx + 1]}`}
+                              aria-label={`Advance ${app.role} to ${KANBAN_STAGES[stageIdx + 1]}`}
                               className="min-h-[44px] min-w-[44px] sm:min-h-[32px] sm:min-w-[32px] p-1.5 rounded-lg hover:bg-slate-800 text-sky-400 hover:text-sky-300 transition-colors flex items-center justify-center"
                             >
-                              <ChevronRight className="w-3.5 h-3.5" />
+                              <ChevronRight className="w-3.5 h-3.5" aria-hidden="true" />
                             </button>
                           )}
                         </div>

@@ -2,6 +2,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import httpx
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
@@ -31,6 +32,27 @@ _FX_CACHE: Dict[str, Any] = {
 _FX_CACHE_TTL_SEC = 4 * 3600  # 4 hours
 
 
+def _ingest_nbg_payload(payload: Any, now: float) -> Optional[Dict[str, Any]]:
+    if not isinstance(payload, list) or not payload:
+        return None
+    block = payload[0]
+    currencies = block.get("currencies") or []
+    parsed = {"GEL": 1.0}
+    for item in currencies:
+        code = str(item.get("code") or "").upper()
+        qty = float(item.get("quantity") or 1)
+        rate = float(item.get("rate") or 0)
+        if code in ("USD", "EUR", "GBP") and rate > 0 and qty > 0:
+            parsed[code] = round(rate / qty, 4)
+    if len(parsed) >= 3:
+        _FX_CACHE["rates"] = parsed
+        _FX_CACHE["source"] = "nbg_live"
+        _FX_CACHE["fetched_at"] = now
+        _FX_CACHE["as_of"] = str(block.get("date") or datetime.now(timezone.utc).date().isoformat())[:10]
+        return dict(_FX_CACHE)
+    return None
+
+
 def get_cached_nbg_rates(allow_network: bool = True) -> Dict[str, Any]:
     """
     Returns GEL conversion rates for USD/EUR/GBP from National Bank of Georgia (nbg.gov.ge)
@@ -46,25 +68,33 @@ def get_cached_nbg_rates(allow_network: bool = True) -> Dict[str, Any]:
     try:
         resp = httpx.get(NBG_RATES_URL, timeout=3.5)
         if resp.status_code == 200:
-            payload = resp.json()
-            if isinstance(payload, list) and payload:
-                block = payload[0]
-                currencies = block.get("currencies") or []
-                parsed = {"GEL": 1.0}
-                for item in currencies:
-                    code = str(item.get("code") or "").upper()
-                    qty = float(item.get("quantity") or 1)
-                    rate = float(item.get("rate") or 0)
-                    if code in ("USD", "EUR", "GBP") and rate > 0 and qty > 0:
-                        parsed[code] = round(rate / qty, 4)
-                if len(parsed) >= 3:
-                    _FX_CACHE["rates"] = parsed
-                    _FX_CACHE["source"] = "nbg_live"
-                    _FX_CACHE["fetched_at"] = now
-                    _FX_CACHE["as_of"] = str(block.get("date") or datetime.now(timezone.utc).date().isoformat())[:10]
-                    return dict(_FX_CACHE)
+            updated = _ingest_nbg_payload(resp.json(), now)
+            if updated is not None:
+                return updated
     except Exception as exc:
         logger.debug(f"NBG live FX rate fetch skipped (using fallback): {exc}")
+
+    return dict(_FX_CACHE)
+
+
+async def get_cached_nbg_rates_async(allow_network: bool = True) -> Dict[str, Any]:
+    """Non-blocking async NBG FX rate fetcher with TTL cache and deterministic offline fallback."""
+    now = time.time()
+    if now - _FX_CACHE["fetched_at"] < _FX_CACHE_TTL_SEC and _FX_CACHE["source"] == "nbg_live":
+        return dict(_FX_CACHE)
+
+    if not allow_network:
+        return dict(_FX_CACHE)
+
+    try:
+        async with httpx.AsyncClient(timeout=3.5) as client:
+            resp = await client.get(NBG_RATES_URL)
+        if resp.status_code == 200:
+            updated = _ingest_nbg_payload(resp.json(), now)
+            if updated is not None:
+                return updated
+    except Exception as exc:
+        logger.debug(f"Async NBG live FX rate fetch skipped (using fallback): {exc}")
 
     return dict(_FX_CACHE)
 
@@ -77,6 +107,7 @@ class TaxCalculatorRequest(BaseModel):
     custom_fx_to_gel: Optional[float] = Field(None, gt=0)
     include_pension_for_labor: bool = True
     transfer_fee_pct: float = Field(0.5, ge=0.0, le=5.0)
+    ytd_revenue_gel: float = Field(0.0, ge=0.0, description="Cumulative YTD GEL revenue already billed this calendar year")
 
 
 class B2BProposalRequest(BaseModel):
@@ -101,13 +132,13 @@ class B2BInvoiceRequest(BaseModel):
 
 
 @router.get("/fx-rates")
-def fetch_georgia_fx_rates() -> Dict[str, Any]:
+async def fetch_georgia_fx_rates() -> Dict[str, Any]:
     """Returns official GEL conversion rates (live NBG or deterministic fallback)."""
-    return get_cached_nbg_rates(allow_network=True)
+    return await get_cached_nbg_rates_async(allow_network=True)
 
 
 @router.post("/tax-calculator")
-def calculate_georgia_b2b_net(req: TaxCalculatorRequest) -> Dict[str, Any]:
+async def calculate_georgia_b2b_net(req: TaxCalculatorRequest) -> Dict[str, Any]:
     """
     Compares Georgian Individual Entrepreneur 1% Small Business B2B taxation (up to 500,000 GEL/year)
     against a standard Georgian labor contract (20% Personal Income Tax + 2% employee pension).
@@ -118,7 +149,7 @@ def calculate_georgia_b2b_net(req: TaxCalculatorRequest) -> Dict[str, Any]:
         fx_source = "custom"
         fx_as_of = None
     else:
-        nbg = get_cached_nbg_rates(allow_network=(cur != "GEL"))
+        nbg = await get_cached_nbg_rates_async(allow_network=(cur != "GEL"))
         fx = float(nbg["rates"].get(cur, DEFAULT_FX_TO_GEL.get(cur, 1.0)))
         fx_source = "nbg_live" if nbg.get("source") == "nbg_live" and cur != "GEL" else "default_fallback"
         fx_as_of = nbg.get("as_of")
@@ -132,9 +163,11 @@ def calculate_georgia_b2b_net(req: TaxCalculatorRequest) -> Dict[str, Any]:
 
     monthly_gross_gel = monthly_orig * fx
     annual_gross_gel = monthly_gross_gel * 12.0
+    ytd_gel = float(req.ytd_revenue_gel or 0.0)
+    cumulative_annual_gel = ytd_gel + annual_gross_gel
 
-    # 1. Georgia IE Small Business Status (1% under 500,000 GEL/yr, 3% excess)
-    under_500k_cap = annual_gross_gel <= 500_000.0
+    # 1. Georgia IE Small Business Status (1% under 500,000 GEL cumulative calendar-year turnover, 3% when exceeded)
+    under_500k_cap = cumulative_annual_gel <= 500_000.0
     b2b_tax_rate = 0.01 if under_500k_cap else 0.03
     b2b_tax_gel = monthly_gross_gel * b2b_tax_rate
     transfer_fee_gel = monthly_gross_gel * (req.transfer_fee_pct / 100.0) if cur != "GEL" else 0.0
@@ -160,6 +193,8 @@ def calculate_georgia_b2b_net(req: TaxCalculatorRequest) -> Dict[str, Any]:
         "monthly_gross_orig": round(monthly_orig, 2),
         "monthly_gross_gel": round(monthly_gross_gel, 2),
         "annual_gross_gel": round(annual_gross_gel, 2),
+        "ytd_revenue_gel": round(ytd_gel, 2),
+        "cumulative_annual_gel": round(cumulative_annual_gel, 2),
         "under_500k_cap": under_500k_cap,
         "b2b_small_business": {
             "tax_rate_pct": round(b2b_tax_rate * 100, 1),
@@ -176,7 +211,7 @@ def calculate_georgia_b2b_net(req: TaxCalculatorRequest) -> Dict[str, Any]:
             "net_orig": round(labor_net_orig, 2),
         },
         "monthly_b2b_advantage_gel": round(monthly_savings_gel, 2),
-        "cap_usage_pct": round(min(999.0, (annual_gross_gel / 500_000.0) * 100.0), 1),
+        "cap_usage_pct": round(min(999.0, (cumulative_annual_gel / 500_000.0) * 100.0), 1),
         "notes": [
             "Georgian Small Business status applies 1% tax on revenue up to 500,000 GEL per calendar year (3% if exceeded).",
             "Foreign B2B digital service exports are outside Georgian VAT territorial scope (consult a Georgian CPA for exact classification).",
@@ -184,10 +219,36 @@ def calculate_georgia_b2b_net(req: TaxCalculatorRequest) -> Dict[str, Any]:
     }
 
 
+def _resolve_tz_offset_hours(tz_name: str, fallback_offset: int) -> tuple[int, bool]:
+    """Resolves live UTC offset and DST active flag via zoneinfo with offline fallback."""
+    try:
+        now_local = datetime.now(ZoneInfo(tz_name))
+        utc_off = now_local.utcoffset()
+        dst_off = now_local.dst()
+        offset_h = int(round(utc_off.total_seconds() / 3600)) if utc_off is not None else fallback_offset
+        is_dst = bool(dst_off and dst_off.total_seconds() != 0)
+        return offset_h, is_dst
+    except (ZoneInfoNotFoundError, Exception):
+        return fallback_offset, False
+
+
+def _format_wrapped_overlap(hours: List[int]) -> str:
+    if not hours:
+        return "Async handoff only"
+    # Detect contiguous ranges cleanly even across midnight boundaries
+    runs: List[List[int]] = []
+    for h in sorted(hours):
+        if not runs or h != runs[-1][-1] + 1:
+            runs.append([h])
+        else:
+            runs[-1].append(h)
+    return ", ".join(f"{r[0]:02d}:00–{(r[-1] + 1) % 24:02d}:00 GET" for r in runs)
+
+
 @router.get("/timezone-matrix")
 def get_tbilisi_timezone_matrix(work_start_get: int = 11, work_end_get: int = 19) -> Dict[str, Any]:
     """
-    Computes exact working-hour overlap between Georgia Time (GET, UTC+4 fixed year-round)
+    Computes exact DST-aware working-hour overlap between Georgia Time (GET, UTC+4 fixed year-round)
     and key remote hiring hubs across Europe, UK, Middle East, and North America.
     """
     start_get = max(0, min(23, int(work_start_get)))
@@ -196,32 +257,33 @@ def get_tbilisi_timezone_matrix(work_start_get: int = 11, work_end_get: int = 19
         end_get = min(24, start_get + 8)
 
     ge_hours = set(range(start_get, end_get))
+    tbilisi_offset, _ = _resolve_tz_offset_hours("Asia/Tbilisi", 4)
 
     regions = [
-        {"region": "UAE / Gulf (Dubai GST)", "utc_offset": 4, "typical_window": "09:00–17:00"},
-        {"region": "Central Europe Standard (Berlin / Warsaw CET)", "utc_offset": 1, "typical_window": "09:00–17:00"},
-        {"region": "Central Europe Summer (CEST)", "utc_offset": 2, "typical_window": "09:00–17:00"},
-        {"region": "United Kingdom (London GMT)", "utc_offset": 0, "typical_window": "09:00–17:00"},
-        {"region": "US East Coast (New York EST)", "utc_offset": -5, "typical_window": "09:00–17:00"},
-        {"region": "US West Coast (San Francisco PST)", "utc_offset": -8, "typical_window": "09:00–17:00"},
+        {"region": "UAE / Gulf (Dubai GST)", "tz": "Asia/Dubai", "fallback_offset": 4},
+        {"region": "Central Europe (Berlin / Warsaw)", "tz": "Europe/Berlin", "fallback_offset": 1},
+        {"region": "United Kingdom (London)", "tz": "Europe/London", "fallback_offset": 0},
+        {"region": "US East Coast (New York)", "tz": "America/New_York", "fallback_offset": -5},
+        {"region": "US West Coast (San Francisco)", "tz": "America/Los_Angeles", "fallback_offset": -8},
     ]
 
     matrix: List[Dict[str, Any]] = []
     for reg in regions:
-        diff = 4 - reg["utc_offset"]  # How many hours Georgia is ahead
+        cur_offset, dst_active = _resolve_tz_offset_hours(reg["tz"], reg["fallback_offset"])
+        diff = tbilisi_offset - cur_offset
         client_start_in_get = 9 + diff
         client_end_in_get = 17 + diff
         client_hours_in_get = {h % 24 for h in range(client_start_in_get, client_end_in_get)}
         overlap = sorted(ge_hours & client_hours_in_get)
-        recommended_get_start = max(8, min(16, client_start_in_get))
+        recommended_get_start = max(8, min(16, client_start_in_get % 24))
+        wrap_suffix = " (+1d)" if client_end_in_get > 24 else ""
+        dst_tag = " · DST" if dst_active else ""
         matrix.append({
-            "region": reg["region"],
+            "region": f"{reg['region']}{dst_tag}",
             "hours_behind_tbilisi": diff,
-            "client_hours_tbilisi_time": f"{client_start_in_get % 24:02d}:00–{client_end_in_get % 24:02d}:00 GET",
+            "client_hours_tbilisi_time": f"{client_start_in_get % 24:02d}:00–{client_end_in_get % 24:02d}:00 GET{wrap_suffix}",
             "overlap_hours_count": len(overlap),
-            "overlap_window_get": (
-                f"{min(overlap):02d}:00–{max(overlap) + 1:02d}:00 GET" if overlap else "Async handoff only"
-            ),
+            "overlap_window_get": _format_wrapped_overlap(overlap),
             "recommended_shift_get": f"{recommended_get_start:02d}:00–{(recommended_get_start + 8) % 24:02d}:00 GET",
         })
 
@@ -313,7 +375,7 @@ def generate_b2b_contractor_proposal(
 
 
 @router.post("/invoice-preview")
-def generate_b2b_invoice_preview(
+async def generate_b2b_invoice_preview(
     req: B2BInvoiceRequest,
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
@@ -332,7 +394,7 @@ def generate_b2b_invoice_preview(
     today_str = datetime.now(timezone.utc).date().isoformat()
     inv_no = (req.invoice_number or f"INV-{today_str.replace('-', '')}-01").strip()
     cur = req.currency.upper()
-    nbg = get_cached_nbg_rates(allow_network=(cur != "GEL"))
+    nbg = await get_cached_nbg_rates_async(allow_network=(cur != "GEL"))
     fx_rate = float(nbg["rates"].get(cur, DEFAULT_FX_TO_GEL.get(cur, 1.0)))
     gel_equiv = round(req.amount * fx_rate, 2)
     tax_1pct_gel = round(gel_equiv * 0.01, 2)

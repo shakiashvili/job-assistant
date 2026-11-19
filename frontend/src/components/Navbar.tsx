@@ -136,10 +136,10 @@ git push -u origin my-feature-branch`;
               <div className="flex items-center gap-2">
                 <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-xs">
                   <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-emerald-700 to-teal-700 flex items-center justify-center text-[10px] font-bold text-white uppercase">
-                    {currentUser.full_name[0] || 'U'}
+                    {(currentUser.full_name?.trim()?.[0] || currentUser.email?.[0] || 'U').toUpperCase()}
                   </div>
                   <span className="font-semibold text-white max-w-[100px] truncate hidden sm:inline">
-                    {currentUser.full_name}
+                    {currentUser.full_name || currentUser.email || 'Candidate'}
                   </span>
                 </div>
                 <button

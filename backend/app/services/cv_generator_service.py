@@ -20,6 +20,15 @@ from ..config import GENERATED_RESUMES_DIR, FONTS_DIR
 from ..db.profile_repository import ground_truth_store, filter_spoken_language_entries
 from ..services.gemini_service import GEORGIAN_SKILL_TRANSLATIONS
 from ..services.scrapers.base_scraper import sanitize_company_name
+from .cv_formatting_utils import (
+    GEORGIAN_PDF_FONT_NAME,
+    UNICODE_FONT_NAME,
+    clean_bullets,
+    clean_foreign_script_text as _clean_foreign_script_text,
+    format_pdf_mixed_script as _format_pdf_mixed_script,
+    normalize_contact_href,
+    register_unicode_font as _register_unicode_font,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -176,36 +185,7 @@ def ascii_filename_slug(text: str, default: str = "Item", max_len: int = 24) -> 
     return (slug[:max_len].strip("_")) or default
 
 
-def clean_bullets(highlights: Optional[List[Any]]) -> List[str]:
-    """Filters out blank bullets and Markdown divider artifacts such as '--' or '---'."""
-    if not highlights:
-        return []
-    result = []
-    for h in highlights:
-        s = str(h or "").strip()
-        if s and not re.fullmatch(r"[-*_•–—.\s]+", s):
-            result.append(s)
-    return result
-
-
-def _format_pdf_mixed_script(text: str, base_font: str, georgian_font: str) -> str:
-    """
-    XML-escapes text and switches font runs inline so Georgian glyphs (Mkhedruli) always
-    render in georgian_font even inside English CVs (and Latin spans keep base_font).
-    """
-    raw = str(text or "")
-    if not raw or base_font == georgian_font or georgian_font == "Helvetica":
-        return escape(raw)
-    parts: List[str] = []
-    for chunk in re.split(r"([\u10A0-\u10FF]+)", raw):
-        if not chunk:
-            continue
-        esc_chunk = escape(chunk)
-        if re.search(r"[\u10A0-\u10FF]", chunk):
-            parts.append(f'<font name="{georgian_font}">{esc_chunk}</font>')
-        else:
-            parts.append(esc_chunk)
-    return "".join(parts)
+# Core bullet filtering and mixed-script PDF helpers live in cv_formatting_utils.py
 
 
 def _resolve_ats_role_tag(parsed_skills: Dict[str, Any], candidate_headline: str) -> str:
@@ -261,143 +241,7 @@ STRICT CONSTRAINTS (ZERO TOLERANCE FOR FABRICATION):
 3. CLEAN ATS FORMAT: Header, Concise Summary, Core Skill Matrix, Verified Experience, Education & Certifications."""
 
 
-def _register_unicode_font(prefer_georgian: bool = False) -> str:
-    """
-    Registers a Unicode TrueType font family (Normal, Bold, Italic, BoldItalic) in ReportLab
-    with cross-platform support. Prioritizes Sylfaen when prefer_georgian=True for crisp Georgian rendering.
-    """
-    family_candidates: List[tuple[str, str, Optional[str], Optional[str], Optional[str]]] = []
-
-    # 1. Check project assets/fonts directory for bundled fonts (Linux/Docker/Windows)
-    if FONTS_DIR.exists():
-        for f in sorted(FONTS_DIR.glob("*.ttf")):
-            if any(tag in f.stem.lower() for tag in ("-bold", "-italic", "-oblique", "bold", "italic")):
-                continue
-            stem_base = f.stem.replace("-Regular", "")
-            bold_c = next(
-                (p for p in [f.with_name(f"{stem_base}-Bold.ttf"), f.with_name(f"{stem_base}Bold.ttf")] if p.exists()),
-                None,
-            )
-            italic_c = next(
-                (p for p in [f.with_name(f"{stem_base}-Italic.ttf"), f.with_name(f"{stem_base}-Oblique.ttf")] if p.exists()),
-                None,
-            )
-            bi_c = next(
-                (p for p in [f.with_name(f"{stem_base}-BoldItalic.ttf"), f.with_name(f"{stem_base}-BoldOblique.ttf")] if p.exists()),
-                None,
-            )
-            family_candidates.append((f.stem, str(f), str(bold_c) if bold_c else None, str(italic_c) if italic_c else None, str(bi_c) if bi_c else None))
-
-    sylfaen_tuple = (
-        "Sylfaen",
-        "C:/Windows/Fonts/sylfaen.ttf",
-        None,
-        None,
-        None,
-    )
-    segoe_tuple = (
-        "SegoeUI",
-        "C:/Windows/Fonts/segoeui.ttf",
-        "C:/Windows/Fonts/segoeuib.ttf",
-        "C:/Windows/Fonts/segoeuii.ttf",
-        "C:/Windows/Fonts/segoeuiz.ttf",
-    )
-    # 2. Cross-platform OS font families
-    if prefer_georgian:
-        family_candidates.extend([
-            sylfaen_tuple,
-            segoe_tuple,
-        ])
-    else:
-        family_candidates.extend([
-            segoe_tuple,
-            sylfaen_tuple,
-        ])
-
-    family_candidates.extend([
-        (
-            "ArialUnicode",
-            "C:/Windows/Fonts/arial.ttf",
-            "C:/Windows/Fonts/arialbd.ttf",
-            "C:/Windows/Fonts/ariali.ttf",
-            "C:/Windows/Fonts/arialbi.ttf",
-        ),
-        # Linux / Docker (FreeSans covers both Latin & Georgian Mkhedruli cleanly in one TTF)
-        (
-            "FreeSans",
-            "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
-            "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
-            "/usr/share/fonts/truetype/freefont/FreeSansOblique.ttf",
-            "/usr/share/fonts/truetype/freefont/FreeSansBoldOblique.ttf",
-        ),
-        (
-            "DejaVuSans",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf",
-        ),
-        (
-            "NotoSansGeorgian",
-            "/usr/share/fonts/truetype/noto/NotoSansGeorgian-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansGeorgian-Bold.ttf",
-            None,
-            None,
-        ),
-        (
-            "LiberationSans",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-BoldItalic.ttf",
-        ),
-        # macOS
-        (
-            "ArialUnicodeMac",
-            "/Library/Fonts/Arial Unicode.ttf",
-            None,
-            None,
-            None,
-        ),
-        (
-            "ArialMac",
-            "/System/Library/Fonts/Supplemental/Arial.ttf",
-            "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-            "/System/Library/Fonts/Supplemental/Arial Italic.ttf",
-            "/System/Library/Fonts/Supplemental/Arial Bold Italic.ttf",
-        ),
-    ])
-
-    for font_name, normal_path, bold_path, italic_path, bi_path in family_candidates:
-        if not Path(normal_path).exists():
-            continue
-        try:
-            if font_name not in pdfmetrics.getRegisteredFontNames():
-                pdfmetrics.registerFont(TTFont(font_name, normal_path))
-            bold_name = f"{font_name}-Bold"
-            italic_name = f"{font_name}-Italic"
-            bi_name = f"{font_name}-BoldItalic"
-            b_file = bold_path if (bold_path and Path(bold_path).exists()) else normal_path
-            i_file = italic_path if (italic_path and Path(italic_path).exists()) else normal_path
-            bi_file = bi_path if (bi_path and Path(bi_path).exists()) else b_file
-            for sub_name, sub_path in [(bold_name, b_file), (italic_name, i_file), (bi_name, bi_file)]:
-                if sub_name not in pdfmetrics.getRegisteredFontNames():
-                    pdfmetrics.registerFont(TTFont(sub_name, sub_path))
-            pdfmetrics.registerFontFamily(
-                font_name,
-                normal=font_name,
-                bold=bold_name,
-                italic=italic_name,
-                boldItalic=bi_name,
-            )
-            return font_name
-        except Exception as e:
-            logger.debug(f"Could not register TTF family {font_name} ({normal_path}): {e}")
-    return "Helvetica"
-
-
-UNICODE_FONT_NAME = _register_unicode_font(prefer_georgian=False)
-GEORGIAN_PDF_FONT_NAME = _register_unicode_font(prefer_georgian=True)
+# Font registration and mixed-script PDF helpers live cleanly in cv_formatting_utils.py
 
 
 def safe_unicode_slug(text: str, default: str = "item", max_len: int = 24) -> str:

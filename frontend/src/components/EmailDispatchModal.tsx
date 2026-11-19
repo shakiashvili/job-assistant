@@ -48,6 +48,22 @@ export const EmailDispatchModal: React.FC<EmailDispatchModalProps> = ({
 
   useEffect(() => {
     if (!isOpen) return;
+    setRecipient(defaultEmail || '');
+    setSubject(`Application: ${jobTitle}`);
+    setBody(
+      `Dear ${companyName} Hiring Team,\n\n` +
+        `I am writing to express my strong interest in the ${jobTitle} position.\n\n` +
+        `With relevant hands-on experience aligned to your team's key requirements, I am ready to contribute from day one.\n\n` +
+        `Please find attached my tailored CV. I look forward to the opportunity to discuss my qualifications.\n\n` +
+        `Best regards,`
+    );
+    setMode('draft');
+    setResult(null);
+    setError(null);
+  }, [isOpen, appId, companyName, jobTitle, defaultEmail]);
+
+  useEffect(() => {
+    if (!isOpen) return;
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };

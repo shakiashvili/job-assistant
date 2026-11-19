@@ -403,7 +403,7 @@ class AuditService:
             tailored_cv.expected_salary = details.salary_range
 
         if user_id is not None and tailored_cv.pdf_filename:
-            from ..routers.ground_truth import record_candidate_document
+            from ..db.document_repository import record_candidate_document
             record_candidate_document(
                 user_id=user_id,
                 filename=tailored_cv.pdf_filename,

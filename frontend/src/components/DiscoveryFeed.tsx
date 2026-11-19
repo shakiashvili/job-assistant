@@ -109,7 +109,9 @@ interface DiscoveryFeedProps {
 }
 
 function formatSalaryDisplay(job: DbJobPosting): string | null {
-  if (!job.salary_min || !job.salary_max) return null;
+  const hasMin = job.salary_min != null && job.salary_min > 0;
+  const hasMax = job.salary_max != null && job.salary_max > 0;
+  if (!hasMin && !hasMax) return null;
   const curRaw = (job.salary_currency || 'USD').trim();
   const curUpper = curRaw.toUpperCase();
   const isGel =
@@ -119,10 +121,16 @@ function formatSalaryDisplay(job: DbJobPosting): string | null {
     curRaw === 'ᲚᲐᲠᲘ';
   const sym = isGel ? '₾' : curUpper === 'EUR' ? '€' : curUpper === 'GBP' ? '£' : '$';
   const labelCur = isGel ? 'GEL' : curUpper;
-  if (job.salary_min === job.salary_max) {
-    return `${job.salary_max.toLocaleString()} ${sym} (${labelCur})`;
+  if (hasMin && hasMax) {
+    if (job.salary_min === job.salary_max) {
+      return `${job.salary_max!.toLocaleString()} ${sym} (${labelCur})`;
+    }
+    return `${job.salary_min!.toLocaleString()}–${job.salary_max!.toLocaleString()} ${sym} (${labelCur})`;
   }
-  return `${job.salary_min.toLocaleString()}–${job.salary_max.toLocaleString()} ${sym} (${labelCur})`;
+  if (hasMin) {
+    return `From ${job.salary_min!.toLocaleString()} ${sym} (${labelCur})`;
+  }
+  return `Up to ${job.salary_max!.toLocaleString()} ${sym} (${labelCur})`;
 }
 
 export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({

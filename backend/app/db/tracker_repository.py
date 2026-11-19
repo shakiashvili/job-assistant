@@ -233,26 +233,26 @@ class TrackerRepository:
 
             app_t: Optional[ApplicationTracker] = None
             if rec.id is not None:
-                app_t = session.get(ApplicationTracker, rec.id)
-                if not app_t:
-                    app_t = ApplicationTracker(
-                        id=rec.id,
-                        user_id=user_id,
-                        job_posting_id=job.id,
-                        company_name=item_in.company,
-                        job_title=item_in.role,
-                        job_url=url,
-                        portal=item_in.portal or job.portal or "generic",
-                        status=db_status,
-                        salary_expected=item_in.salary_expected,
-                        salary_offered=item_in.salary_offered,
-                        recruiter_name=item_in.recruiter_name,
-                        recruiter_email=item_in.recruiter_email,
-                        follow_up_date=item_in.follow_up_date,
-                        cv_pdf_path=item_in.cv_pdf_url,
-                        cover_letter_text=item_in.cover_letter_text or item_in.notes,
-                    )
-                    session.add(app_t)
+                existing_app_t = session.get(ApplicationTracker, rec.id)
+                safe_app_t_id = rec.id if existing_app_t is None else None
+                app_t = ApplicationTracker(
+                    id=safe_app_t_id,
+                    user_id=user_id,
+                    job_posting_id=job.id,
+                    company_name=item_in.company,
+                    job_title=item_in.role,
+                    job_url=url,
+                    portal=item_in.portal or job.portal or "generic",
+                    status=db_status,
+                    salary_expected=item_in.salary_expected,
+                    salary_offered=item_in.salary_offered,
+                    recruiter_name=item_in.recruiter_name,
+                    recruiter_email=item_in.recruiter_email,
+                    follow_up_date=item_in.follow_up_date,
+                    cv_pdf_path=item_in.cv_pdf_url,
+                    cover_letter_text=item_in.cover_letter_text or item_in.notes,
+                )
+                session.add(app_t)
                 session.add(
                     ApplicationEvent(
                         application_id=rec.id,
@@ -287,9 +287,20 @@ class TrackerRepository:
 
             job = session.get(JobPosting, rec.job_posting_id) if rec.job_posting_id else None
             app_t = session.get(ApplicationTracker, rec.id)
+            if app_t and app_t.user_id != rec.user_id:
+                app_t = None
+                if rec.job_posting_id is not None:
+                    app_t = session.exec(
+                        select(ApplicationTracker).where(
+                            ApplicationTracker.user_id == rec.user_id,
+                            ApplicationTracker.job_posting_id == rec.job_posting_id,
+                            ApplicationTracker.is_deleted == False,
+                        )
+                    ).first()
             if not app_t and rec.id is not None:
+                safe_app_t_id = rec.id if session.get(ApplicationTracker, rec.id) is None else None
                 app_t = ApplicationTracker(
-                    id=rec.id,
+                    id=safe_app_t_id,
                     user_id=rec.user_id,
                     job_posting_id=rec.job_posting_id,
                     company_name=job.company if job else "Hiring Company",
@@ -396,7 +407,7 @@ class TrackerRepository:
                 delete(ApplicationEvent).where(ApplicationEvent.application_id == rec.id)
             )
             tracker_row = session.get(ApplicationTracker, rec.id)
-            if tracker_row:
+            if tracker_row and tracker_row.user_id == rec.user_id:
                 session.delete(tracker_row)
             session.delete(rec)
             session.commit()
