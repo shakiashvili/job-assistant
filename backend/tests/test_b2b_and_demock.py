@@ -40,6 +40,7 @@ def test_b2b_tax_calculator_under_and_over_500k_cap():
     assert d1["monthly_b2b_advantage_gel"] > 1000
 
     # Above 500k GEL/year: $20,000 USD/month * 2.72 * 12 = 652,800 GEL (> 500k) -> 3% tax
+    # Article 90: $20k/mo (54,400 GEL/mo) with YTD=0 is still <=500k in Month 1 (1%), while projection crosses at Month 10
     res_over = client.post(
         "/api/b2b/tax-calculator",
         json={
@@ -51,8 +52,18 @@ def test_b2b_tax_calculator_under_and_over_500k_cap():
     )
     assert res_over.status_code == 200
     d2 = res_over.json()
-    assert d2["under_500k_cap"] is False
-    assert d2["b2b_small_business"]["tax_rate_pct"] == 3.0
+    assert d2["under_500k_cap"] is True
+    assert d2["projected_exceeds_500k_cap"] is True
+    assert d2["threshold_crossing_month"] == 10
+    assert d2["b2b_small_business"]["tax_rate_pct"] == 1.0
+    res_over_ytd = client.post(
+        "/api/b2b/tax-calculator",
+        json={"amount": 20000, "currency": "USD", "billing_period": "monthly", "custom_fx_to_gel": 2.72, "ytd_revenue_gel": 460000},
+    )
+    assert res_over_ytd.status_code == 200
+    assert res_over_ytd.json()["under_500k_cap"] is False
+    assert res_over_ytd.json()["b2b_small_business"]["tax_rate_pct"] == 3.0
+    assert res_over_ytd.json()["threshold_crossing_month"] == 1
 
 
 def test_timezone_matrix_and_b2b_proposal():

@@ -1,4 +1,6 @@
+import io
 import uuid
+from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
@@ -202,7 +204,6 @@ def test_extension_requires_uploaded_profile_no_sample_cv_and_tailored_letter_no
        and generates a job-requirement & CV-matched motivational letter referencing real workplaces.
     """
     from docx import Document
-    from app.config import GENERATED_RESUMES_DIR
 
     user_a = f"giorgi_{uuid.uuid4().hex[:8]}@example.com"
     user_b = f"other_{uuid.uuid4().hex[:8]}@example.com"
@@ -285,16 +286,18 @@ Tbilisi, Georgia • +995 571-15-68-07 • [giorgishakiashvili21@gmail.com](mail
     assert "Playwright" in letter or "REST API" in letter
     assert "Giorgi Shakiashvili" in letter
 
-    # Verify generated PDF, DOCX, and HTML preview contain zero '| , |' or '1 week after offer' / 'Notice Period' clutter
-    pdf_path = GENERATED_RESUMES_DIR / body["tailored_cv"]["pdf_filename"]
-    docx_path = GENERATED_RESUMES_DIR / body["tailored_cv"]["docx_filename"]
-    html_path = pdf_path.with_suffix(".html")
-    assert pdf_path.exists() and pdf_path.read_bytes().startswith(b"%PDF-")
-    assert docx_path.exists()
-    assert html_path.exists()
+    # Verify User A can download their generated PDF, DOCX, and HTML preview while User B is blocked (403/404)
+    pdf_resp = client.get(body["tailored_cv"]["pdf_url"], headers=hdr_a)
+    docx_resp = client.get(body["tailored_cv"]["docx_url"], headers=hdr_a)
+    html_url = f"/api/resumes/generated/{Path(body['tailored_cv']['pdf_filename']).stem}.html"
+    html_resp = client.get(html_url, headers=hdr_a)
+    assert pdf_resp.status_code == 200 and pdf_resp.content.startswith(b"%PDF-")
+    assert docx_resp.status_code == 200
+    assert html_resp.status_code == 200
+    assert client.get(body["tailored_cv"]["pdf_url"], headers=hdr_b).status_code in (403, 404)
 
-    docx_text = "\n".join(p.text for p in Document(str(docx_path)).paragraphs)
-    html_text = html_path.read_text(encoding="utf-8")
+    docx_text = "\n".join(p.text for p in Document(io.BytesIO(docx_resp.content)).paragraphs)
+    html_text = html_resp.text
     for rendered in (docx_text, html_text):
         assert "Giorgi Shakiashvili" in rendered
         assert "Sample QA Candidate" not in rendered

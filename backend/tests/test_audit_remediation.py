@@ -426,7 +426,8 @@ def test_high_05_06_09_11_12_14_backup_extension_cache_matching_and_uploads(tmp_
     k2 = gemini_service._build_cache_key("t", "gemini-3.6-flash", "prompt", "application/json", temperature=0.7, max_output_tokens=200)
     k3 = gemini_service._build_cache_key("t", "gemini-3.6-flash", "prompt", "application/json", temperature=0.0, max_output_tokens=800)
     assert len({k1, k2, k3}) == 3
-    assert gemini_service._resolve_pricing("gemini-3.5-flash-lite") == (0.10, 0.40)
+    assert gemini_service._resolve_pricing("gemini-3.5-flash-lite") == (0.30, 2.50)
+    assert gemini_service._resolve_pricing("gemini-3.6-flash") in ((0.75, 3.75), (1.50, 7.50))
 
     # HIGH-11: Word/token boundary matching eliminates substring false positives & restores Selenium WebDriver
     assert skills_match_token("Go", ["Django", "MongoDB"], "Built REST backends with Django and MongoDB") is False
@@ -506,23 +507,30 @@ def test_phase3_modularization_admin_aggregates_and_b2b_precision():
         tracker_store.delete(a1.id, user_id=u_id, is_guest=False)
         tracker_store.delete(a2.id, user_id=u_id, is_guest=False)
 
-    # B2B cumulative YTD 500k GEL check + DST-aware timezone matrix
+    # B2B cumulative YTD 500k GEL check (Tax Code Art. 90 actual vs projected separation) + DST-aware timezone matrix
     under = asyncio.run(
         calculate_georgia_b2b_net(
-            TaxCalculatorRequest(amount=10000, currency="GEL", billing_period="monthly", ytd_revenue_gel=100000)
+            TaxCalculatorRequest(amount=45000, currency="GEL", billing_period="monthly", ytd_revenue_gel=0)
         )
     )
+    # 45,000 GEL in Month 1 (YTD=0) is still under 500k actual -> 1% applies this month even though 12-mo run-rate = 540k
     assert under["under_500k_cap"] is True
+    assert under["actual_cumulative_gel"] == 45000.0
     assert under["b2b_small_business"]["tax_rate_pct"] == 1.0
+    assert under["b2b_small_business"]["tax_gel"] == 450.0
+    assert under["projected_exceeds_500k_cap"] is True
+    assert under["threshold_crossing_month"] == 12
+    assert under["cumulative_annual_gel"] == 540000.0
 
     over = asyncio.run(
         calculate_georgia_b2b_net(
-            TaxCalculatorRequest(amount=10000, currency="GEL", billing_period="monthly", ytd_revenue_gel=420000)
+            TaxCalculatorRequest(amount=10000, currency="GEL", billing_period="monthly", ytd_revenue_gel=495000)
         )
     )
     assert over["under_500k_cap"] is False
+    assert over["actual_cumulative_gel"] == 505000.0
     assert over["b2b_small_business"]["tax_rate_pct"] == 3.0
-    assert over["cumulative_annual_gel"] == 540000.0
+    assert over["threshold_crossing_month"] == 1
 
     tz = get_tbilisi_timezone_matrix(work_start_get=11, work_end_get=19)
     assert len(tz["regions"]) == 5
@@ -586,6 +594,13 @@ def test_phase4_ats_pdf_checker_evidence_diffs_and_immutable_jd_snapshots(monkey
         assert direct_check["candidate_name_present"] is True
         assert "Experience" in direct_check["sections_detected"]
     finally:
+        for pk in ("pdf_path", "docx_path"):
+            p_str = gdata.get(pk)
+            if p_str and Path(p_str).exists():
+                Path(p_str).unlink()
+                html_sib = Path(p_str).with_suffix(".html")
+                if html_sib.exists():
+                    html_sib.unlink()
         for fk in ("pdf_filename", "docx_filename", "html_filename"):
             fn = gdata.get(fk)
             if fn and (GENERATED_RESUMES_DIR / fn).exists():

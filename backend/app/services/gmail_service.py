@@ -21,6 +21,7 @@ from ..config import (
     GENERATED_RESUMES_DIR,
     get_smtp_config,
 )
+from ..db.document_repository import resolve_owned_generated_document, user_generated_resumes_dir
 from ..db.models import User
 from .crypto_service import mask_email
 
@@ -41,17 +42,24 @@ class GmailService:
     """
 
     @staticmethod
-    def _resolve_safe_attachment_path(fpath: Optional[str]) -> Optional[Path]:
-        """Restricts outbound email/draft attachments strictly to files inside GENERATED_RESUMES_DIR."""
+    def _resolve_safe_attachment_path(fpath: Optional[str], user_id: Optional[int] = None) -> Optional[Path]:
+        """Restricts outbound email/draft attachments strictly to files owned by user_id (or root dir when unauthenticated)."""
         if not fpath or "\x00" in str(fpath):
             return None
-        gen_root = GENERATED_RESUMES_DIR.resolve()
         raw = Path(str(fpath).strip())
-        if raw.is_absolute():
-            candidate = raw.resolve()
-        else:
-            candidate = (gen_root / raw.name).resolve()
-        if not candidate.is_relative_to(gen_root) or not candidate.is_file():
+        if user_id is not None:
+            user_dir = user_generated_resumes_dir(user_id)
+            candidate = raw.resolve() if raw.is_absolute() else (user_dir / raw.name).resolve()
+            if candidate.is_relative_to(user_dir) and candidate.is_file():
+                owned, _ = resolve_owned_generated_document(candidate.name, user_id=user_id, is_guest=False)
+                if owned is not None or candidate.parent == user_dir:
+                    return candidate
+            logger.warning("Blocked or missing user-scoped email attachment %s for user_id=%s", fpath, user_id)
+            return None
+
+        gen_root = GENERATED_RESUMES_DIR.resolve()
+        candidate = raw.resolve() if raw.is_absolute() else (gen_root / raw.name).resolve()
+        if candidate.parent != gen_root or not candidate.is_relative_to(gen_root) or not candidate.is_file():
             logger.warning("Blocked or missing email attachment path outside generated resumes dir: %s", fpath)
             return None
         return candidate
@@ -110,6 +118,7 @@ class GmailService:
         body_text: str,
         pdf_path: Optional[str] = None,
         attachment_paths: Optional[List[str]] = None,
+        user_id: Optional[int] = None,
     ) -> email.mime.multipart.MIMEMultipart:
         """Constructs an RFC 2822 compliant MIME message with Word (.docx) / PDF resume attachments."""
         msg = email.mime.multipart.MIMEMultipart()
@@ -131,7 +140,7 @@ class GmailService:
                     all_files.append(ap)
 
         for fpath in all_files:
-            p = self._resolve_safe_attachment_path(fpath)
+            p = self._resolve_safe_attachment_path(fpath, user_id=user_id)
             if p is not None:
                 with open(p, "rb") as f:
                     ext = p.suffix.lower()
@@ -180,8 +189,9 @@ class GmailService:
         Returns {draft_created, attached_files, drafts_url, mode_used, error}.
         """
         resolved_files: List[str] = []
+        uid = user.id if user else None
         for fpath in (attachment_paths or []):
-            p = self._resolve_safe_attachment_path(fpath)
+            p = self._resolve_safe_attachment_path(fpath, user_id=uid)
             if p is not None:
                 resolved_files.append(str(p))
 
@@ -207,6 +217,7 @@ class GmailService:
                     subject=subject,
                     body_text=body_text,
                     attachment_paths=resolved_files,
+                    user_id=uid,
                 )
                 raw_b64 = base64.urlsafe_b64encode(mime_msg.as_bytes()).decode("utf-8")
                 draft = service.users().drafts().create(userId="me", body={"message": {"raw": raw_b64}}).execute()
@@ -304,6 +315,7 @@ class GmailService:
             subject=subject,
             body_text=body_text,
             pdf_path=pdf_path,
+            user_id=user.id,
         )
         raw_base64 = base64.urlsafe_b64encode(mime_msg.as_bytes()).decode("utf-8")
 
@@ -357,6 +369,7 @@ class GmailService:
                 subject=subject,
                 body_text=body_text,
                 pdf_path=pdf_path,
+                user_id=user.id,
             )
             if ok:
                 return {
@@ -375,8 +388,8 @@ class GmailService:
         # Build downloadable RFC 2822 .eml draft file so user can open directly in any mail client with CV attached
         import uuid
         eml_filename = f"application_{uuid.uuid4().hex[:8]}.eml"
-        GENERATED_RESUMES_DIR.mkdir(parents=True, exist_ok=True)
-        eml_path = GENERATED_RESUMES_DIR / eml_filename
+        user_dir = user_generated_resumes_dir(user.id)
+        eml_path = user_dir / eml_filename
         eml_path.write_bytes(mime_msg.as_bytes())
         return {
             "status": "needs_transport",
@@ -433,6 +446,7 @@ class GmailService:
         body_text: str,
         html_body: Optional[str] = None,
         pdf_path: Optional[str] = None,
+        user_id: Optional[int] = None,
     ) -> tuple[bool, str]:
         """
         Sends a real email via Gmail / SMTP (SSL on 465 or STARTTLS on 587).
@@ -460,7 +474,7 @@ class GmailService:
             msg.attach(email.mime.text.MIMEText(body_text, "plain", "utf-8"))
 
         if pdf_path:
-            p = self._resolve_safe_attachment_path(pdf_path)
+            p = self._resolve_safe_attachment_path(pdf_path, user_id=user_id)
             if p is not None:
                 with open(p, "rb") as f:
                     part = email.mime.application.MIMEApplication(f.read(), _subtype="pdf")

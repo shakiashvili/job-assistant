@@ -13,10 +13,12 @@ from sqlmodel import Session, select
 from ..config import BASE_DIR, reload_env_files, get_smtp_config, IS_PRODUCTION
 from ..db.database import get_session, delete_job_posting_cascade
 from ..db.models import User, UserOTP, CandidateProfile, JobPosting, utc_now
-from ..services.crypto_service import blind_index, mask_email
+from ..services.crypto_service import blind_index, blind_index_candidates, mask_email
 from ..services.auth_service import (
+    MAX_IP_AUTH_ATTEMPTS,
     MAX_OTP_REQUESTS,
     MAX_PASSWORD_BYTES,
+    extract_client_ip,
     hash_password,
     verify_password,
     create_access_token,
@@ -214,13 +216,27 @@ def register_user(req: RegisterRequest, response: Response, session: Session = D
 
 
 @router.post("/login", response_model=AuthResponse)
-def login_user(req: LoginRequest, response: Response, session: Session = Depends(get_session)):
+def login_user(
+    req: LoginRequest,
+    request: Request,
+    response: Response,
+    session: Session = Depends(get_session),
+):
     clean_email = sanitize_email(req.email)
+    client_ip = extract_client_ip(request)
     check_rate_limit(clean_email)
+    if client_ip not in ("unknown", "testclient"):
+        check_rate_limit(
+            f"login_ip:{client_ip}",
+            max_attempts=MAX_IP_AUTH_ATTEMPTS,
+            error_detail="Too many failed login attempts from this network. Please wait {remaining} seconds before retrying.",
+        )
 
     user = get_user_by_email(session, clean_email)
     if not user or not verify_password(req.password, user.hashed_password):
         record_login_failure(clean_email)
+        if client_ip not in ("unknown", "testclient"):
+            record_login_failure(f"login_ip:{client_ip}")
         # Constant-time message prevents user enumeration attacks
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -233,6 +249,11 @@ def login_user(req: LoginRequest, response: Response, session: Session = Depends
             status_code=status.HTTP_403_FORBIDDEN,
             detail="This account has been deactivated. Please contact an administrator.",
         )
+
+    active_digest = blind_index(clean_email)
+    if user.email_hash != active_digest:
+        user.email_hash = active_digest
+        session.add(user)
 
     reset_login_attempts(clean_email)
     _sync_profile_owner_on_auth(session, clean_email, force_reset=False)
@@ -337,7 +358,8 @@ def send_otp_code(
     """
     clean_email = sanitize_email(req.email)
     email_digest = blind_index(clean_email)
-    client_host = (request.client.host if request and request.client else "") or "unknown"
+    email_digests = blind_index_candidates(clean_email)
+    client_host = extract_client_ip(request)
     consume_rate_limit(
         f"otp_request:{clean_email}",
         max_attempts=MAX_OTP_REQUESTS,
@@ -352,7 +374,7 @@ def send_otp_code(
 
     # Invalidate previous unused OTPs for this email
     prev_otps = session.exec(
-        select(UserOTP).where((UserOTP.email_hash == email_digest) & (UserOTP.is_used == False))
+        select(UserOTP).where((UserOTP.email_hash.in_(email_digests)) & (UserOTP.is_used == False))
     ).all()
     for o in prev_otps:
         o.is_used = True
@@ -406,20 +428,32 @@ def send_otp_code(
 
 
 @router.post("/verify-otp", response_model=AuthResponse)
-def verify_otp_code(req: VerifyOTPRequest, response: Response, session: Session = Depends(get_session)):
+def verify_otp_code(
+    req: VerifyOTPRequest,
+    request: Request,
+    response: Response,
+    session: Session = Depends(get_session),
+):
     """
     Verifies the 6-digit OTP code with strict brute-force rate limiting and returns signed JWT tokens.
     Automatically creates a candidate User record if signing in for the first time.
     """
     clean_email = sanitize_email(req.email)
+    client_ip = extract_client_ip(request)
     otp_key = f"otp_verify:{clean_email}"
     check_rate_limit(otp_key)
+    if client_ip not in ("unknown", "testclient"):
+        check_rate_limit(
+            f"otp_verify_ip:{client_ip}",
+            max_attempts=MAX_IP_AUTH_ATTEMPTS,
+            error_detail="Too many OTP verification attempts from this network. Please wait {remaining} seconds before retrying.",
+        )
     clean_code = req.otp_code.strip()
-    email_digest = blind_index(clean_email)
+    email_digests = blind_index_candidates(clean_email)
 
     active_otps = session.exec(
         select(UserOTP)
-        .where((UserOTP.email_hash == email_digest) & (UserOTP.is_used == False))
+        .where((UserOTP.email_hash.in_(email_digests)) & (UserOTP.is_used == False))
         .order_by(UserOTP.id.desc())
     ).all()
 
@@ -437,6 +471,8 @@ def verify_otp_code(req: VerifyOTPRequest, response: Response, session: Session 
     if not otp_record or not expires_at or expires_at < now_utc:
         record_login_failure(otp_key)
         record_login_failure(clean_email)
+        if client_ip not in ("unknown", "testclient"):
+            record_login_failure(f"otp_verify_ip:{client_ip}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid or expired verification code. Please request a new OTP.",
@@ -461,6 +497,13 @@ def verify_otp_code(req: VerifyOTPRequest, response: Response, session: Session 
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid or expired verification code. Please request a new OTP.",
         )
+
+    if user is not None:
+        active_digest = blind_index(clean_email)
+        if user.email_hash != active_digest:
+            user.email_hash = active_digest
+            session.add(user)
+            session.commit()
 
     reset_login_attempts(otp_key)
 

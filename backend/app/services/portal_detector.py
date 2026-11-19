@@ -24,21 +24,35 @@ HOSTNAME_PORTAL_MAP = {
 }
 
 
+KNOWN_PORTALS = set(HOSTNAME_PORTAL_MAP.values())
+
+
+def _extract_http_hostname(url: str) -> Optional[str]:
+    """Extracts normalized hostname only for HTTP/HTTPS (or scheme-less web) URLs."""
+    raw = (url or "").strip()
+    if not raw or raw.lower().startswith(("file:", "javascript:", "data:", "mailto:", "about:")):
+        return None
+
+    parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return None
+
+    return parsed.hostname.lower().strip().rstrip(".")
+
+
 def detect_portal_from_url(url: str) -> str:
     """
     Detects portal strictly using canonical URL hostname parsing (urllib.parse.urlparse).
     """
-    if not url:
+    hostname = _extract_http_hostname(url)
+    if not hostname:
         return "custom"
-
-    parsed = urlparse(url if "://" in url else f"https://{url}")
-    hostname = (parsed.hostname or "").lower().strip()
 
     if hostname in HOSTNAME_PORTAL_MAP:
         return HOSTNAME_PORTAL_MAP[hostname]
 
     for domain, portal in HOSTNAME_PORTAL_MAP.items():
-        if hostname.endswith(f".{domain}") or hostname == domain:
+        if hostname == domain or hostname.endswith(f".{domain}"):
             return portal
 
     return "custom"
@@ -47,38 +61,30 @@ def detect_portal_from_url(url: str) -> str:
 def detect_portal_from_html(html: str, url: Optional[str] = None) -> Tuple[str, dict]:
     """
     Extracts job metadata from HTML using semantic DOM selectors and canonical URL hostname parsing.
+    When an HTTP/HTTPS URL is provided, its hostname is authoritative and HTML metadata/links
+    cannot spoof another portal. HTML structural markers are inspected only for local/URL-less inputs.
     """
+    hostname = _extract_http_hostname(url or "")
     portal_type = detect_portal_from_url(url or "")
     soup = BeautifulSoup(html or "", "html.parser")
 
-    if portal_type == "custom":
-        doc_title = (soup.title.string if soup.title and soup.title.string else "").lower()
-        canonical_link = soup.find("link", rel="canonical")
-        if canonical_link and canonical_link.get("href"):
-            portal_type = detect_portal_from_url(str(canonical_link["href"]))
-
-        if portal_type == "custom":
-            if (
-                "greenhouse" in doc_title
-                or soup.find("meta", attrs={"property": "og:site_name", "content": re.compile(r"Greenhouse", re.I)})
-                or soup.find("input", attrs={"name": re.compile(r"job_application\[", re.I)})
-                or soup.find(id="first_name")
-            ):
-                portal_type = "greenhouse"
-            elif (
-                "lever" in doc_title
-                or soup.find("form", class_=re.compile(r"application-form", re.I))
-                or soup.find("input", attrs={"name": "urls[LinkedIn]"})
-            ):
-                portal_type = "lever"
-            elif "dou.ua" in doc_title or soup.find("a", href=re.compile(r"dou\.ua", re.I)):
-                portal_type = "dou.ua"
-            elif "djinni" in doc_title or soup.find("a", href=re.compile(r"djinni\.co", re.I)):
-                portal_type = "djinni.co"
-            elif "jobs.ge" in doc_title or soup.find("a", href=re.compile(r"jobs\.ge", re.I)):
-                portal_type = "jobs.ge"
-            elif "hr.ge" in doc_title or soup.find("a", href=re.compile(r"hr\.ge", re.I)):
-                portal_type = "hr.ge"
+    if portal_type == "custom" and hostname is None:
+        board_el = soup.find(attrs={"data-board": True})
+        board_val = str(board_el.get("data-board", "")).strip().lower() if board_el else ""
+        if board_val in KNOWN_PORTALS:
+            portal_type = board_val
+        elif soup.find("input", attrs={"name": re.compile(r"^job_application\[", re.I)}):
+            portal_type = "greenhouse"
+        elif soup.find("input", attrs={"name": "urls[LinkedIn]"}):
+            portal_type = "lever"
+        elif soup.find("form", id="dou-apply-form"):
+            portal_type = "dou.ua"
+        elif soup.find("form", id="djinni-apply-form"):
+            portal_type = "djinni.co"
+        elif soup.find("form", id="jobsge-apply-form"):
+            portal_type = "jobs.ge"
+        elif soup.find("form", id="justjoin-apply-form"):
+            portal_type = "justjoin.it"
 
     # Extract Title via semantic headings / OpenGraph metadata
     title = ""

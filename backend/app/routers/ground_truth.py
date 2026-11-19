@@ -8,7 +8,11 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select, delete
 
-from ..db.document_repository import record_candidate_document  # noqa: F401 - re-exported for backward compatibility
+from ..db.document_repository import (  # noqa: F401 - re-exported for backward compatibility
+    record_candidate_document,
+    resolve_owned_generated_document,
+    user_generated_resumes_dir,
+)
 from ..db.profile_repository import ground_truth_store, PROFESSION_MD_PRESETS
 from ..db.models import (
     User,
@@ -106,40 +110,21 @@ def _sanitize_uploaded_cv_name(raw_filename: Optional[str]) -> str:
     return _sanitize_safe_filename(candidate_name)
 
 
-def _verify_document_ownership(filename: str, current_user: User) -> None:
+def _resolve_generated_resume_for_user(filename: str, current_user: User) -> Path:
+    """Resolves a generated CV file strictly after fail-closed ownership verification for current_user."""
     safe_name = _sanitize_safe_filename(filename)
-    stem = Path(safe_name).stem
-    with Session(engine) as session:
-        docs = session.exec(
-            select(CandidateDocument).where(
-                (CandidateDocument.filename == safe_name)
-                | (CandidateDocument.filename == f"{stem}.pdf")
-                | (CandidateDocument.filename == f"{stem}.docx")
-            )
-        ).all()
-        if any(doc.user_id == current_user.id for doc in docs):
-            return
-        for doc in docs:
-            if doc.user_id is not None and doc.user_id != current_user.id:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Forbidden: document belongs to another user.",
-                )
-
-
-def _is_file_visible_to_user(filename: str, current_user: User, owner_map: Dict[str, Any]) -> bool:
-    safe_name = Path(filename).name
-    stem = Path(safe_name).stem
-    owners: set = set()
-    for key in (safe_name, f"{stem}.pdf", f"{stem}.docx"):
-        val = owner_map.get(key)
-        if isinstance(val, (set, list, tuple)):
-            owners.update(v for v in val if v is not None)
-        elif val is not None:
-            owners.add(val)
-    if owners:
-        return current_user.id in owners
-    return _is_guest(current_user)
+    path, err = resolve_owned_generated_document(
+        safe_name,
+        user_id=current_user.id,
+        is_guest=_is_guest(current_user),
+    )
+    if err == "invalid":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported or unsafe document filename.")
+    if err == "forbidden":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: document belongs to another user.")
+    if err or path is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Generated Resume file not found")
+    return path
 
 
 class SkillsMdPayload(BaseModel):
@@ -633,15 +618,17 @@ def generate_cv_edition(
         description=desc,
         skills_md_override=live.get("skills_markdown") or None,
         owner_email=current_user.email,
+        user_id=current_user.id,
         cv_language=req.cv_language or "en",
         cv_style=req.edition or "ats",
     )
+    user_gen_dir = user_generated_resumes_dir(current_user.id)
     recorded_names: set[str] = set()
     for fname_key in ("pdf_filename", "docx_filename", "cv_filename"):
         fname_val = pkg.get(fname_key)
         if fname_val and fname_val not in recorded_names:
             recorded_names.add(fname_val)
-            file_p = GENERATED_RESUMES_DIR / fname_val
+            file_p = user_gen_dir / fname_val
             record_candidate_document(
                 user_id=current_user.id,
                 filename=fname_val,
@@ -748,8 +735,9 @@ def check_cv_version_ats_parseability(
         if not ver.pdf_filename:
             raise HTTPException(status_code=400, detail="No generated PDF exists for this CV version yet.")
         safe_pdf = _sanitize_safe_filename(ver.pdf_filename)
-        pdf_path = (GENERATED_RESUMES_DIR / safe_pdf).resolve()
-        if not pdf_path.is_relative_to(GENERATED_RESUMES_DIR.resolve()) or not pdf_path.is_file():
+        user_gen_dir = user_generated_resumes_dir(current_user.id)
+        pdf_path = (user_gen_dir / safe_pdf).resolve()
+        if not pdf_path.is_relative_to(user_gen_dir) or not pdf_path.is_file():
             raise HTTPException(status_code=404, detail="Generated PDF file not found on disk.")
         sec = ver.structured_content or {}
         cand = sec.get("candidate") or {}
@@ -757,6 +745,7 @@ def check_cv_version_ats_parseability(
             pdf_path,
             candidate_name=str(cand.get("full_name") or current_user.full_name or ""),
             expected_email=str(cand.get("email") or current_user.email or ""),
+            expected_phone=str(cand.get("phone") or ""),
             expected_keywords=[str(s) for s in (sec.get("skills") or [])[:12]],
         )
         return {"version_id": ver.id, "pdf_filename": safe_pdf, **report}
@@ -786,15 +775,16 @@ def create_cv_version(
             "cv_style": req.edition,
         }
 
-    rendered = cv_generator_service.render_cv_from_sections(sections)
+    rendered = cv_generator_service.render_cv_from_sections(sections, user_id=current_user.id)
     if rendered.get("ats_parse_report"):
         sections["ats_parse_report"] = rendered["ats_parse_report"]
+    user_gen_dir = user_generated_resumes_dir(current_user.id)
     for fname in (rendered.get("pdf_filename"), rendered.get("docx_filename")):
         if fname:
             record_candidate_document(
                 user_id=current_user.id,
                 filename=fname,
-                file_path=GENERATED_RESUMES_DIR / fname,
+                file_path=user_gen_dir / fname,
                 doc_type=f"cv_studio_{req.edition}",
                 target_company=req.target_company,
                 target_role=req.target_role,
@@ -854,15 +844,17 @@ def update_cv_version(
         rendered = cv_generator_service.render_cv_from_sections(
             sections,
             base_name_override=ver.pdf_filename,
+            user_id=current_user.id,
         )
         if rendered.get("ats_parse_report"):
             sections["ats_parse_report"] = rendered["ats_parse_report"]
+        user_gen_dir = user_generated_resumes_dir(current_user.id)
         for fname in (rendered.get("pdf_filename"), rendered.get("docx_filename")):
             if fname:
                 record_candidate_document(
                     user_id=current_user.id,
                     filename=fname,
-                    file_path=GENERATED_RESUMES_DIR / fname,
+                    file_path=user_gen_dir / fname,
                     doc_type=f"cv_studio_{ver.edition}",
                     target_company=ver.target_company,
                     target_role=ver.target_role,
@@ -897,18 +889,57 @@ def delete_cv_version(
 
 @router.get("/resumes/generated")
 def list_generated_resumes(current_user: User = Depends(get_current_user)):
-    """Lists dynamically generated per-vacancy PDF, DOCX & HTML CVs visible to the current user."""
+    """Lists dynamically generated per-vacancy PDF, DOCX & HTML CVs strictly owned by the current user."""
     files = []
-    with Session(engine) as session:
-        docs = session.exec(select(CandidateDocument)).all()
-        owner_map: Dict[str, set] = {}
-        for d in docs:
-            owner_map.setdefault(d.filename, set()).add(d.user_id)
+    seen_names: set[str] = set()
+    is_guest = _is_guest(current_user)
+    user_dir = user_generated_resumes_dir(current_user.id)
 
-    if GENERATED_RESUMES_DIR.exists():
-        for f in sorted(GENERATED_RESUMES_DIR.glob("*.pdf"), key=lambda p: p.stat().st_mtime, reverse=True):
-            if not _is_file_visible_to_user(f.name, current_user, owner_map):
+    with Session(engine) as session:
+        user_docs = session.exec(
+            select(CandidateDocument).where(CandidateDocument.user_id == current_user.id)
+        ).all()
+        user_vers = session.exec(
+            select(CVVersion).where(CVVersion.user_id == current_user.id)
+        ).all()
+
+    owned_pdf_names: set[str] = set()
+    for d in user_docs:
+        if d.filename.lower().endswith(".pdf"):
+            owned_pdf_names.add(d.filename)
+        elif d.filename.lower().endswith(".docx"):
+            owned_pdf_names.add(f"{Path(d.filename).stem}.pdf")
+    for v in user_vers:
+        if v.pdf_filename:
+            owned_pdf_names.add(v.pdf_filename)
+
+    if user_dir.exists():
+        for f in sorted(user_dir.glob("*.pdf"), key=lambda p: p.stat().st_mtime, reverse=True):
+            if not is_guest and f.name not in owned_pdf_names:
                 continue
+            if f.name in seen_names:
+                continue
+            seen_names.add(f.name)
+            html_sibling = f.with_suffix(".html")
+            docx_sibling = f.with_suffix(".docx")
+            files.append({
+                "filename": f.name,
+                "url": f"/api/resumes/generated/{f.name}",
+                "docx_url": f"/api/resumes/generated/{docx_sibling.name}" if docx_sibling.exists() else None,
+                "html_url": f"/api/resumes/generated/{html_sibling.name}" if html_sibling.exists() else None,
+                "size_kb": round(f.stat().st_size / 1024, 1),
+            })
+
+    if is_guest and GENERATED_RESUMES_DIR.exists():
+        with Session(engine) as session:
+            non_guest_files = {
+                d.filename for d in session.exec(select(CandidateDocument)).all()
+                if d.user_id is not None and d.user_id != current_user.id
+            }
+        for f in sorted(GENERATED_RESUMES_DIR.glob("*.pdf"), key=lambda p: p.stat().st_mtime, reverse=True):
+            if f.name in seen_names or f.name in non_guest_files:
+                continue
+            seen_names.add(f.name)
             html_sibling = f.with_suffix(".html")
             docx_sibling = f.with_suffix(".docx")
             files.append({
@@ -926,12 +957,9 @@ def get_generated_resume_file(
     filename: str,
     current_user: User = Depends(get_current_user),
 ):
-    """Downloads or previews a generated PDF, Word (.docx), EML, or sandboxed HTML resume after verifying ownership."""
+    """Downloads or previews a generated PDF, Word (.docx), EML, or sandboxed HTML resume after fail-closed ownership verification."""
     safe_name = _sanitize_safe_filename(filename)
-    _verify_document_ownership(safe_name, current_user)
-    file_path = (GENERATED_RESUMES_DIR / safe_name).resolve()
-    if not file_path.is_relative_to(GENERATED_RESUMES_DIR.resolve()) or not file_path.exists():
-        raise HTTPException(status_code=404, detail="Generated Resume file not found")
+    file_path = _resolve_generated_resume_for_user(safe_name, current_user)
     lower = safe_name.lower()
     if lower.endswith(".html"):
         return FileResponse(
@@ -973,14 +1001,16 @@ def get_resume_pdf(
     filename: str,
     current_user: User = Depends(get_current_user),
 ):
-    """Downloads or previews a base or generated PDF/DOCX/HTML resume after verifying ownership."""
+    """Downloads or previews a user-owned uploaded or generated PDF/DOCX/HTML resume after fail-closed ownership check."""
     safe_name = _sanitize_safe_filename(filename)
-    _verify_document_ownership(safe_name, current_user)
-    file_path = (RESUMES_DIR / safe_name).resolve()
-    if not file_path.is_relative_to(RESUMES_DIR.resolve()) or not file_path.exists():
-        file_path = (GENERATED_RESUMES_DIR / safe_name).resolve()
-        if not file_path.is_relative_to(GENERATED_RESUMES_DIR.resolve()) or not file_path.exists():
-            raise HTTPException(status_code=404, detail="Resume file not found")
+    file_path: Optional[Path] = None
+    try:
+        file_path, _ = _resolve_user_uploaded_cv(safe_name, current_user)
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_404_NOT_FOUND:
+            raise
+    if file_path is None:
+        file_path = _resolve_generated_resume_for_user(safe_name, current_user)
     lower = safe_name.lower()
     if lower.endswith(".html"):
         return FileResponse(

@@ -1,7 +1,9 @@
+import json
 import logging
 import os
+from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +67,138 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 GEMINI_FAST_MODEL = os.getenv("GEMINI_FAST_MODEL", "gemini-3.5-flash-lite")
 GEMINI_TIMEOUT_MS = int(os.getenv("GEMINI_TIMEOUT_MS", "30000"))
+GEMINI_PRICING_TIER = os.getenv("GEMINI_PRICING_TIER", "standard").strip().lower() or "standard"
+
+# Per-1M token (input_usd, output_usd) schedule by model family and tier.
+# Can be overridden at runtime via GEMINI_MODEL_PRICING_JSON without editing application logic.
+GEMINI_DEFAULT_PRICING: Dict[str, Dict[str, Any]] = {
+    "gemini-3.6-flash": {
+        "effective_until_2026": {
+            "free": (0.0, 0.0),
+            "standard": (0.75, 3.75),
+            "batch": (0.375, 1.875),
+            "flex": (0.375, 1.875),
+            "priority": (1.35, 6.75),
+        },
+        "free": (0.0, 0.0),
+        "standard": (1.50, 7.50),
+        "batch": (0.75, 3.75),
+        "flex": (0.75, 3.75),
+        "priority": (2.70, 13.50),
+    },
+    "gemini-3.8-flash": {
+        "effective_until_2026": {
+            "free": (0.0, 0.0),
+            "standard": (0.75, 3.75),
+            "batch": (0.375, 1.875),
+            "flex": (0.375, 1.875),
+            "priority": (1.35, 6.75),
+        },
+        "free": (0.0, 0.0),
+        "standard": (1.50, 7.50),
+        "batch": (0.75, 3.75),
+        "flex": (0.75, 3.75),
+        "priority": (2.70, 13.50),
+    },
+    "gemini-3.5-flash-lite": {
+        "free": (0.0, 0.0),
+        "standard": (0.30, 2.50),
+        "batch": (0.15, 1.25),
+        "flex": (0.15, 1.25),
+        "priority": (0.54, 4.50),
+    },
+    "gemini-3-flash": {
+        "free": (0.0, 0.0),
+        "standard": (0.75, 3.75),
+        "batch": (0.375, 1.875),
+        "flex": (0.375, 1.875),
+        "priority": (1.35, 6.75),
+    },
+    "gemini-2.5-flash-lite": {
+        "free": (0.0, 0.0),
+        "standard": (0.10, 0.40),
+        "batch": (0.05, 0.20),
+        "flex": (0.05, 0.20),
+        "priority": (0.18, 0.72),
+    },
+    "gemini-2.5-flash": {
+        "free": (0.0, 0.0),
+        "standard": (0.30, 2.50),
+        "batch": (0.15, 1.25),
+        "flex": (0.15, 1.25),
+        "priority": (0.54, 4.50),
+    },
+    "gemini-3-pro": {
+        "free": (0.0, 0.0),
+        "standard": (1.25, 10.00),
+        "batch": (0.625, 5.00),
+        "flex": (0.625, 5.00),
+        "priority": (2.25, 18.00),
+    },
+    "gemini-2.5-pro": {
+        "free": (0.0, 0.0),
+        "standard": (1.25, 10.00),
+        "batch": (0.625, 5.00),
+        "flex": (0.625, 5.00),
+        "priority": (2.25, 18.00),
+    },
+}
+
+
+def resolve_gemini_model_pricing(
+    model_name: str,
+    tier: Optional[str] = None,
+    as_of: Optional[date] = None,
+) -> Tuple[float, float]:
+    """
+    Resolves (input_usd_per_1m, output_usd_per_1m) from GEMINI_MODEL_PRICING_JSON override
+    or the configurable tier-aware schedule in GEMINI_DEFAULT_PRICING.
+    """
+    selected_tier = (tier or os.getenv("GEMINI_PRICING_TIER") or GEMINI_PRICING_TIER or "standard").strip().lower()
+    if selected_tier == "free":
+        return (0.0, 0.0)
+
+    check_date = as_of or datetime.now(timezone.utc).date()
+    low_model = (model_name or "").strip().lower()
+
+    pricing_table: Dict[str, Dict[str, Any]] = dict(GEMINI_DEFAULT_PRICING)
+    override_raw = os.getenv("GEMINI_MODEL_PRICING_JSON", "").strip()
+    if override_raw:
+        try:
+            loaded = json.loads(override_raw)
+            if isinstance(loaded, dict):
+                for mk, mv in loaded.items():
+                    if isinstance(mv, dict):
+                        pricing_table[str(mk).lower()] = mv
+        except Exception as exc:
+            logger.warning("Invalid GEMINI_MODEL_PRICING_JSON ignored: %s", exc)
+
+    matched_entry: Optional[Dict[str, Any]] = None
+    for prefix in sorted(pricing_table.keys(), key=len, reverse=True):
+        if prefix in low_model:
+            matched_entry = pricing_table[prefix]
+            break
+
+    if matched_entry:
+        tier_map = matched_entry
+        if check_date <= date(2026, 12, 31) and isinstance(matched_entry.get("effective_until_2026"), dict):
+            tier_map = matched_entry["effective_until_2026"]
+        rates = tier_map.get(selected_tier) or tier_map.get("standard")
+        if isinstance(rates, (list, tuple)) and len(rates) == 2:
+            return (float(rates[0]), float(rates[1]))
+
+    if "flash-lite" in low_model:
+        base = (0.30, 2.50)
+    elif "pro" in low_model:
+        base = (1.25, 10.00)
+    else:
+        base = (0.75, 3.75)
+
+    if selected_tier in ("batch", "flex"):
+        return (round(base[0] * 0.5, 4), round(base[1] * 0.5, 4))
+    if selected_tier == "priority":
+        return (round(base[0] * 1.8, 4), round(base[1] * 1.8, 4))
+    return base
 PORT = int(os.getenv("PORT", "8000"))
 HOST = os.getenv("HOST", "0.0.0.0")
 ENABLE_PLAYWRIGHT = os.getenv("ENABLE_PLAYWRIGHT", "true").strip().lower() in ("1", "true", "yes", "on")

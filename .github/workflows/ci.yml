@@ -63,11 +63,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: Install, typecheck, and build frontend
+      - name: Install, typecheck, test, and build frontend
         working-directory: frontend
         run: |
           npm ci
           npx tsc --noEmit
+          npm test
           npm run build
       - name: Validate Chrome Extension JS & Manifest
         run: |

@@ -1,6 +1,8 @@
 import asyncio
 import logging
+import os
 import re
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -22,6 +24,17 @@ except ImportError:  # pragma: no cover - slim cloud deploys with ENABLE_PLAYWRI
     Page = Any
 
 from ..config import RESUMES_DIR, GENERATED_RESUMES_DIR, ENABLE_PLAYWRIGHT
+from ..db.document_repository import (
+    is_valid_safe_doc_name,
+    record_candidate_document,
+    resolve_owned_generated_document,
+    resolve_user_id_by_email,
+    user_generated_resumes_dir,
+    user_uploaded_resumes_dir,
+)
+from ..db.models import CandidateDocument, StageApplicationResponse
+from ..db.database import engine
+from sqlmodel import Session, select
 from ..db.profile_repository import ground_truth_store
 from ..services.portal_detector import detect_portal_from_url, detect_portal_from_html
 from ..services.audit_service import validate_safe_external_url
@@ -29,7 +42,6 @@ from ..services.company_validator import company_validator
 from ..services.cv_generator_service import cv_generator_service
 from ..services.gemini_service import gemini_service
 from ..services.salary_service import salary_service
-from ..db.models import StageApplicationResponse
 
 logger = logging.getLogger(__name__)
 
@@ -49,33 +61,75 @@ class PlaywrightStagerService:
     def __init__(self):
         self._active_sessions: Dict[str, Dict[str, Any]] = {}
 
-    def get_resume_path(self, variant: str, custom_pdf_filename: Optional[str] = None) -> Optional[Path]:
-        gen_root = GENERATED_RESUMES_DIR.resolve()
-        res_root = RESUMES_DIR.resolve()
+    def get_resume_path(
+        self,
+        variant: str,
+        custom_pdf_filename: Optional[str] = None,
+        user_id: Optional[int] = None,
+        owner_email: Optional[str] = None,
+    ) -> Optional[Path]:
+        """
+        Fail-closed resume file resolution scoped strictly to the authenticated user.
+        Never falls back to selecting files from shared directories.
+        """
+        uid = user_id if user_id is not None else resolve_user_id_by_email(owner_email)
+
         if custom_pdf_filename:
-            raw_cand = str(custom_pdf_filename).strip()
-            cand_path = Path(raw_cand)
-            if cand_path.is_absolute() or ".." in cand_path.parts or "/" in raw_cand or "\\" in raw_cand:
-                resolved = cand_path.resolve()
-                if (resolved.is_relative_to(gen_root) or resolved.is_relative_to(res_root)) and resolved.is_file():
-                    return resolved
+            safe_name = is_valid_safe_doc_name(custom_pdf_filename)
+            if not safe_name:
                 return None
-            gen_path = (gen_root / raw_cand).resolve()
-            if gen_path.is_relative_to(gen_root) and gen_path.is_file():
+
+            gen_path, err = resolve_owned_generated_document(
+                safe_name,
+                user_id=uid,
+                is_guest=(uid is None),
+            )
+            if gen_path is not None:
                 return gen_path
-            direct_path = (res_root / raw_cand).resolve()
-            if direct_path.is_relative_to(res_root) and direct_path.is_file():
-                return direct_path
+            if err == "forbidden":
+                return None
+
+            if uid is not None:
+                upload_dir = user_uploaded_resumes_dir(uid)
+                with Session(engine) as session:
+                    uploaded_doc = session.exec(
+                        select(CandidateDocument).where(
+                            CandidateDocument.filename == safe_name,
+                            CandidateDocument.doc_type == "uploaded_cv",
+                            CandidateDocument.user_id == uid,
+                        )
+                    ).first()
+                if uploaded_doc:
+                    cand = (
+                        Path(uploaded_doc.storage_path).resolve()
+                        if uploaded_doc.storage_path
+                        else (upload_dir / safe_name).resolve()
+                    )
+                    if cand.is_relative_to(upload_dir) and cand.is_file():
+                        return cand
+            return None
+
+        if uid is None:
             return None
 
         variants = ground_truth_store.get_cv_variants()
-        variant_data = variants.get(variant, {})
-        filename = Path(str(variant_data.get("resume_file") or f"resume_{variant}.pdf")).name
-        path = (res_root / filename).resolve()
-        if path.is_relative_to(res_root) and path.is_file():
-            return path
-        resumes = list(GENERATED_RESUMES_DIR.glob("*.pdf")) + list(RESUMES_DIR.glob("*.pdf"))
-        return resumes[0] if resumes else None
+        variant_data = variants.get(variant, {}) if isinstance(variants, dict) else {}
+        preferred = is_valid_safe_doc_name(str(variant_data.get("resume_file") or f"resume_{variant}.pdf"))
+        if preferred:
+            upload_dir = user_uploaded_resumes_dir(uid)
+            with Session(engine) as session:
+                doc = session.exec(
+                    select(CandidateDocument).where(
+                        CandidateDocument.filename == preferred,
+                        CandidateDocument.doc_type == "uploaded_cv",
+                        CandidateDocument.user_id == uid,
+                    )
+                ).first()
+            if doc:
+                path = (Path(doc.storage_path).resolve() if doc.storage_path else (upload_dir / preferred).resolve())
+                if path.is_relative_to(upload_dir) and path.is_file():
+                    return path
+        return None
 
     async def stage_application(
         self,
@@ -105,10 +159,48 @@ class PlaywrightStagerService:
         except ValueError as ssrf_err:
             raise ValueError(str(ssrf_err)) from ssrf_err
 
+        # Fail closed on unauthorized/invalid custom_pdf_filename BEFORE checking ENABLE_PLAYWRIGHT,
+        # launching Chromium, or navigating to external URLs.
+        resolved_uid = user_id if user_id is not None else resolve_user_id_by_email(owner_email)
+        requested_custom_pdf = str(custom_pdf_filename).strip() if custom_pdf_filename is not None else ""
+        has_custom_pdf_arg = custom_pdf_filename is not None and custom_pdf_filename != ""
+        pre_resolved_resume_path: Optional[Path] = None
+        if has_custom_pdf_arg:
+            if not requested_custom_pdf:
+                raise PermissionError(
+                    "Forbidden: requested CV file is invalid, does not exist, or belongs to another user."
+                )
+            pre_resolved_resume_path = self.get_resume_path(
+                variant,
+                requested_custom_pdf,
+                user_id=resolved_uid,
+                owner_email=owner_email,
+            )
+            if pre_resolved_resume_path is None:
+                raise PermissionError(
+                    "Forbidden: requested CV file is invalid, does not exist, or belongs to another user."
+                )
+
+        # In CI or headless Linux environments without a display server, headed Chromium
+        # fails to launch with "Missing X server or $DISPLAY"; fall back to headless=True.
+        effective_headless = bool(headless)
+        if not effective_headless and (
+            os.getenv("CI", "").strip().lower() in ("1", "true", "yes")
+            or (
+                sys.platform.startswith("linux")
+                and not os.environ.get("DISPLAY")
+                and not os.environ.get("WAYLAND_DISPLAY")
+            )
+        ):
+            logger.info(
+                "No graphical display detected (CI/headless Linux); running Playwright Chromium with headless=True."
+            )
+            effective_headless = True
+
         fields_filled: List[str] = []
         file_uploaded = False
         captcha_status = "none_detected"
-        resume_path: Optional[Path] = None
+        resume_path: Optional[Path] = pre_resolved_resume_path
         page_title: Optional[str] = None
 
         if not ENABLE_PLAYWRIGHT or async_playwright is None:
@@ -137,19 +229,19 @@ class PlaywrightStagerService:
         context: Optional[BrowserContext] = None
         page: Optional[Page] = None
 
-        # In headless mode (automated tests), close immediately in finally.
+        # In headless mode (automated tests or headless servers), close immediately in finally.
         # In headed mode, keep window open for human review and store in _active_sessions.
-        should_close_in_finally = headless
+        should_close_in_finally = effective_headless
 
         try:
             browser = await pw_instance.chromium.launch(
-                headless=headless,
-                args=["--start-maximized"] if not headless else [],
+                headless=effective_headless,
+                args=["--start-maximized"] if not effective_headless else [],
             )
-            context = await browser.new_context(no_viewport=True if not headless else False)
+            context = await browser.new_context(no_viewport=True if not effective_headless else False)
             page = await context.new_page()
 
-            logger.info(f"Navigating to {job_url} (Portal: {portal_type}, Headless: {headless})...")
+            logger.info(f"Navigating to {job_url} (Portal: {portal_type}, Headless: {effective_headless})...")
             await page.goto(job_url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
             await page.wait_for_timeout(300)
             if page.url and not str(page.url).startswith("file://"):
@@ -210,7 +302,7 @@ class PlaywrightStagerService:
             )
             dou_letter_text = narratives["dou_motivational_letter"]
 
-            if not custom_pdf_filename:
+            if not has_custom_pdf_arg:
                 cv_gen = cv_generator_service.generate_vacancy_cv(
                     job_title=detected_role,
                     company=detected_company,
@@ -221,10 +313,21 @@ class PlaywrightStagerService:
                     motivation_statement=motivation_text,
                     dou_motivational_letter=dou_letter_text,
                     skills_md_override=skills_md,
+                    owner_email=owner_email,
+                    user_id=resolved_uid,
                 )
                 resume_path = Path(cv_gen["pdf_path"])
+                if resolved_uid is not None and cv_gen.get("pdf_filename"):
+                    record_candidate_document(
+                        user_id=resolved_uid,
+                        filename=cv_gen["pdf_filename"],
+                        file_path=resume_path,
+                        doc_type="generated_staged_cv",
+                        target_company=detected_company,
+                        target_role=detected_role,
+                    )
             else:
-                resume_path = self.get_resume_path(variant, custom_pdf_filename)
+                resume_path = pre_resolved_resume_path
 
             # Prioritized Semantic Accessibility Locator Cascade
             async def fill_semantic_cascade(
@@ -424,7 +527,8 @@ class PlaywrightStagerService:
             if await captcha_loc.count() > 0:
                 captcha_status = "paused_for_human_hitl"
                 fields_filled.append("captcha_paused_hitl")
-                screenshot_path = GENERATED_RESUMES_DIR / "hitl_captcha_pause.png"
+                screenshot_dir = user_generated_resumes_dir(resolved_uid, owner_email)
+                screenshot_path = screenshot_dir / "hitl_captcha_pause.png"
                 try:
                     await page.screenshot(path=str(screenshot_path), full_page=False)
                     logger.info(f"CAPTCHA challenge detected; saved HITL screenshot to {screenshot_path}")
@@ -503,7 +607,7 @@ class PlaywrightStagerService:
             )
 
             # In headed mode, register active session so the Chromium window stays open for the user!
-            if not headless and browser and context and page:
+            if not effective_headless and browser and context and page:
                 session_id = uuid.uuid4().hex[:8]
                 self._active_sessions[session_id] = {
                     "playwright": pw_instance,
@@ -530,6 +634,9 @@ class PlaywrightStagerService:
                 manual_review_needed=True,
                 page_title=page_title,
             )
+        except (PermissionError, ValueError):
+            should_close_in_finally = True
+            raise
         except Exception as e:
             logger.error(f"Error during Playwright staging: {e}", exc_info=True)
             should_close_in_finally = True

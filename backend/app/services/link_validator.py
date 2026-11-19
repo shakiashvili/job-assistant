@@ -1,26 +1,55 @@
 import asyncio
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Dict, List, Optional, Tuple
 import httpx
 from bs4 import BeautifulSoup
+from .portal_detector import detect_portal_from_url
 
 logger = logging.getLogger(__name__)
 
-# Georgian month names mapping
+# Georgian month names mapping (nominative, dative, genitive)
 GEORGIAN_MONTHS = {
     "იანვარი": 1, "თებერვალი": 2, "მარტი": 3, "აპრილი": 4, "მაისი": 5, "ივნისი": 6,
     "ივლისი": 7, "აგვისტო": 8, "სექტემბერი": 9, "ოქტომბერი": 10, "ნოემბერი": 11, "დეკემბერი": 12,
     "იანვარს": 1, "თებერვალს": 2, "მარტს": 3, "აპრილს": 4, "მაისს": 5, "ივნისს": 6,
     "ივლისს": 7, "აგვისტოს": 8, "სექტემბერს": 9, "ოქტომბერს": 10, "ნოემბერს": 11, "დეკემბერს": 12,
+    "იანვრის": 1, "თებერვლის": 2, "მარტის": 3, "აპრილის": 4, "მაისის": 5, "ივნისის": 6,
+    "ივლისის": 7, "აგვისტოს": 8, "სექტემბრის": 9, "ოქტომბრის": 10, "ნოემბრის": 11, "დეკემბრის": 12,
 }
 
 ENGLISH_MONTHS = {
     "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3, "apr": 4, "april": 4,
     "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7, "aug": 8, "august": 8,
-    "sep": 9, "september": 9, "oct": 10, "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
+    "sep": 9, "sept": 9, "september": 9, "oct": 10, "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
 }
+
+_DEADLINE_KW_PATTERN = (
+    r"(?:ბოლო\s*ვადა|განცხადების\s*ვადა|ვადა|"
+    r"deadline|valid\s+until|closing\s+date|apply\s+before|apply\s+by|"
+    r"submit\s+before|submit\s+by|due\s+date|expires?(?:\s+on)?)"
+)
+_MONTH_WORD_PATTERN = r"[A-Za-z\u10A0-\u10FF\u1C90-\u1CBF]+"
+
+
+def _build_deadline_tuple(
+    year: int,
+    month: int,
+    day: int,
+    display_str: str,
+    today: date,
+) -> Optional[Tuple[datetime, str, bool]]:
+    try:
+        dl_date = datetime(year, month, day, 23, 59, 59, tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return dl_date, display_str, dl_date.date() < today
+
+
+def _resolve_month_number(token: str) -> Optional[int]:
+    cleaned = token.strip(".,").lower()
+    return ENGLISH_MONTHS.get(cleaned) or GEORGIAN_MONTHS.get(cleaned)
 
 
 def parse_vacancy_deadline(text: str) -> Tuple[Optional[datetime], Optional[str], bool]:
@@ -32,51 +61,65 @@ def parse_vacancy_deadline(text: str) -> Tuple[Optional[datetime], Optional[str]
     if not text:
         return None, None, False
 
-    now = datetime.now(timezone.utc)
-    today = now.date()
+    today = datetime.now(timezone.utc).date()
 
     # Pattern 1: Georgian numeric "ბოლო ვადა: DD.MM.YYYY" or "DD/MM/YYYY" or "DD-MM-YYYY"
-    m1 = re.search(r"(?:ბოლო\s*ვადა|განცხადების\s*ვადა|ვადა)\s*[:—–-]?\s*(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})", text, re.I)
-    if m1:
-        try:
-            day, month, year = int(m1.group(1)), int(m1.group(2)), int(m1.group(3))
-            if year < 100:
-                year += 2000
-            dl_date = datetime(year, month, day, 23, 59, 59, tzinfo=timezone.utc)
-            is_expired = dl_date.date() < today
-            return dl_date, f"{day:02d}.{month:02d}.{year}", is_expired
-        except Exception:
-            pass
+    for m1 in re.finditer(r"(?:ბოლო\s*ვადა|განცხადების\s*ვადა|ვადა)\s*[:—–-]?\s*(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})", text, re.I):
+        day, month, year = int(m1.group(1)), int(m1.group(2)), int(m1.group(3))
+        if year < 100:
+            year += 2000
+        res = _build_deadline_tuple(year, month, day, f"{day:02d}.{month:02d}.{year}", today)
+        if res:
+            return res
 
     # Pattern 2: English "Deadline: DD.MM.YYYY" or "Valid until: YYYY-MM-DD"
-    m2 = re.search(r"(?:deadline|valid\s+until|closing\s+date|apply\s+before|expires?)\s*[:—–-]?\s*(\d{1,4})[./-](\d{1,2})[./-](\d{1,4})", text, re.I)
-    if m2:
-        try:
-            p1, p2, p3 = int(m2.group(1)), int(m2.group(2)), int(m2.group(3))
-            if p1 > 1000:  # YYYY-MM-DD
-                year, month, day = p1, p2, p3
-            else:  # DD.MM.YYYY
-                day, month, year = p1, p2, p3
-                if year < 100:
-                    year += 2000
-            dl_date = datetime(year, month, day, 23, 59, 59, tzinfo=timezone.utc)
-            is_expired = dl_date.date() < today
-            return dl_date, f"{year}-{month:02d}-{day:02d}", is_expired
-        except Exception:
-            pass
+    for m2 in re.finditer(
+        r"(?:deadline|valid\s+until|closing\s+date|apply\s+before|apply\s+by|submit\s+before|submit\s+by|due\s+date|expires?(?:\s+on)?)\s*(?:is|[:—–-])?\s*(\d{1,4})[./-](\d{1,2})[./-](\d{1,4})",
+        text,
+        re.I,
+    ):
+        p1, p2, p3 = int(m2.group(1)), int(m2.group(2)), int(m2.group(3))
+        if p1 > 1000:  # YYYY-MM-DD
+            year, month, day = p1, p2, p3
+        else:  # DD.MM.YYYY
+            day, month, year = p1, p2, p3
+            if month > 12 >= day:  # Handle MM/DD/YYYY safely when day > 12
+                day, month = month, day
+            if year < 100:
+                year += 2000
+        res = _build_deadline_tuple(year, month, day, f"{year}-{month:02d}-{day:02d}", today)
+        if res:
+            return res
 
-    # Pattern 3: Named months e.g. "Deadline: November 25, 2026" or "25 ნოემბერი 2026"
-    m3 = re.search(r"(?:deadline|closing\s+date|valid\s+until|ვადა)\s*[:—–-]?\s*([A-Za-z]+|\w+)\s+(\d{1,2}),?\s*(\d{4})", text, re.I)
-    if m3:
-        try:
-            month_str, day, year = m3.group(1).lower(), int(m3.group(2)), int(m3.group(3))
-            month = ENGLISH_MONTHS.get(month_str) or GEORGIAN_MONTHS.get(month_str)
-            if month:
-                dl_date = datetime(year, month, day, 23, 59, 59, tzinfo=timezone.utc)
-                is_expired = dl_date.date() < today
-                return dl_date, f"{month_str.capitalize()} {day}, {year}", is_expired
-        except Exception:
-            pass
+    # Pattern 3a: Day-first named months e.g. "Apply before 15 January 2024" or "ბოლო ვადა: 25 ნოემბერი 2026"
+    day_first_re = (
+        rf"{_DEADLINE_KW_PATTERN}\s*(?:is|[:—–-])?\s*"
+        rf"(\d{{1,2}})(?:st|nd|rd|th)?[\s,.-]+({_MONTH_WORD_PATTERN})[\s,.-]+(\d{{4}})\b"
+    )
+    for m3a in re.finditer(day_first_re, text, re.I):
+        day = int(m3a.group(1))
+        month_raw = m3a.group(2)
+        year = int(m3a.group(3))
+        month = _resolve_month_number(month_raw)
+        if month:
+            res = _build_deadline_tuple(year, month, day, f"{day} {month_raw.capitalize()} {year}", today)
+            if res:
+                return res
+
+    # Pattern 3b: Month-first named months e.g. "Deadline: November 25, 2026"
+    month_first_re = (
+        rf"{_DEADLINE_KW_PATTERN}\s*(?:is|[:—–-])?\s*"
+        rf"({_MONTH_WORD_PATTERN})\.?\s+(\d{{1,2}})(?:st|nd|rd|th)?(?:,|\s)+\s*(\d{{4}})\b"
+    )
+    for m3b in re.finditer(month_first_re, text, re.I):
+        month_raw = m3b.group(1)
+        day = int(m3b.group(2))
+        year = int(m3b.group(3))
+        month = _resolve_month_number(month_raw)
+        if month:
+            res = _build_deadline_tuple(year, month, day, f"{month_raw.capitalize()} {day}, {year}", today)
+            if res:
+                return res
 
     return None, None, False
 
@@ -92,7 +135,7 @@ def validate_live_html_content(url: str, html: str) -> Tuple[bool, str]:
         return False, ""
 
     soup = BeautifulSoup(html, "html.parser")
-    lower_url = url.lower()
+    portal_type = detect_portal_from_url(url)
 
     # Check common expired/404 page text
     full_text = soup.get_text(" ", strip=True)
@@ -111,7 +154,7 @@ def validate_live_html_content(url: str, html: str) -> Tuple[bool, str]:
     if any(p in lower_text for p in expired_phrases):
         return False, ""
 
-    if "jobs.ge" in lower_url:
+    if portal_type == "jobs.ge":
         dtable = soup.select_one(".dtable")
         if not dtable:
             return False, ""
@@ -142,21 +185,21 @@ def validate_live_html_content(url: str, html: str) -> Tuple[bool, str]:
 
         return True, dtable_text
 
-    if "djinni.co" in lower_url:
+    if portal_type == "djinni.co":
         desc_el = soup.select_one("div.job-post__description, div[id^='job-description-'], main")
         txt = desc_el.get_text(" ", strip=True) if desc_el else full_text
         if len(txt) < 80:
             return False, ""
         return True, txt[:4000]
 
-    if "dou.ua" in lower_url:
+    if portal_type == "dou.ua":
         desc_el = soup.select_one("div.b-vacancy, div.vacancy-section, div.l-vacancy")
         txt = desc_el.get_text(" ", strip=True) if desc_el else full_text
         if len(txt) < 80:
             return False, ""
         return True, txt[:4000]
 
-    if "hr.ge" in lower_url:
+    if portal_type == "hr.ge":
         if len(full_text) < 150:
             return False, ""
         main_el = soup.select_one("main, div.announcement-details, div.container")

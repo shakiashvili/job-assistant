@@ -1,13 +1,168 @@
 import hashlib
 import logging
+import re
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 from sqlmodel import Session, select
 
+from ..config import GENERATED_RESUMES_DIR, RESUMES_DIR
 from .database import engine
-from .models import CandidateDocument
+from .models import CandidateDocument, CVVersion, User
 
 logger = logging.getLogger(__name__)
+
+_SAFE_GEN_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,180}\.(pdf|docx|html|eml|md|txt)$", re.IGNORECASE)
+USER_CV_DIR = RESUMES_DIR / "user_uploads"
+
+
+def is_valid_safe_doc_name(filename: Optional[str]) -> Optional[str]:
+    """Validates a single-segment generated/uploaded document filename cleanly."""
+    raw = (filename or "").strip()
+    if not raw or "/" in raw or "\\" in raw or ".." in raw or "\x00" in raw:
+        return None
+    safe_name = Path(raw).name
+    if safe_name != raw or not _SAFE_GEN_NAME_RE.match(safe_name):
+        return None
+    return safe_name
+
+
+def resolve_user_id_by_email(owner_email: Optional[str]) -> Optional[int]:
+    """Resolves a non-guest User.id by encrypted email blind index without raising."""
+    clean = (owner_email or "").strip().lower()
+    if not clean or clean == "guest@talentflow.local":
+        return None
+    try:
+        from ..services.crypto_service import blind_index_candidates
+
+        candidates = blind_index_candidates(clean)
+        with Session(engine) as session:
+            user = session.exec(select(User).where(User.email_hash.in_(candidates))).first()
+            return user.id if user else None
+    except Exception as exc:
+        logger.debug("Could not resolve user_id from owner_email: %s", exc)
+        return None
+
+
+def user_generated_resumes_dir(
+    user_id: Optional[int] = None,
+    owner_email: Optional[str] = None,
+) -> Path:
+    """
+    Returns an isolated generated-CV storage directory per authenticated user:
+    - Authenticated users (`user_id` resolved): `GENERATED_RESUMES_DIR / f"user_{user_id}"`
+    - Unauthenticated direct unit calls (`user_id is None`): root `GENERATED_RESUMES_DIR`
+    """
+    uid = user_id if user_id is not None else resolve_user_id_by_email(owner_email)
+    gen_root = GENERATED_RESUMES_DIR.resolve()
+    gen_root.mkdir(parents=True, exist_ok=True)
+    if uid is None:
+        return gen_root
+    target = (gen_root / f"user_{int(uid)}").resolve()
+    if not target.is_relative_to(gen_root):
+        raise ValueError("Invalid generated resume storage directory.")
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def user_uploaded_resumes_dir(user_id: Optional[int] = None) -> Path:
+    """Returns dedicated per-user uploaded CV directory under USER_CV_DIR."""
+    base = USER_CV_DIR.resolve()
+    base.mkdir(parents=True, exist_ok=True)
+    folder = f"user_{int(user_id)}" if user_id is not None else "guest"
+    target = (base / folder).resolve()
+    if not target.is_relative_to(base):
+        raise ValueError("Invalid user upload directory.")
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def resolve_owned_generated_document(
+    filename: str,
+    user_id: Optional[int],
+    *,
+    is_guest: bool = False,
+) -> Tuple[Optional[Path], Optional[str]]:
+    """
+    Fail-closed resolution for generated resumes (.pdf/.docx/.html/.eml):
+    - Authenticated non-guest users MUST have a matching CandidateDocument or CVVersion owned by `user_id`
+      AND a physical file strictly within `GENERATED_RESUMES_DIR / f"user_{user_id}"`.
+    - Local guest callers (only reachable outside production) are still blocked (`forbidden`) from files
+      owned by any non-guest user or stored inside any `user_<id>` folder.
+    Returns `(resolved_path, error_reason)` where `error_reason` is `None`, `'invalid'`, `'forbidden'`, or `'not_found'`.
+    """
+    safe_name = is_valid_safe_doc_name(filename)
+    if not safe_name:
+        return None, "invalid"
+
+    stem = Path(safe_name).stem
+    candidate_names = {safe_name, f"{stem}.pdf", f"{stem}.docx"}
+    gen_root = GENERATED_RESUMES_DIR.resolve()
+
+    with Session(engine) as session:
+        docs = session.exec(
+            select(CandidateDocument).where(CandidateDocument.filename.in_(list(candidate_names)))
+        ).all()
+        versions = session.exec(
+            select(CVVersion).where(
+                CVVersion.pdf_filename.in_(list(candidate_names))
+                | CVVersion.docx_filename.in_(list(candidate_names))
+            )
+        ).all()
+
+        owned_docs = [d for d in docs if user_id is not None and d.user_id == user_id]
+        owned_vers = [v for v in versions if user_id is not None and v.user_id == user_id]
+
+        if not is_guest:
+            if user_id is None:
+                return None, "forbidden"
+
+            user_dir = user_generated_resumes_dir(user_id)
+            if not owned_docs and not owned_vers:
+                if any(d.user_id is not None and d.user_id != user_id for d in docs) or any(
+                    v.user_id is not None and v.user_id != user_id for v in versions
+                ):
+                    return None, "forbidden"
+                return None, "not_found"
+
+            for d in owned_docs:
+                if d.filename == safe_name and d.storage_path:
+                    cand = Path(d.storage_path).resolve()
+                    if cand.is_relative_to(user_dir) and cand.is_file():
+                        return cand, None
+
+            sibling = (user_dir / safe_name).resolve()
+            if sibling.is_relative_to(user_dir) and sibling.is_file():
+                return sibling, None
+            return None, "not_found"
+
+        # Guest caller (non-production local mode only): serve guest's own file first if recorded
+        if user_id is not None and (owned_docs or owned_vers):
+            guest_dir = user_generated_resumes_dir(user_id)
+            for d in owned_docs:
+                if d.filename == safe_name and d.storage_path:
+                    cand = Path(d.storage_path).resolve()
+                    if cand.is_relative_to(guest_dir) and cand.is_file():
+                        return cand, None
+            guest_cand = (guest_dir / safe_name).resolve()
+            if guest_cand.is_relative_to(guest_dir) and guest_cand.is_file():
+                return guest_cand, None
+
+        if any(d.user_id is not None and d.user_id != user_id for d in docs) or any(
+            v.user_id is not None and v.user_id != user_id for v in versions
+        ):
+            return None, "forbidden"
+
+        if user_id is not None:
+            guest_dir = user_generated_resumes_dir(user_id)
+            guest_cand = (guest_dir / safe_name).resolve()
+            if guest_cand.is_relative_to(guest_dir) and guest_cand.is_file():
+                return guest_cand, None
+
+        # Only unowned direct root files (from unauthenticated local Python unit helpers) may resolve for guest
+        root_cand = (gen_root / safe_name).resolve()
+        if root_cand.parent == gen_root and root_cand.is_relative_to(gen_root) and root_cand.is_file():
+            return root_cand, None
+        return None, "not_found"
 
 
 def record_candidate_document(

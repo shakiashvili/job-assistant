@@ -1,13 +1,16 @@
 import bcrypt
+import hashlib
 import logging
+import os
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any
-from fastapi import Depends, HTTPException, status
+from typing import Optional
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
-from sqlmodel import Session, select
+from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlmodel import Session, delete, select
 
 from ..config import (
     SECRET_KEY,
@@ -16,21 +19,99 @@ from ..config import (
     REFRESH_TOKEN_EXPIRE_DAYS,
     IS_PRODUCTION,
 )
-from ..db.database import get_session
-from ..db.models import User
-from .crypto_service import blind_index
+from ..db.database import engine, get_session, is_sqlite
+from ..db.models import AuthRateLimit, User
+from .crypto_service import blind_index_candidates
 
 logger = logging.getLogger(__name__)
 
 security_bearer = HTTPBearer(auto_error=False)
 
-# Simple in-memory rate limiting / brute-force protection
-# Key: bucket -> {"first_time": float, "attempts": int}
-_LOGIN_ATTEMPTS: Dict[str, Dict[str, Any]] = {}
 MAX_LOGIN_ATTEMPTS = 5
 MAX_OTP_REQUESTS = 5
+MAX_IP_AUTH_ATTEMPTS = int(os.getenv("MAX_IP_AUTH_ATTEMPTS", "25"))
 LOCKOUT_SECONDS = 300  # 5 minutes
 MAX_PASSWORD_BYTES = 72
+
+_REDIS_CHECK_SCRIPT = """
+local val = redis.call('GET', KEYS[1])
+if not val then return {0, 0} end
+local ttl = redis.call('TTL', KEYS[1])
+return {tonumber(val), ttl}
+"""
+
+_REDIS_CONSUME_SCRIPT = """
+local cur = tonumber(redis.call('GET', KEYS[1]) or '0')
+local max_att = tonumber(ARGV[1])
+local win = tonumber(ARGV[2])
+if cur >= max_att then
+    local ttl = redis.call('TTL', KEYS[1])
+    if ttl < 1 then ttl = win end
+    return {cur, ttl, 0}
+end
+local next_val = redis.call('INCR', KEYS[1])
+if next_val == 1 then
+    redis.call('EXPIRE', KEYS[1], win)
+end
+local ttl = redis.call('TTL', KEYS[1])
+if ttl < 1 then ttl = win end
+return {next_val, ttl, 1}
+"""
+
+_REDIS_INCR_SCRIPT = """
+local next_val = redis.call('INCR', KEYS[1])
+if next_val == 1 then
+    redis.call('EXPIRE', KEYS[1], tonumber(ARGV[1]))
+end
+return next_val
+"""
+
+
+def _get_redis_client():
+    redis_url = os.getenv("REDIS_URL", "").strip()
+    if not redis_url:
+        return None
+    try:
+        import redis  # type: ignore
+        return redis.from_url(redis_url, decode_responses=True, socket_connect_timeout=1.5, socket_timeout=1.5)
+    except Exception as exc:
+        logger.debug("Redis rate-limiter unavailable (%s); falling back to shared SQL table.", exc)
+        return None
+
+
+def _bucket_key(identifier: str) -> str:
+    clean = (identifier or "").strip().lower()
+    return hashlib.sha256(clean.encode("utf-8")).hexdigest()
+
+
+def _ensure_rate_limit_table() -> None:
+    try:
+        AuthRateLimit.__table__.create(engine, checkfirst=True)
+    except Exception:
+        pass
+
+
+def extract_client_ip(request: Optional[Request]) -> str:
+    """Extracts client IP cleanly without trusting spoofable X-Forwarded-For unless configured."""
+    if not request:
+        return "unknown"
+    trust_proxy = os.getenv("TRUST_PROXY_HEADERS", "").strip().lower() in ("1", "true", "yes")
+    if trust_proxy:
+        xff = (request.headers.get("x-forwarded-for") or "").strip()
+        if xff:
+            return xff.split(",")[0].strip() or "unknown"
+    return (request.client.host if request.client else "") or "unknown"
+
+
+def _raise_429(remaining: int, error_detail: Optional[str], default_msg: str) -> None:
+    rem = max(1, int(remaining))
+    template = error_detail or default_msg
+    msg = template.format(remaining=rem) if "{remaining}" in template else template
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail=msg,
+        headers={"Retry-After": str(rem)},
+    )
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -63,27 +144,47 @@ def check_rate_limit(
     window_seconds: int = LOCKOUT_SECONDS,
     error_detail: Optional[str] = None,
 ) -> None:
-    """Checks brute-force lockout state without incrementing the failure counter."""
-    now = time.time()
-    record = _LOGIN_ATTEMPTS.get(identifier)
-    if record:
-        attempts = record.get("attempts", 0)
-        first_time = record.get("first_time", now)
-        elapsed = now - first_time
-        if elapsed >= window_seconds:
-            _LOGIN_ATTEMPTS[identifier] = {"attempts": 0, "first_time": now}
+    """Checks shared brute-force lockout state without incrementing the failure counter."""
+    b_key = _bucket_key(identifier)
+    r_client = _get_redis_client()
+    if r_client is not None:
+        try:
+            count, ttl = r_client.eval(_REDIS_CHECK_SCRIPT, 1, f"tf:rl:{b_key}")
+            if int(count or 0) >= max_attempts:
+                _raise_429(
+                    int(ttl) if int(ttl or 0) > 0 else window_seconds,
+                    error_detail,
+                    "Too many failed login attempts. Please wait {remaining} seconds before retrying.",
+                )
             return
-        if attempts >= max_attempts:
-            remaining = max(1, int(window_seconds - elapsed))
-            detail = error_detail or (
-                f"Too many failed login attempts. Please wait {remaining} seconds before retrying."
-            )
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=detail.format(remaining=remaining) if "{remaining}" in detail else detail,
-            )
-    if identifier not in _LOGIN_ATTEMPTS:
-        _LOGIN_ATTEMPTS[identifier] = {"attempts": 0, "first_time": now}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.debug("Redis check_rate_limit fallback to DB: %s", exc)
+
+    now = time.time()
+    for _ in range(2):
+        try:
+            with Session(engine) as session:
+                row = session.get(AuthRateLimit, b_key)
+                if not row:
+                    return
+                if row.expires_at <= now:
+                    row.attempts = 0
+                    row.window_started_at = now
+                    row.expires_at = now + window_seconds
+                    session.add(row)
+                    session.commit()
+                    return
+                if row.attempts >= max_attempts:
+                    _raise_429(
+                        int(row.expires_at - now),
+                        error_detail,
+                        "Too many failed login attempts. Please wait {remaining} seconds before retrying.",
+                    )
+                return
+        except OperationalError:
+            _ensure_rate_limit_table()
 
 
 def consume_rate_limit(
@@ -92,43 +193,129 @@ def consume_rate_limit(
     window_seconds: int = LOCKOUT_SECONDS,
     error_detail: Optional[str] = None,
 ) -> int:
-    """Atomically enforces and increments a request quota counter (e.g. OTP dispatch throttling)."""
-    now = time.time()
-    record = _LOGIN_ATTEMPTS.get(identifier)
-    if record:
-        elapsed = now - record.get("first_time", now)
-        if elapsed >= window_seconds:
-            _LOGIN_ATTEMPTS[identifier] = {"attempts": 1, "first_time": now}
-            return 1
-        attempts = record.get("attempts", 0)
-        if attempts >= max_attempts:
-            remaining = max(1, int(window_seconds - elapsed))
-            detail = error_detail or (
-                f"Too many requests. Please wait {remaining} seconds before retrying."
+    """Atomically enforces and increments a shared request quota counter across workers."""
+    b_key = _bucket_key(identifier)
+    r_client = _get_redis_client()
+    if r_client is not None:
+        try:
+            count, ttl, allowed = r_client.eval(
+                _REDIS_CONSUME_SCRIPT, 1, f"tf:rl:{b_key}", max_attempts, window_seconds
             )
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=detail.format(remaining=remaining) if "{remaining}" in detail else detail,
-            )
-        record["attempts"] = attempts + 1
-        return int(record["attempts"])
+            if not int(allowed):
+                _raise_429(
+                    int(ttl),
+                    error_detail,
+                    "Too many requests. Please wait {remaining} seconds before retrying.",
+                )
+            return int(count)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.debug("Redis consume_rate_limit fallback to DB: %s", exc)
 
-    _LOGIN_ATTEMPTS[identifier] = {"attempts": 1, "first_time": now}
-    return 1
-
-
-def record_login_failure(identifier: str) -> None:
     now = time.time()
-    record = _LOGIN_ATTEMPTS.get(identifier)
-    if record and (now - record.get("first_time", now)) < LOCKOUT_SECONDS:
-        record["attempts"] = record.get("attempts", 0) + 1
-    else:
-        _LOGIN_ATTEMPTS[identifier] = {"attempts": 1, "first_time": now}
+    for _ in range(4):
+        try:
+            with Session(engine) as session:
+                stmt = select(AuthRateLimit).where(AuthRateLimit.bucket_key == b_key)
+                if not is_sqlite:
+                    stmt = stmt.with_for_update()
+                row = session.exec(stmt).first()
+                if not row:
+                    new_row = AuthRateLimit(
+                        bucket_key=b_key,
+                        attempts=1,
+                        window_started_at=now,
+                        expires_at=now + window_seconds,
+                    )
+                    session.add(new_row)
+                    session.commit()
+                    return 1
+
+                if row.expires_at <= now:
+                    row.attempts = 1
+                    row.window_started_at = now
+                    row.expires_at = now + window_seconds
+                    session.add(row)
+                    session.commit()
+                    return 1
+
+                if row.attempts >= max_attempts:
+                    _raise_429(
+                        int(row.expires_at - now),
+                        error_detail,
+                        "Too many requests. Please wait {remaining} seconds before retrying.",
+                    )
+
+                row.attempts = int(row.attempts) + 1
+                session.add(row)
+                session.commit()
+                return int(row.attempts)
+        except OperationalError:
+            _ensure_rate_limit_table()
+        except IntegrityError:
+            continue
+    return max_attempts
+
+
+def record_login_failure(identifier: str, window_seconds: int = LOCKOUT_SECONDS) -> None:
+    b_key = _bucket_key(identifier)
+    r_client = _get_redis_client()
+    if r_client is not None:
+        try:
+            r_client.eval(_REDIS_INCR_SCRIPT, 1, f"tf:rl:{b_key}", window_seconds)
+            return
+        except Exception as exc:
+            logger.debug("Redis record_login_failure fallback to DB: %s", exc)
+
+    now = time.time()
+    for _ in range(4):
+        try:
+            with Session(engine) as session:
+                stmt = select(AuthRateLimit).where(AuthRateLimit.bucket_key == b_key)
+                if not is_sqlite:
+                    stmt = stmt.with_for_update()
+                row = session.exec(stmt).first()
+                if not row:
+                    session.add(
+                        AuthRateLimit(
+                            bucket_key=b_key,
+                            attempts=1,
+                            window_started_at=now,
+                            expires_at=now + window_seconds,
+                        )
+                    )
+                    session.commit()
+                    return
+                if row.expires_at <= now:
+                    row.attempts = 1
+                    row.window_started_at = now
+                    row.expires_at = now + window_seconds
+                else:
+                    row.attempts = int(row.attempts) + 1
+                session.add(row)
+                session.commit()
+                return
+        except OperationalError:
+            _ensure_rate_limit_table()
+        except IntegrityError:
+            continue
 
 
 def reset_login_attempts(identifier: str) -> None:
-    if identifier in _LOGIN_ATTEMPTS:
-        del _LOGIN_ATTEMPTS[identifier]
+    b_key = _bucket_key(identifier)
+    r_client = _get_redis_client()
+    if r_client is not None:
+        try:
+            r_client.delete(f"tf:rl:{b_key}")
+        except Exception:
+            pass
+    try:
+        with Session(engine) as session:
+            session.exec(delete(AuthRateLimit).where(AuthRateLimit.bucket_key == b_key))
+            session.commit()
+    except Exception:
+        pass
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
@@ -206,9 +393,9 @@ def decode_oauth_state_token(token: str) -> Optional[dict]:
 
 
 def get_user_by_email(session: Session, email: str) -> Optional[User]:
-    """Looks up a user via HMAC-SHA256 blind index on the encrypted email column."""
-    target_hash = blind_index(email)
-    return session.exec(select(User).where(User.email_hash == target_hash)).first()
+    """Looks up a user via active and previous blind-index HMAC digests."""
+    candidates = blind_index_candidates(email)
+    return session.exec(select(User).where(User.email_hash.in_(candidates))).first()
 
 
 def get_current_user(
