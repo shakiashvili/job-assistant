@@ -8,10 +8,11 @@ from reportlab.pdfgen import canvas
 from sqlmodel import Session, select
 
 from app.main import app
-from app.config import GENERATED_RESUMES_DIR, resolve_gemini_model_pricing
+from app.config import GENERATED_RESUMES_DIR, TEST_FORMS_DIR, resolve_gemini_model_pricing
 from app.db.database import engine, init_db
 from app.db.document_repository import user_generated_resumes_dir
 from app.db.models import AuthRateLimit, User
+from app.services import playwright_service as pw_module
 from app.services.ats_checker import check_pdf_ats_parseability
 from app.services.auth_service import (
     check_rate_limit,
@@ -60,7 +61,7 @@ def _register_and_upload_same_candidate(prefix: str, unique_marker: str):
     return uid, email, headers
 
 
-def test_generated_cv_user_directory_isolation_and_fail_closed_staging():
+def test_generated_cv_user_directory_isolation_and_fail_closed_staging(monkeypatch):
     """
     P1: Two accounts generating identically named CVs write to isolated user_<id> directories
     without overwriting each other, and cross-user download/listing/staging fail closed (403/404).
@@ -110,16 +111,19 @@ def test_generated_cv_user_directory_isolation_and_fail_closed_staging():
         stray_resp = client.get(f"/api/resumes/generated/{stray_name}", headers=hdr_a)
         assert stray_resp.status_code in (403, 404)
 
+        sample_form_url = (TEST_FORMS_DIR / "greenhouse_sample.html").as_uri()
         stray_stage = client.post(
             "/api/stage-application",
             headers=hdr_b,
             json={
-                "job_url": "https://example.org/job/1",
+                "job_url": sample_form_url,
                 "variant": "qa_automation",
                 "custom_pdf_filename": stray_name,
+                "headless": True,
+                "timeout_seconds": 5,
             },
         )
-        assert stray_stage.status_code in (400, 403, 404)
+        assert stray_stage.status_code == 403
 
         # User C with NO documents gets None from get_resume_path (never grabs first shared PDF!)
         _, _, hdr_c = _register_and_upload_same_candidate("iso_c", "GammaEmployer")
@@ -151,16 +155,68 @@ def test_generated_cv_user_directory_isolation_and_fail_closed_staging():
     listed_b = client.get("/api/resumes/generated", headers=hdr_b).json()
     assert not any(item["filename"] == only_a_pdf for item in listed_b)
 
+    sample_form_url = (TEST_FORMS_DIR / "greenhouse_sample.html").as_uri()
     cross_stage = client.post(
         "/api/stage-application",
         headers=hdr_b,
         json={
-            "job_url": "https://example.org/jobs/999",
+            "job_url": sample_form_url,
             "variant": "qa_automation",
             "custom_pdf_filename": only_a_pdf,
+            "headless": True,
+            "timeout_seconds": 5,
         },
     )
     assert cross_stage.status_code == 403
+
+    # Fail closed even when headless=False in CI/headless env OR when ENABLE_PLAYWRIGHT=false
+    monkeypatch.setenv("CI", "true")
+    cross_stage_ci = client.post(
+        "/api/stage-application",
+        headers=hdr_b,
+        json={
+            "job_url": sample_form_url,
+            "variant": "qa_automation",
+            "custom_pdf_filename": only_a_pdf,
+            "headless": False,
+            "timeout_seconds": 5,
+        },
+    )
+    assert cross_stage_ci.status_code == 403
+
+    orig_enable_pw = pw_module.ENABLE_PLAYWRIGHT
+    monkeypatch.setattr(pw_module, "ENABLE_PLAYWRIGHT", False)
+    cross_stage_disabled = client.post(
+        "/api/stage-application",
+        headers=hdr_b,
+        json={
+            "job_url": sample_form_url,
+            "variant": "qa_automation",
+            "custom_pdf_filename": only_a_pdf,
+            "headless": False,
+        },
+    )
+    assert cross_stage_disabled.status_code == 403
+
+    # Owner staging succeeds with headless fallback enforced under CI=true
+    monkeypatch.setattr(pw_module, "ENABLE_PLAYWRIGHT", orig_enable_pw)
+    if orig_enable_pw:
+        sessions_before = len(playwright_service._active_sessions)
+        owner_stage_ci = client.post(
+            "/api/stage-application",
+            headers=hdr_a,
+            json={
+                "job_url": sample_form_url,
+                "variant": "qa_automation",
+                "custom_pdf_filename": only_a_pdf,
+                "headless": False,
+                "timeout_seconds": 5,
+            },
+        )
+        assert owner_stage_ci.status_code == 200, owner_stage_ci.text
+        assert owner_stage_ci.json()["status"] == "staged"
+        assert owner_stage_ci.json()["file_uploaded"] is True
+        assert len(playwright_service._active_sessions) == sessions_before
 
 
 def test_ats_checker_layout_full_name_and_expected_contact_honesty(tmp_path: Path):

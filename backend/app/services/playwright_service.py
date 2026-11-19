@@ -1,6 +1,8 @@
 import asyncio
 import logging
+import os
 import re
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -157,10 +159,48 @@ class PlaywrightStagerService:
         except ValueError as ssrf_err:
             raise ValueError(str(ssrf_err)) from ssrf_err
 
+        # Fail closed on unauthorized/invalid custom_pdf_filename BEFORE checking ENABLE_PLAYWRIGHT,
+        # launching Chromium, or navigating to external URLs.
+        resolved_uid = user_id if user_id is not None else resolve_user_id_by_email(owner_email)
+        requested_custom_pdf = str(custom_pdf_filename).strip() if custom_pdf_filename is not None else ""
+        has_custom_pdf_arg = custom_pdf_filename is not None and custom_pdf_filename != ""
+        pre_resolved_resume_path: Optional[Path] = None
+        if has_custom_pdf_arg:
+            if not requested_custom_pdf:
+                raise PermissionError(
+                    "Forbidden: requested CV file is invalid, does not exist, or belongs to another user."
+                )
+            pre_resolved_resume_path = self.get_resume_path(
+                variant,
+                requested_custom_pdf,
+                user_id=resolved_uid,
+                owner_email=owner_email,
+            )
+            if pre_resolved_resume_path is None:
+                raise PermissionError(
+                    "Forbidden: requested CV file is invalid, does not exist, or belongs to another user."
+                )
+
+        # In CI or headless Linux environments without a display server, headed Chromium
+        # fails to launch with "Missing X server or $DISPLAY"; fall back to headless=True.
+        effective_headless = bool(headless)
+        if not effective_headless and (
+            os.getenv("CI", "").strip().lower() in ("1", "true", "yes")
+            or (
+                sys.platform.startswith("linux")
+                and not os.environ.get("DISPLAY")
+                and not os.environ.get("WAYLAND_DISPLAY")
+            )
+        ):
+            logger.info(
+                "No graphical display detected (CI/headless Linux); running Playwright Chromium with headless=True."
+            )
+            effective_headless = True
+
         fields_filled: List[str] = []
         file_uploaded = False
         captcha_status = "none_detected"
-        resume_path: Optional[Path] = None
+        resume_path: Optional[Path] = pre_resolved_resume_path
         page_title: Optional[str] = None
 
         if not ENABLE_PLAYWRIGHT or async_playwright is None:
@@ -189,19 +229,19 @@ class PlaywrightStagerService:
         context: Optional[BrowserContext] = None
         page: Optional[Page] = None
 
-        # In headless mode (automated tests), close immediately in finally.
+        # In headless mode (automated tests or headless servers), close immediately in finally.
         # In headed mode, keep window open for human review and store in _active_sessions.
-        should_close_in_finally = headless
+        should_close_in_finally = effective_headless
 
         try:
             browser = await pw_instance.chromium.launch(
-                headless=headless,
-                args=["--start-maximized"] if not headless else [],
+                headless=effective_headless,
+                args=["--start-maximized"] if not effective_headless else [],
             )
-            context = await browser.new_context(no_viewport=True if not headless else False)
+            context = await browser.new_context(no_viewport=True if not effective_headless else False)
             page = await context.new_page()
 
-            logger.info(f"Navigating to {job_url} (Portal: {portal_type}, Headless: {headless})...")
+            logger.info(f"Navigating to {job_url} (Portal: {portal_type}, Headless: {effective_headless})...")
             await page.goto(job_url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
             await page.wait_for_timeout(300)
             if page.url and not str(page.url).startswith("file://"):
@@ -262,8 +302,7 @@ class PlaywrightStagerService:
             )
             dou_letter_text = narratives["dou_motivational_letter"]
 
-            resolved_uid = user_id if user_id is not None else resolve_user_id_by_email(owner_email)
-            if not custom_pdf_filename:
+            if not has_custom_pdf_arg:
                 cv_gen = cv_generator_service.generate_vacancy_cv(
                     job_title=detected_role,
                     company=detected_company,
@@ -288,16 +327,7 @@ class PlaywrightStagerService:
                         target_role=detected_role,
                     )
             else:
-                resume_path = self.get_resume_path(
-                    variant,
-                    custom_pdf_filename,
-                    user_id=resolved_uid,
-                    owner_email=owner_email,
-                )
-                if resume_path is None:
-                    raise PermissionError(
-                        "Forbidden: requested CV file is invalid, does not exist, or belongs to another user."
-                    )
+                resume_path = pre_resolved_resume_path
 
             # Prioritized Semantic Accessibility Locator Cascade
             async def fill_semantic_cascade(
@@ -577,7 +607,7 @@ class PlaywrightStagerService:
             )
 
             # In headed mode, register active session so the Chromium window stays open for the user!
-            if not headless and browser and context and page:
+            if not effective_headless and browser and context and page:
                 session_id = uuid.uuid4().hex[:8]
                 self._active_sessions[session_id] = {
                     "playwright": pw_instance,
