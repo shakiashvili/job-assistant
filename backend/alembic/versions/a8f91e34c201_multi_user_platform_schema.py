@@ -48,7 +48,7 @@ def upgrade() -> None:
         sa.Column("country", sa.String(), nullable=True),
         sa.Column("city", sa.String(), nullable=True),
         sa.Column("posting_date", sa.String(), nullable=True),
-        sa.Column("is_expired", sa.Boolean(), nullable=False, server_default=sa.text("0")),
+        sa.Column("is_expired", sa.Boolean(), nullable=False, server_default=sa.false()),
     ]:
         _add_column_if_missing(inspector, "job_postings", col)
 

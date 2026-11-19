@@ -45,7 +45,7 @@ jobs:
         run: |
           DATABASE_URL=sqlite:///./ci_migration_smoke.db alembic upgrade head
           rm -f ci_migration_smoke.db
-          DATABASE_URL=postgresql+psycopg://talentflow:ci_test_password@localhost:5432/talentflow_ci alembic upgrade head
+          DATABASE_URL=postgresql+psycopg2://talentflow:ci_test_password@localhost:5432/talentflow_ci alembic upgrade head
       - name: Run backend functional & unit tests
         working-directory: backend
         env:
