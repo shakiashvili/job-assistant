@@ -390,21 +390,40 @@ export const B2BMarketHub: React.FC = () => {
                   </strong>
                 </div>
 
-                <div className="space-y-1">
+                <div className="space-y-2">
                   <div className="flex items-center justify-between text-[11px]">
                     <span className="text-slate-300">
-                      {isKa ? '500,000 ₾ წლიური ლიმიტის გამოყენება:' : '500,000 GEL Annual 1% Cap Usage:'}
+                      {isKa ? 'მიმდინარე თვის ფაქტობრივი ბრუნვა (YTD + ეს თვე):' : 'Actual Cumulative Turnover (YTD + This Month):'}
                     </span>
                     <span className={`font-mono font-bold ${taxResult.under_500k_cap ? 'text-emerald-300' : 'text-amber-300'}`}>
-                      {(taxResult.cumulative_annual_gel ?? taxResult.annual_gross_gel).toLocaleString()} ₾ ({taxResult.cap_usage_pct}%)
+                      {(taxResult.actual_cumulative_gel ?? taxResult.monthly_gross_gel).toLocaleString()} ₾ ({taxResult.actual_cap_usage_pct ?? taxResult.cap_usage_pct}%)
                     </span>
                   </div>
                   <div className="w-full h-2 rounded-full bg-slate-800 overflow-hidden">
                     <div
                       className={`h-full transition-all ${taxResult.under_500k_cap ? 'bg-emerald-500' : 'bg-amber-400'}`}
-                      style={{ width: `${Math.min(100, taxResult.cap_usage_pct)}%` }}
+                      style={{ width: `${Math.min(100, taxResult.actual_cap_usage_pct ?? taxResult.cap_usage_pct)}%` }}
                     />
                   </div>
+                  <div className="pt-1 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-300">
+                    <span>
+                      {isKa ? '12-თვის საპროგნოზო ბრუნვა (არა მიმდინარე განაკვეთი):' : '12-Mo Run-Rate Projection (Estimate Only):'}
+                    </span>
+                    <span className="font-mono text-slate-200">
+                      {(taxResult.projected_cumulative_gel ?? taxResult.cumulative_annual_gel ?? taxResult.annual_gross_gel).toLocaleString()} ₾
+                    </span>
+                  </div>
+                  {taxResult.projected_exceeds_500k_cap && taxResult.threshold_crossing_month !== null && taxResult.threshold_crossing_month !== undefined && (
+                    <div className="text-[11px] text-amber-300 bg-amber-950/40 border border-amber-800/60 rounded-lg px-2.5 py-1.5">
+                      {taxResult.threshold_crossing_month === 0
+                        ? (isKa ? '500,000 ₾ ზღვარი უკვე გადაჭარბებულია YTD შემოსავლით (3% განაკვეთი მოქმედებს).' : 'YTD revenue already exceeded 500,000 GEL (3% applies).')
+                        : taxResult.threshold_crossing_month === 1
+                        ? (isKa ? 'მიმდინარე თვეში გადაჭარბდა 500,000 ₾ ზღვარი — ამ თვის დასაწყისიდან მოქმედებს 3%.' : 'This month crosses the 500,000 GEL cap — 3% applies from the start of this month.')
+                        : (isKa
+                          ? `მიმდინარე თვეში მოქმედებს 1%. ${taxResult.threshold_crossing_month}-ე თვეს გადააჭარბებს 500,000 ₾-ს (საპროგნოზო წლიური გადასახადი: ${taxResult.projected_annual_tax_gel?.toLocaleString() ?? ''} ₾).`
+                          : `1% applies this month. At this run-rate, Month #${taxResult.threshold_crossing_month} crosses 500,000 GEL (est. 12-mo blended tax: ${taxResult.projected_effective_tax_rate_pct ?? 1}%).`)}
+                    </div>
+                  )}
                 </div>
               </div>
               {taxLoading && <div className="text-[11px] text-slate-300">Updating figures...</div>}

@@ -9,7 +9,13 @@ from datetime import timedelta
 from typing import Dict, Any, Optional, List, Tuple
 from tenacity import retry, stop_after_attempt, wait_exponential
 from sqlmodel import Session, select
-from ..config import GEMINI_API_KEY, GEMINI_MODEL, GEMINI_FAST_MODEL, GEMINI_TIMEOUT_MS
+from ..config import (
+    GEMINI_API_KEY,
+    GEMINI_MODEL,
+    GEMINI_FAST_MODEL,
+    GEMINI_TIMEOUT_MS,
+    resolve_gemini_model_pricing,
+)
 from ..db.database import engine
 from ..db.models import AIOperationLog, AICacheEntry, utc_now
 from .gemini_utils import (
@@ -24,19 +30,6 @@ logger = logging.getLogger(__name__)
 
 
 class GeminiService:
-    # Published reference pricing per 1M tokens (USD) by model family when token counts are returned.
-    _INPUT_COST_PER_1M = 0.30
-    _OUTPUT_COST_PER_1M = 2.50
-    _MODEL_PRICING_PER_1M = {
-        "gemini-3.6-flash": (0.30, 2.50),
-        "gemini-3-flash": (0.30, 2.50),
-        "gemini-3.5-flash-lite": (0.10, 0.40),
-        "gemini-2.5-flash-lite": (0.10, 0.40),
-        "gemini-2.5-flash": (0.30, 2.50),
-        "gemini-3-pro": (1.25, 10.00),
-        "gemini-2.5-pro": (1.25, 10.00),
-    }
-
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.api_key = api_key or GEMINI_API_KEY or os.getenv("GEMINI_API_KEY", "")
         self.model_name = model or GEMINI_MODEL
@@ -107,16 +100,8 @@ class GeminiService:
         return hashlib.sha256(digest_input.encode("utf-8")).hexdigest()
 
     @classmethod
-    def _resolve_pricing(cls, model_name: str) -> tuple[float, float]:
-        low = (model_name or "").lower()
-        for prefix, rates in cls._MODEL_PRICING_PER_1M.items():
-            if prefix in low:
-                return rates
-        if "flash-lite" in low:
-            return (0.10, 0.40)
-        if "pro" in low:
-            return (1.25, 10.00)
-        return (cls._INPUT_COST_PER_1M, cls._OUTPUT_COST_PER_1M)
+    def _resolve_pricing(cls, model_name: str, tier: Optional[str] = None) -> tuple[float, float]:
+        return resolve_gemini_model_pricing(model_name, tier=tier)
 
     @staticmethod
     def _extract_usage(

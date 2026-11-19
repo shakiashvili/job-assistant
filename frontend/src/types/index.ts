@@ -258,6 +258,7 @@ export interface BulletDiffItem {
 }
 
 export interface ATSParseReport {
+  audit_label?: string;
   status: 'PASS' | 'WARN' | 'FAIL' | string;
   score: number;
   page_count: number;
@@ -266,6 +267,7 @@ export interface ATSParseReport {
   candidate_name_present?: boolean;
   contact_present?: boolean;
   mojibake_free?: boolean;
+  layout_check_performed?: boolean;
   single_column_layout_ok?: boolean;
   sections_detected?: string[];
   keywords_extracted?: string[];
@@ -596,7 +598,16 @@ export interface B2BTaxCalculatorResponse {
   monthly_gross_gel: number;
   annual_gross_gel: number;
   ytd_revenue_gel?: number;
+  actual_cumulative_gel?: number;
+  actual_cap_usage_pct?: number;
   cumulative_annual_gel?: number;
+  projected_annual_gross_gel?: number;
+  projected_cumulative_gel?: number;
+  projected_exceeds_500k_cap?: boolean;
+  threshold_crossing_month?: number | null;
+  projected_annual_tax_gel?: number;
+  projected_effective_tax_rate_pct?: number;
+  projected_cap_usage_pct?: number;
   under_500k_cap: boolean;
   b2b_small_business: {
     tax_rate_pct: number;

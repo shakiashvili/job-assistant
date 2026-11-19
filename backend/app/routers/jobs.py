@@ -31,8 +31,9 @@ from ..services.scrapers.base_scraper import sanitize_company_name, classify_geo
 from ..services.salary_service import salary_service
 from ..services.backup_service import backup_service
 from ..services.upload_utils import read_upload_bounded
+from pathlib import Path
 from .ground_truth import _purge_stale_unapplied_jobs, MAX_UPLOAD_SIZE_BYTES, record_candidate_document
-from ..config import GENERATED_RESUMES_DIR
+from ..db.document_repository import user_generated_resumes_dir
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["Database Profile, Scrapers & Market Intelligence"])
@@ -939,15 +940,17 @@ def prepare_job_email_package(
             cv_language=cv_language,
             cv_style="tailored",
             owner_email=owner,
+            user_id=current_user.id,
         )
 
+        user_gen_dir = user_generated_resumes_dir(current_user.id)
         for fname_key in ("pdf_filename", "docx_filename", "cv_filename"):
             fname_val = pkg.get(fname_key)
             if fname_val:
                 record_candidate_document(
                     user_id=current_user.id,
                     filename=fname_val,
-                    file_path=GENERATED_RESUMES_DIR / fname_val,
+                    file_path=user_gen_dir / fname_val,
                     doc_type="generated_email_cv",
                     target_company=job.company,
                     target_role=job.title,

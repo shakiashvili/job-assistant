@@ -30,6 +30,7 @@ Thumbs.db
 *.db-shm
 *.db-wal
 data/.fernet.key
+data/.blind_index.key
 data/job_assistant.db
 data/backups/
 data/candidate_skills.md

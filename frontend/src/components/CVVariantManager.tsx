@@ -721,7 +721,7 @@ export const CVVariantManager: React.FC = () => {
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs font-bold text-white flex items-center gap-1.5">
                       <ShieldCheck className="w-4 h-4 text-cyan-400" />
-                      ATS PDF Parseability Audit
+                      {generatedOutput.ats_parse_report.audit_label || 'PDF Text Extraction & Layout Check'}
                     </span>
                     <span
                       className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full ${
@@ -736,6 +736,9 @@ export const CVVariantManager: React.FC = () => {
                   <div className="text-[11px] text-slate-300 flex flex-wrap gap-3">
                     <span>Pages: <strong>{generatedOutput.ats_parse_report.page_count}</strong></span>
                     <span>Extracted Text: <strong>{generatedOutput.ats_parse_report.extracted_char_count} chars</strong></span>
+                    <span>Name Match: <strong>{generatedOutput.ats_parse_report.candidate_name_present ? 'Yes' : 'No'}</strong></span>
+                    <span>Contact Match: <strong>{generatedOutput.ats_parse_report.contact_present ? 'Yes' : 'No'}</strong></span>
+                    <span>Single-Column Flow: <strong>{generatedOutput.ats_parse_report.layout_check_performed === false ? 'Unverified' : generatedOutput.ats_parse_report.single_column_layout_ok ? 'Yes' : 'Multi-Column'}</strong></span>
                     <span>Sections: <strong>{(generatedOutput.ats_parse_report.sections_detected || []).join(', ') || 'None'}</strong></span>
                   </div>
                   {generatedOutput.ats_parse_report.warnings && generatedOutput.ats_parse_report.warnings.length > 0 && (

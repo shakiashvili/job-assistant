@@ -6,7 +6,11 @@ from fastapi import APIRouter, HTTPException, Depends, status, Query, Response
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
-from ..config import GENERATED_RESUMES_DIR
+from ..db.document_repository import (
+    record_candidate_document,
+    resolve_owned_generated_document,
+    user_generated_resumes_dir,
+)
 from ..db.database import get_session, engine
 from ..db.models import (
     User,
@@ -130,9 +134,13 @@ def get_or_create_app_tracker(
         job = session.get(JobPosting, rec.job_posting_id) if rec and rec.job_posting_id else None
         cv_path = (rec.custom_cv_path or rec.cv_pdf_path) if rec else None
         if cv_path and not Path(cv_path).is_absolute():
-            candidate_file = GENERATED_RESUMES_DIR / Path(cv_path).name
-            if candidate_file.exists():
-                cv_path = str(candidate_file)
+            owned_cv, _ = resolve_owned_generated_document(
+                Path(cv_path).name,
+                user_id=uid,
+                is_guest=is_guest,
+            )
+            if owned_cv is not None:
+                cv_path = str(owned_cv)
 
         safe_pk = app_id if session.get(ApplicationTracker, app_id) is None else None
         app_tracker = ApplicationTracker(
@@ -326,9 +334,13 @@ def send_or_draft_application_email(
 
     pdf_path = app_tracker.cv_pdf_path
     if pdf_path and not Path(pdf_path).is_absolute():
-        candidate_file = GENERATED_RESUMES_DIR / Path(pdf_path).name
-        if candidate_file.exists():
-            pdf_path = str(candidate_file)
+        owned_cv, _ = resolve_owned_generated_document(
+            Path(pdf_path).name,
+            user_id=current_user.id,
+            is_guest=_is_guest_user(current_user),
+        )
+        if owned_cv is not None:
+            pdf_path = str(owned_cv)
 
     result = gmail_service.dispatch_email(
         user=current_user,
@@ -340,12 +352,11 @@ def send_or_draft_application_email(
     )
 
     if result.get("eml_filename"):
-        from ..db.document_repository import record_candidate_document
         eml_fname = result["eml_filename"]
         record_candidate_document(
             user_id=current_user.id,
             filename=eml_fname,
-            file_path=GENERATED_RESUMES_DIR / eml_fname,
+            file_path=user_generated_resumes_dir(current_user.id) / eml_fname,
             doc_type="eml_draft",
             target_company=app_tracker.company_name,
             target_role=app_tracker.job_title,

@@ -27,6 +27,7 @@ from .models import (
     CVVersion,
     AIOperationLog,
     AICacheEntry,
+    AuthRateLimit,
 )  # noqa: F401
 
 logger = logging.getLogger(__name__)

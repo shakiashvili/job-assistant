@@ -4,8 +4,9 @@ import hmac
 import json
 import logging
 import os
+import secrets
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import String, Text
@@ -16,6 +17,7 @@ from ..config import DATA_DIR, _is_prod, reload_env_files
 logger = logging.getLogger(__name__)
 
 _KEY_FILE: Path = DATA_DIR / ".fernet.key"
+_BLIND_KEY_FILE: Path = DATA_DIR / ".blind_index.key"
 _LEGACY_PREFIX = "enc:"
 _VERSIONED_PREFIX = "enc:v1:"
 
@@ -81,13 +83,124 @@ def _get_fernet() -> Fernet:
     return Fernet(_get_fernet_key_bytes())
 
 
-def blind_index(value: Optional[str]) -> str:
-    """Computes a keyed HMAC-SHA256 blind index for exact-match SQL lookups without storing plaintext."""
-    norm = (value or "").strip().lower()
-    explicit_bi = os.getenv("BLIND_INDEX_KEY", "").strip()
-    key_material = explicit_bi.encode("utf-8") if explicit_bi else _get_fernet_key_bytes()
+def _get_blind_index_key_bytes() -> bytes:
+    """
+    Loads the dedicated HMAC blind-index key completely decoupled from ENCRYPTION_KEY.
+    Rotating ENCRYPTION_KEY must NEVER invalidate existing email_hash lookups.
+    - In production (_is_prod=True): requires BLIND_INDEX_KEY in environment variables.
+    - In local dev/test: reads BLIND_INDEX_KEY or persists a dedicated DATA_DIR/.blind_index.key.
+    """
+    reload_env_files()
+    env_key = os.getenv("BLIND_INDEX_KEY", "").strip()
+    if env_key:
+        return env_key.encode("utf-8")
+
+    if _is_prod:
+        raise RuntimeError(
+            "FATAL SECURITY ERROR: BLIND_INDEX_KEY environment variable is required in production "
+            "and must remain independent of ENCRYPTION_KEY."
+        )
+
+    if _BLIND_KEY_FILE.exists():
+        raw = _BLIND_KEY_FILE.read_bytes().strip()
+        if raw:
+            return raw
+
+    generated = secrets.token_urlsafe(48).encode("utf-8")
+    try:
+        _BLIND_KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _BLIND_KEY_FILE.write_bytes(generated)
+    except Exception as e:
+        logger.warning(f"Could not persist local blind-index key file: {e}")
+    return generated
+
+
+def _compute_blind_hmac(norm_value: str, key_material: bytes) -> str:
     secret = hashlib.sha256(key_material + b":blind-index").digest()
-    return hmac.new(secret, norm.encode("utf-8"), hashlib.sha256).hexdigest()
+    return hmac.new(secret, norm_value.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def blind_index(value: Optional[str]) -> str:
+    """Computes a keyed HMAC-SHA256 blind index using the dedicated BLIND_INDEX_KEY."""
+    norm = (value or "").strip().lower()
+    return _compute_blind_hmac(norm, _get_blind_index_key_bytes())
+
+
+def blind_index_candidates(value: Optional[str]) -> List[str]:
+    """
+    Returns ordered active + BLIND_INDEX_KEY_PREVIOUS HMAC digests for zero-downtime
+    blind-index key rotation prior to completing reindex_all_blind_indices().
+    """
+    norm = (value or "").strip().lower()
+    active = _compute_blind_hmac(norm, _get_blind_index_key_bytes())
+    hashes: List[str] = [active]
+    prev_raw = os.getenv("BLIND_INDEX_KEY_PREVIOUS", "").strip()
+    if prev_raw:
+        for part in prev_raw.split(","):
+            clean_part = part.strip()
+            if clean_part:
+                h = _compute_blind_hmac(norm, clean_part.encode("utf-8"))
+                if h not in hashes:
+                    hashes.append(h)
+    return hashes
+
+
+def reindex_all_blind_indices(session: Any) -> Dict[str, int]:
+    """
+    Explicitly recomputes User.email_hash and UserOTP.email_hash under the current active BLIND_INDEX_KEY
+    by decrypting raw ciphertext columns cleanly (skipping any row unreadable by active+previous keys
+    instead of corrupting hashes with empty digests).
+    """
+    from sqlalchemy import text
+
+    updated_users = 0
+    updated_otps = 0
+    skipped_unreadable = 0
+    conn = session.connection()
+
+    for row in conn.execute(text("SELECT id, email, email_hash FROM users")).fetchall():
+        rid, raw_email, cur_hash = row[0], row[1], row[2]
+        try:
+            plain = decrypt_str(raw_email, raise_on_error=True)
+        except ValueError:
+            skipped_unreadable += 1
+            continue
+        if not plain or not plain.strip():
+            skipped_unreadable += 1
+            continue
+        new_hash = blind_index(plain)
+        if new_hash != cur_hash:
+            conn.execute(
+                text("UPDATE users SET email_hash = :h WHERE id = :id"),
+                {"h": new_hash, "id": rid},
+            )
+            updated_users += 1
+
+    for row in conn.execute(text("SELECT id, email, email_hash FROM user_otps")).fetchall():
+        rid, raw_email, cur_hash = row[0], row[1], row[2]
+        try:
+            plain = decrypt_str(raw_email, raise_on_error=True)
+        except ValueError:
+            skipped_unreadable += 1
+            continue
+        if not plain or not plain.strip():
+            skipped_unreadable += 1
+            continue
+        new_hash = blind_index(plain)
+        if new_hash != cur_hash:
+            conn.execute(
+                text("UPDATE user_otps SET email_hash = :h WHERE id = :id"),
+                {"h": new_hash, "id": rid},
+            )
+            updated_otps += 1
+
+    if updated_users or updated_otps:
+        session.commit()
+    return {
+        "users_reindexed": updated_users,
+        "otps_reindexed": updated_otps,
+        "skipped_unreadable": skipped_unreadable,
+    }
 
 
 def encrypt_str(plaintext: Optional[str]) -> Optional[str]:
@@ -201,3 +314,17 @@ class EncryptedJSON(TypeDecorator):
             return json.loads(decrypted)
         except Exception:
             return {}
+
+
+if __name__ == "__main__":
+    import argparse
+    from sqlmodel import Session as _Session
+    from ..db.database import engine as _engine
+
+    parser = argparse.ArgumentParser(description="TalentFlow encryption & blind-index key maintenance CLI")
+    parser.add_argument("--reindex", action="store_true", help="Recompute User & UserOTP email_hash values with current BLIND_INDEX_KEY")
+    args = parser.parse_args()
+    if args.reindex:
+        with _Session(_engine) as _sess:
+            res = reindex_all_blind_indices(_sess)
+        print(f"Blind index reindexing complete: {res}")

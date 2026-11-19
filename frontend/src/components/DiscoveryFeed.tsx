@@ -913,7 +913,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
               <div className="pt-2 mt-2 border-t border-slate-800/60 space-y-2 text-[10px]">
                 <div className="flex items-center justify-between">
                   <span className="text-emerald-300 font-semibold">View Details &amp; Tailor CV</span>
-                  <span className="text-slate-300">Lang: {job.language_requirements.join(', ')}</span>
+                  <span className="text-slate-300">Lang: {(job.language_requirements || []).join(', ') || 'EN'}</span>
                 </div>
 
                 <div className="flex items-center gap-1.5 pt-1">

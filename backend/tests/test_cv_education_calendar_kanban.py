@@ -257,8 +257,6 @@ def test_kanban_rejected_status_and_google_calendar_api():
 
 def test_profile_updates_automatically_sync_to_saved_and_generated_cvs():
     """Updating fields on Profile Vault must automatically update both existing CV Studio versions (.docx/.pdf/.html) and newly generated CVs."""
-    from app.config import GENERATED_RESUMES_DIR
-
     headers = _auth_headers("profile_cv_sync")
 
     # 1. Initial skills.md upload
@@ -305,9 +303,10 @@ def test_profile_updates_automatically_sync_to_saved_and_generated_cvs():
     assert "Cypress E2E" in matched["rendered_html"]
     assert "Lead QA Automation Engineer" in matched["rendered_html"]
 
-    docx_path = GENERATED_RESUMES_DIR / matched["docx_filename"]
-    assert docx_path.exists()
-    docx_text = "\n".join(p.text for p in Document(str(docx_path)).paragraphs)
+    import io as _io
+    dl1 = client.get(matched["docx_url"], headers=headers)
+    assert dl1.status_code == 200, dl1.text
+    docx_text = "\n".join(p.text for p in Document(_io.BytesIO(dl1.content)).paragraphs)
     assert "+995 599 88 77 66" in docx_text
     assert "Cypress E2E" in docx_text
     assert "French" in docx_text
@@ -319,7 +318,8 @@ def test_profile_updates_automatically_sync_to_saved_and_generated_cvs():
         json={"edition": "recruiter", "cv_language": "en"},
     )
     assert gen2.status_code == 200
-    docx2 = GENERATED_RESUMES_DIR / gen2.json()["docx_filename"]
+    docx2 = Path(gen2.json()["docx_path"])
+    assert docx2.exists() and docx2.parent.name.startswith("user_")
     docx2_text = "\n".join(p.text for p in Document(str(docx2)).paragraphs)
     assert "+995 599 88 77 66" in docx2_text
     assert "Cypress E2E" in docx2_text

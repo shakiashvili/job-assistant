@@ -474,6 +474,16 @@ class AICacheEntry(SQLModel, table=True):
     expires_at: Optional[datetime] = Field(default=None, index=True)
 
 
+class AuthRateLimit(SQLModel, table=True):
+    """Shared persistent brute-force & OTP rate-limit counters across worker processes."""
+    __tablename__ = "auth_rate_limits"
+
+    bucket_key: str = Field(primary_key=True, max_length=255)
+    attempts: int = Field(default=0)
+    window_started_at: float = Field(default=0.0)
+    expires_at: float = Field(default=0.0, index=True)
+
+
 # Canonical and backwards-compatible aliases
 Application = ApplicationTracker
 JobVacancy = JobPosting

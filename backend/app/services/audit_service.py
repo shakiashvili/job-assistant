@@ -9,7 +9,8 @@ import httpx
 from bs4 import BeautifulSoup
 from pathlib import Path
 from typing import List, Optional, Dict, Any
-from ..config import ENABLE_PLAYWRIGHT, GENERATED_RESUMES_DIR, TEST_FORMS_DIR
+from ..config import ENABLE_PLAYWRIGHT, TEST_FORMS_DIR
+from ..db.document_repository import record_candidate_document, resolve_user_id_by_email
 from ..db.profile_repository import ground_truth_store
 from ..services.gemini_service import gemini_service
 from ..services.portal_detector import detect_portal_from_html, detect_portal_from_url
@@ -385,6 +386,7 @@ class AuditService:
             candidate_name=candidate.get("full_name", "Candidate")
         )
 
+        resolved_uid = user_id if user_id is not None else resolve_user_id_by_email(owner_email)
         cv_result_dict = cv_generator_service.generate_vacancy_cv(
             job_title=details.title,
             company=details.company,
@@ -397,17 +399,17 @@ class AuditService:
             skills_md_override=skills_md,
             cv_language=cv_language,
             owner_email=owner_email,
+            user_id=resolved_uid,
         )
         tailored_cv = TailoredCVResult(**cv_result_dict)
         if details.salary_range:
             tailored_cv.expected_salary = details.salary_range
 
-        if user_id is not None and tailored_cv.pdf_filename:
-            from ..db.document_repository import record_candidate_document
+        if resolved_uid is not None and tailored_cv.pdf_filename:
             record_candidate_document(
-                user_id=user_id,
+                user_id=resolved_uid,
                 filename=tailored_cv.pdf_filename,
-                file_path=GENERATED_RESUMES_DIR / tailored_cv.pdf_filename,
+                file_path=Path(cv_result_dict["pdf_path"]),
                 doc_type="generated_audit_cv",
                 target_company=details.company,
                 target_role=details.title,

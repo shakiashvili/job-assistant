@@ -162,17 +162,40 @@ async def calculate_georgia_b2b_net(req: TaxCalculatorRequest) -> Dict[str, Any]
         monthly_orig = req.amount
 
     monthly_gross_gel = monthly_orig * fx
-    annual_gross_gel = monthly_gross_gel * 12.0
+    projected_annual_gross_gel = monthly_gross_gel * 12.0
     ytd_gel = float(req.ytd_revenue_gel or 0.0)
-    cumulative_annual_gel = ytd_gel + annual_gross_gel
 
-    # 1. Georgia IE Small Business Status (1% under 500,000 GEL cumulative calendar-year turnover, 3% when exceeded)
-    under_500k_cap = cumulative_annual_gel <= 500_000.0
-    b2b_tax_rate = 0.01 if under_500k_cap else 0.03
+    # Article 90 (Georgian Tax Code): 3% applies starting from the month in which ACTUAL cumulative
+    # calendar-year turnover exceeds 500,000 GEL — NEVER purely from an annualized projection.
+    actual_cumulative_gel = ytd_gel + monthly_gross_gel
+    actual_under_500k_cap = actual_cumulative_gel <= 500_000.0
+    b2b_tax_rate = 0.01 if actual_under_500k_cap else 0.03
     b2b_tax_gel = monthly_gross_gel * b2b_tax_rate
     transfer_fee_gel = monthly_gross_gel * (req.transfer_fee_pct / 100.0) if cur != "GEL" else 0.0
     b2b_net_gel = monthly_gross_gel - b2b_tax_gel - transfer_fee_gel
     b2b_net_orig = b2b_net_gel / fx
+
+    # Separate 12-month run-rate projection & crossing-month analysis (distinct from current-month tax)
+    projected_cumulative_gel = ytd_gel + projected_annual_gross_gel
+    projected_exceeds_500k = projected_cumulative_gel > 500_000.0
+    threshold_crossing_month: Optional[int] = None
+    if ytd_gel > 500_000.0:
+        threshold_crossing_month = 0  # Already exceeded before this billing month
+    elif monthly_gross_gel > 0 and projected_exceeds_500k:
+        for m_idx in range(1, 13):
+            if ytd_gel + (monthly_gross_gel * m_idx) > 500_000.0:
+                threshold_crossing_month = m_idx
+                break
+
+    projected_annual_tax_gel = 0.0
+    for m_idx in range(1, 13):
+        cum_m = ytd_gel + (monthly_gross_gel * m_idx)
+        projected_annual_tax_gel += monthly_gross_gel * (0.01 if cum_m <= 500_000.0 else 0.03)
+    projected_effective_tax_rate_pct = (
+        round((projected_annual_tax_gel / projected_annual_gross_gel) * 100.0, 2)
+        if projected_annual_gross_gel > 0
+        else 1.0
+    )
 
     # 2. Standard Georgian Labor Contract (2% employee pension + 20% income tax on remaining 98% = 21.6% total)
     pension_rate = 0.02 if req.include_pension_for_labor else 0.0
@@ -192,10 +215,19 @@ async def calculate_georgia_b2b_net(req: TaxCalculatorRequest) -> Dict[str, Any]
         "fx_as_of": fx_as_of,
         "monthly_gross_orig": round(monthly_orig, 2),
         "monthly_gross_gel": round(monthly_gross_gel, 2),
-        "annual_gross_gel": round(annual_gross_gel, 2),
         "ytd_revenue_gel": round(ytd_gel, 2),
-        "cumulative_annual_gel": round(cumulative_annual_gel, 2),
-        "under_500k_cap": under_500k_cap,
+        "actual_cumulative_gel": round(actual_cumulative_gel, 2),
+        "under_500k_cap": actual_under_500k_cap,
+        "actual_cap_usage_pct": round(min(999.0, (actual_cumulative_gel / 500_000.0) * 100.0), 1),
+        "annual_gross_gel": round(projected_annual_gross_gel, 2),
+        "cumulative_annual_gel": round(projected_cumulative_gel, 2),
+        "projected_annual_gross_gel": round(projected_annual_gross_gel, 2),
+        "projected_cumulative_gel": round(projected_cumulative_gel, 2),
+        "projected_exceeds_500k_cap": projected_exceeds_500k,
+        "threshold_crossing_month": threshold_crossing_month,
+        "projected_annual_tax_gel": round(projected_annual_tax_gel, 2),
+        "projected_effective_tax_rate_pct": projected_effective_tax_rate_pct,
+        "projected_cap_usage_pct": round(min(999.0, (projected_cumulative_gel / 500_000.0) * 100.0), 1),
         "b2b_small_business": {
             "tax_rate_pct": round(b2b_tax_rate * 100, 1),
             "tax_gel": round(b2b_tax_gel, 2),
@@ -211,10 +243,11 @@ async def calculate_georgia_b2b_net(req: TaxCalculatorRequest) -> Dict[str, Any]
             "net_orig": round(labor_net_orig, 2),
         },
         "monthly_b2b_advantage_gel": round(monthly_savings_gel, 2),
-        "cap_usage_pct": round(min(999.0, (cumulative_annual_gel / 500_000.0) * 100.0), 1),
+        "cap_usage_pct": round(min(999.0, (actual_cumulative_gel / 500_000.0) * 100.0), 1),
         "notes": [
-            "Georgian Small Business status applies 1% tax on revenue up to 500,000 GEL per calendar year (3% if exceeded).",
-            "Foreign B2B digital service exports are outside Georgian VAT territorial scope (consult a Georgian CPA for exact classification).",
+            "Georgian Tax Code Article 90: Small Business 1% rate applies while actual cumulative calendar-year turnover stays at or below 500,000 GEL; the 3% rate starts in the month the threshold is exceeded.",
+            "Projected 12-month totals are estimates only and do not apply the 3% rate before the threshold is actually crossed.",
+            "Foreign B2B digital service exports are outside Georgian VAT territorial scope (consult a Georgian CPA for tax filing advice).",
         ],
     }
 

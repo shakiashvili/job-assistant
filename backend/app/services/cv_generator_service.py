@@ -16,7 +16,8 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
 
-from ..config import GENERATED_RESUMES_DIR, FONTS_DIR
+from ..config import FONTS_DIR
+from ..db.document_repository import record_candidate_document, resolve_user_id_by_email, user_generated_resumes_dir
 from ..db.profile_repository import ground_truth_store, filter_spoken_language_entries
 from ..services.gemini_service import GEORGIAN_SKILL_TRANSLATIONS
 from ..services.scrapers.base_scraper import sanitize_company_name
@@ -406,6 +407,7 @@ class CVGeneratorService:
         required_skills: Optional[List[str]] = None,
         owner_email: Optional[str] = None,
         vault_override: Optional[Dict[str, Any]] = None,
+        user_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Generates tailored PDF, Word (.docx), and HTML CVs from verified candidate ground truth.
@@ -417,7 +419,8 @@ class CVGeneratorService:
         - `cv_style == "tailored"`: vacancy-specific edition named after the target company and
           target role (`<Candidate>_<Company>_<TargetRole>_CV[_KA].ext`).
         """
-        gt = vault_override if vault_override else ground_truth_store.get_data(owner_email=owner_email)
+        resolved_uid = user_id if user_id is not None else resolve_user_id_by_email(owner_email)
+        gt = vault_override if vault_override else ground_truth_store.get_data(owner_email=owner_email, user_id=resolved_uid)
         ps = dict(gt.get("_parsed_skills") or gt.get("parsed_skills_taxonomy") or {})
         raw_vault_md = str(gt.get("skills_md_raw") or "")
         has_explicit_md_override = bool(
@@ -591,12 +594,13 @@ class CVGeneratorService:
         else:
             base_name = f"{cand_slug}_{job_role_slug or role_tag}_CV{lang_suffix}"
 
+        out_dir = user_generated_resumes_dir(user_id=user_id, owner_email=owner_email)
         pdf_filename = f"{base_name}.pdf"
         docx_filename = f"{base_name}.docx"
         html_filename = f"{base_name}.html"
-        pdf_path = GENERATED_RESUMES_DIR / pdf_filename
-        docx_path = GENERATED_RESUMES_DIR / docx_filename
-        html_path = GENERATED_RESUMES_DIR / html_filename
+        pdf_path = out_dir / pdf_filename
+        docx_path = out_dir / docx_filename
+        html_path = out_dir / html_filename
 
         tailored_highlights = []
         for job in work_history:
@@ -669,6 +673,7 @@ class CVGeneratorService:
             pdf_path,
             candidate_name=str(candidate.get("full_name") or ""),
             expected_email=str(candidate.get("email") or ""),
+            expected_phone=str(candidate.get("phone") or ""),
             expected_keywords=matched_skills or display_skills[:8],
         )
 
@@ -728,6 +733,7 @@ class CVGeneratorService:
         self,
         sections: Dict[str, Any],
         base_name_override: Optional[str] = None,
+        user_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Re-renders HTML, PDF, and DOCX cleanly from user-edited structured CV JSON sections."""
         cand = dict(sections.get("candidate") or {})
@@ -760,12 +766,13 @@ class CVGeneratorService:
             short_id = uuid.uuid4().hex[:6]
             base_name = f"{cand_slug}_{role_slug}_{short_id}_Edited"
 
+        out_dir = user_generated_resumes_dir(user_id=user_id)
         pdf_filename = f"{base_name}.pdf"
         docx_filename = f"{base_name}.docx"
         html_filename = f"{base_name}.html"
-        pdf_path = GENERATED_RESUMES_DIR / pdf_filename
-        docx_path = GENERATED_RESUMES_DIR / docx_filename
-        html_path = GENERATED_RESUMES_DIR / html_filename
+        pdf_path = out_dir / pdf_filename
+        docx_path = out_dir / docx_filename
+        html_path = out_dir / html_filename
 
         html_content = self._build_cv_html(
             candidate=cand,
@@ -822,6 +829,7 @@ class CVGeneratorService:
             pdf_path,
             candidate_name=str(cand.get("full_name") or ""),
             expected_email=str(cand.get("email") or ""),
+            expected_phone=str(cand.get("phone") or ""),
             expected_keywords=display_skills[:8],
         )
 
@@ -829,6 +837,9 @@ class CVGeneratorService:
             "pdf_filename": pdf_filename,
             "docx_filename": docx_filename,
             "html_filename": html_filename,
+            "pdf_path": str(pdf_path),
+            "docx_path": str(docx_path),
+            "html_path": str(html_path),
             "pdf_url": f"/api/resumes/generated/{pdf_filename}",
             "docx_url": f"/api/resumes/generated/{docx_filename}",
             "html_preview_url": f"/api/resumes/generated/{html_filename}",
@@ -898,7 +909,20 @@ class CVGeneratorService:
                     rendered = self.render_cv_from_sections(
                         sections,
                         base_name_override=ver.pdf_filename,
+                        user_id=user_id,
                     )
+                    for fk, fp_key in (("pdf_filename", "pdf_path"), ("docx_filename", "docx_path")):
+                        fname = rendered.get(fk)
+                        fpath = rendered.get(fp_key)
+                        if fname and fpath:
+                            record_candidate_document(
+                                user_id=user_id,
+                                filename=fname,
+                                file_path=Path(fpath),
+                                doc_type=f"cv_studio_{ver_edition}",
+                                target_company=ver.target_company or "",
+                                target_role=ver.target_role or "",
+                            )
                     ver.structured_content = sections
                     ver.rendered_html = rendered.get("rendered_html") or ver.rendered_html
                     ver.pdf_filename = rendered.get("pdf_filename") or ver.pdf_filename
@@ -1562,6 +1586,7 @@ class CVGeneratorService:
         cv_style: str = "tailored",
         skills_md_override: Optional[str] = None,
         owner_email: Optional[str] = None,
+        user_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Generates a complete, ready-to-send email package for any vacancy:
@@ -1572,7 +1597,8 @@ class CVGeneratorService:
         from .gemini_service import gemini_service
         from .matcher_service import matcher_service
 
-        gt = ground_truth_store.get_data(owner_email=owner_email)
+        resolved_uid = user_id if user_id is not None else resolve_user_id_by_email(owner_email)
+        gt = ground_truth_store.get_data(owner_email=owner_email, user_id=resolved_uid)
         candidate = dict(gt.get("candidate", {}))
         ps = dict(gt.get("_parsed_skills") or gt.get("parsed_skills_taxonomy") or {})
         raw_vault_md = str(gt.get("skills_md_raw") or "")
@@ -1656,6 +1682,7 @@ class CVGeneratorService:
             required_skills=req_skills,
             owner_email=owner_email,
             vault_override=gt,
+            user_id=resolved_uid,
         )
 
         # Clean subject & sanitize company (never address location strings, portal chrome, or foreign-script leaks)

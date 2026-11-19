@@ -1,5 +1,6 @@
 import logging
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -7,6 +8,7 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
 from ..db.database import engine, get_session, init_db
+from ..db.document_repository import record_candidate_document
 from ..db.models import ApplicationTracker, User, utc_now
 from ..services.answer_service import load_live_candidate_profile
 from ..services.auth_service import decode_access_token, get_user_by_email
@@ -472,7 +474,18 @@ def prepare_application(
         required_skills=req_skills,
         owner_email=current_user.email,
         vault_override=gt,
+        user_id=current_user.id,
     )
+    for fk, pk in (("pdf_filename", "pdf_path"), ("docx_filename", "docx_path")):
+        if cv_res.get(fk) and cv_res.get(pk):
+            record_candidate_document(
+                user_id=current_user.id,
+                filename=cv_res[fk],
+                file_path=Path(cv_res[pk]),
+                doc_type="generated_extension_cv",
+                target_company=company_name,
+                target_role=job_title,
+            )
 
     # Per-field answers
     field_answers: List[FieldAnswerItem] = []
