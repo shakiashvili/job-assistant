@@ -243,24 +243,24 @@ def _write_env_updates(env_path: Path, updates: dict[str, str]) -> None:
 def configure_smtp_sender(
     req: ConfigureSmtpRequest,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_bearer),
+    session: Session = Depends(get_session),
 ):
     """
     Validates and saves local Gmail SMTP credentials into gitignored backend/.env
-    in local development only. Disabled in production deployments.
+    in local development only. Strictly restricted to authenticated administrators.
     """
     if IS_PRODUCTION:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Runtime .env modification is disabled in production. Configure SMTP environment variables in your host settings.",
         )
-    cfg = get_smtp_config()
-    if cfg["configured"]:
-        payload = decode_access_token(credentials.credentials) if credentials else None
-        if not payload or not payload.get("sub"):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="SMTP is already configured. Sign in first to change sender credentials.",
-            )
+
+    current_user = get_current_user(credentials=credentials, session=session)
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator privileges required to modify server SMTP configuration.",
+        )
 
     clean_user = req.gmail_user.strip().lower()
     clean_pass = req.gmail_app_password.replace(" ", "").strip()

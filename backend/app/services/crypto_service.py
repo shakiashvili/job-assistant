@@ -84,22 +84,22 @@ def _get_fernet() -> Fernet:
 def blind_index(value: Optional[str]) -> str:
     """Computes a keyed HMAC-SHA256 blind index for exact-match SQL lookups without storing plaintext."""
     norm = (value or "").strip().lower()
-    secret = hashlib.sha256(_get_fernet_key_bytes() + b":blind-index").digest()
+    explicit_bi = os.getenv("BLIND_INDEX_KEY", "").strip()
+    key_material = explicit_bi.encode("utf-8") if explicit_bi else _get_fernet_key_bytes()
+    secret = hashlib.sha256(key_material + b":blind-index").digest()
     return hmac.new(secret, norm.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def encrypt_str(plaintext: Optional[str]) -> Optional[str]:
-    """Encrypts plaintext using versioned prefix `enc:v1:<token>`."""
+    """Encrypts plaintext unconditionally using versioned prefix `enc:v1:<token>`."""
     if plaintext is None:
         return None
     s = str(plaintext)
-    if s.startswith(_VERSIONED_PREFIX) or s.startswith(_LEGACY_PREFIX):
-        return s
     token = _get_fernet().encrypt(s.encode("utf-8")).decode("utf-8")
     return f"{_VERSIONED_PREFIX}{token}"
 
 
-def decrypt_str(ciphertext: Optional[str]) -> Optional[str]:
+def decrypt_str(ciphertext: Optional[str], *, raise_on_error: bool = False) -> Optional[str]:
     """
     Decrypts versioned (`enc:v1:`) or legacy (`enc:`) ciphertext using the primary key,
     falling back to ENCRYPTION_KEY_PREVIOUS during key rotation.
@@ -119,15 +119,17 @@ def decrypt_str(ciphertext: Optional[str]) -> Optional[str]:
             return fernet_inst.decrypt(raw_token).decode("utf-8")
         except InvalidToken:
             continue
+    if raise_on_error:
+        raise ValueError("Failed decrypting ciphertext with active and previous encryption keys.")
     logger.warning("Failed decrypting column value with active and previous encryption keys.")
     return ""
 
 
 def rotate_encrypted_value(ciphertext: Optional[str]) -> Optional[str]:
-    """Re-encrypts a legacy or previous-key ciphertext under the current active `enc:v1:` key."""
+    """Re-encrypts a legacy or previous-key ciphertext under the current active `enc:v1:` key cleanly without silent wipes."""
     if ciphertext is None:
         return None
-    plain = decrypt_str(ciphertext)
+    plain = decrypt_str(ciphertext, raise_on_error=True)
     if plain is None:
         return None
     token = _get_fernet().encrypt(plain.encode("utf-8")).decode("utf-8")

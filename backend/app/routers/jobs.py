@@ -57,7 +57,7 @@ def _is_profile_uploaded_for_user(profile: Optional[CandidateProfile], user_emai
         return False
     owner = str(ps.get("owner_email") or "").strip().lower()
     clean_user = (user_email or "").strip().lower()
-    if owner and clean_user and clean_user != "guest@talentflow.local" and owner != clean_user:
+    if owner and clean_user != owner:
         return False
     return True
 
@@ -317,7 +317,7 @@ def get_scrape_task_status(
         t_row = session.exec(select(ScrapeTask).where(ScrapeTask.task_id == task_id)).first()
         if not t_row:
             raise HTTPException(status_code=404, detail=f"Scrape task {task_id} not found.")
-        if t_row.user_id is not None and current_user.email != "guest@talentflow.local" and t_row.user_id != current_user.id:
+        if t_row.user_id is not None and t_row.user_id != current_user.id:
             raise HTTPException(status_code=403, detail="Forbidden: scrape task belongs to another user.")
         summary = t_row.result_summary or {}
         return {

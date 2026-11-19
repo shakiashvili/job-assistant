@@ -808,14 +808,16 @@ class GeminiService:
         supporting separate CV vs Letter language when specified.
         """
         raw_company = str(job_details.get("company") or "your organization").strip()
+        target_letter_lang = letter_language or cv_language
         company = self._clean_foreign_script(raw_company, cv_language) or "Hiring Company"
         raw_title = str(job_details.get("title") or "Specialist").strip()
         title = self._clean_foreign_script(raw_title, cv_language) or "Specialist"
+        ltr_company = self._clean_foreign_script(raw_company, target_letter_lang) or "Hiring Company"
+        ltr_title = self._clean_foreign_script(raw_title, target_letter_lang) or "Specialist"
         industry = job_details.get("industry", "qa_tech")
-        top_skills = ", ".join(matched_skills[:6]) if matched_skills else "core domain tools"
+        top_skills = ", ".join(matched_skills[:6]) if matched_skills else "core domain skills"
         ev = self._extract_cv_evidence_for_letter(skills_md, job_details, matched_skills, missing_skills)
         job_excerpt = str(job_details.get("description") or job_details.get("summary") or "")[:1400]
-        target_letter_lang = letter_language or cv_language
 
         if self.is_available:
             try:
@@ -824,7 +826,7 @@ class GeminiService:
                 cv_lang_name = "GEORGIAN (ქართული ენა)" if cv_language == "ka" else "crisp executive HUMAN English"
                 ltr_lang_name = "GEORGIAN (ქართული ენა)" if target_letter_lang == "ka" else "crisp executive HUMAN English"
                 ka_sal = (
-                    f"Start cover_letter and dou_motivational_letter with 'მოგესალმებით, {company}-ის გუნდს,' and end with 'პატივისცემით,\\n{candidate_name}'."
+                    f"Start cover_letter and dou_motivational_letter with 'მოგესალმებით, {ltr_company}-ის გუნდს,' and end with 'პატივისცემით,\\n{candidate_name}'."
                     if target_letter_lang == "ka"
                     else f"End cover_letter and dou_motivational_letter with 'Best regards,\\n{candidate_name}'."
                 )
@@ -846,7 +848,7 @@ STRICT STYLE CONSTRAINTS:
 4. Keep cover_letter (concise 2 paragraphs) and dou_motivational_letter (deeper 3-4 paragraphs) DISTINCT in structure and content.
 5. Candidate sign-off name: {candidate_name}
 
-Target Role: {title} at {company} (Industry: {industry})
+Target Role: {ltr_title} at {ltr_company} (Industry: {industry})
 Vacancy Required Skills: {ev["req_focus"] or top_skills}
 Matched Candidate Skills: {top_skills}
 Stretch / Ramp Areas: {ev["gap_focus"] or "None"}
@@ -857,9 +859,9 @@ Stretch / Ramp Areas: {ev["gap_focus"] or "None"}
 
 Return JSON with keys:
 - "human_tone_summary": Top-1% recruiter & ATS 3-sentence CV profile summary highlighting verified tooling/stack and domain experience tailored naturally to {title} requirements—WITHOUT writing "tailored for [Company]", WITHOUT copying foreign-language/Cyrillic tokens into English, and WITHOUT inventing Honors or Erasmus.
-- "motivation_statement": Concise 2-3 sentence rationale connecting verified skills and accomplishments to {company}'s requirements for {title}.
+- "motivation_statement": Concise 2-3 sentence rationale connecting verified skills and accomplishments to {ltr_company}'s requirements for {ltr_title}.
 - "cover_letter": Concise 2-paragraph hiring-team email/cover letter focusing on direct vacancy-to-skill fit, ending cleanly with "Best regards,\\n{candidate_name}" (or Georgian "პატივისცემით,\\n{candidate_name}").
-- "dou_motivational_letter": 3-4 paragraph deeper motivational letter addressed to {company}'s hiring team explaining genuine interest in {company}, connecting concrete prior roles/projects and academic background without fabrication, bridging transferable gaps, and closing cleanly with "Best regards,\\n{candidate_name}" (or Georgian "პატივისცემით,\\n{candidate_name}"), with ZERO mention of notice period.
+- "dou_motivational_letter": 3-4 paragraph deeper motivational letter addressed to {ltr_company}'s hiring team explaining genuine interest in {ltr_company}, connecting concrete prior roles/projects and academic background without fabrication, bridging transferable gaps, and closing cleanly with "Best regards,\\n{candidate_name}" (or Georgian "პატივისცემით,\\n{candidate_name}"), with ZERO mention of notice period.
 STRICT PURITY RULE: Zero Cyrillic/Russian words in English/Georgian outputs. Use ONLY English in English outputs and Georgian (+ exact technical tool names) in Georgian outputs."""
                 parsed = self.generate_json(
                     prompt,
@@ -868,17 +870,20 @@ STRICT PURITY RULE: Zero Cyrillic/Russian words in English/Georgian outputs. Use
                     system_instruction=sys_inst,
                     ttl_seconds=1800,
                 )
-                if isinstance(parsed, dict) and (parsed.get("dou_motivational_letter") or parsed.get("cover_letter")):
+                if isinstance(parsed, dict) and (parsed.get("dou_motivational_letter") or parsed.get("cover_letter") or parsed.get("human_tone_summary")):
                     parsed["human_tone_summary"] = self._clean_foreign_script(str(parsed.get("human_tone_summary") or ""), cv_language)
                     parsed["motivation_statement"] = self._clean_foreign_script(str(parsed.get("motivation_statement") or ""), target_letter_lang)
-                    parsed["cover_letter"] = self._clean_foreign_script(str(parsed.get("cover_letter") or parsed.get("dou_motivational_letter") or ""), target_letter_lang)
-                    parsed["dou_motivational_letter"] = self._clean_foreign_script(str(parsed.get("dou_motivational_letter") or parsed.get("cover_letter") or ""), target_letter_lang)
-                    return parsed
+                    if parsed.get("cover_letter"):
+                        parsed["cover_letter"] = self._clean_foreign_script(str(parsed["cover_letter"]), target_letter_lang)
+                    if parsed.get("dou_motivational_letter"):
+                        parsed["dou_motivational_letter"] = self._clean_foreign_script(str(parsed["dou_motivational_letter"]), target_letter_lang)
+                    if all(parsed.get(k) for k in ("human_tone_summary", "cover_letter", "dou_motivational_letter")):
+                        return parsed
             except Exception as e:
                 logger.warning(f"Gemini narrative generation fallback: {e}")
 
-        # --- GEORGIAN LANGUAGE (ქართული ენა) HUMAN-TONE NARRATIVES ---
-        t_low = title.lower()
+        # Zero-fabrication deterministic fallbacks strictly anchored to candidate-verified skills & experience
+        t_low = f"{title} {ltr_title}".lower()
         is_rec = industry in ("hospitality_reception", "receptionist_hospitality") or any(w in t_low for w in ["reception", "front desk", "ადმინისტრატორ", "რეცეფციონ", "მიმღებ", "სასტუმრო"])
         is_sup = industry in ("technical_support", "it_support") or any(w in t_low for w in ["support", "monitoring", "მხარდაჭერ", "მონიტორინგ", "helpdesk", "service desk"])
         is_health = industry == "healthcare_hospital" or any(w in t_low for w in ["პაციენტ", "კლინიკ", "საავადმყოფ", "medical", "clinic", "hospital"])
@@ -889,264 +894,134 @@ STRICT PURITY RULE: Zero Cyrillic/Russian words in English/Georgian outputs. Use
         req_focus = ev["req_focus"] or top_skills
         sign_off_name = candidate_name if candidate_name and candidate_name != "Candidate" else ""
 
-        if cv_language == "ka":
+        def _build_ka(cur_company: str, cur_title: str) -> Dict[str, str]:
             ka_skills = [GEORGIAN_SKILL_TRANSLATIONS.get(s, s) for s in matched_skills[:6]]
             ka_skills_str = ", ".join(ka_skills) if ka_skills else top_skills
             ka_req_str = ", ".join(GEORGIAN_SKILL_TRANSLATIONS.get(s, s) for s in (job_details.get("required_skills") or [])[:5]) or ka_skills_str
             exp_ctx_ka = f" ({work_phrase})" if work_phrase else ""
             edu_ctx_ka = f" ამასთანავე, ჩემი აკადემიური განათლება ({ev['edu_snippet']}) აძლიერებს ანალიტიკურ და ორგანიზაციულ სიზუსტეს." if ev["edu_snippet"] else ""
             sig_ka = f"\n\nპატივისცემით,\n{sign_off_name}" if sign_off_name else "\n\nპატივისცემით"
+            evidence_ka = f" წინა გამოცდილებისას ვახორციელებდი: {ev['bullets'][0]}." if ev["bullets"] else ""
 
             if is_rec:
-                human_summary = (
-                    f"სასტუმროს მიმღების (Front Desk) და სტუმართმოყვარეობის სფეროს სპეციალისტი პრაქტიკული გამოცდილებით{exp_ctx_ka}. "
-                    f"ვფლობ სასტუმროს მართვის პროგრამებს ({ka_skills_str}), სტუმრების სწრაფ რეგისტრაციას (Check-in/Check-out) და VIP კომუნიკაციის სტანდარტებს."
-                )
-                motivation = (
-                    f"{company}-ის სერვისის მაღალი სტანდარტები ზუსტად შეესაბამება ჩემს გამოცდილებას Front Office ოპერაციებში ({ka_skills_str}). "
-                    f"პირველივე დღიდან ვუზრუნველყოფ სტუმრების სწრაფ და კეთილგანწყობილ მომსახურებას."
-                )
-                dou_letter = (
-                    f"მოგესალმებით, {company}-ის გუნდს,\n\n"
-                    f"დიდი ინტერესით გიგზავნით განაცხადს „{title}“ პოზიციაზე. ვაკანსიაში მითითებული მოთხოვნები ({ka_req_str}) პირდაპირ შეესაბამება ჩემს პრაქტიკულ გამოცდილებას Front Desk ოპერაციებში, სტუმრების მიღებასა და ჯავშნების კოორდინაციაში ({ka_skills_str}).\n\n"
-                    f"ჩემი წინა სამუშაო გამოცდილების{exp_ctx_ka} განმავლობაში უზრუნველვყოფდი ყოველდღიური მიმღები პროცესების გამართულობას, დოკუმენტაციის სიზუსტესა და კლიენტთა მაღალი დონის მომსახურებას.{edu_ctx_ka}\n\n"
-                    f"თანდართულია ამ პოზიციის მოთხოვნებზე მორგებული ჩემი რეზიუმე (CV). მოხარული ვიქნები გასაუბრებაზე განვიხილო, როგორ შემიძლია წვლილი შევიტანო {company}-ის გუნდში.{sig_ka}"
-                )
+                summary = f"სასტუმროს მიმღების (Front Desk) და სტუმართმოყვარეობის სფეროს სპეციალისტი ({ka_skills_str}){exp_ctx_ka}."
+                motiv = f"{cur_company}-ის გუნდში გამოვიყენებ ჩემს გამოცდილებას ({ka_skills_str}) სტუმრების სწრაფ და კეთილგანწყობილ მომსახურებაში."
             elif is_sup:
-                human_summary = (
-                    f"ტექნიკური მხარდაჭერისა და სისტემური მონიტორინგის სპეციალისტი პრაქტიკული გამოცდილებით ({ka_skills_str}). "
-                    f"ვახორციელებ ინციდენტების ოპერატიულ დიაგნოსტიკას, სისტემური ლოგების მონიტორინგსა და მომხმარებელთა მოთხოვნების სწრაფ მოგვარებას."
-                )
-                motivation = (
-                    f"{company}-ის ტექნიკური მხარდაჭერის გუნდში შევძლებ ეფექტურად გამოვიყენო ჩემი საინჟინრო და ანალიტიკური გამოცდილება ({ka_skills_str}) ინციდენტების სწრაფ გადაჭრასა და სერვისის უწყვეტობაში."
-                )
-                dou_letter = (
-                    f"მოგესალმებით, {company}-ის გუნდს,\n\n"
-                    f"დიდი ინტერესით გიგზავნით განაცხადს „{title}“ პოზიციაზე. ჩემი პრაქტიკული გამოცდილება ({ka_skills_str}) პირდაპირ პასუხობს ვაკანსიის ძირითად მოთხოვნებს ({ka_req_str}) — ინციდენტების სწრაფ დიაგნოსტიკას, ლოგების მონიტორინგსა და სტაბილურ მომსახურებას.\n\n"
-                    f"ჩემს წინა პოზიციებზე{exp_ctx_ka} პრაქტიკულად ვიყენებდი სისტემურ ანალიზსა და მომხმარებელთა ტექნიკურ მხარდაჭერას, რაც ამცირებდა ხარვეზების აღმოფხვრის დროს.{edu_ctx_ka}\n\n"
-                    f"თანდართულია პოზიციაზე მორგებული ჩემი რეზიუმე (CV) და მოხარული ვიქნები გავაგრძელოთ საუბარი {company}-ის გუნდთან შეხვედრაზე.{sig_ka}"
-                )
+                summary = f"ტექნიკური მხარდაჭერისა და სისტემური მონიტორინგის სპეციალისტი პრაქტიკული გამოცდილებით ({ka_skills_str}){exp_ctx_ka}."
+                motiv = f"{cur_company}-ის ტექნიკური მხარდაჭერის გუნდში გამოვიყენებ ჩემს უნარებს ({ka_skills_str}) ინციდენტების ოპერატიულ გადაჭრაში."
             elif is_health:
-                human_summary = (
-                    f"პაციენტთა კოორდინატორი და სამედიცინო ადმინისტრატორი პრაქტიკული გამოცდილებით კლინიკურ გარემოში{exp_ctx_ka}. "
-                    f"ვმართავ {ka_skills_str} პროცესებს, პაციენტთა ნაკადებს, სადაზღვევო ავტორიზაციებსა და ექიმების განრიგს მაღალი სიზუსტით."
-                )
-                motivation = (
-                    f"{company} გამოირჩევა პაციენტზე ორიენტირებული მომსახურებით. "
-                    f"ჩემი გამოცდილება სამედიცინო რეგისტრაციასა და EMR სისტემებში გამართულად უზრუნველყოფს პაციენტთა მიღებას."
-                )
-                dou_letter = (
-                    f"მოგესალმებით, {company}-ის გუნდს,\n\n"
-                    f"დიდი ინტერესით გიგზავნით განაცხადს „{title}“ პოზიციაზე. ჩემი გამოცდილება ({ka_skills_str}) სრულად შეესაბამება პოზიციის მოთხოვნებს ({ka_req_str}) პაციენტთა რეგისტრაციასა და კლინიკის ადმინისტრირებაში.\n\n"
-                    f"წინა გამოცდილებისას{exp_ctx_ka} ყოველდღიურად ვუზრუნველყოფდი ზუსტ კოორდინაციას, დოკუმენტაციის წარმოებასა და პაციენტებთან კეთილგანწყობილ კომუნიკაციას.{edu_ctx_ka}\n\n"
-                    f"თანდართულია მორგებული რეზიუმე (CV) და მოხარული ვიქნები {company}-ის გუნდთან გასაუბრებაზე შეხვედრით.{sig_ka}"
-                )
+                summary = f"პაციენტთა კოორდინატორი და სამედიცინო ადმინისტრატორი ({ka_skills_str}){exp_ctx_ka}."
+                motiv = f"{cur_company}-ში ჩემი პრაქტიკული უნარები ({ka_skills_str}) გამართულად უზრუნველყოფს პაციენტთა რეგისტრაციასა და კოორდინაციას."
             elif is_cust:
-                human_summary = (
-                    f"მომხმარებელთა მხარდაჭერის (Customer Care) სპეციალისტი პრაქტიკული გამოცდილებით ({ka_skills_str}){exp_ctx_ka}. "
-                    f"ვუზრუნველყოფ სწრაფ რეაგირებას ჩატსა და ზარებზე, CRM პროცესების ზუსტ მართვას და მომხმარებელთა მაღალ კმაყოფილებას."
-                )
-                motivation = (
-                    f"ჩემი პრაქტიკული გამოცდილება მომხმარებელთა მომსახურებასა და კომუნიკაციაში საშუალებას მომცემს {company}-ის გუნდში სწრაფად გადავჭრა რთული ქეისები."
-                )
-                dou_letter = (
-                    f"მოგესალმებით, {company}-ის გუნდს,\n\n"
-                    f"დიდი ინტერესით გიგზავნით განაცხადს „{title}“ პოზიციაზე. ჩემი გამოცდილება ({ka_skills_str}) პირდაპირ ემთხვევა ვაკანსიის მოთხოვნებს ({ka_req_str}) მომხმარებელთა ოპერატიული მხარდაჭერისა და კომუნიკაციის კუთხით.\n\n"
-                    f"წინა პოზიციებზე{exp_ctx_ka} მუდმივად ვინარჩუნებდი სერვისის მაღალ სტანდარტსა და მომართვების სწრაფ გადაჭრას.{edu_ctx_ka}\n\n"
-                    f"თანდართულია პოზიციაზე მორგებული ჩემი რეზიუმე (CV). მოხარული ვიქნები დეტალების გასაუბრებაზე განხილვით.{sig_ka}"
-                )
+                summary = f"მომხმარებელთა მხარდაჭერის (Customer Care) სპეციალისტი ({ka_skills_str}){exp_ctx_ka}."
+                motiv = f"ჩემი გამოცდილება ({ka_skills_str}) საშუალებას მომცემს {cur_company}-ის მომხმარებლებს ოპერატიულად დავეხმარო."
             elif is_qa:
-                human_summary = (
-                    f"QA Automation და Manual ტესტირების ინჟინერი პრაქტიკული გამოცდილებით ({ka_skills_str}){exp_ctx_ka}. "
-                    f"ვაპროექტებ ავტომატიზებულ რეგრესიულ ტესტებს, ვამოწმებ REST API კონტრაქტებს და CI/CD პაიპლაინებში ვავლენ კრიტიკულ ხარვეზებს გამოშვებამდე."
-                )
-                motivation = (
-                    f"{company}-ში მუშაობა საშუალებას მომცემს გამოვიყენო {ka_skills_str} რეალური პროდუქტების ტესტირებასა და გამოშვების ხარისხის გაუმჯობესებაში."
-                )
-                evidence_line_ka = (
-                    f" {work_phrase}-ში მუშაობისას პრაქტიკულად ვახორციელებდი: {ev['bullets'][0]}."
-                    if ev["bullets"]
-                    else f"{exp_ctx_ka} პრაქტიკულად ვქმნიდი ტესტ-ქეისებსა და ავტომატიზებულ შემოწმებებს სტაბილური გამოშვებისთვის."
-                )
-                dou_letter = (
-                    f"მოგესალმებით, {company}-ის გუნდს,\n\n"
-                    f"გწერთ „{title}“ პოზიციასთან დაკავშირებით. ჩემი პრაქტიკული საინჟინრო გამოცდილება ({ka_skills_str}) პირდაპირ შეესაბამება ვაკანსიის მოთხოვნებს ({ka_req_str}).\n\n"
-                    f"წინა გამოცდილებისას ვახორციელებდი ფუნქციურ, რეგრესიულ და API ტესტირებას ხარისხის მაღალი სტანდარტების დასაცავად.{evidence_line_ka}{edu_ctx_ka}\n\n"
-                    f"თანდართულია ამ პოზიციისთვის მორგებული ჩემი რეზიუმე (CV) და მოხარული ვიქნები გასაუბრებაზე განვიხილო {company}-ის პროდუქტის ხარისხში ჩემი წვლილი.{sig_ka}"
-                )
+                summary = f"QA და პროგრამული უზრუნველყოფის ტესტირების სპეციალისტი პრაქტიკული გამოცდილებით ({ka_skills_str}){exp_ctx_ka}."
+                motiv = f"{cur_company}-ში ჩემი უნარებით ({ka_skills_str}) გავაძლიერებ პროდუქტის ტესტირებასა და გამოშვების ხარისხს."
             else:
-                human_summary = (
-                    f"{title}-ის სპეციალისტი პრაქტიკული სამუშაო გამოცდილებით ({ka_skills_str}){exp_ctx_ka}. "
-                    f"უზრუნველვყოფ ყოველდღიური პროცესების გამართულ შესრულებას, ზუსტ დოკუმენტირებასა და გუნდურ შედეგებს."
-                )
-                motivation = (
-                    f"მინდა ჩემი პრაქტიკული უნარები ({ka_skills_str}) მივმართო {company}-ის გუნდის მიზნებისა და მაღალი ხარისხის მისაღწევად."
-                )
-                dou_letter = (
-                    f"მოგესალმებით, {company}-ის გუნდს,\n\n"
-                    f"დიდი ინტერესით გიგზავნით განაცხადს „{title}“ პოზიციაზე. ჩემი პრაქტიკული გამოცდილება ({ka_skills_str}) შეესაბამება ვაკანსიის მოთხოვნებს ({ka_req_str}).\n\n"
-                    f"წინა სამუშაო გამოცდილება{exp_ctx_ka} დამეხმარა ოპერაციული სიზუსტისა და შედეგზე ორიენტირებული მუშაობის გაძლიერებაში.{edu_ctx_ka}\n\n"
-                    f"თანდართულია მორგებული რეზიუმე (CV). მოხარული ვიქნები გასაუბრებაზე შეხვედრით.{sig_ka}"
-                )
-            cover_letter_ka = (
-                f"მოგესალმებით, {company}-ის გუნდს,\n\n"
-                f"გწერთ „{title}“ პოზიციაზე ჩემი კანდიდატურის განსახილველად. ჩემი პრაქტიკული გამოცდილება ({ka_skills_str}) პირდაპირ ფარავს ვაკანსიის ძირითად მოთხოვნებს ({ka_req_str}){exp_ctx_ka}.\n\n"
-                f"მოხარული ვიქნები გაგიზიაროთ ჩემი რეზიუმე და გასაუბრებაზე განვიხილოთ თანამშრომლობის დეტალები.{sig_ka}"
+                summary = f"{cur_title}-ის სპეციალისტი პრაქტიკული გამოცდილებით ({ka_skills_str}){exp_ctx_ka}."
+                motiv = f"მინდა ჩემი პრაქტიკული უნარები ({ka_skills_str}) მივმართო {cur_company}-ის გუნდის მიზნების მისაღწევად."
+
+            dou_l = (
+                f"მოგესალმებით, {cur_company}-ის გუნდს,\n\n"
+                f"დიდი ინტერესით გიგზავნით განაცხადს „{cur_title}“ პოზიციაზე. ჩემი პრაქტიკული გამოცდილება ({ka_skills_str}) შეესაბამება ვაკანსიის მოთხოვნებს ({ka_req_str}).\n\n"
+                f"ჩემი სამუშაო გამოცდილების{exp_ctx_ka} განმავლობაში პრაქტიკულად ვიყენებდი ({ka_skills_str}) ზუსტი და სტაბილური შედეგების მისაღწევად.{evidence_ka}{edu_ctx_ka}\n\n"
+                f"თანდართულია პოზიციაზე მორგებული ჩემი რეზიუმე (CV) და მოხარული ვიქნები გასაუბრებაზე დეტალების განხილვით.{sig_ka}"
+            )
+            cov_l = (
+                f"მოგესალმებით, {cur_company}-ის გუნდს,\n\n"
+                f"გწერთ „{cur_title}“ პოზიციაზე ჩემი კანდიდატურის განსახილველად. ჩემი პრაქტიკული გამოცდილება ({ka_skills_str}) ფარავს ვაკანსიის ძირითად მოთხოვნებს ({ka_req_str}){exp_ctx_ka}.\n\n"
+                f"თანდართულია ჩემი რეზიუმე და მოხარული ვიქნები გასაუბრებაზე შეხვედრით.{sig_ka}"
             )
             return {
-                "human_tone_summary": human_summary,
-                "motivation_statement": motivation,
-                "cover_letter": cover_letter_ka,
-                "dou_motivational_letter": dou_letter,
+                "human_tone_summary": summary,
+                "motivation_statement": motiv,
+                "cover_letter": cov_l,
+                "dou_motivational_letter": dou_l,
             }
 
-        # --- ENGLISH HUMAN-TONE NARRATIVES ACROSS ALL INDUSTRIES ---
-        exp_ctx_en = f" across {work_phrase}" if work_phrase else ""
-        edu_ctx_en = f" Additionally, my academic foundation ({ev['edu_snippet']}) supports structured analytical execution." if ev["edu_snippet"] else ""
-        sig_en = f"\n\nBest regards,\n{sign_off_name}" if sign_off_name else "\n\nBest regards"
-        gap_ctx_en = (
-            f" Where your stack extends into {ev['gap_focus']}, my hands-on foundation in {top_skills} positions me to ramp up rapidly."
-            if ev["gap_focus"]
-            else ""
-        )
+        def _build_en(cur_company: str, cur_title: str) -> Dict[str, str]:
+            exp_ctx_en = f" across {work_phrase}" if work_phrase else ""
+            edu_ctx_en = f" My academic foundation ({ev['edu_snippet']}) reinforces analytical rigor." if ev["edu_snippet"] else ""
+            sig_en = f"\n\nBest regards,\n{sign_off_name}" if sign_off_name else "\n\nBest regards"
+            gap_ctx_en = (
+                f" Where your stack extends into {ev['gap_focus']}, my foundation in {top_skills} supports fast ramp-up."
+                if ev["gap_focus"]
+                else ""
+            )
+            evidence_line = f" Notably, I delivered: {ev['bullets'][0]}." if ev["bullets"] else ""
 
-        if is_rec:
-            human_summary = (
-                f"Front Desk Receptionist and Hospitality Specialist experienced in "
-                f"managing guest check-ins, reservations, and VIP operations using {top_skills}{exp_ctx_en}. "
-                f"Sustains calm, multilingual coordination tailored to {company}'s front-office workflows."
-            )
-            motivation_statement = (
-                f"My day-to-day background in {top_skills} and VIP front-desk coordination directly supports "
-                f"{company}'s hospitality standards from day one."
-            )
-            dou_letter = (
-                f"Dear {company} Hiring Team,\n\n"
-                f"I am applying for the {title} role at {company}. Your requirements around {req_focus} align directly with my practical background in front-office hospitality, guest relations, and reservation coordination ({top_skills}).\n\n"
-                f"Through my hands-on experience{exp_ctx_en}, I maintained seamless check-in workflows, accurate booking administration, and attentive service for international guests.{edu_ctx_en}\n\n"
-                f"Please find my tailored CV attached. I would welcome the chance to discuss how my front-desk skills can support {company}'s guest experience.{sig_en}"
-            )
-        elif is_sup:
-            human_summary = (
-                f"Technical Support Specialist and Systems Monitoring professional experienced with {top_skills}{exp_ctx_en}. "
-                f"Investigates system logs, validates API/SQL data flows, and resolves customer escalations efficiently for {company}."
-            )
-            motivation_statement = (
-                f"Applying my diagnostic skills in {top_skills}, I can help {company}'s support team resolve complex technical issues and sustain system reliability."
-            )
-            bullet_en = f" Specifically, in prior delivery I applied this directly: {ev['bullets'][0]}." if ev["bullets"] else ""
-            dou_letter = (
-                f"Dear {company} Hiring Team,\n\n"
-                f"I am writing to apply for the {title} role at {company}. Your focus on {req_focus} closely mirrors my practical experience with {top_skills}.\n\n"
-                f"In my previous work{exp_ctx_en}, I investigated production anomalies, analyzed logs and API/SQL data flows, and partnered with engineering teams to close escalations cleanly.{bullet_en}{gap_ctx_en}{edu_ctx_en}\n\n"
-                f"My tailored CV is attached, and I look forward to discussing how I can strengthen reliability and response quality on your team.{sig_en}"
-            )
-        elif is_health:
-            human_summary = (
-                f"Hospital Patient Coordinator and Medical Receptionist experienced in {top_skills}{exp_ctx_en}. "
-                f"Manages patient intake, clinic schedules, and EMR/insurance verification accurately for clinical teams at {company}."
-            )
-            motivation_statement = (
-                f"My workflow background across medical scheduling, insurance verification, and {top_skills} equips me "
-                f"to streamline patient intake at {company}."
-            )
-            dou_letter = (
-                f"Dear {company} Hiring Team,\n\n"
-                f"I am applying for the {title} role at {company}. My patient coordination and clinical administration experience ({top_skills}) directly matches your stated needs in {req_focus}.\n\n"
-                f"Across my work{exp_ctx_en}, I ensured accurate patient scheduling, confidential record handling, and empathetic front-desk communication.{edu_ctx_en}\n\n"
-                f"Please review my attached tailored CV. I welcome an opportunity to discuss supporting {company}'s clinical team.{sig_en}"
-            )
-        elif is_cust:
-            human_summary = (
-                f"Customer Service and Client Care Specialist experienced in {top_skills} across chat, email, and CRM ticketing{exp_ctx_en}. "
-                f"Delivers structured first-contact troubleshooting and consistent client satisfaction for {company}."
-            )
-            motivation_statement = (
-                f"Working daily with {top_skills}, I can help {company}'s support team resolve complex escalations and meet SLA targets quickly."
-            )
-            dou_letter = (
-                f"Dear {company} Hiring Team,\n\n"
-                f"I am excited to apply for the {title} position at {company}. My verified experience across {top_skills} aligns squarely with the role requirements you outlined ({req_focus}).\n\n"
-                f"In my previous roles{exp_ctx_en}, I handled multi-channel client inquiries, documented recurring root causes, and maintained fast SLA resolution.{gap_ctx_en}{edu_ctx_en}\n\n"
-                f"My tailored CV is attached, and I would appreciate the opportunity to discuss supporting your customer operations.{sig_en}"
-            )
-        elif is_qa:
-            human_summary = (
-                f"Detail-oriented QA & Software Test Engineer experienced across {top_skills}{exp_ctx_en}. "
-                f"Combines thorough manual functional, regression, and REST API testing with practical UI/API automation, relational PostgreSQL verification, and CI/CD defect prevention."
-            )
-            motivation_statement = (
-                f"I want to apply my hands-on engineering work in {top_skills} directly to {company}'s release pipeline, "
-                f"strengthening reliable automated and API test coverage from sprint one."
-            )
-            evidence_paras = []
-            if work_phrase:
-                lead = f"Across my experience as {work_phrase}, I matched my engineering work to needs like {req_focus}."
-                if ev["bullets"]:
-                    lead += f" Notably, I delivered: {ev['bullets'][0]}."
-                if len(ev["bullets"]) > 1:
-                    lead += f" I also contributed by: {ev['bullets'][1]}."
-                evidence_paras.append(lead)
-            elif ev["bullets"]:
-                evidence_paras.append(f"In my hands-on QA delivery, I have proven experience in: {ev['bullets'][0]}.")
+            if is_rec:
+                summary = f"Front Desk Receptionist and Hospitality Specialist experienced with {top_skills}{exp_ctx_en}, maintaining accurate guest check-in and reservation coordination for {cur_company}."
+                motiv = f"My verified background in {top_skills} directly supports {cur_company}'s front-desk operations and guest coordination."
+            elif is_sup:
+                summary = f"Technical Support Specialist experienced with {top_skills}{exp_ctx_en}, investigating reported issues and resolving client escalations cleanly for {cur_company}."
+                motiv = f"Applying my diagnostic experience with {top_skills}, I can help {cur_company} maintain reliable support operations."
+            elif is_health:
+                summary = f"Patient Coordinator and Medical Administrator experienced with {top_skills}{exp_ctx_en}, managing clinical intake and scheduling accurately for {cur_company}."
+                motiv = f"My administrative experience across {top_skills} equips me to support {cur_company}'s patient intake team reliably."
+            elif is_cust:
+                summary = f"Customer Service and Client Care Specialist experienced with {top_skills}{exp_ctx_en}, delivering responsive troubleshooting and consistent service quality for {cur_company}."
+                motiv = f"Working daily with {top_skills}, I can help {cur_company}'s support team resolve client requests efficiently."
+            elif is_qa:
+                summary = f"QA and Software Testing Specialist experienced across {top_skills}{exp_ctx_en}, delivering structured test execution and quality verification tailored to {cur_company}."
+                motiv = f"I want to apply my hands-on QA background in {top_skills} directly to {cur_company}'s engineering and release workflow."
             else:
-                evidence_paras.append(
-                    f"In my recent QA work, I implemented structured test cases, validated REST API endpoints, and collaborated closely with developers to catch regressions early."
-                )
-            if gap_ctx_en or edu_ctx_en:
-                evidence_paras.append(f"{gap_ctx_en.strip()}{edu_ctx_en}".strip())
-            evidence_block = "\n\n".join(p for p in evidence_paras if p)
-            dou_letter = (
-                f"Dear {company} Hiring Team,\n\n"
-                f"I am writing to apply for the {title} position at {company}. After reviewing your requirements ({req_focus}), I see a strong match between your quality engineering goals and my hands-on experience in {top_skills}.\n\n"
-                f"{evidence_block}\n\n"
-                f"I have attached a tailored CV aligned directly with your role requirements and would welcome the opportunity to discuss how I can support {company}'s release quality.{sig_en}"
+                summary = f"Focused {cur_title} specialist with verified experience in {top_skills}{exp_ctx_en}, delivering structured execution aligned with {cur_company}'s priorities."
+                motiv = f"I want to apply my verified skills in {top_skills} directly to {cur_company}'s goals and deliver dependable outcomes."
+
+            dou_l = (
+                f"Dear {cur_company} Hiring Team,\n\n"
+                f"I am applying for the {cur_title} role at {cur_company}. Your requirements around {req_focus} align with my verified experience in {top_skills}.\n\n"
+                f"Across my work{exp_ctx_en}, I applied {top_skills} to deliver accurate, dependable outcomes.{evidence_line}{gap_ctx_en}{edu_ctx_en}\n\n"
+                f"Please find my tailored CV attached, and I look forward to discussing how I can contribute to {cur_company}'s team.{sig_en}"
             )
-        else:
-            human_summary = (
-                f"Focused {title} specialist with verified hands-on experience in {top_skills}{exp_ctx_en}. "
-                f"Maintains reliable execution, clear documentation, and measurable results aligned with {company}'s priorities."
+            cov_l = (
+                f"Dear {cur_company} Hiring Team,\n\n"
+                f"I am applying for the {cur_title} opening at {cur_company}. My verified skills in {top_skills} align directly with your core focus ({req_focus}){exp_ctx_en}.\n\n"
+                f"Thank you for reviewing my attached CV; I welcome a brief conversation about supporting your team.{sig_en}"
             )
-            motivation_statement = (
-                f"I want to apply my practical skills in {top_skills} directly to {company}'s team and deliver dependable results from week one."
-            )
-            bullet_en = f" Key accomplishment from my CV: {ev['bullets'][0]}." if ev["bullets"] else ""
-            dou_letter = (
-                f"Dear {company} Hiring Team,\n\n"
-                f"I am applying for the {title} role at {company}. Your requirements around {req_focus} align strongly with my verified experience in {top_skills}.\n\n"
-                f"Across my work{exp_ctx_en}, I consistently delivered structured execution and measurable quality.{bullet_en}{gap_ctx_en}{edu_ctx_en}\n\n"
-                f"Please find my tailored CV attached, and I look forward to discussing how I can contribute to {company}'s team.{sig_en}"
-            )
-        cover_letter_en = (
-            f"Dear {company} Hiring Team,\n\n"
-            f"I am applying for the {title} opening at {company}. My hands-on skills in {top_skills} align directly with your stated core focus ({req_focus}){exp_ctx_en}.\n\n"
-            f"Thank you for considering my attached CV; I welcome a brief conversation about supporting your team.{sig_en}"
-        )
+            return {
+                "human_tone_summary": summary,
+                "motivation_statement": motiv,
+                "cover_letter": cov_l,
+                "dou_motivational_letter": dou_l,
+            }
+
+        cv_pack = _build_ka(company, title) if cv_language == "ka" else _build_en(company, title)
+        ltr_pack = _build_ka(ltr_company, ltr_title) if target_letter_lang == "ka" else _build_en(ltr_company, ltr_title)
         return {
-            "human_tone_summary": human_summary,
-            "motivation_statement": motivation_statement,
-            "cover_letter": cover_letter_en,
-            "dou_motivational_letter": dou_letter,
+            "human_tone_summary": cv_pack["human_tone_summary"],
+            "motivation_statement": ltr_pack["motivation_statement"],
+            "cover_letter": ltr_pack["cover_letter"],
+            "dou_motivational_letter": ltr_pack["dou_motivational_letter"],
         }
 
     def translate_bullets_to_georgian(self, bullets: List[str]) -> List[str]:
-        """Translates English resume bullets to fluent Georgian so KA CVs never mix languages."""
+        """Translates non-Georgian resume bullets to Georgian when AI is available, preserving originals verbatim offline."""
         if not bullets:
             return []
         clean_in = [str(b).strip() for b in bullets if str(b).strip()]
         if not clean_in:
             return []
-        # Skip if already mostly Georgian script
-        if sum(len(re.findall(r"[\u10A0-\u10FF]", b)) for b in clean_in) >= 20:
+
+        translate_indices = [
+            idx
+            for idx, b in enumerate(clean_in)
+            if len(re.findall(r"[\u10A0-\u10FF]", b)) < 5
+        ]
+        if not translate_indices:
             return clean_in
 
+        to_translate = [clean_in[idx] for idx in translate_indices]
         if self.is_available:
             try:
                 prompt = (
                     "Translate the following CV responsibility bullets into crisp, natural Georgian (ქართული ენა). "
+                    "Preserve facts, metrics, and technical acronyms accurately without inventing details. "
                     "Keep domain tool names and software acronyms in Latin script, "
                     "and return STRICT JSON: {\"translated\": [\"...\"]}.\n\n"
-                    + json.dumps(clean_in, ensure_ascii=False)
+                    + json.dumps(to_translate, ensure_ascii=False)
                 )
                 parsed = self.generate_json(
                     prompt,
@@ -1155,38 +1030,22 @@ STRICT PURITY RULE: Zero Cyrillic/Russian words in English/Georgian outputs. Use
                     temperature=0.1,
                     ttl_seconds=86400,
                 )
-                if isinstance(parsed, dict) and isinstance(parsed.get("translated"), list) and len(parsed["translated"]) == len(clean_in):
-                    return [str(x).strip() for x in parsed["translated"]]
+                if (
+                    isinstance(parsed, dict)
+                    and isinstance(parsed.get("translated"), list)
+                    and len(parsed["translated"]) == len(to_translate)
+                ):
+                    out = list(clean_in)
+                    for offset, idx in enumerate(translate_indices):
+                        translated_item = str(parsed["translated"][offset]).strip()
+                        if translated_item:
+                            out[idx] = translated_item
+                    return out
             except Exception as e:
                 logger.debug(f"Georgian bullet translation fallback: {e}")
 
-        # Deterministic Georgian phrase mapping fallback (domain-neutral)
-        out: List[str] = []
-        replacements = [
-            (r"\bAnalyzed financial and trading software specifications to design and execute manual test cases in accordance with STLC best practices\.?", "საფინანსო და სავაჭრო სისტემების სპეციფიკაციების ანალიზი და STLC სტანდარტების მიხედვით მანუალური ტესტ-ქეისების შედგენა/შესრულება."),
-            (r"\bValidated mathematical calculation rules, boundary limits, and financial transaction workflows against formal benchmark specifications\.?", "მათემატიკური გამოთვლების წესების, სასაზღვრო მნიშვნელობებისა და ფინანსური ტრანზაქციების ვალიდაცია ფორმალურ სპეციფიკაციებთან მიმართებაში."),
-            (r"\bDeveloped Python automation scripts to parse, process, and verify structured financial test data against expected outputs\.?", "Python-ის ავტომატიზაციის სკრიპტების შექმნა სტრუქტურირებული ფინანსური მონაცემების პარსინგისა და მოსალოდნელ შედეგებთან შედარებისთვის."),
-            (r"\bManaged issue lifecycles and defect documentation in Jira, integrating validation scripts into GitLab CI pipelines\.?", "ხარვეზების (Bug-ების) სრული ციკლის მართვა Jira-ში და ვალიდაციის სკრიპტების ინტეგრაცია GitLab CI პაიპლაინებში."),
-            (r"\bExecuted manual functional, regression, and smoke test suites[^.]*\.?", "ფუნქციური, რეგრესიული და Smoke ტესტირების შესრულება, ხარვეზების რეპორტინგი და ვერიფიკაცია."),
-            (r"\bTested REST API endpoints[^.]*\.?", "REST API ენდფოინთების ტესტირება Postman/Swagger-ით (HTTP სტატუს-კოდები, სქემები და ავთენტიფიკაციის ტოკენები)."),
-            (r"\bPerformed cross-browser UI testing[^.]*\.?", "UI და Cross-Browser ტესტირება Chrome DevTools-ითა და ავტომატიზებული Playwright/Selenium სკრიპტებით."),
-        ]
-        for b in clean_in:
-            translated = b
-            for pat, ka_txt in replacements:
-                if re.search(pat, translated, re.IGNORECASE):
-                    translated = re.sub(pat, ka_txt, translated, flags=re.IGNORECASE)
-                    break
-            if not re.search(r"[\u10A0-\u10FF]", translated):
-                tech_tokens = [tok for tok in re.findall(r"\b[A-Z][A-Za-z0-9+.#/\-]{1,}\b", translated) if tok not in ("The", "And", "For", "With")]
-                tech_str = ", ".join(dict.fromkeys(tech_tokens[:6]))
-                translated = (
-                    f"პრაქტიკული სამუშაო გამოცდილება და ოპერაციული შესრულება ({tech_str}) გამოყენებით."
-                    if tech_str
-                    else "პროფესიული ამოცანების შესრულება და შედეგებზე ორიენტირებული მუშაობა."
-                )
-            out.append(translated)
-        return out
+        # Zero-fabrication offline policy: preserve verified original bullets verbatim
+        return clean_in
 
     def generate_grounded_answers(
         self,

@@ -217,37 +217,28 @@ def _extract_override_profile_taxonomy(skills_md: str) -> tuple[Dict[str, Any], 
 
 
 def resolve_candidate_headline(candidate: Dict[str, Any], skills: List[str], parsed_skills: Dict[str, Any]) -> str:
-    """Returns candidate's true professional seniority/headline across ANY domain without QA bias."""
+    """Returns the candidate's verified headline/primary_role strictly without forcing a QA/SDET title."""
     ps = parsed_skills or {}
     industry = str(ps.get("target_industry") or "").lower()
     primary_role = str(ps.get("primary_role") or "").strip()
     raw_hl = str(candidate.get("headline") or "").strip()
-    skills_blob = " ".join(skills).lower()
 
     if raw_hl and not any(w in raw_hl.lower() for w in ["intern", "trainee", "სტაჟიორ"]):
-        if industry == "qa_tech" and any(k in skills_blob for k in ["playwright", "pytest", "selenium", "cypress"]) and "qa" in raw_hl.lower():
-            return "QA Automation Engineer & SDET | Playwright • Python • API • CI/CD"
         return raw_hl
     if primary_role:
         return primary_role
-    if industry == "qa_tech" or any(k in skills_blob for k in ["playwright", "pytest", "selenium", "cypress"]):
-        return "QA Automation Engineer & SDET | Playwright • Python • API • CI/CD"
+    if industry == "qa_tech":
+        return "QA Engineer"
     return raw_hl or "Specialist"
 
-RESUME_STRATEGIST_SYSTEM_PROMPT = """You are an elite technical CV strategist specializing in QA Automation and SDET careers.
-Your goal is to tailor the candidate's existing experience to the provided vacancy description for maximum ATS keyword alignment and recruiter impact.
+
+RESUME_STRATEGIST_SYSTEM_PROMPT = """You are a Top 1% Executive CV Strategist and ATS Career Architect across technology and business disciplines.
+Your goal is to tailor the candidate's verified experience to the provided vacancy description for maximum ATS keyword alignment and recruiter readability.
 
 STRICT CONSTRAINTS (ZERO TOLERANCE FOR FABRICATION):
-1. TRUTHFUL GROUNDING: Every bullet point, tool, framework, company, and timeline MUST come strictly from the candidate's verified profile. NEVER invent skills, tools, degrees, or certifications that the candidate does not possess.
-2. NATURAL HUMANIZED TONE: Use an active, confident, and natural tone (implied first person: "Architected", "Implemented", "Automated", "Stabilized"). Avoid generic AI buzzwords ("visionary", "spearheaded synergy", "passionate maven").
-3. ATS TERMINOLOGY MIRRORING: If the vacancy mentions "End-to-End UI Testing" and the candidate has "E2E Playwright Automation", match the vacancy's exact phrasing while retaining factual truth.
-4. METRICS & IMPACT: Format technical achievements using Google's X-Y-Z formula: Accomplished [X] measured by [Y] by doing [Z] (e.g., "Reduced regression test cycle time by 45% by architecting parallelized Playwright suites in GitHub Actions").
-5. CLEAN ATS FORMAT:
-   - Header (Contact Info, Location, GitHub, LinkedIn)
-   - Professional Summary (3 lines maximum: QA seniority, core automation framework, domain focus)
-   - Technical Skill Matrix (Languages, Test Automation, API, CI/CD, Methodologies)
-   - Professional Experience (Reverse chronological; 3-5 concise, metric-driven bullets per role)
-   - Education & Certifications"""
+1. TRUTHFUL GROUNDING: Every bullet point, tool, skill, company, degree, and timeline MUST come strictly from the candidate's verified profile. NEVER invent skills, honors, awards, tools, or certifications.
+2. NATURAL HUMANIZED TONE: Use active, factual phrasing without generic AI clichés or unrequested availability timing.
+3. CLEAN ATS FORMAT: Header, Concise Summary, Core Skill Matrix, Verified Experience, Education & Certifications."""
 
 
 def _register_unicode_font(prefer_georgian: bool = False) -> str:
@@ -577,20 +568,23 @@ class CVGeneratorService:
             override_ps, override_skills, _ = _extract_override_profile_taxonomy(skills_md)
             ps = override_ps
 
-        candidate = dict(gt.get("candidate", {}))
+        candidate = dict(gt.get("candidate", {})) if not has_explicit_md_override else {}
         for fld in ("full_name", "headline", "email", "phone"):
             if has_explicit_md_override:
                 candidate[fld] = parsed_md.get(fld) or ""
             elif not candidate.get(fld) and parsed_md.get(fld):
                 candidate[fld] = parsed_md[fld]
-        if parsed_md.get("location") and (has_explicit_md_override or not _format_candidate_location(candidate.get("location"))):
+        if has_explicit_md_override:
+            if parsed_md.get("location"):
+                loc_parts = [p.strip() for p in str(parsed_md["location"]).split(",", 1)]
+                candidate["location"] = {"city": loc_parts[0], "country": loc_parts[1] if len(loc_parts) > 1 else ""}
+            else:
+                candidate["location"] = {}
+        elif parsed_md.get("location") and not _format_candidate_location(candidate.get("location")):
             loc_parts = [p.strip() for p in str(parsed_md["location"]).split(",", 1)]
-            candidate["location"] = {
-                "city": loc_parts[0],
-                "country": loc_parts[1] if len(loc_parts) > 1 else "",
-            }
+            candidate["location"] = {"city": loc_parts[0], "country": loc_parts[1] if len(loc_parts) > 1 else ""}
 
-        cand_links = dict(candidate.get("links") or {})
+        cand_links = {} if has_explicit_md_override else dict(candidate.get("links") or {})
         if skills_md:
             gh_m = re.search(r"(https?://(?:www\.)?github\.com/[A-Za-z0-9._-]+/?)", skills_md, re.I)
             li_m = re.search(r"(https?://(?:www\.)?linkedin\.com/in/[A-Za-z0-9._-]+/?)", skills_md, re.I)
@@ -601,11 +595,11 @@ class CVGeneratorService:
         candidate["links"] = cand_links
 
         if has_explicit_md_override:
-            core_skills = parsed_md.get("skills") or override_skills or (gt.get("skills", {}) or {}).get("core", []) or []
-            raw_work_history = parsed_md.get("work_history") or gt.get("work_history", [])
-            education = parsed_md.get("education") or gt.get("education", [])
-            projects = parsed_md.get("projects") or gt.get("projects", [])
-            certifications = parsed_md.get("certifications") or gt.get("certifications") or ps.get("courses_and_certifications") or []
+            core_skills = parsed_md.get("skills") or override_skills or []
+            raw_work_history = parsed_md.get("work_history") or []
+            education = parsed_md.get("education") or []
+            projects = parsed_md.get("projects") or []
+            certifications = parsed_md.get("certifications") or []
         else:
             core_skills = (gt.get("skills", {}) or {}).get("core") or parsed_md.get("skills") or []
             raw_work_history = gt.get("work_history") if gt.get("work_history") else (parsed_md.get("work_history") or [])
@@ -798,6 +792,7 @@ class CVGeneratorService:
             "target_role": candidate_headline,
             "human_tone_summary": human_summary,
             "applicant_summary": human_summary,
+            "cover_letter": motivation_statement,
             "motivation_statement": motivation_statement,
             "dou_motivational_letter": dou_motivational_letter,
             "cv_sections": cv_sections,

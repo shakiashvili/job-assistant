@@ -73,7 +73,7 @@ class TrackerRepository:
         is_guest: bool = False,
     ) -> bool:
         if user_id is None:
-            return True
+            return row_user_id is None
         if is_guest:
             return row_user_id is None or row_user_id == user_id
         return row_user_id == user_id
@@ -82,6 +82,7 @@ class TrackerRepository:
         self,
         rec: ApplicationRecord,
         job: Optional[JobPosting],
+        app_tracker: Optional[ApplicationTracker] = None,
     ) -> ApplicationItem:
         ui_status = DB_TO_UI_STATUS.get(rec.submission_status, rec.submission_status or "Discovered")
         score = (
@@ -93,13 +94,17 @@ class TrackerRepository:
         if job and job.salary_min and job.salary_max:
             salary_str = f"{int(job.salary_min):,}–{int(job.salary_max):,} {job.salary_currency or 'USD'}"
         interview_dt = rec.interview_date.strftime("%Y-%m-%d %H:%M") if rec.interview_date else None
+        company_val = (app_tracker.company_name if app_tracker and app_tracker.company_name else None) or (job.company if job else "Hiring Company")
+        role_val = (app_tracker.job_title if app_tracker and app_tracker.job_title else None) or (job.title if job else "Specialist")
+        portal_val = (app_tracker.portal if app_tracker and app_tracker.portal else None) or (job.portal if job else "generic")
+        url_val = (app_tracker.job_url if app_tracker and app_tracker.job_url else None) or (job.url if job else "")
         return ApplicationItem(
             id=f"app-{rec.id}",
             user_id=rec.user_id,
-            company=job.company if job else "Hiring Company",
-            role=job.title if job else "Specialist",
-            portal=job.portal if job else "generic",
-            url=job.url if job else "",
+            company=company_val,
+            role=role_val,
+            portal=portal_val,
+            url=url_val,
             status=ui_status,
             match_score=score,
             ats_score=score,
@@ -126,26 +131,28 @@ class TrackerRepository:
         user_id: Optional[int] = None,
         is_guest: bool = False,
     ) -> List[ApplicationItem]:
-        """Fetches all application records and associated JobPostings in a SINGLE SQL JOIN query."""
+        """Fetches all application records, JobPostings, and per-user ApplicationTracker metadata in ONE SQL JOIN."""
         with Session(engine) as session:
             stmt = (
-                select(ApplicationRecord, JobPosting)
+                select(ApplicationRecord, JobPosting, ApplicationTracker)
                 .outerjoin(JobPosting, ApplicationRecord.job_posting_id == JobPosting.id)
+                .outerjoin(ApplicationTracker, ApplicationRecord.id == ApplicationTracker.id)
             )
-            if user_id is not None:
-                if is_guest:
-                    stmt = stmt.where(
-                        or_(
-                            ApplicationRecord.user_id == user_id,
-                            ApplicationRecord.user_id.is_(None),
-                        )
+            if user_id is None:
+                stmt = stmt.where(ApplicationRecord.user_id.is_(None))
+            elif is_guest:
+                stmt = stmt.where(
+                    or_(
+                        ApplicationRecord.user_id == user_id,
+                        ApplicationRecord.user_id.is_(None),
                     )
-                else:
-                    stmt = stmt.where(ApplicationRecord.user_id == user_id)
+                )
+            else:
+                stmt = stmt.where(ApplicationRecord.user_id == user_id)
 
             stmt = stmt.order_by(ApplicationRecord.applied_at.desc(), ApplicationRecord.updated_at.desc())
-            pairs = session.exec(stmt).all()
-            return [self._record_to_item(rec, job) for rec, job in pairs]
+            triples = session.exec(stmt).all()
+            return [self._record_to_item(rec, job, app_t) for rec, job, app_t in triples]
 
     def get_by_id(
         self,
@@ -158,17 +165,18 @@ class TrackerRepository:
             return None
         with Session(engine) as session:
             stmt = (
-                select(ApplicationRecord, JobPosting)
+                select(ApplicationRecord, JobPosting, ApplicationTracker)
                 .outerjoin(JobPosting, ApplicationRecord.job_posting_id == JobPosting.id)
+                .outerjoin(ApplicationTracker, ApplicationRecord.id == ApplicationTracker.id)
                 .where(ApplicationRecord.id == int(rec_id_str))
             )
-            pair = session.exec(stmt).first()
-            if not pair:
+            triple = session.exec(stmt).first()
+            if not triple:
                 return None
-            rec, job = pair
+            rec, job, app_t = triple
             if not self._ownership_matches(rec.user_id, user_id, is_guest=is_guest):
                 raise PermissionError("Forbidden: application belongs to another user")
-            return self._record_to_item(rec, job)
+            return self._record_to_item(rec, job, app_t)
 
     def create(
         self,
@@ -223,7 +231,28 @@ class TrackerRepository:
             session.add(rec)
             session.flush()
 
+            app_t: Optional[ApplicationTracker] = None
             if rec.id is not None:
+                app_t = session.get(ApplicationTracker, rec.id)
+                if not app_t:
+                    app_t = ApplicationTracker(
+                        id=rec.id,
+                        user_id=user_id,
+                        job_posting_id=job.id,
+                        company_name=item_in.company,
+                        job_title=item_in.role,
+                        job_url=url,
+                        portal=item_in.portal or job.portal or "generic",
+                        status=db_status,
+                        salary_expected=item_in.salary_expected,
+                        salary_offered=item_in.salary_offered,
+                        recruiter_name=item_in.recruiter_name,
+                        recruiter_email=item_in.recruiter_email,
+                        follow_up_date=item_in.follow_up_date,
+                        cv_pdf_path=item_in.cv_pdf_url,
+                        cover_letter_text=item_in.cover_letter_text or item_in.notes,
+                    )
+                    session.add(app_t)
                 session.add(
                     ApplicationEvent(
                         application_id=rec.id,
@@ -237,7 +266,7 @@ class TrackerRepository:
 
             session.commit()
             session.refresh(rec)
-            return self._record_to_item(rec, job)
+            return self._record_to_item(rec, job, app_t)
 
     def update(
         self,
@@ -257,19 +286,26 @@ class TrackerRepository:
                 raise PermissionError("Forbidden: application belongs to another user")
 
             job = session.get(JobPosting, rec.job_posting_id) if rec.job_posting_id else None
+            app_t = session.get(ApplicationTracker, rec.id)
+            if not app_t and rec.id is not None:
+                app_t = ApplicationTracker(
+                    id=rec.id,
+                    user_id=rec.user_id,
+                    job_posting_id=rec.job_posting_id,
+                    company_name=job.company if job else "Hiring Company",
+                    job_title=job.title if job else "Specialist",
+                    job_url=job.url if job else None,
+                    portal=job.portal if job else "generic",
+                    status=rec.submission_status,
+                )
             old_status = rec.submission_status
 
             if item_update.status is not None:
                 rec.submission_status = UI_TO_DB_STATUS.get(item_update.status, item_update.status)
                 if rec.submission_status in ("SUBMITTED", "APPLIED", "HR_SCREEN", "TECH_INTERVIEW", "FINAL_INTERVIEW", "OFFER", "REJECTED") and rec.applied_at is None:
                     rec.applied_at = utc_now()
-                if job:
-                    job.status = (
-                        "APPLIED"
-                        if rec.submission_status in ("SUBMITTED", "APPLIED")
-                        else ("REJECTED" if rec.submission_status == "REJECTED" else job.status)
-                    )
-                    session.add(job)
+                if app_t:
+                    app_t.status = rec.submission_status
             if item_update.notes is not None:
                 rec.cover_letter_text = item_update.notes
             if item_update.cover_letter_text is not None:
@@ -313,14 +349,14 @@ class TrackerRepository:
             if item_update.outcome is not None:
                 rec.outcome = item_update.outcome
 
-            if job:
+            # Store per-user company/title mutations strictly on ApplicationTracker (never overwrite shared JobPosting!)
+            if app_t:
                 if item_update.company is not None:
-                    job.company = item_update.company
+                    app_t.company_name = item_update.company
                 if item_update.role is not None:
-                    job.title = item_update.role
-                if item_update.match_score is not None:
-                    job.suitability_score = float(item_update.match_score)
-                session.add(job)
+                    app_t.job_title = item_update.role
+                app_t.updated_at = utc_now()
+                session.add(app_t)
 
             rec.updated_at = utc_now()
             session.add(rec)
@@ -339,7 +375,7 @@ class TrackerRepository:
 
             session.commit()
             session.refresh(rec)
-            return self._record_to_item(rec, job)
+            return self._record_to_item(rec, job, app_t)
 
     def delete(
         self,
@@ -359,6 +395,9 @@ class TrackerRepository:
             session.exec(
                 delete(ApplicationEvent).where(ApplicationEvent.application_id == rec.id)
             )
+            tracker_row = session.get(ApplicationTracker, rec.id)
+            if tracker_row:
+                session.delete(tracker_row)
             session.delete(rec)
             session.commit()
             return True

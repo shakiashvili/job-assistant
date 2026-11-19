@@ -159,10 +159,15 @@ class PlanService:
                     session.delete(ep)
             session.commit()
 
-        # Compare CandidateProfile against missing requirements across live JobPosting rows
+        # Compare CandidateProfile against missing requirements across live public or user-matched JobPosting rows
         gap_counts: Counter = Counter()
         market_jobs = session.exec(
-            select(JobPosting).where(JobPosting.status != "FILTERED_OUT").limit(35)
+            select(JobPosting)
+            .where(
+                (JobPosting.status != "FILTERED_OUT")
+                & (JobPosting.user_id.is_(None) | (JobPosting.user_id == user.id))
+            )
+            .limit(35)
         ).all()
         for job in market_jobs:
             reqs = matcher_service.extract_job_requirements(job.title, job.description_raw)
