@@ -198,7 +198,11 @@ def check_pdf_ats_parseability(
     if page_count > 2:
         score = max(0, score - 10)
 
-    status = "PASS" if (score >= 75 and selectable_ok and mojibake_free and single_col_ok) else "WARN"
+    status = (
+        "PASS"
+        if (score >= 75 and selectable_ok and mojibake_free and single_col_ok and name_ok and contact_ok)
+        else "WARN"
+    )
     return {
         "audit_label": "PDF Text Extraction & Layout Check",
         "status": status,

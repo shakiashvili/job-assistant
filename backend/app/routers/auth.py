@@ -335,7 +335,7 @@ def configure_smtp_sender(
             "SMTP_PASSWORD": clean_pass,
         },
     )
-    reload_env_files()
+    reload_env_files(override=True)
 
     return {
         "status": "ok",

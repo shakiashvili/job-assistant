@@ -424,6 +424,11 @@ export const B2BMarketHub: React.FC = () => {
                           : `1% applies this month. At this run-rate, Month #${taxResult.threshold_crossing_month} crosses 500,000 GEL (est. 12-mo blended tax: ${taxResult.projected_effective_tax_rate_pct ?? 1}%).`)}
                     </div>
                   )}
+                  <p className="text-[11px] text-slate-400 pt-1">
+                    {isKa
+                      ? 'მოდელი იყენებს სტანდარტულ 500,000 ₾ ზღვარს (აგრო-/ღვინის ტურიზმის 700,000 ₾ სპეც-ზღვარი და სხვა გამონაკლისები გათვალისწინებული არ არის).'
+                      : 'Scope: applies the general 500,000 GEL Small Business threshold (Article 90); sector exceptions such as the 700,000 GEL wine-/agro-tourism cap are not modeled.'}
+                  </p>
                 </div>
               </div>
               {taxLoading && <div className="text-[11px] text-slate-300">Updating figures...</div>}

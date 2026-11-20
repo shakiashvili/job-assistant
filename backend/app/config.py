@@ -14,14 +14,14 @@ DATA_DIR = PROJECT_ROOT / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def reload_env_files() -> None:
-    """Loads environment variables from project root .env and backend/.env dynamically."""
+def reload_env_files(override: bool = False) -> None:
+    """Loads environment variables from project root .env and backend/.env dynamically without clobbering explicit process env unless override=True."""
     env_candidates = [PROJECT_ROOT / ".env", BASE_DIR / ".env"]
     try:
         from dotenv import load_dotenv
         for p in env_candidates:
             if p.exists():
-                load_dotenv(dotenv_path=p, override=True)
+                load_dotenv(dotenv_path=p, override=override)
         return
     except ImportError:
         pass
@@ -36,7 +36,7 @@ def reload_env_files() -> None:
                     k, v = line.split("=", 1)
                     k = k.strip()
                     v = v.strip().strip('"').strip("'")
-                    if k:
+                    if k and (override or k not in os.environ):
                         os.environ[k] = v
             except Exception:
                 pass

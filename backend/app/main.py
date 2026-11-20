@@ -32,6 +32,11 @@ logger = logging.getLogger("job_assistant_backend")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    try:
+        from .services.auth_service import purge_expired_rate_limits
+        purge_expired_rate_limits()
+    except Exception as exc:
+        logger.debug("Startup expired rate-limit cleanup skipped: %s", exc)
     if not gemini_service.is_available:
         logger.warning(
             "⚠️ GEMINI_API_KEY is not configured or invalid. The backend is running in "

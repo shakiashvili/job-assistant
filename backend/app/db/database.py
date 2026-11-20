@@ -102,18 +102,24 @@ def init_db(force: bool = False) -> None:
                 engine.url.render_as_string(hide_password=False).replace("%", "%%"),
             )
             command.upgrade(cfg, "head")
-            _MIGRATION_RUN_DONE = True
-            return
         except Exception as e:
             logger.critical(f"Alembic migration failed — refusing to mask schema error: {e}")
             raise RuntimeError(f"Database migration failed: {e}") from e
+    else:
+        try:
+            SQLModel.metadata.create_all(engine)
+        except Exception as e:
+            logger.error(f"Database schema initialization failed: {e}")
+            raise
 
     try:
-        SQLModel.metadata.create_all(engine)
-        _MIGRATION_RUN_DONE = True
+        from .document_repository import migrate_legacy_generated_resumes
+
+        migrate_legacy_generated_resumes()
     except Exception as e:
-        logger.error(f"Database schema initialization failed: {e}")
-        raise
+        logger.warning("Legacy generated CV migration step reported a non-fatal warning: %s", e)
+
+    _MIGRATION_RUN_DONE = True
 
 
 def get_session() -> Generator[Session, None, None]:

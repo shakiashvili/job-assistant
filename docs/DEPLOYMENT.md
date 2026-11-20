@@ -36,14 +36,34 @@
    - `DATABASE_URL`: PostgreSQL URI from Step 1
    - `SECRET_KEY`: strong random 48+ byte URL-safe string
    - `ENCRYPTION_KEY`: dedicated Fernet base64 key (`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`)
+   - `BLIND_INDEX_KEY`: dedicated independent HMAC secret (`python -c "import secrets; print(secrets.token_urlsafe(48))"`) — **must remain separate from `ENCRYPTION_KEY`** so encryption key rotation never breaks email lookups
    - `ENVIRONMENT=production`
    - `ALLOWED_ORIGINS`: `https://your-app.vercel.app,chrome-extension://<YOUR_EXTENSION_ID>`
+   - `REDIS_URL` (optional): shared Redis URI for distributed auth rate limiting (otherwise uses PostgreSQL `auth_rate_limits`)
    - `GEMINI_API_KEY`: your Google AI Studio key (optional — deterministic fallback remains active if unset)
    - `GEMINI_MODEL=gemini-3.6-flash`
    - `GEMINI_FAST_MODEL=gemini-3.5-flash-lite`
    - `GEMINI_TIMEOUT_MS=30000`
    - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` (if using Gmail OAuth)
 3. Verify `/api/health` returns `{"status": "healthy", ...}`.
+
+### Upgrading Existing Deployments (Blind-Index & Legacy CV Migration)
+If upgrading an existing production database created before `BLIND_INDEX_KEY` separation (where `email_hash` was derived from the prior `ENCRYPTION_KEY`) or before per-user `generated/user_<id>/` CV isolation:
+1. **Set transition secrets before deploy**:
+   - Keep `ENCRYPTION_KEY` (or put the old value in `ENCRYPTION_KEY_PREVIOUS` if also rotating `ENCRYPTION_KEY`).
+   - Set a new independent `BLIND_INDEX_KEY`.
+   - Set `BLIND_INDEX_KEY_PREVIOUS=<your pre-upgrade ENCRYPTION_KEY>` (comma-separated if migrating across multiple historical keys).
+2. **Deploy and verify**:
+   - Application startup (`alembic upgrade head` + legacy CV migration) automatically moves unambiguous pre-existing files in `data/resumes/generated/` into `data/resumes/generated/user_<id>/` and updates `candidate_documents.storage_path`.
+   - Existing users can log in and request OTPs immediately via `BLIND_INDEX_KEY_PREVIOUS`.
+3. **Run full blind-index reindexing** while decryption keys remain configured:
+   ```bash
+   cd backend
+   python -m app.services.crypto_service --reindex
+   ```
+   *(Optionally run legacy CV migration explicitly on a mounted volume via `python -m app.db.document_repository --migrate-legacy-cvs`.)*
+4. **Finalize cleanup**:
+   - Verify existing accounts can sign in cleanly, then remove `BLIND_INDEX_KEY_PREVIOUS` from your environment settings. Keep `ENCRYPTION_KEY_PREVIOUS` until encrypted PII columns have been re-encrypted under the new `ENCRYPTION_KEY`.
 
 ### Step 3: Deploy Frontend SPA (Vercel or Cloudflare Pages)
 1. Set Root Directory to `frontend`.
