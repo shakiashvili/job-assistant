@@ -681,9 +681,14 @@ export async function verifyOtp(email: string, otp_code: string): Promise<AuthRe
   return data;
 }
 
-export async function fetchSmtpStatus(): Promise<{ smtp_configured: boolean }> {
+export async function fetchSmtpStatus(): Promise<{
+  smtp_configured: boolean;
+  otp_available?: boolean;
+  provider?: string;
+  can_configure_local_smtp?: boolean;
+}> {
   const res = await fetch(`${API_BASE}/auth/smtp-status`);
-  if (!res.ok) return { smtp_configured: false };
+  if (!res.ok) return { smtp_configured: false, otp_available: false, can_configure_local_smtp: false };
   return res.json();
 }
 

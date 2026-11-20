@@ -7,9 +7,12 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from sqlalchemy import text
 from .config import GEMINI_MODEL, GEMINI_FAST_MODEL, DATABASE_URL, FRONTEND_URL, ENABLE_PLAYWRIGHT, IS_PRODUCTION
-from .db.database import init_db
+from .db.database import engine, init_db
 from .services.gemini_service import gemini_service
+from .services.scrape_worker import SCRAPE_WORKER_MODE, scrape_queue
+from .services.storage_service import storage_service
 from .routers.audit import router as audit_router
 from .routers.answers import router as answers_router
 from .routers.stage import router as stage_router
@@ -37,6 +40,10 @@ async def lifespan(app: FastAPI):
         purge_expired_rate_limits()
     except Exception as exc:
         logger.debug("Startup expired rate-limit cleanup skipped: %s", exc)
+    try:
+        scrape_queue.start_embedded_worker()
+    except Exception as exc:
+        logger.warning("Durable scrape worker startup warning: %s", exc)
     if not gemini_service.is_available:
         logger.warning(
             "⚠️ GEMINI_API_KEY is not configured or invalid. The backend is running in "
@@ -45,6 +52,10 @@ async def lifespan(app: FastAPI):
     else:
         logger.info(f"✅ Gemini API active using model '{gemini_service.model_name}'.")
     yield
+    try:
+        await scrape_queue.stop_embedded_worker()
+    except Exception as exc:
+        logger.debug("Durable scrape worker shutdown note: %s", exc)
     # Clean up lingering Playwright sessions and browser processes on shutdown
     try:
         from .services.playwright_service import playwright_service
@@ -163,18 +174,48 @@ def root():
     }
 
 
+@app.get("/health/live")
+@app.get("/api/health/live")
+def liveness_check():
+    """Lightweight process liveness probe (does not query external dependencies)."""
+    return {"status": "alive"}
+
+
 @app.get("/health")
 @app.get("/api/health")
+@app.get("/api/health/ready")
 def healthcheck():
-    init_db()
+    """Readiness probe that runs a live `SELECT 1` database check and returns HTTP 503 if unreachable."""
+    db_type = "sqlite" if DATABASE_URL.startswith("sqlite") else "postgresql"
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception as exc:
+        logger.error("Readiness database connectivity check failed: %s", exc)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "database": "unreachable",
+                "database_type": db_type,
+                "database_reachable": False,
+                "storage": storage_service.get_storage_status(),
+                "scrape_worker_mode": SCRAPE_WORKER_MODE,
+                "playwright_enabled": ENABLE_PLAYWRIGHT,
+            },
+        )
+
     return {
         "status": "healthy",
-        "database": "sqlite" if DATABASE_URL.startswith("sqlite") else "postgresql",
+        "database": db_type,
+        "database_reachable": True,
+        "storage": storage_service.get_storage_status(),
+        "scrape_worker_mode": SCRAPE_WORKER_MODE,
         "playwright_enabled": ENABLE_PLAYWRIGHT,
         "gemini": {
             "model": GEMINI_MODEL,
             "fast_model": GEMINI_FAST_MODEL,
             "connected": gemini_service.is_available,
-            "mode": f"live_{GEMINI_MODEL}" if gemini_service.is_available else "ground_truth_heuristic_engine"
-        }
+            "mode": f"live_{GEMINI_MODEL}" if gemini_service.is_available else "ground_truth_heuristic_engine",
+        },
     }

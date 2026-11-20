@@ -22,8 +22,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Local encrypted/gitignored Gmail SMTP configuration state
+  // OTP delivery & local SMTP status
   const [smtpConfigured, setSmtpConfigured] = useState<boolean | null>(null);
+  const [otpAvailable, setOtpAvailable] = useState<boolean | null>(null);
+  const [canConfigureLocalSmtp, setCanConfigureLocalSmtp] = useState<boolean>(true);
   const [showSmtpSetup, setShowSmtpSetup] = useState(false);
   const [smtpUser, setSmtpUser] = useState('');
   const [smtpAppPassword, setSmtpAppPassword] = useState('');
@@ -35,8 +37,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
     fetchSmtpStatus()
       .then((res) => {
         if (active) {
+          const avail = res.otp_available ?? res.smtp_configured;
+          const localAllowed = res.can_configure_local_smtp ?? true;
           setSmtpConfigured(res.smtp_configured);
-          if (!res.smtp_configured) setShowSmtpSetup(true);
+          setOtpAvailable(avail);
+          setCanConfigureLocalSmtp(localAllowed);
+          if (!avail && localAllowed) setShowSmtpSetup(true);
         }
       })
       .catch(() => {});
@@ -283,6 +289,38 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
         {/* 1. Passwordless OTP Flow */}
         {mode === 'otp' && otpStep === 'request' && (
           <div className="space-y-4">
+            {otpAvailable === false && !canConfigureLocalSmtp ? (
+              <div className="p-3.5 rounded-xl bg-amber-950/40 border border-amber-800/60 text-amber-200 text-xs space-y-2.5">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+                  <span>
+                    Passwordless Email OTP is not enabled on this deployment. Please sign in or create an account using your email and password.
+                  </span>
+                </div>
+                <div className="flex gap-2 pl-6">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMode('login');
+                      setError(null);
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white font-semibold text-[11px]"
+                  >
+                    Use Password Sign In
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMode('register');
+                      setError(null);
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-[11px]"
+                  >
+                    Create Account
+                  </button>
+                </div>
+              </div>
+            ) : (
             <form onSubmit={handleSendOtp} className="space-y-4">
               <div>
                 <label htmlFor="auth-otp-email" className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1">
@@ -314,8 +352,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
                 <ArrowRight className="w-4 h-4" />
               </button>
             </form>
+            )}
 
-            {smtpConfigured === false && (
+            {smtpConfigured === false && canConfigureLocalSmtp && (
               <div className="pt-2 border-t border-slate-800">
                 <button
                   type="button"

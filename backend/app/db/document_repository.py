@@ -7,6 +7,7 @@ from typing import Dict, Optional, Set, Tuple
 from sqlmodel import Session, select
 
 from ..config import GENERATED_RESUMES_DIR, RESUMES_DIR
+from ..services.storage_service import storage_service
 from .database import engine
 from .models import CandidateDocument, CVVersion, User
 
@@ -77,6 +78,36 @@ def user_uploaded_resumes_dir(user_id: Optional[int] = None) -> Path:
     return target
 
 
+def _hydrate_owned_generated_file(
+    safe_name: str,
+    user_dir: Path,
+    owned_docs: list[CandidateDocument],
+    owned_vers: list[CVVersion],
+) -> Optional[Path]:
+    """Hydrates a missing user-owned generated CV artifact from S3/R2, encrypted DB blob, or CVVersion HTML."""
+    target = (user_dir / safe_name).resolve()
+    if not target.is_relative_to(user_dir):
+        return None
+    for d in owned_docs:
+        if d.filename == safe_name:
+            hydrated = storage_service.hydrate_local_file(
+                target,
+                storage_backend=getattr(d, "storage_backend", None),
+                object_key=getattr(d, "object_key", None),
+                encrypted_content=getattr(d, "encrypted_content", None),
+                expected_sha256=d.sha256_hash,
+            )
+            if hydrated is not None and hydrated.is_file():
+                return hydrated
+    if safe_name.lower().endswith(".html"):
+        for v in owned_vers:
+            if v.rendered_html:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(v.rendered_html, encoding="utf-8")
+                return target
+    return None
+
+
 def resolve_owned_generated_document(
     filename: str,
     user_id: Optional[int],
@@ -134,6 +165,10 @@ def resolve_owned_generated_document(
             sibling = (user_dir / safe_name).resolve()
             if sibling.is_relative_to(user_dir) and sibling.is_file():
                 return sibling, None
+
+            hydrated = _hydrate_owned_generated_file(safe_name, user_dir, owned_docs, owned_vers)
+            if hydrated is not None:
+                return hydrated, None
             return None, "not_found"
 
         # Guest caller (non-production local mode only): serve guest's own file first if recorded
@@ -147,6 +182,9 @@ def resolve_owned_generated_document(
             guest_cand = (guest_dir / safe_name).resolve()
             if guest_cand.is_relative_to(guest_dir) and guest_cand.is_file():
                 return guest_cand, None
+            hydrated = _hydrate_owned_generated_file(safe_name, guest_dir, owned_docs, owned_vers)
+            if hydrated is not None:
+                return hydrated, None
 
         if any(d.user_id is not None and d.user_id != user_id for d in docs) or any(
             v.user_id is not None and v.user_id != user_id for v in versions
@@ -182,6 +220,12 @@ def record_candidate_document(
         raw_bytes = file_path.read_bytes()
         sha = hashlib.sha256(raw_bytes).hexdigest()
         size_b = len(raw_bytes)
+        backend_name, obj_key, enc_blob = storage_service.persist_document(
+            user_id=user_id,
+            doc_type=doc_type,
+            filename=filename,
+            raw_bytes=raw_bytes,
+        )
         with Session(engine) as session:
             stmt = select(CandidateDocument).where(
                 CandidateDocument.filename == filename,
@@ -194,6 +238,9 @@ def record_candidate_document(
             existing = session.exec(stmt).first()
             if existing:
                 existing.storage_path = str(file_path)
+                existing.storage_backend = backend_name
+                existing.object_key = obj_key
+                existing.encrypted_content = enc_blob
                 existing.size_bytes = size_b
                 existing.sha256_hash = sha
                 if original_filename:
@@ -210,6 +257,9 @@ def record_candidate_document(
                 filename=filename,
                 original_filename=original_filename or filename,
                 storage_path=str(file_path),
+                storage_backend=backend_name,
+                object_key=obj_key,
+                encrypted_content=enc_blob,
                 size_bytes=size_b,
                 sha256_hash=sha,
                 version_number=1,

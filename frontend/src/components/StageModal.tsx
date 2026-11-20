@@ -360,18 +360,24 @@ export const StageModal: React.FC<StageModalProps> = ({
             </div>
           )}
 
-          {/* Success Result */}
+          {/* Staging Result */}
           {result && (
             <div
               className={`p-4 rounded-xl border space-y-2.5 ${
                 result.status === 'error' || result.status === 'blocked_by_reviews'
                   ? 'bg-rose-950/30 border-rose-800 text-rose-300'
+                  : result.status === 'playwright_disabled'
+                  ? 'bg-amber-950/30 border-amber-800/70 text-amber-200'
                   : 'bg-emerald-950/30 border-emerald-800/70 text-emerald-300'
               }`}
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 font-semibold text-sm">
-                  <CheckCircle2 className="w-5 h-5" />
+                  {result.status === 'playwright_disabled' || result.status === 'error' || result.status === 'blocked_by_reviews' ? (
+                    <AlertTriangle className="w-5 h-5 flex-shrink-0" />
+                  ) : (
+                    <CheckCircle2 className="w-5 h-5 flex-shrink-0" />
+                  )}
                   <span>{result.message}</span>
                 </div>
                 <span className="text-xs uppercase bg-slate-950 px-2.5 py-0.5 rounded font-mono">
@@ -379,6 +385,11 @@ export const StageModal: React.FC<StageModalProps> = ({
                 </span>
               </div>
 
+              {result.status === 'playwright_disabled' ? (
+                <p className="text-xs text-amber-100/90 leading-relaxed">
+                  Server-side Chromium automation is intentionally disabled on cloud deployments. Open the target job page in your browser and use the TalentFlow Chrome Extension to autofill and attach your tailored CV locally.
+                </p>
+              ) : (
               <div className="text-xs text-slate-300 space-y-1">
                 <div>
                   <strong>Fields Filled ({result.fields_filled.length}):</strong>{' '}
@@ -395,6 +406,7 @@ export const StageModal: React.FC<StageModalProps> = ({
                   </span>
                 </div>
               </div>
+              )}
             </div>
           )}
         </div>

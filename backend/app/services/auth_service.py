@@ -69,13 +69,21 @@ return next_val
 """
 
 
+_REDIS_CLIENT_CACHE: dict[str, object] = {}
+
+
 def _get_redis_client():
     redis_url = os.getenv("REDIS_URL", "").strip()
     if not redis_url:
         return None
+    cached = _REDIS_CLIENT_CACHE.get(redis_url)
+    if cached is not None:
+        return cached
     try:
         import redis  # type: ignore
-        return redis.from_url(redis_url, decode_responses=True, socket_connect_timeout=1.5, socket_timeout=1.5)
+        client = redis.from_url(redis_url, decode_responses=True, socket_connect_timeout=1.5, socket_timeout=1.5)
+        _REDIS_CLIENT_CACHE[redis_url] = client
+        return client
     except Exception as exc:
         logger.debug("Redis rate-limiter unavailable (%s); falling back to shared SQL table.", exc)
         return None

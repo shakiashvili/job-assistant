@@ -1,4 +1,5 @@
 import base64
+from functools import lru_cache
 import hashlib
 import hmac
 import json
@@ -12,16 +13,29 @@ from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import String, Text
 from sqlalchemy.types import TypeDecorator
 
-from ..config import DATA_DIR, _is_prod, reload_env_files
+from ..config import DATA_DIR, _is_prod
 
 logger = logging.getLogger(__name__)
 
 _KEY_FILE: Path = DATA_DIR / ".fernet.key"
 _BLIND_KEY_FILE: Path = DATA_DIR / ".blind_index.key"
+_CACHED_FERNET_FILE_KEY: Optional[bytes] = None
+_CACHED_BLIND_FILE_KEY: Optional[bytes] = None
 _LEGACY_PREFIX = "enc:"
 _VERSIONED_PREFIX = "enc:v1:"
 
 
+@lru_cache(maxsize=16)
+def _fernet_for_key(key_bytes: bytes) -> Fernet:
+    return Fernet(key_bytes)
+
+
+@lru_cache(maxsize=16)
+def _blind_secret_for_key(key_material: bytes) -> bytes:
+    return hashlib.sha256(key_material + b":blind-index").digest()
+
+
+@lru_cache(maxsize=32)
 def _derive_fernet_bytes(raw_secret: str) -> bytes:
     """Normalizes a valid Fernet key or derives a deterministic 32-byte urlsafe key from a secret string."""
     clean = raw_secret.strip()
@@ -35,11 +49,11 @@ def _derive_fernet_bytes(raw_secret: str) -> bytes:
 
 def _get_fernet_key_bytes() -> bytes:
     """
-    Loads the active 256-bit Fernet symmetric encryption key.
+    Loads the active 256-bit Fernet symmetric encryption key without per-call .env disk I/O.
     - In production (_is_prod=True), requires ENCRYPTION_KEY in environment variables and raises RuntimeError if absent.
     - In local development, reads ENCRYPTION_KEY or persists a stable key in DATA_DIR/.fernet.key (never regenerated on restart).
     """
-    reload_env_files()
+    global _CACHED_FERNET_FILE_KEY
     env_key = os.getenv("ENCRYPTION_KEY", "").strip()
     if env_key:
         return _derive_fernet_bytes(env_key)
@@ -50,9 +64,13 @@ def _get_fernet_key_bytes() -> bytes:
             "to guarantee stable field-level encryption across restarts and deployments."
         )
 
+    if _CACHED_FERNET_FILE_KEY is not None:
+        return _CACHED_FERNET_FILE_KEY
+
     if _KEY_FILE.exists():
         raw = _KEY_FILE.read_bytes().strip()
         if raw:
+            _CACHED_FERNET_FILE_KEY = raw
             return raw
 
     key = Fernet.generate_key()
@@ -61,11 +79,12 @@ def _get_fernet_key_bytes() -> bytes:
         _KEY_FILE.write_bytes(key)
     except Exception as e:
         logger.warning(f"Could not persist local encryption key file: {e}")
+    _CACHED_FERNET_FILE_KEY = key
     return key
 
 
 def _get_previous_fernet_instances() -> List[Fernet]:
-    """Returns Fernet instances for comma-separated ENCRYPTION_KEY_PREVIOUS values to support safe key rotation."""
+    """Returns cached Fernet instances for comma-separated ENCRYPTION_KEY_PREVIOUS values to support safe key rotation."""
     prev_raw = os.getenv("ENCRYPTION_KEY_PREVIOUS", "").strip()
     if not prev_raw:
         return []
@@ -73,14 +92,14 @@ def _get_previous_fernet_instances() -> List[Fernet]:
     for part in prev_raw.split(","):
         if part.strip():
             try:
-                instances.append(Fernet(_derive_fernet_bytes(part.strip())))
+                instances.append(_fernet_for_key(_derive_fernet_bytes(part.strip())))
             except Exception as e:
                 logger.warning(f"Invalid key in ENCRYPTION_KEY_PREVIOUS skipped: {e}")
     return instances
 
 
 def _get_fernet() -> Fernet:
-    return Fernet(_get_fernet_key_bytes())
+    return _fernet_for_key(_get_fernet_key_bytes())
 
 
 def _get_blind_index_key_bytes() -> bytes:
@@ -90,7 +109,7 @@ def _get_blind_index_key_bytes() -> bytes:
     - In production (_is_prod=True): requires BLIND_INDEX_KEY in environment variables.
     - In local dev/test: reads BLIND_INDEX_KEY or persists a dedicated DATA_DIR/.blind_index.key.
     """
-    reload_env_files()
+    global _CACHED_BLIND_FILE_KEY
     env_key = os.getenv("BLIND_INDEX_KEY", "").strip()
     if env_key:
         return env_key.encode("utf-8")
@@ -101,9 +120,13 @@ def _get_blind_index_key_bytes() -> bytes:
             "and must remain independent of ENCRYPTION_KEY."
         )
 
+    if _CACHED_BLIND_FILE_KEY is not None:
+        return _CACHED_BLIND_FILE_KEY
+
     if _BLIND_KEY_FILE.exists():
         raw = _BLIND_KEY_FILE.read_bytes().strip()
         if raw:
+            _CACHED_BLIND_FILE_KEY = raw
             return raw
 
     generated = secrets.token_urlsafe(48).encode("utf-8")
@@ -112,11 +135,12 @@ def _get_blind_index_key_bytes() -> bytes:
         _BLIND_KEY_FILE.write_bytes(generated)
     except Exception as e:
         logger.warning(f"Could not persist local blind-index key file: {e}")
+    _CACHED_BLIND_FILE_KEY = generated
     return generated
 
 
 def _compute_blind_hmac(norm_value: str, key_material: bytes) -> str:
-    secret = hashlib.sha256(key_material + b":blind-index").digest()
+    secret = _blind_secret_for_key(key_material)
     return hmac.new(secret, norm_value.encode("utf-8"), hashlib.sha256).hexdigest()
 
 

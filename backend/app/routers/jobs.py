@@ -30,6 +30,12 @@ from ..services.scrapers.scraper_orchestrator import scraper_orchestrator
 from ..services.scrapers.base_scraper import sanitize_company_name, classify_georgia_b2b_suitability
 from ..services.salary_service import salary_service
 from ..services.backup_service import backup_service
+from ..services.scrape_worker import (
+    SCRAPE_WORKER_MODE,
+    execute_scrape_task,
+    recover_stale_scrape_tasks,
+    scrape_queue,
+)
 from ..services.upload_utils import read_upload_bounded
 from pathlib import Path
 from .ground_truth import _purge_stale_unapplied_jobs, MAX_UPLOAD_SIZE_BYTES, record_candidate_document
@@ -37,6 +43,11 @@ from ..db.document_repository import user_generated_resumes_dir
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["Database Profile, Scrapers & Market Intelligence"])
+
+_DJINNI_FIRE_RE = _re.compile(r"🔥+")
+_DJINNI_RESPONDS_RE = _re.compile(r"\bResponds Quickly\b.*$", flags=_re.I)
+_DJINNI_SALARY_TAIL_RE = _re.compile(r"\s+(?:up\s+to|to|from)\s+[\$€£]\s*\d[\d,]*.*$", flags=_re.I)
+_WHITESPACE_RE = _re.compile(r"\s+")
 
 
 class ScrapeRequest(BaseModel):
@@ -212,97 +223,42 @@ async def trigger_multi_portal_scrape(
     )
 
 
-async def _run_background_scrape_task(
-    task_id: str,
-    portals: Optional[List[str]],
-    allow_network: bool,
-    owner_email: Optional[str],
-    user_id: Optional[int],
-) -> None:
-    try:
-        res = await scraper_orchestrator.run_scrapers(
-            portals=portals,
-            allow_network=allow_network,
-            owner_email=owner_email,
-            user_id=user_id,
-        )
-        with Session(engine) as session:
-            t_row = session.exec(select(ScrapeTask).where(ScrapeTask.task_id == task_id)).first()
-            if t_row:
-                t_row.status = "COMPLETED"
-                t_row.progress_pct = 100
-                t_row.result_summary = {
-                    "total_processed": int(res.get("total_processed") or 0),
-                    "staged_ready_count": int(res.get("staged_ready_count") or 0),
-                    "filtered_out_count": int(res.get("filtered_out_count") or 0),
-                }
-                t_row.completed_at = utc_now()
-                session.add(t_row)
-                session.commit()
-    except Exception as exc:
-        logger.error(f"Background scrape task {task_id} failed: {exc}")
-        with Session(engine) as session:
-            t_row = session.exec(select(ScrapeTask).where(ScrapeTask.task_id == task_id)).first()
-            if t_row:
-                t_row.status = "FAILED"
-                t_row.error_message = str(exc)
-                t_row.completed_at = utc_now()
-                session.add(t_row)
-                session.commit()
-
-
 @router.post("/jobs/scrape/async")
 async def trigger_async_scrape(
     request: Optional[ScrapeRequest] = None,
     current_user: User = Depends(get_current_user),
 ):
     """
-    Launches a non-blocking background scrape task with per-user duplicate run deduplication.
+    Enqueues a durable DB-backed background scrape task with stale-task recovery,
+    heartbeats, execution timeouts, and per-user duplicate run deduplication.
     Returns a task_id that can be polled via GET /api/jobs/scrape/status/{task_id}.
     """
-    init_db()
     portals = request.portals if request else None
     allow_net = request.allow_network if request else True
     owner = current_user.email if current_user.email != "guest@talentflow.local" else None
 
-    with Session(engine) as session:
-        existing_running = session.exec(
-            select(ScrapeTask).where(
-                ScrapeTask.user_id == current_user.id,
-                ScrapeTask.status == "RUNNING",
-            )
-        ).first()
-        if existing_running:
-            return {
-                "task_id": existing_running.task_id,
-                "status": existing_running.status,
-                "deduplicated": True,
-                "message": "An active scrape task is already running for your account.",
-            }
+    enqueued = scrape_queue.enqueue_task(
+        user_id=current_user.id,
+        portals=portals,
+        allow_network=allow_net,
+    )
+    if enqueued.get("deduplicated"):
+        return enqueued
 
-        task_id = f"scrape-{uuid.uuid4().hex[:10]}"
-        task_row = ScrapeTask(
-            task_id=task_id,
-            user_id=current_user.id,
-            status="RUNNING",
-            portals=portals or scraper_orchestrator.DEFAULT_PORTALS,
-            progress_pct=10,
-        )
-        session.add(task_row)
-        session.commit()
-
+    task_id = enqueued["task_id"]
     if not allow_net:
-        await _run_background_scrape_task(task_id, portals, False, owner, current_user.id)
-    else:
-        asyncio.create_task(
-            _run_background_scrape_task(task_id, portals, allow_net, owner, current_user.id)
-        )
+        await execute_scrape_task(task_id, owner_email=owner)
+    elif SCRAPE_WORKER_MODE != "external":
+        # If FastAPI lifespan embedded consumer is active, notify_worker() wakes it.
+        # When invoked in contexts without lifespan (e.g. direct TestClient), dispatch cleanly.
+        if scrape_queue._consumer_task is None or scrape_queue._consumer_task.done():
+            asyncio.create_task(execute_scrape_task(task_id, owner_email=owner))
 
     with Session(engine) as session:
         t_now = session.exec(select(ScrapeTask).where(ScrapeTask.task_id == task_id)).first()
         return {
             "task_id": task_id,
-            "status": t_now.status if t_now else "RUNNING",
+            "status": t_now.status if t_now else "QUEUED",
             "deduplicated": False,
         }
 
@@ -312,12 +268,13 @@ def get_scrape_task_status(
     task_id: str,
     current_user: User = Depends(get_current_user),
 ):
-    """Returns progress and completion metrics for a background scrape task."""
+    """Returns progress and completion metrics for a durable background scrape task."""
+    recover_stale_scrape_tasks()
     with Session(engine) as session:
         t_row = session.exec(select(ScrapeTask).where(ScrapeTask.task_id == task_id)).first()
         if not t_row:
             raise HTTPException(status_code=404, detail=f"Scrape task {task_id} not found.")
-        if t_row.user_id is not None and t_row.user_id != current_user.id:
+        if t_row.user_id is None or t_row.user_id != current_user.id:
             raise HTTPException(status_code=403, detail="Forbidden: scrape task belongs to another user.")
         summary = t_row.result_summary or {}
         return {
@@ -325,6 +282,10 @@ def get_scrape_task_status(
             "status": t_row.status,
             "portals": t_row.portals,
             "progress_pct": t_row.progress_pct,
+            "attempt_count": t_row.attempt_count,
+            "max_attempts": t_row.max_attempts,
+            "worker_id": t_row.worker_id,
+            "heartbeat_at": t_row.heartbeat_at.isoformat() if t_row.heartbeat_at else None,
             "total_processed": summary.get("total_processed", 0),
             "staged_count": summary.get("staged_ready_count", 0),
             "filtered_out_count": summary.get("filtered_out_count", 0),
@@ -497,14 +458,14 @@ async def list_scraped_jobs(
             )
             if dumped.get("portal") == "djinni.co" and dumped.get("title"):
                 raw_t = str(dumped["title"])
-                clean_t = _re.sub(r"🔥+", "", raw_t)
-                clean_t = _re.sub(r"\bResponds Quickly\b.*$", "", clean_t, flags=_re.I)
-                clean_t = _re.sub(r"\s+(?:up\s+to|to|from)\s+[\$€£]\s*\d[\d,]*.*$", "", clean_t, flags=_re.I)
+                clean_t = _DJINNI_FIRE_RE.sub("", raw_t)
+                clean_t = _DJINNI_RESPONDS_RE.sub("", clean_t)
+                clean_t = _DJINNI_SALARY_TAIL_RE.sub("", clean_t)
                 if dumped.get("company") and len(dumped["company"]) > 2:
                     ci = clean_t.find(f" {dumped['company']}")
                     if ci > 4:
                         clean_t = clean_t[:ci]
-                dumped["title"] = _re.sub(r"\s+", " ", clean_t).strip() or raw_t
+                dumped["title"] = _WHITESPACE_RE.sub(" ", clean_t).strip() or raw_t
                 if dumped.get("salary_min") is None:
                     sal_ex = salary_service.extract_explicit_salary(f"{raw_t}\n{dumped.get('description_raw', '')}")
                     if sal_ex:
@@ -548,21 +509,21 @@ async def list_scraped_jobs(
                 if (dumped := _serialize_job_row(entry)).get("georgia_eligible")
             ]
 
-            tier_counts = {
-                "ALL": len(all_geo_items),
-                "DIRECT": sum(1 for it in all_geo_items if it.get("match_tier") == "DIRECT"),
-                "ADJACENT": sum(1 for it in all_geo_items if it.get("match_tier") == "ADJACENT"),
-                "PUBLIC_INTERNSHIP": sum(
-                    1
-                    for it in all_geo_items
-                    if it.get("match_tier") == "PUBLIC_INTERNSHIP" or it.get("portal") == "hr.gov.ge"
-                ),
-            }
-            status_counts = {
-                "ALL": len(all_geo_items),
-                "STAGED": sum(1 for it in all_geo_items if it.get("status") == "STAGED"),
-                "AUDITED": sum(1 for it in all_geo_items if it.get("status") == "AUDITED"),
-            }
+            tier_counts = {"ALL": len(all_geo_items), "DIRECT": 0, "ADJACENT": 0, "PUBLIC_INTERNSHIP": 0}
+            status_counts = {"ALL": len(all_geo_items), "STAGED": 0, "AUDITED": 0}
+            for it in all_geo_items:
+                mt = it.get("match_tier")
+                if mt == "DIRECT":
+                    tier_counts["DIRECT"] += 1
+                elif mt == "ADJACENT":
+                    tier_counts["ADJACENT"] += 1
+                if mt == "PUBLIC_INTERNSHIP" or it.get("portal") == "hr.gov.ge":
+                    tier_counts["PUBLIC_INTERNSHIP"] += 1
+                st_val = it.get("status")
+                if st_val == "STAGED":
+                    status_counts["STAGED"] += 1
+                elif st_val == "AUDITED":
+                    status_counts["AUDITED"] += 1
 
             eligible_filtered = all_geo_items
             if status and status.upper() != "ALL":

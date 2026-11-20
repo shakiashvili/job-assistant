@@ -6,6 +6,7 @@ import { DiscoveryFeed } from '../components/DiscoveryFeed';
 import { CVVariantManager } from '../components/CVVariantManager';
 import { ApplicationTracker } from '../components/ApplicationTracker';
 import { StageModal } from '../components/StageModal';
+import { AuthModal } from '../components/AuthModal';
 import { B2BMarketHub } from '../components/B2BMarketHub';
 import * as api from '../services/api';
 import { DbJobPosting, GroundTruth } from '../types';
@@ -379,5 +380,45 @@ describe('Core Frontend Component Workflows', () => {
     expect(await screen.findByText(/IE B2B \(1% Tax\)/i)).toBeInTheDocument();
     expect(screen.getByText(/1% applies this month\. At this run-rate, Month #12 crosses 500,000 GEL/i)).toBeInTheDocument();
     expect(screen.getByText(/Actual Cumulative Turnover \(YTD \+ This Month\):/i)).toBeInTheDocument();
+  });
+
+  it('StageModal clearly explains cloud Playwright disablement and points users to Chrome Extension', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, 'stageApplication').mockResolvedValueOnce({
+      status: 'playwright_disabled',
+      portal_detected: 'greenhouse',
+      fields_filled: [],
+      captcha_status: 'none_detected',
+      file_uploaded: false,
+      message: 'Server-side headless Chromium staging is disabled (ENABLE_PLAYWRIGHT=false).',
+      manual_review_needed: true,
+    });
+
+    render(
+      <StageModal
+        isOpen
+        onClose={() => {}}
+        jobUrl="https://boards.greenhouse.io/example/jobs/123"
+        variant="qa_automation"
+      />
+    );
+    await user.click(screen.getByRole('button', { name: /Launch Playwright & Apply/i }));
+    expect(await screen.findByText(/TalentFlow Chrome Extension/i)).toBeInTheDocument();
+  });
+
+  it('AuthModal shows honest unavailable-OTP guidance in production without exposing local SMTP setup', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, 'fetchSmtpStatus').mockResolvedValueOnce({
+      smtp_configured: false,
+      otp_available: false,
+      provider: 'disabled',
+      can_configure_local_smtp: false,
+    });
+
+    render(<AuthModal isOpen onClose={() => {}} onAuthSuccess={() => {}} />);
+    await user.click(screen.getByRole('button', { name: /Email OTP/i }));
+
+    expect(await screen.findByText(/Passwordless Email OTP is not enabled on this deployment/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Configure Gmail SMTP Sender/i)).not.toBeInTheDocument();
   });
 });

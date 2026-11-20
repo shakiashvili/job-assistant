@@ -258,3 +258,71 @@ def get_smtp_config() -> Dict[str, Any]:
         "password": password,
         "from_email": from_email,
     }
+
+
+def get_email_delivery_config() -> Dict[str, Any]:
+    """
+    Resolves OTP/transactional email delivery configuration.
+    Prefers HTTPS API providers (Resend / SendGrid over port 443, compatible with Render Free/PaaS)
+    before falling back to SMTP (blocked on Render Free outbound ports 25/465/587).
+    """
+    reload_env_files()
+    otp_enabled = os.getenv("OTP_EMAIL_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
+    resend_key = os.getenv("RESEND_API_KEY", "").strip()
+    sendgrid_key = os.getenv("SENDGRID_API_KEY", "").strip()
+    from_email = (os.getenv("EMAIL_FROM") or os.getenv("RESEND_FROM_EMAIL") or "").strip()
+
+    if not otp_enabled:
+        return {
+            "otp_enabled": False,
+            "configured": False,
+            "provider": "disabled",
+            "from_email": from_email,
+            "resend_api_key": "",
+            "sendgrid_api_key": "",
+            "can_configure_local_smtp": False,
+        }
+
+    if resend_key:
+        return {
+            "otp_enabled": True,
+            "configured": True,
+            "provider": "resend",
+            "from_email": from_email or "TalentFlow AI <onboarding@resend.dev>",
+            "resend_api_key": resend_key,
+            "sendgrid_api_key": "",
+            "can_configure_local_smtp": False,
+        }
+
+    if sendgrid_key and from_email:
+        return {
+            "otp_enabled": True,
+            "configured": True,
+            "provider": "sendgrid",
+            "from_email": from_email,
+            "resend_api_key": "",
+            "sendgrid_api_key": sendgrid_key,
+            "can_configure_local_smtp": False,
+        }
+
+    smtp_cfg = get_smtp_config()
+    if smtp_cfg["configured"]:
+        return {
+            "otp_enabled": True,
+            "configured": True,
+            "provider": "smtp",
+            "from_email": smtp_cfg["from_email"],
+            "resend_api_key": "",
+            "sendgrid_api_key": "",
+            "can_configure_local_smtp": not IS_PRODUCTION,
+        }
+
+    return {
+        "otp_enabled": True,
+        "configured": False,
+        "provider": "none",
+        "from_email": from_email,
+        "resend_api_key": "",
+        "sendgrid_api_key": "",
+        "can_configure_local_smtp": not IS_PRODUCTION,
+    }

@@ -42,6 +42,7 @@ from ..services.company_validator import company_validator
 from ..services.cv_generator_service import cv_generator_service
 from ..services.gemini_service import gemini_service
 from ..services.salary_service import salary_service
+from ..services.storage_service import storage_service
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +108,15 @@ class PlaywrightStagerService:
                     )
                     if cand.is_relative_to(upload_dir) and cand.is_file():
                         return cand
+                    hyd = storage_service.hydrate_local_file(
+                        (upload_dir / safe_name).resolve(),
+                        storage_backend=uploaded_doc.storage_backend,
+                        object_key=uploaded_doc.object_key,
+                        encrypted_content=uploaded_doc.encrypted_content,
+                        expected_sha256=uploaded_doc.sha256_hash,
+                    )
+                    if hyd is not None and hyd.is_file():
+                        return hyd
             return None
 
         if uid is None:
