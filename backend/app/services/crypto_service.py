@@ -139,9 +139,17 @@ def blind_index_candidates(value: Optional[str]) -> List[str]:
         for part in prev_raw.split(","):
             clean_part = part.strip()
             if clean_part:
-                h = _compute_blind_hmac(norm, clean_part.encode("utf-8"))
+                raw_bytes = clean_part.encode("utf-8")
+                h = _compute_blind_hmac(norm, raw_bytes)
                 if h not in hashes:
                     hashes.append(h)
+                # Legacy deployments prior to independent BLIND_INDEX_KEY derived blind indexes
+                # from _derive_fernet_bytes(ENCRYPTION_KEY); support both seamlessly during upgrade.
+                derived = _derive_fernet_bytes(clean_part)
+                if derived != raw_bytes:
+                    h_legacy = _compute_blind_hmac(norm, derived)
+                    if h_legacy not in hashes:
+                        hashes.append(h_legacy)
     return hashes
 
 

@@ -1,8 +1,9 @@
 import hashlib
 import logging
 import re
+import shutil
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Dict, Optional, Set, Tuple
 from sqlmodel import Session, select
 
 from ..config import GENERATED_RESUMES_DIR, RESUMES_DIR
@@ -220,3 +221,129 @@ def record_candidate_document(
     except Exception as e:
         logger.debug(f"Could not record CandidateDocument for {filename}: {e}")
         return None
+
+
+def migrate_legacy_generated_resumes(session: Optional[Session] = None) -> Dict[str, int]:
+    """
+    Migrates pre-isolation generated CV files from flat GENERATED_RESUMES_DIR root into
+    per-user directories (`GENERATED_RESUMES_DIR / f"user_{user_id}"`) and updates
+    `CandidateDocument.storage_path`.
+
+    Fail-closed collision safety:
+    - Files claimed by multiple distinct user IDs are skipped (never assigned blindly).
+    - Unowned files with no non-null CandidateDocument/CVVersion user_id are untouched.
+    """
+    gen_root = GENERATED_RESUMES_DIR.resolve()
+    if not gen_root.exists():
+        return {"moved_files": 0, "updated_records": 0, "skipped_ambiguous": 0, "skipped_existing": 0}
+
+    def _run(db: Session) -> Dict[str, int]:
+        moved_files = 0
+        updated_records = 0
+        skipped_ambiguous = 0
+        skipped_existing = 0
+
+        file_owners: Dict[str, Set[int]] = {}
+        stem_owners: Dict[str, Set[int]] = {}
+        docs_by_name: Dict[str, list[CandidateDocument]] = {}
+
+        docs = db.exec(
+            select(CandidateDocument).where(
+                CandidateDocument.user_id.is_not(None),
+                CandidateDocument.doc_type != "uploaded_cv",
+            )
+        ).all()
+        for doc in docs:
+            safe = is_valid_safe_doc_name(doc.filename)
+            if not safe or doc.user_id is None:
+                continue
+            uid = int(doc.user_id)
+            file_owners.setdefault(safe, set()).add(uid)
+            stem_owners.setdefault(Path(safe).stem, set()).add(uid)
+            docs_by_name.setdefault(safe, []).append(doc)
+
+        versions = db.exec(select(CVVersion).where(CVVersion.user_id.is_not(None))).all()
+        for ver in versions:
+            if ver.user_id is None:
+                continue
+            uid = int(ver.user_id)
+            for raw_name in (ver.pdf_filename, ver.docx_filename):
+                safe = is_valid_safe_doc_name(raw_name)
+                if not safe:
+                    continue
+                file_owners.setdefault(safe, set()).add(uid)
+                stem_owners.setdefault(Path(safe).stem, set()).add(uid)
+
+        # Also attribute unambiguous sibling root artifacts (.html/.eml/.docx/.pdf sharing exact stem)
+        for item in list(gen_root.iterdir()):
+            if not item.is_file():
+                continue
+            safe = is_valid_safe_doc_name(item.name)
+            if not safe or safe in file_owners:
+                continue
+            s_owners = stem_owners.get(Path(safe).stem)
+            if s_owners and len(s_owners) == 1:
+                file_owners[safe] = set(s_owners)
+
+        for fname, owners in file_owners.items():
+            if len(owners) > 1:
+                logger.warning(
+                    "Skipping legacy CV migration for '%s': claimed by multiple users %s",
+                    fname,
+                    sorted(owners),
+                )
+                skipped_ambiguous += 1
+                continue
+            if not owners:
+                continue
+
+            uid = next(iter(owners))
+            user_dir = user_generated_resumes_dir(uid)
+            root_src = (gen_root / fname).resolve()
+            dest = (user_dir / fname).resolve()
+            if root_src.parent != gen_root or not dest.is_relative_to(user_dir):
+                continue
+
+            if root_src.is_file():
+                if not dest.exists():
+                    shutil.move(str(root_src), str(dest))
+                    moved_files += 1
+                else:
+                    skipped_existing += 1
+
+            if dest.is_file():
+                for doc in docs_by_name.get(fname, []):
+                    if doc.user_id == uid and doc.storage_path != str(dest):
+                        doc.storage_path = str(dest)
+                        db.add(doc)
+                        updated_records += 1
+
+        if updated_records:
+            db.commit()
+
+        return {
+            "moved_files": moved_files,
+            "updated_records": updated_records,
+            "skipped_ambiguous": skipped_ambiguous,
+            "skipped_existing": skipped_existing,
+        }
+
+    if session is not None:
+        return _run(session)
+    with Session(engine) as own_session:
+        return _run(own_session)
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="TalentFlow generated-document repository maintenance CLI")
+    parser.add_argument(
+        "--migrate-legacy-cvs",
+        action="store_true",
+        help="Move unambiguous legacy shared generated CVs into per-user directories",
+    )
+    args = parser.parse_args()
+    if args.migrate_legacy_cvs:
+        summary = migrate_legacy_generated_resumes()
+        print(f"Legacy CV migration complete: {summary}")

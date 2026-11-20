@@ -1,4 +1,10 @@
+import hashlib
+import hmac
 import json
+import os
+import subprocess
+import sys
+import time
 import uuid
 from datetime import date
 from pathlib import Path
@@ -8,19 +14,23 @@ from reportlab.pdfgen import canvas
 from sqlmodel import Session, select
 
 from app.main import app
-from app.config import GENERATED_RESUMES_DIR, TEST_FORMS_DIR, resolve_gemini_model_pricing
-from app.db.database import engine, init_db
-from app.db.document_repository import user_generated_resumes_dir
-from app.db.models import AuthRateLimit, User
+from app.config import BASE_DIR, GENERATED_RESUMES_DIR, PROJECT_ROOT, TEST_FORMS_DIR, resolve_gemini_model_pricing
+from app.db.database import DATABASE_URL, engine, init_db
+from app.db.document_repository import migrate_legacy_generated_resumes, user_generated_resumes_dir
+from app.db.models import AuthRateLimit, CandidateDocument, User
+from app.services import auth_service as auth_service_mod
 from app.services import playwright_service as pw_module
 from app.services.ats_checker import check_pdf_ats_parseability
 from app.services.auth_service import (
     check_rate_limit,
     consume_rate_limit,
+    hash_password,
+    purge_expired_rate_limits,
     record_login_failure,
     reset_login_attempts,
 )
 from app.services.crypto_service import (
+    _derive_fernet_bytes,
     blind_index,
     encrypt_str,
     reindex_all_blind_indices,
@@ -252,6 +262,45 @@ def test_ats_checker_layout_full_name_and_expected_contact_honesty(tmp_path: Pat
     assert rep_partial["single_column_layout_ok"] is True
     assert rep_partial["candidate_name_present"] is False
     assert rep_partial["contact_present"] is False
+    assert rep_partial["status"] == "WARN"
+
+    # 2b. Full name + clean single-column layout + sections (score >= 75), but missing expected contact -> MUST WARN, not PASS
+    missing_contact_pdf = tmp_path / "missing_contact.pdf"
+    c_mc = canvas.Canvas(str(missing_contact_pdf), pagesize=A4)
+    c_mc.drawString(50, 780, "Nino Kvaratskhelia")
+    c_mc.drawString(50, 755, "Professional Summary: Experienced quality engineer testing APIs and web services.")
+    c_mc.drawString(50, 730, "Technical Skills: Python, PyTest, Playwright, FastAPI, Docker, PostgreSQL")
+    c_mc.drawString(50, 705, "Work Experience: Built automated integration suites across microservice endpoints.")
+    c_mc.drawString(50, 680, "Education: B.Sc. in Computer Science, Tbilisi State University")
+    c_mc.save()
+
+    rep_mc = check_pdf_ats_parseability(
+        missing_contact_pdf,
+        candidate_name="Nino Kvaratskhelia",
+        expected_email="nino.real@example.ge",
+    )
+    assert rep_mc["score"] >= 75
+    assert rep_mc["candidate_name_present"] is True
+    assert rep_mc["contact_present"] is False
+    assert rep_mc["status"] == "WARN"
+
+    # 2c. Complete valid single-column CV with full name + expected email -> PASS
+    complete_pdf = tmp_path / "complete_valid.pdf"
+    c_ok = canvas.Canvas(str(complete_pdf), pagesize=A4)
+    c_ok.drawString(50, 780, "Nino Kvaratskhelia | nino.real@example.ge")
+    c_ok.drawString(50, 755, "Professional Summary: Experienced quality engineer testing APIs and web services.")
+    c_ok.drawString(50, 730, "Technical Skills: Python, PyTest, Playwright, FastAPI, Docker, PostgreSQL")
+    c_ok.drawString(50, 705, "Work Experience: Built automated integration suites across microservice endpoints.")
+    c_ok.save()
+
+    rep_ok = check_pdf_ats_parseability(
+        complete_pdf,
+        candidate_name="Nino Kvaratskhelia",
+        expected_email="nino.real@example.ge",
+    )
+    assert rep_ok["status"] == "PASS"
+    assert rep_ok["candidate_name_present"] is True
+    assert rep_ok["contact_present"] is True
 
     # 3. True two-column layout PDF -> single_column_layout_ok MUST be False
     two_col_pdf = tmp_path / "two_column.pdf"
@@ -324,6 +373,40 @@ def test_shared_persistent_rate_limiting_and_ip_buckets():
         with pytest.raises(HTTPException) as ip_exc:
             check_rate_limit(ip_bucket, max_attempts=5, window_seconds=120)
         assert ip_exc.value.status_code == 429
+
+        # Expired SQL rows from one-off probes are cleaned up while active buckets are preserved
+        stale_key_1 = hashlib.sha256(f"probe_{uuid.uuid4().hex}@example.com".encode("utf-8")).hexdigest()
+        stale_key_2 = hashlib.sha256(f"probe_{uuid.uuid4().hex}@example.com".encode("utf-8")).hexdigest()
+        active_key = hashlib.sha256(f"active_{uuid.uuid4().hex}@example.com".encode("utf-8")).hexdigest()
+        now_val = time.time()
+        with Session(engine) as sess:
+            sess.add(AuthRateLimit(bucket_key=stale_key_1, attempts=1, window_started_at=now_val - 900, expires_at=now_val - 300))
+            sess.add(AuthRateLimit(bucket_key=stale_key_2, attempts=2, window_started_at=now_val - 900, expires_at=now_val - 120))
+            sess.add(AuthRateLimit(bucket_key=active_key, attempts=5, window_started_at=now_val, expires_at=now_val + 600))
+            sess.commit()
+
+        deleted = purge_expired_rate_limits()
+        assert deleted >= 2
+        with Session(engine) as sess:
+            assert sess.get(AuthRateLimit, stale_key_1) is None
+            assert sess.get(AuthRateLimit, stale_key_2) is None
+            assert sess.get(AuthRateLimit, active_key) is not None
+
+        # Throttled periodic sweep during live consume_rate_limit also prunes expired buckets
+        stale_key_3 = hashlib.sha256(f"probe_{uuid.uuid4().hex}@example.com".encode("utf-8")).hexdigest()
+        with Session(engine) as sess:
+            sess.add(AuthRateLimit(bucket_key=stale_key_3, attempts=1, window_started_at=now_val - 900, expires_at=now_val - 60))
+            sess.commit()
+        auth_service_mod._LAST_RATE_LIMIT_PRUNE_TS = 0.0
+        probe_bucket = f"otp_request:prune_trigger_{uuid.uuid4().hex[:8]}@example.com"
+        consume_rate_limit(probe_bucket, max_attempts=5, window_seconds=120)
+        reset_login_attempts(probe_bucket)
+        with Session(engine) as sess:
+            assert sess.get(AuthRateLimit, stale_key_3) is None
+            active_row = sess.get(AuthRateLimit, active_key)
+            assert active_row is not None
+            sess.delete(active_row)
+            sess.commit()
     finally:
         reset_login_attempts(bucket)
 
@@ -377,3 +460,196 @@ def test_blind_index_decoupled_from_encryption_rotation_and_reindex(monkeypatch)
     assert login_after_bi_rot.status_code == 200, login_after_bi_rot.text
     # Ensure ciphertext encrypted under k1 stays readable under k2
     assert encrypt_str("ok").startswith("enc:v1:")
+
+
+def test_legacy_blind_index_upgrade_cli_reindex_and_deploy_config(monkeypatch):
+    """
+    P1/P2: Simulates pre-upgrade accounts whose email_hash was derived from legacy ENCRYPTION_KEY,
+    verifies login with BLIND_INDEX_KEY_PREVIOUS + ENCRYPTION_KEY rotation, executes the CLI `--reindex`
+    command, and verifies login continues working after removing BLIND_INDEX_KEY_PREVIOUS.
+    """
+    from cryptography.fernet import Fernet
+
+    init_db()
+
+    render_text = (PROJECT_ROOT / "render.yaml").read_text(encoding="utf-8")
+    env_tmpl_text = (PROJECT_ROOT / ".env.example").read_text(encoding="utf-8")
+    deploy_doc = (PROJECT_ROOT / "docs" / "DEPLOYMENT.md").read_text(encoding="utf-8")
+    assert "key: BLIND_INDEX_KEY" in render_text
+    assert "BLIND_INDEX_KEY=" in env_tmpl_text
+    assert "BLIND_INDEX_KEY" in deploy_doc and "--reindex" in deploy_doc
+
+    legacy_passphrase = f"legacy-nonfernet-enc-secret-{uuid.uuid4().hex[:8]}"
+    new_enc_key = Fernet.generate_key().decode("utf-8")
+    new_blind_key = f"independent-blind-key-{uuid.uuid4().hex}"
+
+    # Create two legacy user rows as existed prior to independent BLIND_INDEX_KEY separation
+    legacy_fernet_bytes = _derive_fernet_bytes(legacy_passphrase)
+    legacy_fernet = Fernet(legacy_fernet_bytes)
+    legacy_hmac_secret = hashlib.sha256(legacy_fernet_bytes + b":blind-index").digest()
+
+    email_login_upgrade = f"legacy_login_{uuid.uuid4().hex[:8]}@example.com"
+    email_cli_reindex = f"legacy_cli_{uuid.uuid4().hex[:8]}@example.com"
+    pw = "LegacyAccountPass123!"
+
+    with Session(engine) as sess:
+        from sqlalchemy import text as sa_text
+
+        for em, nm in ((email_login_upgrade, "Legacy Login User"), (email_cli_reindex, "Legacy CLI User")):
+            legacy_hash = hmac.new(legacy_hmac_secret, em.lower().encode("utf-8"), hashlib.sha256).hexdigest()
+            enc_em = f"enc:v1:{legacy_fernet.encrypt(em.encode('utf-8')).decode('utf-8')}"
+            enc_nm = f"enc:v1:{legacy_fernet.encrypt(nm.encode('utf-8')).decode('utf-8')}"
+            sess.connection().execute(
+                sa_text(
+                    "INSERT INTO users (email, email_hash, hashed_password, full_name, is_active, is_admin, created_at) "
+                    "VALUES (:email, :email_hash, :hpw, :fn, :active, :admin, CURRENT_TIMESTAMP)"
+                ),
+                {
+                    "email": enc_em,
+                    "email_hash": legacy_hash,
+                    "hpw": hash_password(pw),
+                    "fn": enc_nm,
+                    "active": True,
+                    "admin": False,
+                },
+            )
+        sess.commit()
+
+    # Step 1: Upgrade keys with transition PREVIOUS vars enabled
+    monkeypatch.setenv("ENCRYPTION_KEY", new_enc_key)
+    monkeypatch.setenv("ENCRYPTION_KEY_PREVIOUS", legacy_passphrase)
+    monkeypatch.setenv("BLIND_INDEX_KEY", new_blind_key)
+    monkeypatch.setenv("BLIND_INDEX_KEY_PREVIOUS", legacy_passphrase)
+
+    # First user logs in via BLIND_INDEX_KEY_PREVIOUS (even with non-Fernet legacy ENCRYPTION_KEY)
+    login_u1 = client.post("/api/auth/login", json={"email": email_login_upgrade, "password": pw})
+    assert login_u1.status_code == 200, login_u1.text
+    assert login_u1.json()["user"]["full_name"] == "Legacy Login User"
+
+    # Step 2: Run the exact CLI `--reindex` command for remaining dormant legacy accounts
+    cli_env = os.environ.copy()
+    cli_env["ENCRYPTION_KEY"] = new_enc_key
+    cli_env["ENCRYPTION_KEY_PREVIOUS"] = legacy_passphrase
+    cli_env["BLIND_INDEX_KEY"] = new_blind_key
+    cli_env["BLIND_INDEX_KEY_PREVIOUS"] = ""
+    cli_env["DATABASE_URL"] = DATABASE_URL
+    cli_env["PYTHONPATH"] = str(BASE_DIR)
+    cli_res = subprocess.run(
+        [sys.executable, "-m", "app.services.crypto_service", "--reindex"],
+        cwd=str(BASE_DIR),
+        env=cli_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert cli_res.returncode == 0, cli_res.stderr or cli_res.stdout
+    assert "Blind index reindexing complete" in cli_res.stdout
+
+    # Step 3: Remove BLIND_INDEX_KEY_PREVIOUS — both legacy accounts still log in cleanly!
+    monkeypatch.setenv("BLIND_INDEX_KEY_PREVIOUS", "")
+    login_u1_after = client.post("/api/auth/login", json={"email": email_login_upgrade, "password": pw})
+    login_u2_after = client.post("/api/auth/login", json={"email": email_cli_reindex, "password": pw})
+    assert login_u1_after.status_code == 200, login_u1_after.text
+    assert login_u2_after.status_code == 200, login_u2_after.text
+    assert login_u2_after.json()["user"]["full_name"] == "Legacy CLI User"
+
+
+def test_legacy_shared_cv_migration_moves_owned_and_blocks_collisions():
+    """
+    P2: Verifies one-time/startup migration moves unambiguous legacy generated CVs from flat
+    GENERATED_RESUMES_DIR into user_<id>/ directories and updates CandidateDocument.storage_path,
+    while refusing to move colliding multi-owner or unowned root files.
+    """
+    uid_a, _, hdr_a = _register_and_upload_same_candidate("mig_a", "MigrationCorpA")
+    uid_b, _, hdr_b = _register_and_upload_same_candidate("mig_b", "MigrationCorpB")
+
+    tag = uuid.uuid4().hex[:8]
+    legacy_pdf = f"Legacy_Owned_{tag}.pdf"
+    legacy_html = f"Legacy_Owned_{tag}.html"
+    colliding_pdf = f"Legacy_Shared_{tag}.pdf"
+    unowned_pdf = f"Legacy_Unowned_{tag}.pdf"
+
+    root_pdf = GENERATED_RESUMES_DIR / legacy_pdf
+    root_html = GENERATED_RESUMES_DIR / legacy_html
+    root_col = GENERATED_RESUMES_DIR / colliding_pdf
+    root_unowned = GENERATED_RESUMES_DIR / unowned_pdf
+
+    user_a_dir = user_generated_resumes_dir(uid_a)
+    user_b_dir = user_generated_resumes_dir(uid_b)
+    dest_pdf = user_a_dir / legacy_pdf
+    dest_html = user_a_dir / legacy_html
+
+    try:
+        root_pdf.write_bytes(b"%PDF-1.4\n%LegacyOwnedByA\n")
+        root_html.write_text("<html><body>LegacyOwnedByA</body></html>", encoding="utf-8")
+        root_col.write_bytes(b"%PDF-1.4\n%CollidingShared\n")
+        root_unowned.write_bytes(b"%PDF-1.4\n%UnownedRoot\n")
+
+        with Session(engine) as sess:
+            sess.add(
+                CandidateDocument(
+                    user_id=uid_a,
+                    doc_type="generated_pdf",
+                    filename=legacy_pdf,
+                    original_filename=legacy_pdf,
+                    storage_path=str(root_pdf),
+                    size_bytes=len(root_pdf.read_bytes()),
+                )
+            )
+            sess.add(
+                CandidateDocument(
+                    user_id=uid_a,
+                    doc_type="generated_pdf",
+                    filename=colliding_pdf,
+                    original_filename=colliding_pdf,
+                    storage_path=str(root_col),
+                    size_bytes=10,
+                )
+            )
+            sess.add(
+                CandidateDocument(
+                    user_id=uid_b,
+                    doc_type="generated_pdf",
+                    filename=colliding_pdf,
+                    original_filename=colliding_pdf,
+                    storage_path=str(root_col),
+                    size_bytes=10,
+                )
+            )
+            sess.commit()
+
+        stats = migrate_legacy_generated_resumes()
+        assert stats["moved_files"] >= 2
+        assert stats["updated_records"] >= 1
+        assert stats["skipped_ambiguous"] >= 1
+
+        # Unambiguous files moved cleanly out of root into user_<a>/ and DB path updated
+        assert not root_pdf.exists() and dest_pdf.is_file()
+        assert not root_html.exists() and dest_html.is_file()
+        with Session(engine) as sess:
+            migrated_doc = sess.exec(
+                select(CandidateDocument).where(
+                    CandidateDocument.user_id == uid_a,
+                    CandidateDocument.filename == legacy_pdf,
+                )
+            ).first()
+            assert migrated_doc is not None
+            assert Path(migrated_doc.storage_path).resolve() == dest_pdf.resolve()
+
+        # Owner can now download moved PDF & HTML; User B cannot
+        dl_a = client.get(f"/api/resumes/generated/{legacy_pdf}", headers=hdr_a)
+        assert dl_a.status_code == 200 and b"LegacyOwnedByA" in dl_a.content
+        assert client.get(f"/api/resumes/generated/{legacy_pdf}", headers=hdr_b).status_code in (403, 404)
+
+        # Colliding & unowned root files stay out of per-user directories and remain blocked
+        assert root_col.exists() and not (user_a_dir / colliding_pdf).exists() and not (user_b_dir / colliding_pdf).exists()
+        assert client.get(f"/api/resumes/generated/{colliding_pdf}", headers=hdr_a).status_code in (403, 404)
+        assert root_unowned.exists() and client.get(f"/api/resumes/generated/{unowned_pdf}", headers=hdr_a).status_code in (403, 404)
+
+        # Second migration run is a clean idempotent no-op for the migrated file
+        stats_2 = migrate_legacy_generated_resumes()
+        assert stats_2["moved_files"] == 0
+    finally:
+        for p in (root_pdf, root_html, root_col, root_unowned, dest_pdf, dest_html):
+            if p.exists():
+                p.unlink()

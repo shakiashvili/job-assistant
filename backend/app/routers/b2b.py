@@ -246,6 +246,7 @@ async def calculate_georgia_b2b_net(req: TaxCalculatorRequest) -> Dict[str, Any]
         "cap_usage_pct": round(min(999.0, (actual_cumulative_gel / 500_000.0) * 100.0), 1),
         "notes": [
             "Georgian Tax Code Article 90: Small Business 1% rate applies while actual cumulative calendar-year turnover stays at or below 500,000 GEL; the 3% rate starts in the month the threshold is exceeded.",
+            "Scope: models the standard 500,000 GEL Small Business threshold only (specialized exceptions such as the 700,000 GEL wine-/agro-tourism cap are excluded).",
             "Projected 12-month totals are estimates only and do not apply the 3% rate before the threshold is actually crossed.",
             "Foreign B2B digital service exports are outside Georgian VAT territorial scope (consult a Georgian CPA for tax filing advice).",
         ],

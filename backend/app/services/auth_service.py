@@ -32,6 +32,8 @@ MAX_OTP_REQUESTS = 5
 MAX_IP_AUTH_ATTEMPTS = int(os.getenv("MAX_IP_AUTH_ATTEMPTS", "25"))
 LOCKOUT_SECONDS = 300  # 5 minutes
 MAX_PASSWORD_BYTES = 72
+RATE_LIMIT_PRUNE_INTERVAL_SECONDS = int(os.getenv("RATE_LIMIT_PRUNE_INTERVAL_SECONDS", "300"))
+_LAST_RATE_LIMIT_PRUNE_TS = 0.0
 
 _REDIS_CHECK_SCRIPT = """
 local val = redis.call('GET', KEYS[1])
@@ -89,6 +91,38 @@ def _ensure_rate_limit_table() -> None:
         AuthRateLimit.__table__.create(engine, checkfirst=True)
     except Exception:
         pass
+
+
+def purge_expired_rate_limits(
+    session: Optional[Session] = None,
+    *,
+    now_ts: Optional[float] = None,
+) -> int:
+    """Deletes expired SQL auth_rate_limits rows so unique-email probes cannot bloat the table."""
+    cutoff = float(now_ts) if now_ts is not None else time.time()
+
+    def _delete_expired(db: Session) -> int:
+        res = db.exec(delete(AuthRateLimit).where(AuthRateLimit.expires_at <= cutoff))
+        return int(getattr(res, "rowcount", 0) or 0)
+
+    if session is not None:
+        return _delete_expired(session)
+
+    with Session(engine) as own_session:
+        deleted = _delete_expired(own_session)
+        own_session.commit()
+        return deleted
+
+
+def _maybe_prune_expired_rate_limits(session: Session, now: float) -> None:
+    global _LAST_RATE_LIMIT_PRUNE_TS
+    if (now - _LAST_RATE_LIMIT_PRUNE_TS) < RATE_LIMIT_PRUNE_INTERVAL_SECONDS:
+        return
+    _LAST_RATE_LIMIT_PRUNE_TS = now
+    try:
+        purge_expired_rate_limits(session, now_ts=now)
+    except Exception as exc:
+        logger.debug("Expired SQL rate-limit pruning skipped: %s", exc)
 
 
 def extract_client_ip(request: Optional[Request]) -> str:
@@ -229,6 +263,7 @@ def consume_rate_limit(
                         expires_at=now + window_seconds,
                     )
                     session.add(new_row)
+                    _maybe_prune_expired_rate_limits(session, now)
                     session.commit()
                     return 1
 
@@ -237,6 +272,7 @@ def consume_rate_limit(
                     row.window_started_at = now
                     row.expires_at = now + window_seconds
                     session.add(row)
+                    _maybe_prune_expired_rate_limits(session, now)
                     session.commit()
                     return 1
 
@@ -249,6 +285,7 @@ def consume_rate_limit(
 
                 row.attempts = int(row.attempts) + 1
                 session.add(row)
+                _maybe_prune_expired_rate_limits(session, now)
                 session.commit()
                 return int(row.attempts)
         except OperationalError:
@@ -285,6 +322,7 @@ def record_login_failure(identifier: str, window_seconds: int = LOCKOUT_SECONDS)
                             expires_at=now + window_seconds,
                         )
                     )
+                    _maybe_prune_expired_rate_limits(session, now)
                     session.commit()
                     return
                 if row.expires_at <= now:
@@ -294,6 +332,7 @@ def record_login_failure(identifier: str, window_seconds: int = LOCKOUT_SECONDS)
                 else:
                     row.attempts = int(row.attempts) + 1
                 session.add(row)
+                _maybe_prune_expired_rate_limits(session, now)
                 session.commit()
                 return
         except OperationalError:
