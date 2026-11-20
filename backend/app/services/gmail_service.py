@@ -19,6 +19,7 @@ from ..config import (
     GOOGLE_REDIRECT_URI,
     FRONTEND_URL,
     GENERATED_RESUMES_DIR,
+    get_email_delivery_config,
     get_smtp_config,
 )
 from ..db.document_repository import resolve_owned_generated_document, user_generated_resumes_dir
@@ -505,14 +506,113 @@ class GmailService:
             logger.error(err)
             return False, err
 
+    def _send_email_resend(
+        self,
+        *,
+        api_key: str,
+        from_email: str,
+        to_email: str,
+        subject: str,
+        body_text: str,
+        html_body: str,
+    ) -> Tuple[bool, str]:
+        try:
+            import httpx
+
+            resp = httpx.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "from": from_email,
+                    "to": [to_email],
+                    "subject": subject,
+                    "text": body_text,
+                    "html": html_body,
+                },
+                timeout=12.0,
+            )
+            if 200 <= resp.status_code < 300:
+                logger.info("HTTPS Resend OTP email delivered to %s", mask_email(to_email))
+                return True, f"Sent via Resend HTTPS API to {mask_email(to_email)}"
+            err = f"Resend API returned HTTP {resp.status_code}: {resp.text[:200]}"
+            logger.error(err)
+            return False, err
+        except Exception as exc:
+            err = f"Resend HTTPS delivery error: {exc}"
+            logger.error(err)
+            return False, err
+
+    def _send_email_sendgrid(
+        self,
+        *,
+        api_key: str,
+        from_email: str,
+        to_email: str,
+        subject: str,
+        body_text: str,
+        html_body: str,
+    ) -> Tuple[bool, str]:
+        try:
+            import httpx
+
+            resp = httpx.post(
+                "https://api.sendgrid.com/v3/mail/send",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "personalizations": [{"to": [{"email": to_email}]}],
+                    "from": {"email": from_email},
+                    "subject": subject,
+                    "content": [
+                        {"type": "text/plain", "value": body_text},
+                        {"type": "text/html", "value": html_body},
+                    ],
+                },
+                timeout=12.0,
+            )
+            if 200 <= resp.status_code < 300:
+                logger.info("HTTPS SendGrid OTP email delivered to %s", mask_email(to_email))
+                return True, f"Sent via SendGrid HTTPS API to {mask_email(to_email)}"
+            err = f"SendGrid API returned HTTP {resp.status_code}: {resp.text[:200]}"
+            logger.error(err)
+            return False, err
+        except Exception as exc:
+            err = f"SendGrid HTTPS delivery error: {exc}"
+            logger.error(err)
+            return False, err
+
     def send_otp_email(self, to_email: str, code: str) -> Dict[str, Any]:
-        """Dispatches a 6-digit passwordless OTP verification email to the user's inbox."""
-        cfg = get_smtp_config()
-        if not cfg["configured"]:
+        """
+        Dispatches a 6-digit passwordless OTP verification email.
+        Supports HTTPS API providers (Resend, SendGrid over port 443) for cloud hosting compatibility,
+        with fallback to Gmail/SMTP where outbound SMTP ports are permitted.
+        """
+        delivery_cfg = get_email_delivery_config()
+        if not delivery_cfg["otp_enabled"]:
             return {
                 "delivered": False,
                 "smtp_configured": False,
-                "error": "Gmail SMTP credentials (GMAIL_USER & GMAIL_APP_PASSWORD) are not configured in backend/.env.",
+                "provider": "disabled",
+                "otp_available": False,
+                "error": "Passwordless Email OTP sign-in is disabled on this server. Please use email and password sign-in.",
+            }
+        if not delivery_cfg["configured"] and get_smtp_config().get("configured"):
+            delivery_cfg = {**delivery_cfg, "configured": True, "provider": "smtp"}
+        if not delivery_cfg["configured"]:
+            return {
+                "delivered": False,
+                "smtp_configured": False,
+                "provider": "none",
+                "otp_available": False,
+                "error": (
+                    "No OTP email provider is configured (set RESEND_API_KEY or SENDGRID_API_KEY + EMAIL_FROM "
+                    "for HTTPS delivery, or local GMAIL_USER & GMAIL_APP_PASSWORD)."
+                ),
             }
 
         subject = "Your TalentFlow AI Sign-In Verification Code"
@@ -533,10 +633,32 @@ class GmailService:
             f"<p style='font-size:12px;color:#94a3b8;'>Valid for 10 minutes. Do not share this code with anyone.</p>"
             f"</div>"
         )
-        ok, detail = self.send_email_smtp(to_email=to_email, subject=subject, body_text=body_text, html_body=html_body)
+        provider = delivery_cfg["provider"]
+        if provider == "resend":
+            ok, detail = self._send_email_resend(
+                api_key=delivery_cfg["resend_api_key"],
+                from_email=delivery_cfg["from_email"],
+                to_email=to_email,
+                subject=subject,
+                body_text=body_text,
+                html_body=html_body,
+            )
+        elif provider == "sendgrid":
+            ok, detail = self._send_email_sendgrid(
+                api_key=delivery_cfg["sendgrid_api_key"],
+                from_email=delivery_cfg["from_email"],
+                to_email=to_email,
+                subject=subject,
+                body_text=body_text,
+                html_body=html_body,
+            )
+        else:
+            ok, detail = self.send_email_smtp(to_email=to_email, subject=subject, body_text=body_text, html_body=html_body)
         return {
             "delivered": ok,
             "smtp_configured": True,
+            "provider": provider,
+            "otp_available": True,
             "error": None if ok else detail,
         }
 

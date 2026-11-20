@@ -139,6 +139,9 @@ class CandidateDocument(SQLModel, table=True):
     filename: str = Field(index=True)
     original_filename: str = Field(default="")
     storage_path: str = Field(default="")
+    storage_backend: str = Field(default="local")  # s3, db_blob, local
+    object_key: Optional[str] = Field(default=None)
+    encrypted_content: Optional[str] = Field(default=None, sa_column=Column(Text, nullable=True))
     doc_type: str = Field(default="generated_pdf", index=True)  # uploaded_cv, generated_pdf, generated_docx, generated_html
     cv_style: str = Field(default="tailored")  # ats, recruiter, tailored, base
     cv_language: str = Field(default="en")
@@ -396,10 +399,17 @@ class ScrapeTask(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     task_id: str = Field(unique=True, index=True)
     user_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
-    status: str = Field(default="RUNNING", index=True)  # PENDING, RUNNING, COMPLETED, FAILED
+    status: str = Field(default="QUEUED", index=True)  # QUEUED, RUNNING, COMPLETED, FAILED
     portals: List[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    allow_network: bool = Field(default=True)
     progress_pct: int = Field(default=0)
     current_portal: Optional[str] = Field(default=None)
+    worker_id: Optional[str] = Field(default=None)
+    started_at: Optional[datetime] = Field(default=None)
+    heartbeat_at: Optional[datetime] = Field(default=None, index=True)
+    attempt_count: int = Field(default=0)
+    max_attempts: int = Field(default=2)
+    timeout_seconds: int = Field(default=180)
     result_summary: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
     error_message: Optional[str] = Field(default=None)
     created_at: datetime = Field(default_factory=utc_now, index=True)

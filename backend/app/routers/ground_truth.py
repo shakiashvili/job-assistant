@@ -27,6 +27,7 @@ from ..db.models import (
 )
 from ..services.auth_service import get_current_user
 from ..services.answer_service import load_live_candidate_profile
+from ..services.storage_service import storage_service
 from ..config import RESUMES_DIR, GENERATED_RESUMES_DIR
 from ..db.database import engine, delete_job_posting_cascade
 
@@ -398,19 +399,24 @@ def list_my_uploaded_cvs(current_user: User = Depends(get_current_user)):
 
     for doc in user_docs:
         p = Path(doc.storage_path).resolve() if doc.storage_path else (user_dir / doc.filename).resolve()
-        if not p.is_relative_to(base_resolved) or not p.is_file():
+        ext = Path(doc.filename).suffix.lower()
+        if ext not in (".pdf", ".docx", ".md", ".txt"):
             continue
-        if p.suffix.lower() not in (".pdf", ".docx", ".md", ".txt"):
+        is_local = p.is_relative_to(base_resolved) and p.is_file()
+        is_durable_remote = bool(doc.encrypted_content or (doc.storage_backend == "s3" and doc.object_key))
+        if not is_local and not is_durable_remote:
             continue
         if doc.filename in seen_names:
             continue
         seen_names.add(doc.filename)
+        size_b = p.stat().st_size if is_local else int(doc.size_bytes or 0)
         files.append({
             "filename": doc.filename,
             "original_filename": doc.original_filename or doc.filename,
             "url": f"/api/resumes/user/{doc.filename}",
-            "ext": p.suffix.lower().lstrip("."),
-            "size_kb": round(p.stat().st_size / 1024, 1),
+            "ext": ext.lstrip("."),
+            "size_kb": round(size_b / 1024, 1),
+            "storage_backend": doc.storage_backend or "local",
         })
 
     for f in sorted(user_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
@@ -519,6 +525,17 @@ def _resolve_user_uploaded_cv(filename: str, current_user: User) -> tuple[Path, 
             candidate_path = Path(user_doc.storage_path).resolve() if user_doc.storage_path else (user_dir / safe_name).resolve()
             if candidate_path.is_relative_to(base_resolved) and candidate_path.is_file():
                 return candidate_path, user_doc.id
+            hydrate_target = (user_dir / safe_name).resolve()
+            if hydrate_target.is_relative_to(user_dir.resolve()):
+                hydrated = storage_service.hydrate_local_file(
+                    hydrate_target,
+                    storage_backend=user_doc.storage_backend,
+                    object_key=user_doc.object_key,
+                    encrypted_content=user_doc.encrypted_content,
+                    expected_sha256=user_doc.sha256_hash,
+                )
+                if hydrated is not None and hydrated.is_file():
+                    return hydrated, user_doc.id
 
         local_candidate = (user_dir / safe_name).resolve()
         if local_candidate.is_relative_to(user_dir.resolve()) and local_candidate.is_file():
@@ -550,22 +567,30 @@ def delete_personal_cv(
     filename: str,
     current_user: User = Depends(get_current_user),
 ):
-    """Deletes an uploaded personal resume strictly scoped to current_user."""
+    """Deletes an uploaded personal resume strictly scoped to current_user (local cache, remote S3 object, and DB row)."""
     target, doc_id = _resolve_user_uploaded_cv(filename, current_user)
     safe_name = _sanitize_safe_filename(filename)
-    target.unlink()
+    if target.exists():
+        target.unlink()
     with Session(engine) as session:
-        stmt = delete(CandidateDocument).where(
-            CandidateDocument.user_id == current_user.id,
-            CandidateDocument.doc_type == "uploaded_cv",
-            CandidateDocument.filename == safe_name,
-        )
         if doc_id is not None:
-            stmt = delete(CandidateDocument).where(
-                CandidateDocument.id == doc_id,
-                CandidateDocument.user_id == current_user.id,
-            )
-        session.exec(stmt)
+            docs_to_remove = session.exec(
+                select(CandidateDocument).where(
+                    CandidateDocument.id == doc_id,
+                    CandidateDocument.user_id == current_user.id,
+                )
+            ).all()
+        else:
+            docs_to_remove = session.exec(
+                select(CandidateDocument).where(
+                    CandidateDocument.user_id == current_user.id,
+                    CandidateDocument.doc_type == "uploaded_cv",
+                    CandidateDocument.filename == safe_name,
+                )
+            ).all()
+        for doc in docs_to_remove:
+            storage_service.delete_remote_document(doc.storage_backend, doc.object_key)
+            session.delete(doc)
         session.commit()
     return {"status": "deleted", "filename": safe_name}
 
@@ -735,9 +760,12 @@ def check_cv_version_ats_parseability(
         if not ver.pdf_filename:
             raise HTTPException(status_code=400, detail="No generated PDF exists for this CV version yet.")
         safe_pdf = _sanitize_safe_filename(ver.pdf_filename)
-        user_gen_dir = user_generated_resumes_dir(current_user.id)
-        pdf_path = (user_gen_dir / safe_pdf).resolve()
-        if not pdf_path.is_relative_to(user_gen_dir) or not pdf_path.is_file():
+        pdf_path, _err = resolve_owned_generated_document(
+            safe_pdf,
+            user_id=current_user.id,
+            is_guest=_is_guest(current_user),
+        )
+        if pdf_path is None or not pdf_path.is_file():
             raise HTTPException(status_code=404, detail="Generated PDF file not found on disk.")
         sec = ver.structured_content or {}
         cand = sec.get("candidate") or {}
@@ -929,6 +957,30 @@ def list_generated_resumes(current_user: User = Depends(get_current_user)):
                 "html_url": f"/api/resumes/generated/{html_sibling.name}" if html_sibling.exists() else None,
                 "size_kb": round(f.stat().st_size / 1024, 1),
             })
+
+    # Include durable DB/S3-backed generated PDFs even if ephemeral local disk cache was cleared
+    durable_doc_names = {
+        d.filename
+        for d in user_docs
+        if d.encrypted_content or (d.storage_backend == "s3" and d.object_key)
+    }
+    for d in user_docs:
+        if d.doc_type == "uploaded_cv" or not d.filename.lower().endswith(".pdf"):
+            continue
+        if d.filename in seen_names or d.filename not in durable_doc_names:
+            continue
+        seen_names.add(d.filename)
+        stem = Path(d.filename).stem
+        docx_name = f"{stem}.docx"
+        html_name = f"{stem}.html"
+        files.append({
+            "filename": d.filename,
+            "url": f"/api/resumes/generated/{d.filename}",
+            "docx_url": f"/api/resumes/generated/{docx_name}" if docx_name in durable_doc_names else None,
+            "html_url": f"/api/resumes/generated/{html_name}" if html_name in durable_doc_names else None,
+            "size_kb": round(int(d.size_bytes or 0) / 1024, 1),
+            "storage_backend": d.storage_backend or "db_blob",
+        })
 
     if is_guest and GENERATED_RESUMES_DIR.exists():
         with Session(engine) as session:

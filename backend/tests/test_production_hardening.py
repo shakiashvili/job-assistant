@@ -653,3 +653,284 @@ def test_legacy_shared_cv_migration_moves_owned_and_blocks_collisions():
         for p in (root_pdf, root_html, root_col, root_unowned, dest_pdf, dest_html):
             if p.exists():
                 p.unlink()
+
+
+def test_durable_cv_storage_survives_local_disk_wipe_and_s3_roundtrip(monkeypatch):
+    """
+    P1: Verifies uploaded and generated CVs survive ephemeral local disk wipes via encrypted DB blobs
+    and via S3/R2 object storage (including per-user key isolation and remote delete cleanup).
+    """
+    from app.db.document_repository import user_uploaded_resumes_dir
+    from app.services.storage_service import storage_service
+
+    uid_a, _, hdr_a = _register_and_upload_same_candidate("dur_a", "DurableAlpha")
+    uid_b, _, hdr_b = _register_and_upload_same_candidate("dur_b", "DurableBeta")
+
+    # Part A: Encrypted DB blob persistence (S3 unset) survives local disk wipe
+    monkeypatch.setenv("S3_BUCKET", "")
+    up_name = f"durable_upload_{uuid.uuid4().hex[:6]}.pdf"
+    up_bytes = b"%PDF-1.4\n%DurableUploadedBytesAlpha\n"
+    up_resp = client.post(
+        "/api/resumes/my-cvs/upload",
+        headers=hdr_a,
+        files={"file": (up_name, up_bytes, "application/pdf")},
+        data={"parse_into_profile": "false"},
+    )
+    assert up_resp.status_code == 200, up_resp.text
+
+    gen_resp = client.post(
+        "/api/resumes/generate-edition",
+        headers=hdr_a,
+        json={"edition": "ats", "cv_language": "en"},
+    )
+    assert gen_resp.status_code == 200, gen_resp.text
+    gen_body = gen_resp.json()
+    gen_pdf_name = gen_body["pdf_filename"]
+    gen_pdf_path = Path(gen_body["pdf_path"])
+    gen_pdf_bytes = gen_pdf_path.read_bytes()
+    cv_ver_id = gen_body["cv_version_id"]
+
+    # Simulate ephemeral container restart wiping both local upload and generated files
+    local_up_path = user_uploaded_resumes_dir(uid_a) / up_name
+    assert local_up_path.is_file() and gen_pdf_path.is_file()
+    local_up_path.unlink()
+    gen_pdf_path.unlink()
+    assert not local_up_path.exists() and not gen_pdf_path.exists()
+
+    # Listing still reports both durable documents after local disk wipe
+    my_cvs = client.get("/api/resumes/my-cvs", headers=hdr_a)
+    assert my_cvs.status_code == 200
+    assert any(item["filename"] == up_name for item in my_cvs.json())
+
+    gen_list = client.get("/api/resumes/generated", headers=hdr_a)
+    assert gen_list.status_code == 200
+    assert any(item["filename"] == gen_pdf_name for item in gen_list.json())
+
+    # Downloading transparently re-hydrates exact bytes for owner, while blocking User B
+    dl_up = client.get(f"/api/resumes/user/{up_name}", headers=hdr_a)
+    assert dl_up.status_code == 200 and dl_up.content == up_bytes
+    assert client.get(f"/api/resumes/user/{up_name}", headers=hdr_b).status_code in (403, 404)
+
+    dl_gen = client.get(f"/api/resumes/generated/{gen_pdf_name}", headers=hdr_a)
+    assert dl_gen.status_code == 200 and dl_gen.content == gen_pdf_bytes
+    assert client.get(f"/api/resumes/generated/{gen_pdf_name}", headers=hdr_b).status_code in (403, 404)
+
+    # ATS check also succeeds cleanly after wipe + rehydration
+    gen_pdf_path.unlink()
+    ats_after_wipe = client.get(f"/api/cv-versions/{cv_ver_id}/ats-check", headers=hdr_a)
+    assert ats_after_wipe.status_code == 200, ats_after_wipe.text
+
+    # Part B: S3/R2 object-storage roundtrip with per-user object key & remote deletion
+    fake_s3: dict[str, bytes] = {}
+    monkeypatch.setenv("S3_BUCKET", "talentflow-test-bucket")
+    monkeypatch.setenv("S3_ENDPOINT_URL", "https://r2.example.invalid")
+    monkeypatch.setenv("S3_ACCESS_KEY_ID", "test-ak")
+    monkeypatch.setenv("S3_SECRET_ACCESS_KEY", "test-sk")
+    monkeypatch.setattr(storage_service, "put_s3_object", lambda key, data, content_type="": fake_s3.__setitem__(key, data))
+    monkeypatch.setattr(storage_service, "get_s3_object", lambda key: fake_s3.get(key))
+    monkeypatch.setattr(storage_service, "delete_s3_object", lambda key: fake_s3.pop(key, None) is not None)
+
+    s3_name = f"s3_cv_{uuid.uuid4().hex[:6]}.pdf"
+    s3_bytes = b"%PDF-1.4\n%S3StoredResumePayload\n"
+    s3_up = client.post(
+        "/api/resumes/my-cvs/upload",
+        headers=hdr_a,
+        files={"file": (s3_name, s3_bytes, "application/pdf")},
+        data={"parse_into_profile": "false"},
+    )
+    assert s3_up.status_code == 200, s3_up.text
+    expected_key = f"talentflow/users/user_{uid_a}/uploads/{s3_name}"
+    assert expected_key in fake_s3 and fake_s3[expected_key] == s3_bytes
+
+    s3_local = user_uploaded_resumes_dir(uid_a) / s3_name
+    s3_local.unlink()
+    dl_s3 = client.get(f"/api/resumes/user/{s3_name}", headers=hdr_a)
+    assert dl_s3.status_code == 200 and dl_s3.content == s3_bytes
+
+    del_s3 = client.delete(f"/api/resumes/my-cvs/{s3_name}", headers=hdr_a)
+    assert del_s3.status_code == 200
+    assert expected_key not in fake_s3
+
+
+def test_durable_scrape_stale_recovery_and_timeout(monkeypatch):
+    """
+    P1: Verifies interrupted RUNNING scrape tasks left by process restarts do not permanently
+    block users: stale tasks re-queue up to max_attempts, then fail cleanly, and timeouts fail fast.
+    """
+    import asyncio
+    from datetime import timedelta
+    from app.db.models import ScrapeTask, utc_now
+    from app.services.scrape_worker import execute_scrape_task, recover_stale_scrape_tasks
+    from app.services.scrapers.scraper_orchestrator import scraper_orchestrator
+
+    uid, _, hdr = _register_and_upload_same_candidate("scrape_dur", "ScrapeCorp")
+    stale_tid_maxed = f"scrape-stale-max-{uuid.uuid4().hex[:8]}"
+    stale_tid_retry = f"scrape-stale-ret-{uuid.uuid4().hex[:8]}"
+    old_hb = utc_now() - timedelta(minutes=15)
+
+    with Session(engine) as sess:
+        sess.add(
+            ScrapeTask(
+                task_id=stale_tid_maxed,
+                user_id=uid,
+                status="RUNNING",
+                portals=["jobs.ge"],
+                allow_network=False,
+                worker_id="crashed-worker-old",
+                started_at=old_hb,
+                heartbeat_at=old_hb,
+                attempt_count=2,
+                max_attempts=2,
+                timeout_seconds=60,
+            )
+        )
+        sess.commit()
+
+    # Calling /api/jobs/scrape/async must recover the dead RUNNING task -> FAILED and launch a new task!
+    resp = client.post("/api/jobs/scrape/async", headers=hdr, json={"allow_network": False, "portals": ["jobs.ge"]})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["deduplicated"] is False
+    assert body["task_id"] != stale_tid_maxed
+    assert body["status"] == "COMPLETED"
+
+    old_status = client.get(f"/api/jobs/scrape/status/{stale_tid_maxed}", headers=hdr)
+    assert old_status.status_code == 200
+    assert old_status.json()["status"] == "FAILED"
+
+    # A stale RUNNING task with remaining retries transitions back to QUEUED for worker recovery
+    with Session(engine) as sess:
+        sess.add(
+            ScrapeTask(
+                task_id=stale_tid_retry,
+                user_id=uid,
+                status="RUNNING",
+                portals=["jobs.ge"],
+                allow_network=False,
+                worker_id="crashed-worker-retry",
+                started_at=old_hb,
+                heartbeat_at=old_hb,
+                attempt_count=1,
+                max_attempts=2,
+                timeout_seconds=60,
+            )
+        )
+        sess.commit()
+
+    rec = recover_stale_scrape_tasks()
+    assert rec["requeued"] >= 1
+    with Session(engine) as sess:
+        requeued_row = sess.exec(select(ScrapeTask).where(ScrapeTask.task_id == stale_tid_retry)).first()
+        assert requeued_row is not None and requeued_row.status == "QUEUED"
+
+    # Hard execution timeout marks a hung scrape task FAILED cleanly
+    timeout_tid = f"scrape-timeout-{uuid.uuid4().hex[:8]}"
+    with Session(engine) as sess:
+        sess.add(
+            ScrapeTask(
+                task_id=timeout_tid,
+                user_id=uid,
+                status="QUEUED",
+                portals=["jobs.ge"],
+                allow_network=False,
+                attempt_count=0,
+                max_attempts=1,
+                timeout_seconds=1,
+            )
+        )
+        sess.commit()
+
+    async def _slow_scrape(*args, **kwargs):
+        await asyncio.sleep(3)
+        return {"total_processed": 0}
+
+    monkeypatch.setattr(scraper_orchestrator, "run_scrapers", _slow_scrape)
+    asyncio.run(execute_scrape_task(timeout_tid))
+    with Session(engine) as sess:
+        timed_out = sess.exec(select(ScrapeTask).where(ScrapeTask.task_id == timeout_tid)).first()
+        assert timed_out is not None
+        assert timed_out.status == "FAILED"
+        assert "timeout" in (timed_out.error_message or "").lower()
+
+
+def test_https_otp_email_delivery_and_disabled_mode(monkeypatch):
+    """
+    P2: Verifies OTP email delivery supports HTTPS APIs (Resend over port 443, avoiding blocked
+    Render Free SMTP ports) and honestly disables OTP with HTTP 503 when OTP_EMAIL_ENABLED=false.
+    """
+    import httpx
+    from types import SimpleNamespace
+
+    captured: dict = {}
+
+    def _fake_post(url, headers=None, json=None, timeout=None):
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["json"] = json
+        return SimpleNamespace(status_code=200, text='{"id":"re_ok"}')
+
+    monkeypatch.setattr(httpx, "post", _fake_post)
+    monkeypatch.setenv("OTP_EMAIL_ENABLED", "true")
+    monkeypatch.setenv("RESEND_API_KEY", "re_live_test_token")
+    monkeypatch.setenv("EMAIL_FROM", "TalentFlow AI <noreply@talentflow.example>")
+
+    st = client.get("/api/auth/smtp-status")
+    assert st.status_code == 200
+    st_json = st.json()
+    assert st_json["otp_available"] is True
+    assert st_json["provider"] == "resend"
+
+    otp_email = f"otp_https_{uuid.uuid4().hex[:8]}@example.com"
+    send_resp = client.post("/api/auth/send-otp", json={"email": otp_email})
+    assert send_resp.status_code == 200, send_resp.text
+    assert send_resp.json()["delivered"] is True
+    assert send_resp.json()["provider"] == "resend"
+    assert captured["url"] == "https://api.resend.com/emails"
+    assert captured["json"]["to"] == [otp_email]
+
+    # When OTP is disabled explicitly, status reports disabled and send-otp returns 503
+    monkeypatch.setenv("OTP_EMAIL_ENABLED", "false")
+    st_dis = client.get("/api/auth/email-status")
+    assert st_dis.status_code == 200
+    assert st_dis.json()["otp_available"] is False
+    assert st_dis.json()["provider"] == "disabled"
+
+    send_dis = client.post("/api/auth/send-otp", json={"email": otp_email})
+    assert send_dis.status_code == 503
+
+
+def test_health_readiness_db_check_and_render_docs_accuracy(monkeypatch):
+    """
+    P2: Verifies /api/health and /api/health/ready execute a live DB connectivity check
+    (returning 503 on DB outage while /api/health/live stays 200) and deployment config/docs are accurate.
+    """
+    import app.main as main_mod
+
+    live = client.get("/api/health/live")
+    assert live.status_code == 200 and live.json()["status"] == "alive"
+
+    ready = client.get("/api/health/ready")
+    assert ready.status_code == 200
+    r_json = ready.json()
+    assert r_json["status"] == "healthy"
+    assert r_json["database_reachable"] is True
+    assert r_json["storage"]["durable"] is True
+
+    def _broken_connect():
+        raise RuntimeError("Simulated database outage")
+
+    monkeypatch.setattr(main_mod.engine, "connect", _broken_connect)
+    down_health = client.get("/api/health")
+    down_ready = client.get("/api/health/ready")
+    still_live = client.get("/api/health/live")
+    assert down_health.status_code == 503 and down_health.json()["status"] == "unhealthy"
+    assert down_ready.status_code == 503 and down_ready.json()["database_reachable"] is False
+    assert still_live.status_code == 200
+
+    # Verify render.yaml & DEPLOYMENT.md reflect non-ephemeral storage and accurate Render Postgres expiry
+    render_yaml = (PROJECT_ROOT / "render.yaml").read_text(encoding="utf-8")
+    deploy_md = (PROJECT_ROOT / "docs" / "DEPLOYMENT.md").read_text(encoding="utf-8")
+    assert "plan: starter" in render_yaml
+    assert "mountPath: /app/data" in render_yaml
+    assert "30 days" in deploy_md and "14-day" in deploy_md
+    assert "90 days" not in deploy_md

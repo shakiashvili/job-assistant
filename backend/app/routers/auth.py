@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import update
 from sqlmodel import Session, select
 
-from ..config import BASE_DIR, reload_env_files, get_smtp_config, IS_PRODUCTION
+from ..config import BASE_DIR, reload_env_files, get_email_delivery_config, get_smtp_config, IS_PRODUCTION
 from ..db.database import get_session, delete_job_posting_cascade
 from ..db.models import User, UserOTP, CandidateProfile, JobPosting, utc_now
 from ..services.crypto_service import blind_index, blind_index_candidates, mask_email
@@ -261,10 +261,16 @@ def login_user(
 
 
 @router.get("/smtp-status")
+@router.get("/email-status")
 def get_smtp_delivery_status():
-    """Returns whether local Gmail SMTP delivery is configured without exposing credentials."""
-    cfg = get_smtp_config()
-    return {"smtp_configured": cfg["configured"]}
+    """Returns OTP email delivery readiness & provider (Resend/SendGrid HTTPS or SMTP) without exposing secrets."""
+    cfg = get_email_delivery_config()
+    return {
+        "smtp_configured": cfg["configured"],
+        "otp_available": bool(cfg["otp_enabled"] and cfg["configured"]),
+        "provider": cfg["provider"],
+        "can_configure_local_smtp": cfg["can_configure_local_smtp"],
+    }
 
 
 def _write_env_updates(env_path: Path, updates: dict[str, str]) -> None:
@@ -357,6 +363,20 @@ def send_otp_code(
     Valid for 10 minutes. Strictly rate-limited per email and client IP before dispatch.
     """
     clean_email = sanitize_email(req.email)
+    email_cfg = get_email_delivery_config()
+    if not email_cfg["otp_enabled"]:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Passwordless Email OTP sign-in is disabled on this server. Please use Sign In or Create Account with password.",
+        )
+    if IS_PRODUCTION and not email_cfg["configured"]:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Email OTP delivery is not configured on this server (configure RESEND_API_KEY or SENDGRID_API_KEY "
+                "over HTTPS). Please use Sign In or Create Account with password."
+            ),
+        )
     email_digest = blind_index(clean_email)
     email_digests = blind_index_candidates(clean_email)
     client_host = extract_client_ip(request)
@@ -404,18 +424,20 @@ def send_otp_code(
         logger.error(f"Failed to send OTP email to {mask_email(clean_email)}: {delivery['error']}")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=delivery["error"] or "Failed to send OTP verification email via Gmail SMTP.",
+            detail=delivery["error"] or "Failed to send OTP verification email.",
         )
 
     if not delivery["smtp_configured"]:
-        logger.warning(f"OTP generated for {mask_email(clean_email)}, but Gmail SMTP is not configured in backend/.env.")
+        logger.warning(f"OTP generated for {mask_email(clean_email)}, but no email delivery provider is configured.")
         return {
             "status": "ok",
             "delivered": False,
             "smtp_configured": False,
+            "otp_available": False,
+            "provider": delivery.get("provider", "none"),
             "message": (
-                "Email could not be delivered to Gmail because GMAIL_USER and GMAIL_APP_PASSWORD "
-                "are not set in backend/.env. Configure them below (local only) or use Register / Sign In with Password."
+                "Email OTP delivery is not configured (set RESEND_API_KEY / SENDGRID_API_KEY for HTTPS delivery, "
+                "or local Gmail SMTP below). Use Register / Sign In with Password instead."
             ),
         }
 
@@ -423,7 +445,9 @@ def send_otp_code(
         "status": "ok",
         "delivered": True,
         "smtp_configured": True,
-        "message": f"Verification code sent to {mask_email(clean_email)}. Check your Gmail inbox (valid for 10 minutes).",
+        "otp_available": True,
+        "provider": delivery.get("provider", "smtp"),
+        "message": f"Verification code sent to {mask_email(clean_email)}. Check your inbox (valid for 10 minutes).",
     }
 
 

@@ -79,7 +79,15 @@ class DatabaseBackupService:
 
         table_counts: Dict[str, int] = {}
         with Session(engine) as session:
-            for tbl in ("users", "candidate_profiles", "job_postings", "application_tracker", "application_records"):
+            for tbl in (
+                "users",
+                "candidate_profiles",
+                "candidate_documents",
+                "cv_versions",
+                "job_postings",
+                "application_tracker",
+                "application_records",
+            ):
                 try:
                     cnt = session.exec(text(f"SELECT COUNT(*) FROM {tbl}")).one()
                     table_counts[tbl] = int(cnt[0] if isinstance(cnt, tuple) else cnt)
@@ -253,7 +261,15 @@ class DatabaseBackupService:
         init_db(force=True)
         restored_counts: Dict[str, int] = {}
         with Session(engine) as session:
-            for tbl in ("users", "candidate_profiles", "job_postings", "application_tracker", "application_records"):
+            for tbl in (
+                "users",
+                "candidate_profiles",
+                "candidate_documents",
+                "cv_versions",
+                "job_postings",
+                "application_tracker",
+                "application_records",
+            ):
                 try:
                     cnt = session.exec(text(f"SELECT COUNT(*) FROM {tbl}")).one()
                     restored_counts[tbl] = int(cnt[0] if isinstance(cnt, tuple) else cnt)
