@@ -72,11 +72,9 @@ class TrackerRepository:
         user_id: Optional[int],
         is_guest: bool = False,
     ) -> bool:
-        if user_id is None:
-            return row_user_id is None
-        if is_guest:
-            return row_user_id is None or row_user_id == user_id
-        return row_user_id == user_id
+        """Strictly requires matching non-null user_id ownership (never grants access to user_id=None rows)."""
+        del is_guest
+        return user_id is not None and row_user_id is not None and row_user_id == user_id
 
     def _record_to_item(
         self,
@@ -134,25 +132,17 @@ class TrackerRepository:
         is_guest: bool = False,
     ) -> List[ApplicationItem]:
         """Fetches all application records, JobPostings, and per-user ApplicationTracker metadata in ONE SQL JOIN."""
+        del is_guest
+        if user_id is None:
+            return []
         with Session(engine) as session:
             stmt = (
                 select(ApplicationRecord, JobPosting, ApplicationTracker)
                 .outerjoin(JobPosting, ApplicationRecord.job_posting_id == JobPosting.id)
                 .outerjoin(ApplicationTracker, ApplicationRecord.id == ApplicationTracker.id)
+                .where(ApplicationRecord.user_id == user_id)
+                .order_by(ApplicationRecord.applied_at.desc(), ApplicationRecord.updated_at.desc())
             )
-            if user_id is None:
-                stmt = stmt.where(ApplicationRecord.user_id.is_(None))
-            elif is_guest:
-                stmt = stmt.where(
-                    or_(
-                        ApplicationRecord.user_id == user_id,
-                        ApplicationRecord.user_id.is_(None),
-                    )
-                )
-            else:
-                stmt = stmt.where(ApplicationRecord.user_id == user_id)
-
-            stmt = stmt.order_by(ApplicationRecord.applied_at.desc(), ApplicationRecord.updated_at.desc())
             triples = session.exec(stmt).all()
             return [self._record_to_item(rec, job, app_t) for rec, job, app_t in triples]
 

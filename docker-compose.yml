@@ -1,0 +1,124 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: talentflow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-talentflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-talentflow_local_strong_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-talentflow}
+    ports:
+      # Bound to localhost only so PostgreSQL is never exposed directly to the public internet
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-talentflow} -d ${POSTGRES_DB:-talentflow}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: talentflow-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${PORT:-8000}:8000"
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-talentflow}:${POSTGRES_PASSWORD:-talentflow_local_strong_pw}@postgres:5432/${POSTGRES_DB:-talentflow}
+      # REQUIRED stable secrets (set these in your root .env so restarts never break logins or encrypted data!)
+      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env (python -c "import secrets; print(secrets.token_urlsafe(48))")}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Set ENCRYPTION_KEY in .env (python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")}
+      ENCRYPTION_KEY_PREVIOUS: ${ENCRYPTION_KEY_PREVIOUS:-}
+      BLIND_INDEX_KEY: ${BLIND_INDEX_KEY:?Set BLIND_INDEX_KEY in .env (python -c "import secrets; print(secrets.token_urlsafe(48))")}
+      BLIND_INDEX_KEY_PREVIOUS: ${BLIND_INDEX_KEY_PREVIOUS:-}
+      # Frontend origin(s) allowed to call this backend (e.g. your Vercel or Cloudflare Pages URL)
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      CORS_ALLOWED_EXTENSION_IDS: ${CORS_ALLOWED_EXTENSION_IDS:-}
+      TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-true}
+      # Optional Gemini AI API
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
+      GEMINI_FAST_MODEL: ${GEMINI_FAST_MODEL:-gemini-3.5-flash-lite}
+      GEMINI_PRICING_TIER: ${GEMINI_PRICING_TIER:-standard}
+      # Durable scraping & Playwright
+      ENABLE_PLAYWRIGHT: ${ENABLE_PLAYWRIGHT:-false}
+      SCRAPE_WORKER_MODE: ${SCRAPE_WORKER_MODE:-embedded}
+      # Transactional Email OTP (Resend/SendGrid HTTPS API or set OTP_EMAIL_ENABLED=false for password-only)
+      OTP_EMAIL_ENABLED: ${OTP_EMAIL_ENABLED:-false}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      SENDGRID_API_KEY: ${SENDGRID_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      # Optional S3 / Cloudflare R2 object storage (when unset, files persist both in ./data and encrypted DB blobs)
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      S3_REGION: ${S3_REGION:-auto}
+    volumes:
+      # Persists uploaded CVs, generated CVs, and backups directly on your Windows host under ./data
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4)\""]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  # Optional dedicated scrape worker: start with `docker compose --profile worker up -d`
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: talentflow-worker
+    profiles: ["worker"]
+    restart: unless-stopped
+    entrypoint: ["python", "-m", "app.services.scrape_worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-talentflow}:${POSTGRES_PASSWORD:-talentflow_local_strong_pw}@postgres:5432/${POSTGRES_DB:-talentflow}
+      SECRET_KEY: ${SECRET_KEY}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      ENCRYPTION_KEY_PREVIOUS: ${ENCRYPTION_KEY_PREVIOUS:-}
+      BLIND_INDEX_KEY: ${BLIND_INDEX_KEY}
+      BLIND_INDEX_KEY_PREVIOUS: ${BLIND_INDEX_KEY_PREVIOUS:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
+      GEMINI_FAST_MODEL: ${GEMINI_FAST_MODEL:-gemini-3.5-flash-lite}
+    volumes:
+      - ./data:/app/data
+
+  # Free-forever public HTTPS bridge from your Windows Docker backend to a Vercel / Cloudflare Pages frontend:
+  # 1) Quick test URL (no domain needed): docker compose --profile quick-tunnel up -d
+  # 2) Permanent custom domain tunnel: set CLOUDFLARE_TUNNEL_TOKEN in .env and run `docker compose --profile tunnel up -d`
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: talentflow-cloudflared
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:?Set CLOUDFLARE_TUNNEL_TOKEN in .env}
+
+  cloudflared-quick:
+    image: cloudflare/cloudflared:latest
+    container_name: talentflow-cloudflared-quick
+    profiles: ["quick-tunnel"]
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    command: tunnel --no-autoupdate --url http://backend:8000
+
+volumes:
+  postgres_data:

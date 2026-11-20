@@ -934,3 +934,53 @@ def test_health_readiness_db_check_and_render_docs_accuracy(monkeypatch):
     assert "mountPath: /app/data" in render_yaml
     assert "30 days" in deploy_md and "14-day" in deploy_md
     assert "90 days" not in deploy_md
+
+    compose_yaml = (PROJECT_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "BLIND_INDEX_KEY" in compose_yaml
+    assert "ENCRYPTION_KEY" in compose_yaml
+    assert "./data:/app/data" in compose_yaml
+    assert "postgres:16-alpine" in compose_yaml
+
+
+def test_strict_fail_closed_ownership_blocks_null_user_id_tracker_and_scrape_rows():
+    """
+    Verifies residual user_id=None / guest@talentflow.local bypasses are completely removed:
+    neither guest nor registered users can read/modify orphaned user_id=None tracker records or scrape tasks.
+    """
+    from app.db.models import ApplicationRecord, ScrapeTask
+    from app.db.tracker_repository import tracker_store
+
+    init_db()
+    uid, _, hdr = _register_and_upload_same_candidate("strict_own", "StrictOwnerCo")
+
+    orphan_tid = f"scrape-orphan-{uuid.uuid4().hex[:8]}"
+    with Session(engine) as sess:
+        orphan_rec = ApplicationRecord(
+            user_id=None,
+            submission_status="SAVED",
+            notes="Orphaned legacy application",
+        )
+        sess.add(orphan_rec)
+        sess.add(
+            ScrapeTask(
+                task_id=orphan_tid,
+                user_id=None,
+                status="COMPLETED",
+                portals=["jobs.ge"],
+            )
+        )
+        sess.commit()
+        sess.refresh(orphan_rec)
+        orphan_app_id = f"app-{orphan_rec.id}"
+
+    # Orphaned ApplicationRecord (user_id=None) must be blocked even if caller passes is_guest=True
+    assert tracker_store._ownership_matches(None, uid, is_guest=True) is False
+    assert tracker_store._ownership_matches(None, None, is_guest=True) is False
+    assert all(it.id != orphan_app_id for it in tracker_store.get_all(user_id=uid, is_guest=True))
+    assert tracker_store.get_all(user_id=None, is_guest=True) == []
+
+    # Guest (no Authorization header) and authenticated user both get 403 on orphaned app & scrape task
+    assert client.get(f"/api/applications/{orphan_app_id}").status_code == 403
+    assert client.get(f"/api/applications/{orphan_app_id}", headers=hdr).status_code == 403
+    assert client.get(f"/api/jobs/scrape/status/{orphan_tid}").status_code == 403
+    assert client.get(f"/api/jobs/scrape/status/{orphan_tid}", headers=hdr).status_code == 403

@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional, List
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import defer
 from sqlmodel import Session, select, delete
 
 from ..db.document_repository import (  # noqa: F401 - re-exported for backward compatibility
@@ -390,6 +391,7 @@ def list_my_uploaded_cvs(current_user: User = Depends(get_current_user)):
     with Session(engine) as session:
         user_docs = session.exec(
             select(CandidateDocument)
+            .options(defer(CandidateDocument.encrypted_content))
             .where(
                 CandidateDocument.user_id == current_user.id,
                 CandidateDocument.doc_type == "uploaded_cv",
@@ -403,7 +405,7 @@ def list_my_uploaded_cvs(current_user: User = Depends(get_current_user)):
         if ext not in (".pdf", ".docx", ".md", ".txt"):
             continue
         is_local = p.is_relative_to(base_resolved) and p.is_file()
-        is_durable_remote = bool(doc.encrypted_content or (doc.storage_backend == "s3" and doc.object_key))
+        is_durable_remote = bool(doc.storage_backend == "db_blob" or (doc.storage_backend == "s3" and doc.object_key))
         if not is_local and not is_durable_remote:
             continue
         if doc.filename in seen_names:
@@ -925,10 +927,14 @@ def list_generated_resumes(current_user: User = Depends(get_current_user)):
 
     with Session(engine) as session:
         user_docs = session.exec(
-            select(CandidateDocument).where(CandidateDocument.user_id == current_user.id)
+            select(CandidateDocument)
+            .options(defer(CandidateDocument.encrypted_content))
+            .where(CandidateDocument.user_id == current_user.id)
         ).all()
         user_vers = session.exec(
-            select(CVVersion).where(CVVersion.user_id == current_user.id)
+            select(CVVersion)
+            .options(defer(CVVersion.rendered_html), defer(CVVersion.structured_content))
+            .where(CVVersion.user_id == current_user.id)
         ).all()
 
     owned_pdf_names: set[str] = set()
@@ -962,7 +968,7 @@ def list_generated_resumes(current_user: User = Depends(get_current_user)):
     durable_doc_names = {
         d.filename
         for d in user_docs
-        if d.encrypted_content or (d.storage_backend == "s3" and d.object_key)
+        if d.storage_backend == "db_blob" or (d.storage_backend == "s3" and d.object_key)
     }
     for d in user_docs:
         if d.doc_type == "uploaded_cv" or not d.filename.lower().endswith(".pdf"):

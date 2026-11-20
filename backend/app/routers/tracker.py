@@ -70,10 +70,6 @@ class CreateInterviewReflectionRequest(BaseModel):
     follow_up_items: str = ""
 
 
-def _is_guest_user(user: User) -> bool:
-    return (user.email or "").strip().lower() == "guest@talentflow.local"
-
-
 def get_or_create_app_tracker(
     app_id_str: str,
     session: Session,
@@ -86,18 +82,11 @@ def get_or_create_app_tracker(
             detail="Invalid application identifier.",
         )
     app_id = int(clean_id)
-    is_guest = _is_guest_user(current_user) if current_user else True
     uid = current_user.id if current_user else None
 
     rec = session.get(ApplicationRecord, app_id)
     if rec:
-        if rec.user_id is not None:
-            if uid is None or (rec.user_id != uid):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Forbidden: application belongs to another user",
-                )
-        elif not is_guest:
+        if uid is None or rec.user_id is None or rec.user_id != uid:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Forbidden: application belongs to another user",
@@ -116,13 +105,7 @@ def get_or_create_app_tracker(
             ).first()
 
     if app_tracker and not rec:
-        if app_tracker.user_id is not None:
-            if uid is None or (app_tracker.user_id != uid):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Forbidden: application belongs to another user",
-                )
-        elif not is_guest:
+        if uid is None or app_tracker.user_id is None or app_tracker.user_id != uid:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Forbidden: application belongs to another user",
@@ -137,7 +120,7 @@ def get_or_create_app_tracker(
             owned_cv, _ = resolve_owned_generated_document(
                 Path(cv_path).name,
                 user_id=uid,
-                is_guest=is_guest,
+                is_guest=False,
             )
             if owned_cv is not None:
                 cv_path = str(owned_cv)
@@ -167,7 +150,7 @@ def list_applications(current_user: User = Depends(get_current_user)):
     """Lists all tracked applications scoped to the current user in a single JOIN query."""
     return tracker_store.get_all(
         user_id=current_user.id,
-        is_guest=_is_guest_user(current_user),
+        is_guest=False,
     )
 
 
@@ -176,7 +159,7 @@ def get_application_analytics(current_user: User = Depends(get_current_user)):
     """Returns pipeline conversion rates, counts by status/portal/role, and summary metrics."""
     return tracker_store.get_analytics(
         user_id=current_user.id,
-        is_guest=_is_guest_user(current_user),
+        is_guest=False,
     )
 
 
@@ -188,7 +171,7 @@ def export_applications(
     """Exports the current user's application history as JSON or CSV."""
     payload = tracker_store.export_applications(
         user_id=current_user.id,
-        is_guest=_is_guest_user(current_user),
+        is_guest=False,
         fmt=format,
     )
     if format.lower() == "csv":
@@ -214,7 +197,7 @@ def get_application(
         item = tracker_store.get_by_id(
             app_id,
             user_id=current_user.id,
-            is_guest=_is_guest_user(current_user),
+            is_guest=False,
         )
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
@@ -249,7 +232,7 @@ def update_application(
             app_id,
             item_update,
             user_id=current_user.id,
-            is_guest=_is_guest_user(current_user),
+            is_guest=False,
         )
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
@@ -269,7 +252,7 @@ def delete_application(
         deleted = tracker_store.delete(
             app_id,
             user_id=current_user.id,
-            is_guest=_is_guest_user(current_user),
+            is_guest=False,
         )
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
@@ -289,7 +272,7 @@ def list_application_events(
         item = tracker_store.get_by_id(
             app_id,
             user_id=current_user.id,
-            is_guest=_is_guest_user(current_user),
+            is_guest=False,
         )
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
@@ -337,7 +320,7 @@ def send_or_draft_application_email(
         owned_cv, _ = resolve_owned_generated_document(
             Path(pdf_path).name,
             user_id=current_user.id,
-            is_guest=_is_guest_user(current_user),
+            is_guest=False,
         )
         if owned_cv is not None:
             pdf_path = str(owned_cv)
@@ -367,7 +350,7 @@ def send_or_draft_application_email(
             app_id,
             ApplicationUpdate(status="Applied"),
             user_id=current_user.id,
-            is_guest=_is_guest_user(current_user),
+            is_guest=False,
         )
 
     return result
@@ -482,9 +465,8 @@ def list_interview_reflection_notes(
     stmt = select(InterviewNote).where(
         InterviewNote.application_id == app_tracker.id,
         InterviewNote.interview_round_id == round_id,
+        InterviewNote.user_id == current_user.id,
     )
-    if not _is_guest_user(current_user):
-        stmt = stmt.where(InterviewNote.user_id == current_user.id)
     return session.exec(stmt.order_by(InterviewNote.created_at.desc())).all()
 
 
@@ -515,7 +497,7 @@ def create_interview_calendar_event(
         item = tracker_store.get_by_id(
             app_id,
             user_id=current_user.id,
-            is_guest=_is_guest_user(current_user),
+            is_guest=False,
         )
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
@@ -527,7 +509,7 @@ def create_interview_calendar_event(
             app_id,
             ApplicationUpdate(interview_date=req.interview_date),
             user_id=current_user.id,
-            is_guest=_is_guest_user(current_user),
+            is_guest=False,
         )
 
     event_summary = req.summary or f"Interview: {item.role} at {item.company}"

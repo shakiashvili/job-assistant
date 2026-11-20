@@ -44,6 +44,11 @@ from ..db.document_repository import user_generated_resumes_dir
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["Database Profile, Scrapers & Market Intelligence"])
 
+_DJINNI_FIRE_RE = _re.compile(r"🔥+")
+_DJINNI_RESPONDS_RE = _re.compile(r"\bResponds Quickly\b.*$", flags=_re.I)
+_DJINNI_SALARY_TAIL_RE = _re.compile(r"\s+(?:up\s+to|to|from)\s+[\$€£]\s*\d[\d,]*.*$", flags=_re.I)
+_WHITESPACE_RE = _re.compile(r"\s+")
+
 
 class ScrapeRequest(BaseModel):
     portals: Optional[List[str]] = None
@@ -269,7 +274,7 @@ def get_scrape_task_status(
         t_row = session.exec(select(ScrapeTask).where(ScrapeTask.task_id == task_id)).first()
         if not t_row:
             raise HTTPException(status_code=404, detail=f"Scrape task {task_id} not found.")
-        if t_row.user_id is not None and t_row.user_id != current_user.id:
+        if t_row.user_id is None or t_row.user_id != current_user.id:
             raise HTTPException(status_code=403, detail="Forbidden: scrape task belongs to another user.")
         summary = t_row.result_summary or {}
         return {
@@ -453,14 +458,14 @@ async def list_scraped_jobs(
             )
             if dumped.get("portal") == "djinni.co" and dumped.get("title"):
                 raw_t = str(dumped["title"])
-                clean_t = _re.sub(r"🔥+", "", raw_t)
-                clean_t = _re.sub(r"\bResponds Quickly\b.*$", "", clean_t, flags=_re.I)
-                clean_t = _re.sub(r"\s+(?:up\s+to|to|from)\s+[\$€£]\s*\d[\d,]*.*$", "", clean_t, flags=_re.I)
+                clean_t = _DJINNI_FIRE_RE.sub("", raw_t)
+                clean_t = _DJINNI_RESPONDS_RE.sub("", clean_t)
+                clean_t = _DJINNI_SALARY_TAIL_RE.sub("", clean_t)
                 if dumped.get("company") and len(dumped["company"]) > 2:
                     ci = clean_t.find(f" {dumped['company']}")
                     if ci > 4:
                         clean_t = clean_t[:ci]
-                dumped["title"] = _re.sub(r"\s+", " ", clean_t).strip() or raw_t
+                dumped["title"] = _WHITESPACE_RE.sub(" ", clean_t).strip() or raw_t
                 if dumped.get("salary_min") is None:
                     sal_ex = salary_service.extract_explicit_salary(f"{raw_t}\n{dumped.get('description_raw', '')}")
                     if sal_ex:
@@ -504,21 +509,21 @@ async def list_scraped_jobs(
                 if (dumped := _serialize_job_row(entry)).get("georgia_eligible")
             ]
 
-            tier_counts = {
-                "ALL": len(all_geo_items),
-                "DIRECT": sum(1 for it in all_geo_items if it.get("match_tier") == "DIRECT"),
-                "ADJACENT": sum(1 for it in all_geo_items if it.get("match_tier") == "ADJACENT"),
-                "PUBLIC_INTERNSHIP": sum(
-                    1
-                    for it in all_geo_items
-                    if it.get("match_tier") == "PUBLIC_INTERNSHIP" or it.get("portal") == "hr.gov.ge"
-                ),
-            }
-            status_counts = {
-                "ALL": len(all_geo_items),
-                "STAGED": sum(1 for it in all_geo_items if it.get("status") == "STAGED"),
-                "AUDITED": sum(1 for it in all_geo_items if it.get("status") == "AUDITED"),
-            }
+            tier_counts = {"ALL": len(all_geo_items), "DIRECT": 0, "ADJACENT": 0, "PUBLIC_INTERNSHIP": 0}
+            status_counts = {"ALL": len(all_geo_items), "STAGED": 0, "AUDITED": 0}
+            for it in all_geo_items:
+                mt = it.get("match_tier")
+                if mt == "DIRECT":
+                    tier_counts["DIRECT"] += 1
+                elif mt == "ADJACENT":
+                    tier_counts["ADJACENT"] += 1
+                if mt == "PUBLIC_INTERNSHIP" or it.get("portal") == "hr.gov.ge":
+                    tier_counts["PUBLIC_INTERNSHIP"] += 1
+                st_val = it.get("status")
+                if st_val == "STAGED":
+                    status_counts["STAGED"] += 1
+                elif st_val == "AUDITED":
+                    status_counts["AUDITED"] += 1
 
             eligible_filtered = all_geo_items
             if status and status.upper() != "ALL":
