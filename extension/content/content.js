@@ -220,13 +220,14 @@
     );
   }
 
+  let nextFieldSeq = 0;
+
   function scanFormFields() {
     const root = getActiveFormRoot();
     if (!root) return [];
 
     const fields = [];
     const seenRadioNames = new Set();
-    let idx = 0;
 
     // 1. Fieldset / radio groups first
     const radios = root.querySelectorAll('input[type="radio"]');
@@ -237,7 +238,7 @@
       const groupRadios = Array.from(root.querySelectorAll(`input[type="radio"][name="${CSS.escape(rName)}"]`));
       if (!groupRadios.some(isVisible)) continue;
 
-      const fieldId = r.getAttribute("data-tf-field-id") || `tf-field-${idx++}`;
+      const fieldId = r.getAttribute("data-tf-field-id") || `tf-field-${nextFieldSeq++}`;
       groupRadios.forEach((gr) => gr.setAttribute("data-tf-field-id", fieldId));
 
       const fs = r.closest("fieldset, .fb-dash-form-element, [data-automation-id='formField']");
@@ -271,7 +272,7 @@
         : tag === "input"
         ? (el.getAttribute("type") || "text").toLowerCase()
         : tag;
-      const fieldId = el.getAttribute("data-tf-field-id") || `tf-field-${idx++}`;
+      const fieldId = el.getAttribute("data-tf-field-id") || `tf-field-${nextFieldSeq++}`;
       el.setAttribute("data-tf-field-id", fieldId);
 
       const options =
@@ -540,6 +541,7 @@
           }
           const applied = applyFieldAnswers(data.field_answers || []);
           if (metaEl) {
+            metaEl.dataset.locked = "true";
             metaEl.textContent = `${data.job_title} (${data.match_score}% ${data.match_tier}) · Filled ${applied.filledCount} fields`;
           }
           if (!useLastCvOnly && data.tailored_cv?.pdf_url) {
@@ -596,48 +598,6 @@
     return false;
   });
 
-  function debounce(fn, waitMs = 350) {
-    let timerId = null;
-    return (...args) => {
-      if (timerId) clearTimeout(timerId);
-      timerId = setTimeout(() => {
-        timerId = null;
-        fn(...args);
-      }, waitMs);
-    };
-  }
-
-  let __domObserver = null;
-
-  function initDebouncedDomObserver() {
-    if (__domObserver || !document.body) return;
-
-    const handleDomChange = debounce(() => {
-      const portal = detectPortal();
-      const fields = scanFormFields();
-      const metaEl = document.getElementById("tf-hud-meta");
-      if (metaEl && !metaEl.dataset.locked) {
-        metaEl.textContent = "";
-        metaEl.append("Portal: ");
-        const portalBold = document.createElement("b");
-        portalBold.textContent = portal.toUpperCase();
-        metaEl.append(portalBold, ` · ${fields.length} controls ready`);
-      }
-    }, 350);
-
-    __domObserver = new MutationObserver((mutations) => {
-      const relevant = mutations.some((m) => {
-        const targetEl = m.target instanceof Element ? m.target : m.target?.parentElement;
-        return !targetEl?.closest("#ai-job-assistant-hud, #tf-ai-toast");
-      });
-      if (relevant) {
-        handleDomChange();
-      }
-    });
-
-    __domObserver.observe(document.body, { childList: true, subtree: true });
-  }
-
   function initWebAuthBridge() {
     window.addEventListener("message", (event) => {
       if (event.source !== window || event.origin !== window.location.origin) return;
@@ -660,8 +620,11 @@
 
   function bootstrapContentScript() {
     initWebAuthBridge();
-    injectFloatingHud();
-    initDebouncedDomObserver();
+    const host = (window.location.hostname || "").toLowerCase();
+    // Skip floating HUD on local TalentFlow web app tabs; scan forms strictly on explicit user click
+    if (host !== "localhost" && host !== "127.0.0.1") {
+      injectFloatingHud();
+    }
   }
 
   if (document.readyState === "loading") {

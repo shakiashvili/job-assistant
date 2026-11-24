@@ -8,18 +8,6 @@ if (chrome.sidePanel && typeof chrome.sidePanel.setPanelBehavior === "function")
     .catch((error) => console.debug("sidePanel.setPanelBehavior note:", error));
 }
 
-if (chrome.action && chrome.action.onClicked) {
-  chrome.action.onClicked.addListener(async (tab) => {
-    if (tab && tab.id && chrome.sidePanel && typeof chrome.sidePanel.open === "function") {
-      try {
-        await chrome.sidePanel.open({ tabId: tab.id });
-      } catch (err) {
-        console.debug("sidePanel.open note:", err);
-      }
-    }
-  });
-}
-
 async function getConfig() {
   const [syncData, localData] = await Promise.all([
     chrome.storage.sync.get(["apiBaseUrl", "webAppUrl"]),
@@ -159,13 +147,27 @@ async function apiRequest(path, { method = "GET", body = null, requiresAuth = tr
   }
 }
 
-async function fetchPdfBase64(pdfUrl) {
+async function fetchCvFileBase64(fileUrl) {
   const cfg = await getConfig();
-  const fullUrl = pdfUrl.startsWith("http") ? pdfUrl : `${cfg.apiBaseUrl}${pdfUrl}`;
+  let activeToken = cfg.jwtToken;
+  if (!activeToken && cfg.refreshToken) {
+    activeToken = await tryRefreshSession(cfg);
+  }
+  const fullUrl = fileUrl.startsWith("http") ? fileUrl : `${cfg.apiBaseUrl}${fileUrl}`;
+  const doFetch = (token) =>
+    fetchWithTimeout(fullUrl, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
   try {
-    const resp = await fetchWithTimeout(fullUrl);
+    let resp = await doFetch(activeToken);
+    if (resp.status === 401 && cfg.refreshToken) {
+      const nextToken = await tryRefreshSession(cfg);
+      if (nextToken) {
+        resp = await doFetch(nextToken);
+      }
+    }
     if (!resp.ok) {
-      return { ok: false, error: `Failed to download tailored PDF (HTTP ${resp.status})` };
+      return { ok: false, error: `Failed to download tailored CV (HTTP ${resp.status})` };
     }
     const buffer = await resp.arrayBuffer();
     const bytes = new Uint8Array(buffer);
@@ -176,12 +178,15 @@ async function fetchPdfBase64(pdfUrl) {
     }
     const base64 = btoa(binary);
     const filename = fullUrl.split("/").pop().split("?")[0] || "Tailored_Resume.pdf";
-    return { ok: true, base64, filename, fullUrl, mimeType: "application/pdf" };
+    const mimeType = filename.toLowerCase().endsWith(".docx")
+      ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      : "application/pdf";
+    return { ok: true, base64, filename, fullUrl, mimeType };
   } catch (err) {
     if (err?.name === "AbortError") {
-      return { ok: false, error: `PDF download timed out after ${REQUEST_TIMEOUT_MS / 1000}s. Please try again.` };
+      return { ok: false, error: `CV download timed out after ${REQUEST_TIMEOUT_MS / 1000}s. Please try again.` };
     }
-    return { ok: false, error: `PDF fetch error: ${err.message}` };
+    return { ok: false, error: `CV fetch error: ${err.message}` };
   }
 }
 
@@ -363,26 +368,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
-  if (type === "ANSWER_QUESTIONS") {
-    apiRequest("/api/answers/solve-screening", {
-      method: "POST",
-      body: message.payload,
-      requiresAuth: false,
-    }).then(sendResponse);
-    return true;
-  }
-
-  if (type === "AUDIT_JOB") {
-    apiRequest("/api/audit-job", {
-      method: "POST",
-      body: message.payload,
-      requiresAuth: false,
-    }).then(sendResponse);
-    return true;
-  }
-
   if (type === "FETCH_CV_BLOB") {
-    fetchPdfBase64(message.pdfUrl).then(sendResponse);
+    fetchCvFileBase64(message.pdfUrl || message.fileUrl || "").then(sendResponse);
     return true;
   }
 
@@ -392,11 +379,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       body: message.payload,
       requiresAuth: true,
     }).then(sendResponse);
-    return true;
-  }
-
-  if (type === "GET_LAST_PREPARED") {
-    getConfig().then((cfg) => sendResponse({ ok: true, data: cfg.lastPreparedApp }));
     return true;
   }
 
@@ -437,11 +419,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           target: { tabId: webTab.id },
           func: () => ({
             token: localStorage.getItem("talentflow_token") || "",
+            refreshToken: localStorage.getItem("talentflow_refresh_token") || "",
             userRaw: localStorage.getItem("talentflow_user") || "",
           }),
         });
         const extracted = results?.[0]?.result;
-        if (!extracted || !extracted.token) {
+        if (!extracted || (!extracted.token && !extracted.refreshToken)) {
           sendResponse({
             ok: false,
             error: "No active login token found in the open Web Portal tab. Please sign in on the web portal first.",
@@ -454,6 +437,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         } catch (_e) {}
         await chrome.storage.local.set({
           jwtToken: extracted.token,
+          refreshToken: extracted.refreshToken || "",
           userEmail: parsedUser.email || "",
           userName: parsedUser.full_name || "",
         });

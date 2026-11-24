@@ -664,6 +664,42 @@ export interface B2BInvoiceResponse {
   invoice_text: string;
 }
 
+export interface JobSearchParams {
+  page?: number;
+  limit?: number;
+  portal?: string;
+  market?: string;
+  status?: string;
+  tier?: string;
+  min_score?: number;
+  include_filtered?: boolean;
+  search?: string;
+  country?: string;
+  city?: string;
+  remote_type?: string;
+  salary_min?: number;
+  language?: string;
+  technology?: string;
+  experience_level?: string;
+  employment_type?: string;
+  sort_by?: 'relevance' | 'newest' | 'salary_desc' | 'company_asc' | string;
+  only_new?: boolean;
+  only_saved?: boolean;
+  b2b_only?: boolean;
+  geo_eligible_only?: boolean;
+}
+
+export interface ScraperSourceHealthItem {
+  portal: string;
+  status: string;
+  last_attempt_at?: string | null;
+  last_success_at?: string | null;
+  jobs_found: number;
+  latency_ms: number;
+  consecutive_failures: number;
+  last_error?: string | null;
+}
+
 export interface SavedSearchItem {
   id: number;
   user_id: number;

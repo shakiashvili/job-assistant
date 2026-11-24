@@ -1,9 +1,7 @@
-import json
 import logging
 from typing import Dict, Any, List, Optional
 from urllib.parse import quote_plus
 from pydantic import BaseModel, Field
-from ...config import GEMINI_API_KEY, GEMINI_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -44,25 +42,25 @@ _DOMAIN_QUERY_TEMPLATES: Dict[str, Dict[str, Any]] = {
     },
     "software_engineering": {
         "primary_ge": ["Developer", "პროგრამისტი"],
-        "adjacent_ge": ["QA", "Support"],
+        "adjacent_ge": ["Backend", "Support"],
         "remote_int": ["Python", "Developer", "JavaScript"],
         "is_it_category": True,
         "djinni_kw": "Python",
         "dou_cat": "Python",
         "justjoin_cat": "python",
         "domain_kw": ["developer", "engineer", "programmer", "backend", "frontend", "full stack", "python", "typescript", "დეველოპერ", "პროგრამისტ"],
-        "adjacent_kw": ["qa", "automation", "devops", "technical support", "sql", "data", "ტესტ", "მხარდაჭერ"],
+        "adjacent_kw": ["devops", "technical support", "sql", "data", "automation", "მხარდაჭერ"],
     },
     "data_analytics": {
         "primary_ge": ["Analyst", "SQL"],
-        "adjacent_ge": ["QA", "Operations"],
+        "adjacent_ge": ["BI", "Operations"],
         "remote_int": ["Data Analyst", "BI"],
         "is_it_category": True,
         "djinni_kw": "Data+Analyst",
         "dou_cat": "Analyst",
         "justjoin_cat": "data",
         "domain_kw": ["analyst", "data", "power bi", "tableau", "sql", "reporting", "ანალიტიკოს"],
-        "adjacent_kw": ["qa", "finance", "operations", "excel", "python", "ფინანს"],
+        "adjacent_kw": ["finance", "operations", "excel", "python", "reporting", "ფინანს"],
     },
     "logistics_supply_chain": {
         "primary_ge": ["ლოჯისტიკა", "Logistics"],
@@ -154,14 +152,14 @@ _DOMAIN_QUERY_TEMPLATES: Dict[str, Dict[str, Any]] = {
     },
     "customer_service": {
         "primary_ge": ["Support", "მხარდაჭერა"],
-        "adjacent_ge": ["Customer", "QA"],
+        "adjacent_ge": ["Customer", "Operations"],
         "remote_int": ["Support"],
         "is_it_category": False,
         "djinni_kw": "Support",
         "dou_cat": "Support",
         "justjoin_cat": "support",
         "domain_kw": ["support", "customer service", "client care", "call center", "helpdesk", "მხარდაჭერა", "ოპერატორი", "ქოლ"],
-        "adjacent_kw": ["qa", "manual testing", "onboarding", "sales", "coordinator", "ადმინისტრატორი"],
+        "adjacent_kw": ["onboarding", "sales", "coordinator", "client success", "ადმინისტრატორი"],
     },
 }
 
@@ -251,19 +249,26 @@ def build_search_queries(
         for q in dict.fromkeys(primary_ge[:2] + adjacent_ge[:1])
     ]
 
-    # Enforce strict exp_years filter on Djinni via djinni_exp_url while keeping clean base djinni_url
+    # Adapt exp_years filter on Djinni to candidate's actual experience band
     djinni_url = None
     djinni_exp_url = None
     if djinni_kw:
         djinni_url = f"https://djinni.co/jobs/?primary_keyword={quote_plus(djinni_kw)}&employment=remote"
-        exp_param = "&exp_years=0-1" if cap_exp <= 1.5 else "&exp_years=1"
+        if cap_exp <= 1.5:
+            exp_param = "&exp_years=0-1"
+        elif cap_exp <= 2.5:
+            exp_param = "&exp_years=1"
+        elif cap_exp <= 5.5:
+            exp_param = "&exp_years=3"
+        else:
+            exp_param = ""
         djinni_exp_url = f"{djinni_url}{exp_param}"
 
     dou_url = f"https://jobs.dou.ua/vacancies/?category={quote_plus(dou_cat)}&remote" if dou_cat else None
     justjoin_url = f"https://justjoin.it/job-offers/all-locations/{justjoin_cat}?workplace=remote" if justjoin_cat else None
 
     hr_gov_queries = list(dict.fromkeys(
-        ["IT", "ანალიტიკ", "სისტემ"] if is_it else (primary_ge[:2] + adjacent_ge[:1])
+        (primary_ge[:2] + ["IT", "ანალიტიკ"]) if is_it else (primary_ge[:2] + adjacent_ge[:1])
     ))
     linkedin_urls = build_linkedin_search_urls(
         primary_role=primary_role,

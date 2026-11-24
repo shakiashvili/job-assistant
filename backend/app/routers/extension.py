@@ -442,7 +442,7 @@ def prepare_application(
     job_details = {
         "title": job_title,
         "company": company_name,
-        "industry": str(parsed_skills.get("target_industry") or "qa_tech"),
+        "industry": str(parsed_skills.get("target_industry") or "general_professional"),
         "portal": portal,
         "summary": desc_text[:1600],
         "description": desc_text[:2000],
@@ -504,7 +504,7 @@ def prepare_application(
             questions=q_dicts,
             candidate_data=gt,
             job_details=job_details,
-            variant=str(parsed_skills.get("target_industry") or "qa_automation"),
+            variant=str(parsed_skills.get("target_industry") or "general_professional"),
             cv_language=cv_lang,
             candidate_profile=parsed_skills,
         )

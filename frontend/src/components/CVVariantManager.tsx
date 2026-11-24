@@ -51,6 +51,8 @@ export const CVVariantManager: React.FC = () => {
     cv_version_id?: number | null;
     bullet_diffs?: BulletDiffItem[];
     ats_parse_report?: ATSParseReport;
+    matched_skills?: string[];
+    missing_skills?: string[];
   } | null>(null);
   const [letterTab, setLetterTab] = useState<'cover' | 'motivational'>('cover');
   const [cvVersions, setCvVersions] = useState<CVVersionItem[]>([]);
@@ -119,17 +121,28 @@ export const CVVariantManager: React.FC = () => {
   };
 
   useEffect(() => {
+    const controller = new AbortController();
     const timer = setTimeout(() => {
-      void fetchScrapedJobs({
-        page: 1,
-        limit: 25,
-        min_score: 0,
-        search: vacancySearch.trim() || undefined,
-      })
-        .then((res) => setJobsList(res.items || []))
+      void fetchScrapedJobs(
+        {
+          page: 1,
+          limit: 25,
+          min_score: 0,
+          search: vacancySearch.trim() || undefined,
+        },
+        controller.signal
+      )
+        .then((res) => {
+          if (!controller.signal.aborted) {
+            setJobsList(res.items || []);
+          }
+        })
         .catch(() => {});
     }, 280);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
   }, [vacancySearch]);
 
   const triggerCrossOriginDownload = async (relativeOrFullUrl: string, filename: string): Promise<boolean> => {
@@ -219,6 +232,8 @@ export const CVVariantManager: React.FC = () => {
         cv_version_id: res.cv_version_id,
         bullet_diffs: res.bullet_diffs || (res.cv_sections?.bullet_diffs as BulletDiffItem[] | undefined),
         ats_parse_report: res.ats_parse_report || (res.cv_sections?.ats_parse_report as ATSParseReport | undefined),
+        matched_skills: res.matched_skills || [],
+        missing_skills: res.missing_skills || [],
       });
 
       const versionsRes = await fetchCvVersions().catch(() => ({ items: [] as CVVersionItem[] }));
@@ -712,6 +727,51 @@ export const CVVariantManager: React.FC = () => {
                 : generatedOutput.cover_letter}
             </pre>
           </div>
+
+          {/* Honest Vacancy Alignment: Matched Verified Skills vs Missing Requirements (never fabricated) */}
+          {((generatedOutput.matched_skills && generatedOutput.matched_skills.length > 0) ||
+            (generatedOutput.missing_skills && generatedOutput.missing_skills.length > 0)) && (
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <div className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider mb-1.5">
+                  Verified Skills Emphasized ({generatedOutput.matched_skills?.length || 0})
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {(generatedOutput.matched_skills || []).length > 0 ? (
+                    (generatedOutput.matched_skills || []).slice(0, 12).map((s) => (
+                      <span
+                        key={s}
+                        className="px-2 py-0.5 rounded-md bg-emerald-950/70 border border-emerald-800/60 text-[11px] text-emerald-200"
+                      >
+                        {s}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-[11px] text-slate-500">General profile alignment used</span>
+                  )}
+                </div>
+              </div>
+              <div>
+                <div className="text-[11px] font-bold text-amber-400 uppercase tracking-wider mb-1.5">
+                  Missing Vacancy Requirements — Not Added ({generatedOutput.missing_skills?.length || 0})
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {(generatedOutput.missing_skills || []).length > 0 ? (
+                    (generatedOutput.missing_skills || []).slice(0, 12).map((s) => (
+                      <span
+                        key={s}
+                        className="px-2 py-0.5 rounded-md bg-amber-950/50 border border-amber-800/60 text-[11px] text-amber-200"
+                      >
+                        {s}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-[11px] text-emerald-400/90">No major requirement gaps detected</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* ATS PDF Parseability Report & Evidence-Linked Bullet Diffs */}
           {(generatedOutput.ats_parse_report || (generatedOutput.bullet_diffs && generatedOutput.bullet_diffs.length > 0)) && (

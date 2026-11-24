@@ -255,6 +255,28 @@ _TECH_HYBRID_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_US_GEORGIA_STATE_RE = re.compile(
+    r"(?:\b(?:atlanta|savannah|augusta|marietta|alpharetta|roswell|macon|united\s+states|u\.s\.a?)\b|georgia,\s*(?:us|usa|united\s+states)\b|,\s*ga\b|\bga,\s*(?:us|usa)\b)",
+    re.IGNORECASE,
+)
+
+
+def is_georgia_country_location(loc_lower: str) -> bool:
+    """Distinguishes the country of Georgia (Tbilisi/Batumi/საქართველო) from the US state of Georgia (Atlanta, GA)."""
+    text = (loc_lower or "").lower()
+    if any(
+        w in text
+        for w in (
+            "tbilisi", "batumi", "kutaisi", "rustavi",
+            "თბილისი", "ბათუმი", "ქუთაისი", "საქართველო",
+            "тбилиси", "батуми", "кутаиси", "рустави", "грузия",
+        )
+    ):
+        return True
+    if "georgia" in text and not _US_GEORGIA_STATE_RE.search(text):
+        return True
+    return False
+
 
 def evaluate_remote_and_language_gate(
     title: str,
@@ -336,13 +358,7 @@ def evaluate_remote_and_language_gate(
         portal in ("remotive.com", "himalayas.app", "remoteok.com") and not is_onsite and not is_hybrid
     )
 
-    is_georgia_location = any(
-        w in loc_lower for w in [
-            "georgia", "tbilisi", "batumi", "kutaisi", "rustavi",
-            "თბილისი", "ბათუმი", "ქუთაისი", "საქართველო",
-            "тбилиси", "батуми", "кутаиси", "рустави", "грузия"
-        ]
-    )
+    is_georgia_location = is_georgia_country_location(loc_lower)
     is_domestic_portal = portal in ("jobs.ge", "hr.ge", "hr.gov.ge") or (portal == "headhunter.ge" and is_georgia_location)
     is_foreign_portal_or_job = not is_domestic_portal and not (portal in ("jobs.ge", "hr.ge", "hr.gov.ge") or is_georgia_location)
 
@@ -356,10 +372,10 @@ def evaluate_remote_and_language_gate(
             "no visa sponsorship"
         ]
     )
-    is_us_location = any(
+    is_us_location = bool(_US_GEORGIA_STATE_RE.search(loc_lower)) or any(
         re.search(rf"\b{state}\b", loc_lower) for state in [
             "united states", "usa", "u.s.", "san francisco", "new york", "austin", "chicago",
-            "seattle", "los angeles", "california", "texas", "washington", "boston", "ny", "ca", "tx", "wa"
+            "seattle", "los angeles", "california", "texas", "washington", "boston", "ny", "ca", "tx", "wa", "ga"
         ]
     )
     is_worldwide_remote = any(
@@ -501,8 +517,9 @@ def classify_georgia_b2b_suitability(
         r"\bw-?2 only\b",
     ]
     explicit_ge_or_worldwide = bool(
-        re.search(
-            r"\b(georgia|tbilisi|worldwide|anywhere|global remote|work from anywhere|emea|europe|caucasus|utc\+?4|gmt\+?4)\b",
+        is_georgia_country_location(blob)
+        or re.search(
+            r"\b(worldwide|anywhere|global remote|work from anywhere|emea|europe|caucasus|utc\+?4|gmt\+?4)\b",
             blob,
         )
     )
@@ -533,6 +550,7 @@ class BasePortalScraper:
     market: str = "GLOBAL_REMOTE"
     rate_limit_delay_sec: float = 0.05
     max_retries: int = 2
+    _host_semaphores: Dict[str, asyncio.Semaphore] = {}
 
     DEFAULT_HEADERS = {
         "User-Agent": (
@@ -543,33 +561,124 @@ class BasePortalScraper:
         "Accept-Language": "en-US,en;q=0.9,ka;q=0.8",
     }
 
-    async def fetch_html(self, url: str, timeout: float = 4.0) -> Optional[str]:
-        """Fetches HTML from a URL with polite concurrency rate limiting and fast-fail on anti-bot/404 statuses."""
+    @classmethod
+    def _get_host_semaphore(cls, url: str) -> asyncio.Semaphore:
+        from urllib.parse import urlparse
+        host = (urlparse(url).netloc or "default").lower()
+        sem = cls._host_semaphores.get(host)
+        if sem is None:
+            sem = asyncio.Semaphore(4)
+            cls._host_semaphores[host] = sem
+        return sem
+
+    async def _request_with_backoff(
+        self,
+        url: str,
+        *,
+        timeout: float = 6.0,
+        headers: Optional[Dict[str, str]] = None,
+    ) -> Optional[httpx.Response]:
+        merged_headers = {**self.DEFAULT_HEADERS, **(headers or {})}
+        sem = self._get_host_semaphore(url)
         for attempt in range(1, self.max_retries + 1):
             try:
-                await asyncio.sleep(self.rate_limit_delay_sec)
-                async with httpx.AsyncClient(
-                    headers=self.DEFAULT_HEADERS,
-                    follow_redirects=True,
-                    timeout=timeout,
-                ) as client:
-                    response = await client.get(url)
-                    if response.status_code == 200 and response.text:
-                        return response.text
-                    if response.status_code in (401, 403, 404, 429, 503):
-                        logger.debug(
-                            f"[{self.portal_name}] HTTP {response.status_code} on {url} — skipping retry"
-                        )
-                        return None
-                    logger.warning(
-                        f"[{self.portal_name}] HTTP {response.status_code} on {url} (attempt {attempt})"
-                    )
+                async with sem:
+                    if self.rate_limit_delay_sec > 0:
+                        await asyncio.sleep(self.rate_limit_delay_sec)
+                    async with httpx.AsyncClient(
+                        headers=merged_headers,
+                        follow_redirects=True,
+                        timeout=timeout,
+                    ) as client:
+                        response = await client.get(url)
+                if response.status_code == 200:
+                    return response
+                if response.status_code in (401, 403, 404):
+                    logger.debug("[%s] HTTP %d on %s — skipping retry", self.portal_name, response.status_code, url)
+                    return None
+                if response.status_code in (429, 503) and attempt < self.max_retries:
+                    retry_after = response.headers.get("Retry-After", "")
+                    wait_s = min(3.0, float(retry_after)) if retry_after.isdigit() else min(2.5, 0.6 * attempt)
+                    await asyncio.sleep(wait_s)
+                    continue
+                logger.debug("[%s] HTTP %d on %s (attempt %d)", self.portal_name, response.status_code, url, attempt)
             except Exception as e:
-                logger.debug(f"[{self.portal_name}] Network fetch attempt {attempt} failed for {url}: {e}")
+                logger.debug("[%s] Network fetch attempt %d failed for %s: %s", self.portal_name, attempt, url, e)
         return None
+
+    async def fetch_html(self, url: str, timeout: float = 4.0) -> Optional[str]:
+        """Fetches HTML from a URL with per-host concurrency limiting and bounded 429/503 backoff."""
+        resp = await self._request_with_backoff(url, timeout=timeout)
+        return resp.text if (resp is not None and resp.text) else None
+
+    async def fetch_json(
+        self,
+        url: str,
+        timeout: float = 8.0,
+        headers: Optional[Dict[str, str]] = None,
+    ) -> Optional[Any]:
+        """Fetches JSON payload with shared backoff, rate limiting, and safe parsing."""
+        req_headers = {"Accept": "application/json", **(headers or {})}
+        resp = await self._request_with_backoff(url, timeout=timeout, headers=req_headers)
+        if resp is None:
+            return None
+        try:
+            return resp.json()
+        except Exception as exc:
+            logger.debug("[%s] Invalid JSON from %s: %s", self.portal_name, url, exc)
+            return None
 
     def make_soup(self, html: str) -> BeautifulSoup:
         return BeautifulSoup(html, "html.parser")
+
+    def _fallback_curated_listings(self) -> List[Dict[str, Any]]:
+        """No synthetic/hardcoded fallback vacancies; live scraped results only."""
+        return []
+
+    async def scrape_and_enrich_urls(
+        self,
+        urls: List[str],
+        parse_fn,
+        enrich_fn,
+        *,
+        limit: int = 20,
+        dedupe_key: str = "external_id",
+        dedupe_title_company: bool = False,
+        keep_filtered_stubs: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Shared fetch -> parse -> dedupe -> concurrent enrichment pipeline for HTML portal scrapers."""
+        pages = await asyncio.gather(*(self.fetch_html(u) for u in urls), return_exceptions=True)
+        candidates: List[Dict[str, Any]] = []
+        seen_keys: set[str] = set()
+        seen_tc: set[Tuple[str, str]] = set()
+        for html in pages:
+            if isinstance(html, str) and html:
+                for item in parse_fn(html):
+                    key = str(item.get(dedupe_key) or "")
+                    tc = (str(item.get("title") or "").lower().strip(), str(item.get("company") or "").lower().strip())
+                    if key and key in seen_keys:
+                        continue
+                    if dedupe_title_company and tc in seen_tc:
+                        continue
+                    if key:
+                        seen_keys.add(key)
+                    if dedupe_title_company:
+                        seen_tc.add(tc)
+                    candidates.append(item)
+        if not candidates:
+            return []
+        if keep_filtered_stubs:
+            to_enrich = [c for c in candidates if c.get("status") != "FILTERED_OUT"][:limit]
+            filtered_stubs = [c for c in candidates if c.get("status") == "FILTERED_OUT"]
+        else:
+            to_enrich = candidates[:limit]
+            filtered_stubs = []
+        results: List[Dict[str, Any]] = []
+        if to_enrich:
+            enriched = await asyncio.gather(*(enrich_fn(c) for c in to_enrich), return_exceptions=True)
+            results.extend(x for x in enriched if isinstance(x, dict))
+        results.extend(filtered_stubs)
+        return results
 
     async def scrape(self, allow_network: bool = True) -> List[Dict[str, Any]]:
         raise NotImplementedError

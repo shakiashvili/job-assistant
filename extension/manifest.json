@@ -15,7 +15,7 @@
     "http://127.0.0.1:8000/*",
     "http://localhost:5173/*",
     "http://127.0.0.1:5173/*",
-    "*://*.linkedin.com/*",
+    "*://*.linkedin.com/jobs/*",
     "*://*.myworkdayjobs.com/*",
     "*://boards.greenhouse.io/*",
     "*://job-boards.greenhouse.io/*",
@@ -57,6 +57,8 @@
   "content_scripts": [
     {
       "matches": [
+        "http://localhost:5173/*",
+        "http://127.0.0.1:5173/*",
         "*://*.linkedin.com/jobs/*",
         "*://*.myworkdayjobs.com/*",
         "*://boards.greenhouse.io/*",

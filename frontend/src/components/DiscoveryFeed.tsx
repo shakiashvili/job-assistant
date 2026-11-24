@@ -18,8 +18,10 @@ import {
   Bell,
   Bookmark,
   Trash2,
+  SlidersHorizontal,
+  AlertTriangle,
 } from 'lucide-react';
-import { DbJobPosting, SavedSearchItem, NotificationItem } from '../types';
+import { DbJobPosting, JobSearchParams, SavedSearchItem, NotificationItem } from '../types';
 import { BACKEND_ORIGIN } from '../services/api';
 
 export interface CandidateRoleHeaderInfo {
@@ -106,6 +108,12 @@ interface DiscoveryFeedProps {
   onDeleteSavedSearch?: (searchId: number) => void;
   notifications?: NotificationItem[];
   onMarkNotificationRead?: (notifId: number) => void;
+  advancedFilters?: Partial<JobSearchParams>;
+  onAdvancedFiltersChange?: (patch: Partial<JobSearchParams>) => void;
+  onResetFilters?: () => void;
+  isLoadingJobs?: boolean;
+  jobsError?: string | null;
+  onRetryJobs?: () => void;
 }
 
 function formatSalaryDisplay(job: DbJobPosting): string | null {
@@ -178,8 +186,25 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
   onDeleteSavedSearch,
   notifications = [],
   onMarkNotificationRead,
+  advancedFilters,
+  onAdvancedFiltersChange,
+  onResetFilters,
+  isLoadingJobs = false,
+  jobsError = null,
+  onRetryJobs,
 }) => {
   const [localTierTab, setLocalTierTab] = useState<'ALL' | 'DIRECT' | 'ADJACENT' | 'PUBLIC_INTERNSHIP'>('ALL');
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const activeAdvancedCount = [
+    advancedFilters?.country,
+    advancedFilters?.city,
+    advancedFilters?.technology,
+    advancedFilters?.language && advancedFilters.language !== 'ALL' ? advancedFilters.language : '',
+    advancedFilters?.experience_level && advancedFilters.experience_level !== 'ALL' ? advancedFilters.experience_level : '',
+    advancedFilters?.employment_type && advancedFilters.employment_type !== 'ALL' ? advancedFilters.employment_type : '',
+    advancedFilters?.salary_min && advancedFilters.salary_min > 0 ? String(advancedFilters.salary_min) : '',
+    advancedFilters?.only_new ? 'new' : '',
+  ].filter(Boolean).length;
   const tierTab = controlledTierTab ?? localTierTab;
   const handleTierClick = (t: 'ALL' | 'DIRECT' | 'ADJACENT' | 'PUBLIC_INTERNSHIP') => {
     if (onSelectTierTab) onSelectTierTab(t);
@@ -395,7 +420,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 value={searchQuery}
                 onChange={(e) => onSearchQueryChange(e.target.value)}
                 aria-label="Search vacancies by role, company, or skill"
-                placeholder="Search by role, company, or skill (e.g. QA, Python, API, TBC)..."
+                placeholder="Search by role, company, or skills (e.g. Analyst, Python, IFRS, Remote)..."
                 className="w-full pl-8 pr-8 py-1.5 rounded-xl bg-slate-950 border border-slate-700 focus:border-emerald-400 focus:outline-none text-xs text-white placeholder-slate-400"
               />
               {searchQuery && (
@@ -499,8 +524,131 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 <span>Save Alert Filter</span>
               </button>
             )}
+
+            {onAdvancedFiltersChange && (
+              <>
+                <select
+                  aria-label="Sort vacancies"
+                  value={advancedFilters?.sort_by || 'relevance'}
+                  onChange={(e) => onAdvancedFiltersChange({ sort_by: e.target.value })}
+                  className="text-[11px] px-2.5 py-1 rounded-lg bg-slate-950 text-slate-200 border border-slate-700 focus:border-emerald-400 focus:outline-none"
+                >
+                  <option value="relevance">Sort: Relevance</option>
+                  <option value="newest">Sort: Newest</option>
+                  <option value="salary_desc">Sort: Highest Salary</option>
+                  <option value="company_asc">Sort: Company A–Z</option>
+                </select>
+                <button
+                  type="button"
+                  aria-expanded={showAdvancedFilters}
+                  onClick={() => setShowAdvancedFilters((v) => !v)}
+                  className={`inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg font-semibold border transition-colors ${
+                    showAdvancedFilters || activeAdvancedCount > 0
+                      ? 'bg-indigo-950/60 border-indigo-500/70 text-indigo-200'
+                      : 'bg-slate-950 text-slate-300 hover:text-white border-slate-800'
+                  }`}
+                >
+                  <SlidersHorizontal className="w-3 h-3" aria-hidden="true" />
+                  <span>Filters{activeAdvancedCount > 0 ? ` (${activeAdvancedCount})` : ''}</span>
+                </button>
+              </>
+            )}
           </div>
         </div>
+
+        {onAdvancedFiltersChange && showAdvancedFilters && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 p-3 rounded-xl bg-slate-950/85 border border-slate-800 text-xs">
+            <input
+              type="text"
+              aria-label="Filter by country"
+              value={advancedFilters?.country || ''}
+              onChange={(e) => onAdvancedFiltersChange({ country: e.target.value })}
+              placeholder="Country (e.g. Georgia, Germany)"
+              className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 placeholder-slate-400 focus:outline-none focus:border-emerald-400"
+            />
+            <input
+              type="text"
+              aria-label="Filter by city"
+              value={advancedFilters?.city || ''}
+              onChange={(e) => onAdvancedFiltersChange({ city: e.target.value })}
+              placeholder="City (e.g. Tbilisi, Berlin)"
+              className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 placeholder-slate-400 focus:outline-none focus:border-emerald-400"
+            />
+            <input
+              type="text"
+              aria-label="Filter by skill or technology"
+              value={advancedFilters?.technology || ''}
+              onChange={(e) => onAdvancedFiltersChange({ technology: e.target.value })}
+              placeholder="Skills / Tools (e.g. SQL, Excel, Python)"
+              className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 placeholder-slate-400 focus:outline-none focus:border-emerald-400"
+            />
+            <input
+              type="number"
+              min={0}
+              step={200}
+              aria-label="Minimum monthly salary"
+              value={advancedFilters?.salary_min || ''}
+              onChange={(e) => onAdvancedFiltersChange({ salary_min: e.target.value ? Number(e.target.value) : undefined })}
+              placeholder="Min Salary (e.g. 2000)"
+              className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 placeholder-slate-400 focus:outline-none focus:border-emerald-400"
+            />
+            <select
+              aria-label="Filter by language"
+              value={advancedFilters?.language || 'ALL'}
+              onChange={(e) => onAdvancedFiltersChange({ language: e.target.value === 'ALL' ? undefined : e.target.value })}
+              className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 focus:outline-none focus:border-emerald-400"
+            >
+              <option value="ALL">Any Language</option>
+              <option value="English">English</option>
+              <option value="Georgian">Georgian / ქართული</option>
+              <option value="German">German</option>
+            </select>
+            <select
+              aria-label="Filter by experience level"
+              value={advancedFilters?.experience_level || 'ALL'}
+              onChange={(e) => onAdvancedFiltersChange({ experience_level: e.target.value === 'ALL' ? undefined : e.target.value })}
+              className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 focus:outline-none focus:border-emerald-400"
+            >
+              <option value="ALL">Any Experience Level</option>
+              <option value="intern">Intern / Trainee</option>
+              <option value="junior">Junior / Entry</option>
+              <option value="mid">Mid-Level</option>
+              <option value="senior">Senior / Lead</option>
+            </select>
+            <select
+              aria-label="Filter by employment type"
+              value={advancedFilters?.employment_type || 'ALL'}
+              onChange={(e) => onAdvancedFiltersChange({ employment_type: e.target.value === 'ALL' ? undefined : e.target.value })}
+              className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 focus:outline-none focus:border-emerald-400"
+            >
+              <option value="ALL">Any Employment Type</option>
+              <option value="full_time">Full-Time</option>
+              <option value="part_time">Part-Time</option>
+              <option value="contract">Contract / B2B</option>
+              <option value="internship">Internship</option>
+            </select>
+            <div className="flex items-center justify-between gap-2">
+              <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-200 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={Boolean(advancedFilters?.only_new)}
+                  onChange={(e) => onAdvancedFiltersChange({ only_new: e.target.checked })}
+                  className="rounded border-slate-600 bg-slate-900 text-emerald-500"
+                />
+                <span>Only Unapplied</span>
+              </label>
+              {onResetFilters && (
+                <button
+                  type="button"
+                  onClick={onResetFilters}
+                  className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-semibold"
+                >
+                  Clear All
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
         {(savedSearches.length > 0 || notifications.some((n) => !n.is_read)) && (
           <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 text-[11px]">
@@ -651,7 +799,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
       )}
 
       {/* Async Background Scan Status Bar */}
-      {scrapeTaskInfo && ['PENDING', 'PROCESSING', 'FAILED'].includes(scrapeTaskInfo.status) && (
+      {scrapeTaskInfo && ['PENDING', 'QUEUED', 'RUNNING', 'PROCESSING', 'FAILED'].includes(scrapeTaskInfo.status) && (
         <div
           className={`text-xs px-3.5 py-2.5 rounded-xl border space-y-1.5 ${
             scrapeTaskInfo.status === 'FAILED'
@@ -696,8 +844,41 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
         </div>
       )}
 
+      {/* API Error Banner (never masquerade errors as zero results) */}
+      {jobsError && (
+        <div
+          role="alert"
+          className="p-4 rounded-xl bg-rose-950/40 border border-rose-800/70 text-rose-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+        >
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-rose-400 flex-shrink-0 mt-0.5" aria-hidden="true" />
+            <div>
+              <strong className="block text-rose-100">Could not load vacancies</strong>
+              <span>{jobsError}</span>
+            </div>
+          </div>
+          {onRetryJobs && (
+            <button
+              type="button"
+              onClick={onRetryJobs}
+              className="px-3.5 py-1.5 rounded-lg bg-rose-800 hover:bg-rose-700 text-white font-semibold self-start sm:self-center"
+            >
+              Retry Search
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Search Loading Indicator */}
+      {isLoadingJobs && !jobsError && (
+        <div className="text-xs text-emerald-300 bg-slate-950/70 border border-slate-800 px-3.5 py-2.5 rounded-xl flex items-center gap-2" aria-live="polite">
+          <RefreshCw className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+          <span>Updating vacancy matches...</span>
+        </div>
+      )}
+
       {/* Empty State */}
-      {filteredDbJobs.length === 0 && (
+      {!isLoadingJobs && !jobsError && filteredDbJobs.length === 0 && (
         <div className="text-xs text-slate-400 text-center py-8 border border-dashed border-slate-700 bg-slate-950/60 rounded-xl space-y-3">
           {!profileUploaded ? (
             <>

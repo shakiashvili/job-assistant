@@ -1,7 +1,5 @@
-import hashlib
 import html as html_lib
 import logging
-import os
 import re
 import uuid
 from pathlib import Path
@@ -12,11 +10,8 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
 
-from ..config import FONTS_DIR
 from ..db.document_repository import record_candidate_document, resolve_user_id_by_email, user_generated_resumes_dir
 from ..db.profile_repository import ground_truth_store, filter_spoken_language_entries
 from ..services.gemini_service import GEORGIAN_SKILL_TRANSLATIONS
@@ -42,16 +37,73 @@ _KA_TO_LATIN = {
 }
 
 
-def normalize_contact_href(raw: str, is_email: bool = False) -> str:
-    """Normalizes LinkedIn, GitHub, Portfolio, or Email into an actionable href/mailto URL."""
-    val = (raw or "").strip()
-    if not val:
-        return ""
-    if is_email or ("@" in val and not val.startswith("http")):
-        return val if val.startswith("mailto:") else f"mailto:{val}"
-    if val.startswith(("http://", "https://")):
-        return val
-    return f"https://{val.lstrip('/')}"
+_TECH_ROLE_RE = re.compile(
+    r"(?:\b(?:qa|sdet|tester|software\s+engineer|developer|programmer|devops|cloud\s+engineer|"
+    r"backend|frontend|full[\s-]stack|data\s+engineer|data\s+analyst|sql|python|java|javascript|"
+    r"typescript|playwright|selenium|cypress|cybersecurity|information\s+technology|it\s+support)\b|"
+    r"პროგრამ|დეველოპერ|ტესტერ|ტექნიკურ)",
+    re.IGNORECASE,
+)
+
+
+def _is_technical_profile(headline: str, skills: List[str]) -> bool:
+    """Determines whether to label the skills section as Technical vs Core Competencies."""
+    blob = f"{headline} {' '.join(skills[:15])}"
+    return bool(_TECH_ROLE_RE.search(blob))
+
+
+def _prepare_cv_render_context(
+    candidate: Dict[str, Any],
+    candidate_headline: str,
+    display_skills: List[str],
+    cv_language: str,
+    cv_style: str,
+) -> Dict[str, Any]:
+    """Shared header, contact, and profession-aware section-label builder for DOCX, PDF, and HTML renderers."""
+    is_ka = cv_language == "ka"
+    full_name = _clean_foreign_script_text(candidate.get("full_name", "Candidate"), cv_language) or str(
+        candidate.get("full_name", "Candidate")
+    )
+    role_heading = (
+        _clean_foreign_script_text(candidate_headline or str(candidate.get("headline") or "Specialist"), cv_language)
+        or "Specialist"
+    )
+    email = str(candidate.get("email") or "").strip()
+    if email == "candidate@example.com":
+        email = ""
+    raw_phone = str(candidate.get("phone") or "").strip()
+    phone = "" if (not raw_phone or "+000" in raw_phone or re.fullmatch(r"[+\s0()-]+", raw_phone)) else raw_phone
+    loc = _clean_foreign_script_text(_format_candidate_location(candidate.get("location")), cv_language)
+    links = candidate.get("links", {}) if isinstance(candidate.get("links"), dict) else {}
+    linkedin = str(links.get("linkedin", "")).strip()
+    github = str(links.get("github", "")).strip()
+    portfolio = str(links.get("portfolio", "")).strip()
+
+    is_tech = _is_technical_profile(role_heading, display_skills)
+    if is_ka:
+        lbl_skills = "ტექნიკური კომპეტენციები და სტეკი" if is_tech else "ძირითადი კომპეტენციები და უნარები"
+    else:
+        lbl_skills = "TECHNICAL SKILLS & STACK" if is_tech else "CORE COMPETENCIES & SKILLS"
+
+    return {
+        "is_ka": is_ka,
+        "full_name": full_name,
+        "role_heading": role_heading,
+        "email": email,
+        "phone": phone,
+        "loc": loc,
+        "linkedin": linkedin,
+        "github": github,
+        "portfolio": portfolio,
+        "labels": {
+            "summary": "პროფესიული მიმოხილვა" if is_ka else ("EXECUTIVE PROFILE" if cv_style == "recruiter" else "PROFESSIONAL SUMMARY"),
+            "skills": lbl_skills,
+            "exp": "სამუშაო გამოცდილება" if is_ka else "PROFESSIONAL EXPERIENCE",
+            "proj": "რელევანტური პროექტები" if is_ka else "RELEVANT PROJECTS",
+            "edu": "განათლება და სპეციალიზებული ტრენინგები" if is_ka else "EDUCATION & SPECIALIZED TRAINING",
+            "lang": "ენები" if is_ka else "LANGUAGES",
+        },
+    }
 
 
 def group_skills_into_ats_buckets(skills: List[str], cv_language: str = "en") -> List[tuple[str, List[str]]]:
@@ -116,20 +168,6 @@ def _apply_docx_run_font(run, font_name: str = "Calibri") -> None:
         rPr.insert(0, rFonts)
     for attr in ("w:ascii", "w:hAnsi", "w:cs", "w:eastAsia"):
         rFonts.set(qn(attr), font_name)
-
-
-def _clean_foreign_script_text(raw: Any, cv_language: str = "en") -> str:
-    """Prevents foreign script contamination (e.g. Cyrillic 'Разработка') inside EN/KA CVs."""
-    s = str(raw or "")
-    if not s:
-        return ""
-    # Always strip accidental Cyrillic fragments from non-Russian CVs
-    s = re.sub(r"[\u0400-\u04FF]+", "", s)
-    if cv_language == "en":
-        s = re.sub(r"[\u10A0-\u10FF]+", "", s)
-    s = re.sub(r"\s{2,}", " ", s)
-    s = re.sub(r"\s+([,.;:!?])", r"\1", s)
-    return s.strip(" -–—•|")
 
 
 def _add_docx_hyperlink(paragraph, display_text: str, url: str, font_name: str = "Calibri") -> None:
@@ -244,20 +282,6 @@ STRICT CONSTRAINTS (ZERO TOLERANCE FOR FABRICATION):
 
 
 # Font registration and mixed-script PDF helpers live cleanly in cv_formatting_utils.py
-
-
-def safe_unicode_slug(text: str, default: str = "item", max_len: int = 24) -> str:
-    """
-    Produces a safe, cross-platform filename slug that preserves Unicode characters
-    (Georgian ქართული, Cyrillic, Umlauts) and falls back to a deterministic hash
-    if stripped of non-word symbols, avoiding empty filename bugs like CV___Role_EN.pdf.
-    """
-    if not text:
-        return default
-    slug = re.sub(r"[^\w\-]+", "_", text, flags=re.UNICODE).strip("_")
-    if not slug or len(slug.replace("_", "")) == 0:
-        slug = f"{default}_{hashlib.md5(text.encode('utf-8', errors='ignore')).hexdigest()[:6]}"
-    return slug[:max_len]
 
 
 def _format_candidate_location(loc_val: Any) -> str:
@@ -978,17 +1002,11 @@ class CVGeneratorService:
         accent = RGBColor(0x0F, 0x17, 0x2A) if cv_style == "ats" else RGBColor(0x03, 0x69, 0xA1)
         subtle = RGBColor(0x47, 0x55, 0x69)
 
-        full_name = _clean_foreign_script_text(candidate.get("full_name", "Candidate"), cv_language) or str(candidate.get("full_name", "Candidate"))
-        email = str(candidate.get("email") or "").strip()
-        if email == "candidate@example.com":
-            email = ""
-        raw_phone = str(candidate.get("phone") or "").strip()
-        phone = "" if (not raw_phone or "+000" in raw_phone or re.fullmatch(r"[+\s0()-]+", raw_phone)) else raw_phone
-        loc = _clean_foreign_script_text(_format_candidate_location(candidate.get("location")), cv_language)
-        links = candidate.get("links", {}) if isinstance(candidate.get("links"), dict) else {}
-        linkedin = str(links.get("linkedin", "")).strip()
-        github = str(links.get("github", "")).strip()
-        portfolio = str(links.get("portfolio", "")).strip()
+        ctx = _prepare_cv_render_context(candidate, candidate_headline, display_skills, cv_language, cv_style)
+        full_name, role_heading = ctx["full_name"], ctx["role_heading"]
+        email, phone, loc = ctx["email"], ctx["phone"], ctx["loc"]
+        linkedin, github, portfolio = ctx["linkedin"], ctx["github"], ctx["portfolio"]
+        lbl = ctx["labels"]
 
         p_name = doc.add_paragraph()
         p_name.paragraph_format.space_after = Pt(2)
@@ -998,7 +1016,6 @@ class CVGeneratorService:
         r_name.font.color.rgb = RGBColor(0x0F, 0x17, 0x2A)
         _apply_docx_run_font(r_name, font_family)
 
-        role_heading = _clean_foreign_script_text(candidate_headline or str(candidate.get("headline") or "Specialist"), cv_language) or "Specialist"
         p_role = doc.add_paragraph()
         p_role.paragraph_format.space_after = Pt(3)
         r_role = p_role.add_run(role_heading)
@@ -1047,12 +1064,9 @@ class CVGeneratorService:
             run.font.color.rgb = accent
             _apply_docx_run_font(run, font_family)
 
-        lbl_summary = "პროფესიული მიმოხილვა" if is_ka else ("EXECUTIVE PROFILE" if cv_style == "recruiter" else "PROFESSIONAL SUMMARY")
-        lbl_skills = "ტექნიკური კომპეტენციები და სტეკი" if is_ka else "TECHNICAL SKILLS & STACK"
-        lbl_exp = "სამუშაო გამოცდილება" if is_ka else "PROFESSIONAL EXPERIENCE"
-        lbl_proj = "რელევანტური პროექტები" if is_ka else "RELEVANT PROJECTS"
-        lbl_edu = "განათლება და სპეციალიზებული ტრენინგები" if is_ka else "EDUCATION & SPECIALIZED TRAINING"
-        lbl_lang = "ენები" if is_ka else "LANGUAGES"
+        lbl_summary, lbl_skills, lbl_exp, lbl_proj, lbl_edu, lbl_lang = (
+            lbl["summary"], lbl["skills"], lbl["exp"], lbl["proj"], lbl["edu"], lbl["lang"]
+        )
 
         add_section_heading(lbl_summary)
         p_sum = doc.add_paragraph(_clean_foreign_script_text(human_summary, cv_language))
@@ -1261,50 +1275,35 @@ class CVGeneratorService:
             spaceAfter=2.5,
         )
 
-        full_name = escape(str(candidate.get("full_name", "Candidate")))
-        raw_email = str(candidate.get("email", "candidate@example.com")).strip()
-        email = escape(raw_email) if raw_email and raw_email != "candidate@example.com" else ""
-        raw_phone = str(candidate.get("phone") or "").strip()
-        phone = "" if (not raw_phone or "+000" in raw_phone or re.fullmatch(r"[+\s0()-]+", raw_phone)) else escape(raw_phone)
-        loc = escape(_format_candidate_location(candidate.get("location")))
-        links = candidate.get("links", {}) if isinstance(candidate.get("links"), dict) else {}
-        raw_linkedin = str(links.get("linkedin", "")).strip()
-        raw_github = str(links.get("github", "")).strip()
-        raw_portfolio = str(links.get("portfolio", "")).strip()
+        ctx = _prepare_cv_render_context(candidate, candidate_headline, display_skills, cv_language, cv_style)
+        email = escape(ctx["email"]) if ctx["email"] else ""
+        phone = escape(ctx["phone"]) if ctx["phone"] else ""
+        loc = escape(ctx["loc"]) if ctx["loc"] else ""
 
         pdf_links = []
         if email:
             pdf_links.append(
-                f'<link href="{escape(normalize_contact_href(raw_email, is_email=True))}" color="#0369a1"><u>{email}</u></link>'
+                f'<link href="{escape(normalize_contact_href(ctx["email"], is_email=True))}" color="#0369a1"><u>{email}</u></link>'
             )
         if phone:
             pdf_links.append(phone)
         if loc:
             pdf_links.append(loc)
-        if raw_linkedin:
-            pdf_links.append(
-                f'<link href="{escape(normalize_contact_href(raw_linkedin))}" color="#0369a1"><u>{escape(raw_linkedin)}</u></link>'
-            )
-        if raw_github:
-            pdf_links.append(
-                f'<link href="{escape(normalize_contact_href(raw_github))}" color="#0369a1"><u>{escape(raw_github)}</u></link>'
-            )
-        if raw_portfolio:
-            pdf_links.append(
-                f'<link href="{escape(normalize_contact_href(raw_portfolio))}" color="#0369a1"><u>{escape(raw_portfolio)}</u></link>'
-            )
+        for raw_url in (ctx["linkedin"], ctx["github"], ctx["portfolio"]):
+            if raw_url:
+                pdf_links.append(
+                    f'<link href="{escape(normalize_contact_href(raw_url))}" color="#0369a1"><u>{escape(raw_url)}</u></link>'
+                )
 
-        lbl_summary = "პროფესიული მიმოხილვა" if is_ka else ("EXECUTIVE PROFILE" if cv_style == "recruiter" else "PROFESSIONAL SUMMARY")
-        lbl_skills = "ტექნიკური კომპეტენციები და სტეკი" if is_ka else "TECHNICAL SKILLS & STACK"
-        lbl_exp = "სამუშაო გამოცდილება" if is_ka else "PROFESSIONAL EXPERIENCE"
-        lbl_proj = "რელევანტური პროექტები" if is_ka else "RELEVANT PROJECTS"
-        lbl_edu = "განათლება და სპეციალიზებული ტრენინგები" if is_ka else "EDUCATION & SPECIALIZED TRAINING"
-        lbl_lang = "ენები" if is_ka else "LANGUAGES"
+        lbl = ctx["labels"]
+        lbl_summary, lbl_skills, lbl_exp, lbl_proj, lbl_edu, lbl_lang = (
+            lbl["summary"], lbl["skills"], lbl["exp"], lbl["proj"], lbl["edu"], lbl["lang"]
+        )
 
         story = []
 
         # 1. Header (ALWAYS showcase true candidate persona headline without ugly tags)
-        role_display = _clean_foreign_script_text(candidate_headline or str(candidate.get("headline") or "Specialist"), cv_language) or "Specialist"
+        role_display = ctx["role_heading"]
         story.append(Paragraph(f"<b>{_format_pdf_mixed_script(str(candidate.get('full_name', 'Candidate')), font_name, GEORGIAN_PDF_FONT_NAME)}</b>", header_style))
         story.append(Paragraph(_format_pdf_mixed_script(role_display, font_name, GEORGIAN_PDF_FONT_NAME), role_style))
         if pdf_links:
@@ -1401,46 +1400,28 @@ class CVGeneratorService:
     ) -> str:
         is_ka = cv_language == "ka"
         esc = lambda v: html_lib.escape(str(v or ""), quote=True)
-        full_name = str(candidate.get("full_name", "Candidate"))
-        raw_email = str(candidate.get("email") or "").strip()
-        email = "" if raw_email == "candidate@example.com" else raw_email
-        raw_phone = str(candidate.get("phone") or "").strip()
-        phone = "" if (not raw_phone or "+000" in raw_phone or re.fullmatch(r"[+\s0()-]+", raw_phone)) else raw_phone
-        loc = _format_candidate_location(candidate.get("location"))
-        links = candidate.get("links", {}) if isinstance(candidate.get("links"), dict) else {}
-        linkedin = str(links.get("linkedin", "")).strip()
-        github = str(links.get("github", "")).strip()
-        portfolio = str(links.get("portfolio", "")).strip()
-
+        ctx = _prepare_cv_render_context(candidate, candidate_headline, display_skills, cv_language, cv_style)
+        full_name = ctx["full_name"]
         html_contact_parts = []
-        if email:
+        if ctx["email"]:
             html_contact_parts.append(
-                f'<a href="{esc(normalize_contact_href(email, is_email=True))}" style="color:#0369a1;">{esc(email)}</a>'
+                f'<a href="{esc(normalize_contact_href(ctx["email"], is_email=True))}" style="color:#0369a1;">{esc(ctx["email"])}</a>'
             )
-        if phone:
-            html_contact_parts.append(esc(phone))
-        if loc:
-            html_contact_parts.append(esc(loc))
-        if linkedin:
-            html_contact_parts.append(
-                f'<a href="{esc(normalize_contact_href(linkedin))}" target="_blank" style="color:#0369a1;">{esc(linkedin)}</a>'
-            )
-        if github:
-            html_contact_parts.append(
-                f'<a href="{esc(normalize_contact_href(github))}" target="_blank" style="color:#0369a1;">{esc(github)}</a>'
-            )
-        if portfolio:
-            html_contact_parts.append(
-                f'<a href="{esc(normalize_contact_href(portfolio))}" target="_blank" style="color:#0369a1;">{esc(portfolio)}</a>'
-            )
+        if ctx["phone"]:
+            html_contact_parts.append(esc(ctx["phone"]))
+        if ctx["loc"]:
+            html_contact_parts.append(esc(ctx["loc"]))
+        for raw_url in (ctx["linkedin"], ctx["github"], ctx["portfolio"]):
+            if raw_url:
+                html_contact_parts.append(
+                    f'<a href="{esc(normalize_contact_href(raw_url))}" target="_blank" style="color:#0369a1;">{esc(raw_url)}</a>'
+                )
         html_contact_line = " &nbsp;•&nbsp; ".join(x for x in html_contact_parts if x)
 
-        lbl_summary = "პროფესიული მიმოხილვა" if is_ka else ("EXECUTIVE PROFILE" if cv_style == "recruiter" else "PROFESSIONAL SUMMARY")
-        lbl_skills = "ტექნიკური კომპეტენციები და სტეკი" if is_ka else "TECHNICAL SKILLS & STACK"
-        lbl_exp = "სამუშაო გამოცდილება" if is_ka else "PROFESSIONAL EXPERIENCE"
-        lbl_proj = "რელევანტური პროექტები" if is_ka else "RELEVANT PROJECTS"
-        lbl_edu = "განათლება და სპეციალიზებული ტრენინგები" if is_ka else "EDUCATION & SPECIALIZED TRAINING"
-        lbl_lang = "ენები" if is_ka else "LANGUAGES"
+        lbl = ctx["labels"]
+        lbl_summary, lbl_skills, lbl_exp, lbl_proj, lbl_edu, lbl_lang = (
+            lbl["summary"], lbl["skills"], lbl["exp"], lbl["proj"], lbl["edu"], lbl["lang"]
+        )
 
         grouped_html = group_skills_into_ats_buckets(display_skills[:60], cv_language=cv_language)
         if grouped_html:
@@ -1709,6 +1690,10 @@ class CVGeneratorService:
             effective_domain = "marketing_growth"
         elif any(w in target_role_lower for w in ["გაყიდვ", "sales", "account executive", "business development"]):
             effective_domain = "sales_bd"
+        elif any(w in target_role_lower for w in ["ადამიანური რესურს", "რეკრუტ", "human resources", "recruiter", "talent acquisition", "hr generalist", "hrbp", "people operations"]):
+            effective_domain = "hr_recruiting"
+        elif any(w in target_role_lower for w in ["იურისტ", "საჯარო", "lawyer", "legal counsel", "compliance", "public administration"]):
+            effective_domain = "public_admin_legal"
         elif any(w in target_role_lower for w in ["qa", "quality assurance", "tester", "ტესტ", "ავტომატიზ", "test engineer"]):
             effective_domain = "qa_tech"
         else:
@@ -1728,9 +1713,18 @@ class CVGeneratorService:
         # Clean sign-off: excludes email & excludes placeholder phones/dashes
         contact_footer = "\n".join(x for x in [cand_name, cand_phone, cand_linkedin] if x and x != "-")
 
-        # Domain-aware skills highlight: never inject test runners or automation tools into hospitality/admin cover letters
+        # Domain-aware skills highlight: never inject QA/test runners into non-tech cover letters
         is_non_tech_domain = effective_domain in (
-            "receptionist_hospitality", "healthcare_hospital", "customer_service", "logistics_supply_chain"
+            "receptionist_hospitality",
+            "healthcare_hospital",
+            "customer_service",
+            "logistics_supply_chain",
+            "finance_accounting",
+            "marketing_growth",
+            "sales_bd",
+            "hr_recruiting",
+            "public_admin_legal",
+            "general_professional",
         )
         if is_non_tech_domain:
             tech_noise = {"playwright", "selenium", "cypress", "appium", "pytest", "junit", "postman", "jmeter", "webdriver", "qa", "automation", "regression", "api testing", "test cases"}
@@ -1742,9 +1736,9 @@ class CVGeneratorService:
                 skills_highlight = ", ".join(clean_cand_skills[:5])
             else:
                 skills_highlight = (
-                    "სტუმართმოყვარეობა, ორგანიზებულობა, კომუნიკაცია"
+                    "ანალიტიკური აზროვნება, ორგანიზებულობა, პროფესიული კომუნიკაცია"
                     if cover_lang == "ka"
-                    else "multilingual communication, organization, customer care"
+                    else "cross-functional coordination, analytical execution, stakeholder communication"
                 )
         else:
             skills_highlight = ", ".join(matched[:6]) if matched else ", ".join(cand_skills[:6])
@@ -1775,6 +1769,8 @@ class CVGeneratorService:
             "finance_accounting": ("ფინანსების, ბუღალტრული აღრიცხვისა და ანალიტიკის მიმართულებით", "ფინანსური ოპერაციების აღრიცხვას, რეპორტინგის მომზადებასა და მონაცემების ზუსტ კონტროლს", "ფინანსური პროცესების სიზუსტესა და გამართულობაში"),
             "marketing_growth": ("მარკეტინგის, ციფრული კამპანიებისა და ბრენდის კომუნიკაციის მიმართულებით", "ციფრული კამპანიების დაგეგმვას, კონტენტის მართვასა და შედეგების ანალიტიკას", "მარკეტინგული მიზნებისა და ზრდის მიღწევაში"),
             "sales_bd": ("გაყიდვების, კლიენტების მოზიდვისა და ბიზნესის განვითარების მიმართულებით", "პარტნიორებთან ურთიერთობების მართვას, მოლაპარაკებების წარმოებასა და გაყიდვების გეგმების შესრულებას", "გაყიდვებისა და კლიენტთა ბაზის გაფართოებაში"),
+            "hr_recruiting": ("ადამიანური რესურსების მართვის, რეკრუტინგისა და თანამშრომელთა განვითარების მიმართულებით", "შერჩევის პროცესების გამართულ წარმართვას, ონბორდინგის კოორდინაციასა და HR პროცესების მართვას", "ძლიერი გუნდის ჩამოყალიბებასა და თანამშრომელთა გამოცდილების გაუმჯობესებაში"),
+            "public_admin_legal": ("სამართლებრივი მხარდაჭერის, შესაბამისობისა და საჯარო ადმინისტრირების მიმართულებით", "ხელშეკრულებების ანალიზს, რეგულაციებთან შესაბამისობის კონტროლსა და დოკუმენტაციის ზუსტ წარმოებას", "სამართლებრივ სიზუსტესა და ორგანიზაციულ სტაბილურობაში"),
             "qa_tech": ("QA ავტომატიზაციასა და API/Manual ტესტირებაში", "ავტომატიზებული რეგრესიული ტესტების შექმნას, REST API კონტრაქტების შემოწმებასა და ხარვეზების ადრეულ აღმოჩენას", "ტესტირებისა და პროდუქტის ხარისხის სტაბილურობაში"),
         }
         domain_focus_en = {
@@ -1790,6 +1786,8 @@ class CVGeneratorService:
             "finance_accounting": ("finance, accounting, and analytical reporting", "maintaining accurate financial reconciliations, reporting workflows, and compliance controls", "financial accuracy and operational clarity"),
             "marketing_growth": ("digital marketing and campaign growth", "planning acquisition campaigns, managing content workflows, and tracking conversion analytics", "brand reach and measurable growth"),
             "sales_bd": ("B2B sales and account management", "building client pipelines, managing onboarding, and hitting revenue targets through consultative outreach", "client acquisition and revenue execution"),
+            "hr_recruiting": ("human resources, talent acquisition, and people operations", "managing end-to-end hiring pipelines, employee onboarding, and structured HR policies", "hiring quality and team retention"),
+            "public_admin_legal": ("legal analysis, compliance, and public administration", "reviewing contracts, ensuring regulatory alignment, and maintaining structured legal documentation", "compliance accuracy and institutional governance"),
             "qa_tech": ("QA automation and manual/API test engineering", "automating regression coverage, validating REST API contracts, and catching critical defects before release", "release confidence and test stability"),
         }
 
@@ -1946,6 +1944,8 @@ class CVGeneratorService:
             "cv_sections": cv_res.get("cv_sections"),
             "bullet_diffs": cv_res.get("bullet_diffs") or [],
             "ats_parse_report": cv_res.get("ats_parse_report") or {},
+            "matched_skills": matched,
+            "missing_skills": missing,
             "docx_path": cv_res["docx_path"],
             "pdf_path": cv_res["pdf_path"],
         }

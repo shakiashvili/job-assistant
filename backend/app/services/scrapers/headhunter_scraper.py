@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import re
 from typing import Dict, Any, List, Optional
@@ -126,10 +125,6 @@ class HeadhunterScraper(BasePortalScraper):
 
         return results
 
-    def _fallback_curated_listings(self) -> List[Dict[str, Any]]:
-        """Purged: never inject dead static vacancies when offline."""
-        return []
-
     async def _enrich_and_verify_item(
         self,
         item: Dict[str, Any],
@@ -196,36 +191,16 @@ class HeadhunterScraper(BasePortalScraper):
     ) -> List[Dict[str, Any]]:
         if not allow_network:
             return []
-
-        base_urls = search_urls or [
-            search_url or self.SEARCH_URL,
-        ]
-        pages = await asyncio.gather(*(self.fetch_html(u) for u in base_urls), return_exceptions=True)
-
-        candidates: List[Dict[str, Any]] = []
-        seen_ids: set[str] = set()
-        seen_title_comp: set[tuple[str, str]] = set()
-        for html in pages:
-            if isinstance(html, str) and html:
-                for item in self.parse_html_listings(
-                    html,
-                    domain_keywords=domain_keywords,
-                    candidate_languages=candidate_languages,
-                ):
-                    tc_key = (item["title"].lower().strip(), item["company"].lower().strip())
-                    if item["external_id"] not in seen_ids and tc_key not in seen_title_comp:
-                        seen_ids.add(item["external_id"])
-                        seen_title_comp.add(tc_key)
-                        candidates.append(item)
-
-        if not candidates:
-            return []
-
-        enriched = await asyncio.gather(
-            *(self._enrich_and_verify_item(c, candidate_languages=candidate_languages) for c in candidates[:18]),
-            return_exceptions=True,
+        base_urls = search_urls or [search_url or self.SEARCH_URL]
+        return await self.scrape_and_enrich_urls(
+            base_urls,
+            lambda html: self.parse_html_listings(
+                html, domain_keywords=domain_keywords, candidate_languages=candidate_languages
+            ),
+            lambda c: self._enrich_and_verify_item(c, candidate_languages=candidate_languages),
+            limit=18,
+            dedupe_title_company=True,
         )
-        return [x for x in enriched if isinstance(x, dict)]
 
 
 headhunter_scraper = HeadhunterScraper()

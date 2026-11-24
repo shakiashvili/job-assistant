@@ -205,6 +205,7 @@ def healthcheck():
             },
         )
 
+    ai_health = gemini_service.get_provider_health()
     return {
         "status": "healthy",
         "database": db_type,
@@ -218,4 +219,5 @@ def healthcheck():
             "connected": gemini_service.is_available,
             "mode": f"live_{GEMINI_MODEL}" if gemini_service.is_available else "ground_truth_heuristic_engine",
         },
+        "ai": ai_health,
     }

@@ -55,51 +55,51 @@ _DOMAIN_PROFILE_CATALOG: List[Dict[str, Any]] = [
     {
         "target_industry": "logistics_supply_chain",
         "detected_industry": "Supply Chain & Logistics",
-        "primary_role": "Logistics & Supply Chain Coordinator",
+        "primary_role": "Logistics & Supply Chain Specialist",
         "adjacent_roles": ["Procurement Specialist", "Dispatch & Freight Operations", "Inventory & Warehouse Analyst", "Operations Coordinator"],
-        "signals": ["logistics", "supply chain", "procurement", "warehouse", "freight", "dispatch", "customs", "incoterms", "ლოჯისტიკ", "შესყიდვ", "მომარაგებ"],
+        "signals": ["logistics", "supply chain", "procurement", "warehouse", "freight", "dispatch", "customs", "incoterms", "inventory", "vendor management", "operations manager", "ლოჯისტიკ", "შესყიდვ", "მომარაგებ"],
     },
     {
         "target_industry": "finance_accounting",
         "detected_industry": "Finance & Accounting",
-        "primary_role": "Junior Financial Analyst & Accountant",
+        "primary_role": "Financial Analyst & Accountant",
         "adjacent_roles": ["Audit Associate", "Billing & Reconciliation Specialist", "Operations & Reporting Analyst", "Treasury Coordinator"],
-        "signals": ["accounting", "accountant", "financial analyst", "bookkeeping", "ifrs", "1c accounting", "oris", "ბუღალტ", "ფინანს", "აუდიტ"],
+        "signals": ["accounting", "accountant", "financial analyst", "bookkeeping", "ifrs", "gaap", "tax", "payroll", "1c accounting", "oris", "quickbooks", "financial reporting", "treasury", "controller", "rs.ge", "ბუღალტ", "ფინანს", "აუდიტ"],
     },
     {
         "target_industry": "data_analytics",
         "detected_industry": "Data & Business Analytics",
         "primary_role": "Data & BI Analyst",
-        "adjacent_roles": ["Data Quality Engineer", "Operations Reporting Specialist", "Junior SQL Developer", "QA & Data Validation Analyst"],
-        "signals": ["data analyst", "power bi", "tableau", "looker", "etl", "data quality", "bi developer", "ანალიტიკოს"],
+        "adjacent_roles": ["Data Quality Engineer", "Operations Reporting Specialist", "SQL Data Analyst", "Business Analyst"],
+        "signals": ["data analyst", "power bi", "tableau", "looker", "etl", "data quality", "bi developer", "business analyst", "ანალიტიკოს"],
     },
     {
         "target_industry": "marketing_growth",
         "detected_industry": "Marketing & Digital Growth",
         "primary_role": "Digital Marketing Specialist",
-        "adjacent_roles": ["SMM & Content Coordinator", "Performance Marketing Associate", "E-Commerce Coordinator", "Brand & PR Assistant"],
-        "signals": ["digital marketing", "seo", "smm", "meta ads", "google ads", "copywriter", "content manager", "მარკეტინგ"],
+        "adjacent_roles": ["SMM & Content Coordinator", "Performance Marketing Associate", "E-Commerce Coordinator", "Brand & PR Specialist"],
+        "signals": ["digital marketing", "marketing manager", "seo", "smm", "meta ads", "google ads", "copywriter", "content manager", "brand", "hubspot", "social media", "მარკეტინგ"],
     },
     {
         "target_industry": "sales_bd",
         "detected_industry": "Sales & Business Development",
         "primary_role": "B2B Sales & Account Specialist",
         "adjacent_roles": ["Client Onboarding Specialist", "Customer Success Associate", "CRM & Lead Operations Specialist", "Business Support Coordinator"],
-        "signals": ["sales manager", "business development", "b2b sales", "account executive", "lead generation", "გაყიდვ"],
+        "signals": ["sales manager", "business development", "b2b sales", "account executive", "account manager", "lead generation", "pipeline", "negotiation", "გაყიდვ"],
     },
     {
         "target_industry": "hr_recruiting",
         "detected_industry": "HR & Talent Acquisition",
         "primary_role": "HR & Talent Acquisition Specialist",
         "adjacent_roles": ["People Operations Coordinator", "Office & Admin Coordinator", "Onboarding Specialist", "Training Coordinator"],
-        "signals": ["recruiter", "human resources", "talent acquisition", "hr generalist", "hris", "ადამიანური რესურს", "რეკრუტ"],
+        "signals": ["recruiter", "human resources", "talent acquisition", "hr generalist", "hrbp", "people operations", "hris", "onboarding", "compensation", "ადამიანური რესურს", "რეკრუტ"],
     },
     {
         "target_industry": "public_admin_legal",
         "detected_industry": "Public Administration & Legal",
-        "primary_role": "Junior Legal & Public Policy Specialist",
-        "adjacent_roles": ["Compliance & Audit Coordinator", "Public Procurement Officer", "Administrative Department Specialist", "Contract Assistant"],
-        "signals": ["public administration", "lawyer", "legal counsel", "compliance", "procurement law", "იურისტ", "საჯარო მმართველ"],
+        "primary_role": "Legal & Public Policy Specialist",
+        "adjacent_roles": ["Compliance & Audit Coordinator", "Public Procurement Officer", "Administrative Department Specialist", "Contract Specialist"],
+        "signals": ["public administration", "lawyer", "legal counsel", "compliance", "procurement law", "contract law", "იურისტ", "საჯარო მმართველ"],
     },
     {
         "target_industry": "receptionist_hospitality",
@@ -171,30 +171,20 @@ class ProfileService:
         github_url = ""
         linkedin_url = ""
 
-        # 1. Name extraction
-        name_m = re.search(r"(?:\*\*Author:\*\*|\*\*Name:\*\*|Full Name|Author|Candidate|სახელი და გვარი|Name)\**\s*:\**\s*([^\n\r*]+)", text, re.I)
-        if name_m:
-            candidate_cand = name_m.group(1).strip()
-            if len(candidate_cand) > 2 and not any(w in candidate_cand.lower() for w in ["http", "api", "case study"]):
-                full_name = candidate_cand
-        else:
-            # Check # heading, but skip if it is a project / case study title
-            for line in text.splitlines():
-                s = line.strip()
-                if s.startswith("# "):
-                    candidate_cand = s[2:].strip()
-                    parts = re.split(r"\s+[—–-]\s+", candidate_cand, maxsplit=1)
-                    cand_first = parts[0].strip()
-                    # Skip obvious project / documentation headings rather than person names
-                    if not any(
-                        w in cand_first.lower()
-                        for w in [
-                            "case study", "project", "sticker", "portfolio",
-                            "guide", "docs", "documentation", "readme", "api reference",
-                        ]
-                    ):
-                        full_name = cand_first
-                    break
+        from ..db.profile_repository import profile_repository, filter_spoken_language_entries
+
+        md_parsed = profile_repository.parse_profile_from_md(text)
+        cand_name_raw = str(md_parsed.get("full_name") or "").strip()
+        if cand_name_raw and not any(
+            w in cand_name_raw.lower()
+            for w in ("http", "api", "case study", "project", "sticker", "portfolio", "guide", "docs", "documentation", "readme")
+        ):
+            full_name = cand_name_raw
+        email = str(md_parsed.get("email") or "")
+        phone = str(md_parsed.get("phone") or "")
+        location = str(md_parsed.get("location") or "")
+        github_url = str(md_parsed.get("github_url") or "")
+        linkedin_url = str(md_parsed.get("linkedin_url") or "")
 
         # 2. Universal Weighted-Evidence Domain, Primary Role & Adjacent Role Detection
         # Score by header/headline (+12), verified skills (+4), and body (+1) so mentioning
@@ -206,7 +196,7 @@ class ProfileService:
 
         header_lines = "\n".join(text.splitlines()[:12]).lower()
         skills_blob = " ".join(str(x).lower() for x in (taxonomy_dict.get("all_skills") or []))
-        has_qa_tax = bool(taxonomy_dict.get("qa_automation") or taxonomy_dict.get("manual_qa"))
+        qa_auto_hits = [s for s in (taxonomy_dict.get("qa_automation") or [])]
 
         best_score = 0
         best_dom: Optional[Dict[str, Any]] = None
@@ -227,8 +217,8 @@ class ProfileService:
                     score += 4
                 if hit_body:
                     score += 1
-            if dom["target_industry"] == "qa_tech" and has_qa_tax:
-                score += 6 * (len(taxonomy_dict.get("qa_automation") or []) + len(taxonomy_dict.get("manual_qa") or []))
+            if dom["target_industry"] == "qa_tech" and qa_auto_hits:
+                score += 2 * len(qa_auto_hits)
             if score > best_score:
                 best_score = score
                 best_dom = dom
@@ -266,52 +256,10 @@ class ProfileService:
         if headline_m:
             headline = headline_m.group(1).strip()
             primary_role = headline
-        else:
-            for line in text.splitlines():
-                s = line.strip()
-                if s.startswith("# "):
-                    parts = re.split(r"\s+[—–-]\s+", s[2:].strip(), maxsplit=1)
-                    if len(parts) == 2 and len(parts[1].strip()) > 2:
-                        primary_role = parts[1].strip()
-                        headline = primary_role
-                    break
+        elif md_parsed.get("headline"):
+            headline = str(md_parsed["headline"]).strip()
+            primary_role = headline
 
-        header_lines = "\n".join(text.splitlines()[:15])
-
-        email_m = re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", text)
-        if email_m:
-            email = email_m.group(0)
-
-        phone_m = re.search(r"(?:Phone|ტელეფონი|Tel)\**\s*:\**\s*([+\d \t()-]{7,22})", text, re.I)
-        if not phone_m:
-            phone_m = re.search(
-                r"(?<!\d)(\+\d{1,3}[\s.-]?(?:\(?\d{2,4}\)?[\s.-]?){2,4}\d{2,4})(?!\d)",
-                header_lines,
-            )
-        if phone_m:
-            phone = phone_m.group(1).strip(" -\t\r\n")
-
-        loc_m = re.search(r"(?:Location|მდებარეობა)\**\s*:\**\s*([^\n]+)", text, re.I)
-        if not loc_m:
-            loc_m = re.search(
-                r"(?:^|[•|])\s*([A-Z][A-Za-zÀ-ÿ .-]{1,28},\s*[A-Z][A-Za-zÀ-ÿ .-]{1,28})\s*(?:$|[•|])",
-                header_lines,
-                re.M,
-            )
-        if loc_m:
-            location = loc_m.group(1).strip()
-
-        gh_m = re.search(r"https?://(?:www\.)?github\.com/[^\s)]+", text, re.I)
-        if gh_m:
-            github_url = gh_m.group(0)
-
-        li_m = re.search(r"https?://(?:www\.)?linkedin\.com/in/[^\s)]+", text, re.I)
-        if li_m:
-            linkedin_url = li_m.group(0)
-
-        from ..db.profile_repository import profile_repository, filter_spoken_language_entries
-
-        md_parsed = profile_repository.parse_profile_from_md(text)
         education_entries: List[Dict[str, Any]] = list(md_parsed.get("education") or [])
         projects_entries: List[Dict[str, Any]] = list(md_parsed.get("projects") or [])
         courses_certs: List[str] = list(md_parsed.get("certifications") or [])
@@ -370,9 +318,13 @@ class ProfileService:
             max_allowed_years = 2.0
         elif exp_years <= 2.0:
             max_allowed_years = min(exp_years + 0.5, 2.0)
+        elif exp_years <= 5.0:
+            max_allowed_years = round(exp_years + 1.5, 1)
         else:
-            max_allowed_years = round(exp_years + 0.5, 1)
-        seniority_level = taxonomy_dict.get("seniority_level") or ("JUNIOR" if eff_years <= 2.0 else "MID")
+            max_allowed_years = round(exp_years + 3.0, 1)
+        seniority_level = taxonomy_dict.get("seniority_level") or (
+            "JUNIOR" if eff_years <= 2.5 else ("MID" if eff_years <= 5.0 else ("SENIOR" if eff_years <= 8.0 else "LEAD"))
+        )
         verified_skills = list(taxonomy_dict.get("all_skills") or [])
         eligible_internships = bool(
             exp_years is None
@@ -538,13 +490,7 @@ CRITICAL INSTRUCTIONS:
         Scopes records per user_id / owner_email when provided so separate accounts keep isolated uploaded profiles,
         and synchronizes normalized CandidateSkill, CandidateExperience, and CandidateEducation rows.
         """
-        from sqlmodel import delete
-        from ..db.models import (
-            User,
-            CandidateSkill,
-            CandidateExperience,
-            CandidateEducation,
-        )
+        from ..db.models import User
 
         init_db()
 
@@ -649,6 +595,9 @@ CRITICAL INSTRUCTIONS:
                 except Exception:
                     existing_vault = {}
 
+            from ..db.profile_repository import profile_repository
+
+            parsed_md = profile_repository.parse_profile_from_md(raw_markdown)
             cand = existing_vault.setdefault("candidate", {})
             cand["full_name"] = extracted.full_name
             parts = extracted.full_name.split()
@@ -665,8 +614,27 @@ CRITICAL INSTRUCTIONS:
                 cand["location"] = loc_dict
             cand.setdefault("links", {})["github"] = extracted.github_url
             cand.setdefault("links", {})["linkedin"] = extracted.linkedin_url
-            cand.setdefault("compensation", {}).setdefault("notice_period", "")
+            comp_v = dict(cand.get("compensation") or {})
+            comp_v["notice_period"] = parsed_md.get("notice_period") or comp_v.get("notice_period") or ""
+            cand["compensation"] = comp_v
+            if parsed_md.get("spoken_languages"):
+                cand["languages"] = list(parsed_md["spoken_languages"])
+                skills_payload["spoken_languages"] = [
+                    f"{l['language']} ({l['proficiency']})" if l.get("proficiency") else l["language"]
+                    for l in parsed_md["spoken_languages"]
+                ]
             existing_vault.setdefault("skills", {})["core"] = skills_payload.get("all_skills", [])
+            if parsed_md.get("work_history") or mark_uploaded:
+                existing_vault["work_history"] = list(parsed_md.get("work_history") or existing_vault.get("work_history") or [])
+            if parsed_md.get("projects"):
+                existing_vault["projects"] = list(parsed_md["projects"])
+                skills_payload["projects"] = list(parsed_md["projects"])
+            if parsed_md.get("certifications"):
+                existing_vault["certifications"] = list(parsed_md["certifications"])
+                skills_payload["courses_and_certifications"] = list(parsed_md["certifications"])
+            grouped_edu = list(parsed_md.get("education") or skills_payload.get("education") or existing_vault.get("education") or [])
+            existing_vault["education"] = grouped_edu
+            skills_payload["education"] = grouped_edu
 
             skills_payload["ground_truth_vault"] = existing_vault
 
@@ -701,95 +669,15 @@ CRITICAL INSTRUCTIONS:
             session.add(profile)
             session.flush()
 
-            # Sync relational CandidateSkill, CandidateExperience, CandidateEducation rows
-            if profile.id is not None:
-                session.exec(delete(CandidateSkill).where(CandidateSkill.profile_id == profile.id))
-                session.exec(delete(CandidateExperience).where(CandidateExperience.profile_id == profile.id))
-                session.exec(delete(CandidateEducation).where(CandidateEducation.profile_id == profile.id))
-
-                seen_skills = set()
-                category_buckets = [
-                    ("qa_automation", skills_payload.get("qa_automation", [])),
-                    ("manual_qa", skills_payload.get("manual_qa", [])),
-                    ("languages", skills_payload.get("languages", [])),
-                    ("api_and_performance", skills_payload.get("api_and_performance", [])),
-                    ("cicd_and_devops", skills_payload.get("cicd_and_devops", [])),
-                    ("tools", skills_payload.get("tools", [])),
-                    ("frameworks", skills_payload.get("frameworks", [])),
-                    ("general", skills_payload.get("all_skills", [])),
-                ]
-                for cat_name, items in category_buckets:
-                    for sk in (items or []):
-                        sk_clean = str(sk).strip()
-                        if not sk_clean or sk_clean.lower() in seen_skills:
-                            continue
-                        seen_skills.add(sk_clean.lower())
-                        session.add(
-                            CandidateSkill(
-                                profile_id=profile.id,
-                                user_id=profile.user_id,
-                                skill_name=sk_clean,
-                                category=cat_name,
-                                is_verified=True,
-                            )
-                        )
-
-                for edu_entry in (skills_payload.get("education", []) or []):
-                    if isinstance(edu_entry, dict):
-                        inst = str(edu_entry.get("institution") or edu_entry.get("school") or "").strip()
-                        deg = str(edu_entry.get("degree") or edu_entry.get("field") or inst).strip()
-                        grad_yr = str(edu_entry.get("dates") or edu_entry.get("years") or edu_entry.get("graduation_year") or "").strip()
-                        fos = str(edu_entry.get("field_of_study") or edu_entry.get("focus") or "").strip()
-                        mods = [str(m).strip() for m in (edu_entry.get("modules") or []) if str(m).strip()]
-                        if inst or deg:
-                            session.add(
-                                CandidateEducation(
-                                    profile_id=profile.id,
-                                    user_id=profile.user_id,
-                                    institution=(inst or deg)[:120],
-                                    degree=deg[:200],
-                                    field_of_study=fos[:250] or None,
-                                    graduation_year=grad_yr[:32],
-                                    coursework=mods,
-                                )
-                            )
-                    else:
-                        edu_str = str(edu_entry).strip()
-                        if edu_str:
-                            session.add(
-                                CandidateEducation(
-                                    profile_id=profile.id,
-                                    user_id=profile.user_id,
-                                    institution=edu_str[:120],
-                                    degree=edu_str[:200],
-                                )
-                            )
-
-                exp_list = existing_vault.get("work_history") or existing_vault.get("experience") or []
-                if isinstance(exp_list, list) and exp_list:
-                    for exp_item in exp_list:
-                        if isinstance(exp_item, dict):
-                            session.add(
-                                CandidateExperience(
-                                    profile_id=profile.id,
-                                    user_id=profile.user_id,
-                                    company=str(exp_item.get("company") or "Experience"),
-                                    role_title=str(exp_item.get("role") or exp_item.get("title") or extracted.primary_role),
-                                    location=str(exp_item.get("location") or ""),
-                                    start_date=str(exp_item.get("dates") or exp_item.get("start_date") or ""),
-                                    highlights=list(exp_item.get("highlights") or exp_item.get("bullets") or []),
-                                )
-                            )
-                elif skills_payload.get("achievements"):
-                    session.add(
-                        CandidateExperience(
-                            profile_id=profile.id,
-                            user_id=profile.user_id,
-                            company="Professional Experience",
-                            role_title=str(extracted.primary_role or extracted.headline or "Specialist"),
-                            highlights=list(skills_payload.get("achievements", [])[:10]),
-                        )
-                    )
+            # Single-transaction relational sync via shared repository helper
+            profile_repository.sync_relational_children(
+                session,
+                profile,
+                skills_payload=skills_payload,
+                work_history=list(existing_vault.get("work_history") or existing_vault.get("experience") or []),
+                education_entries=grouped_edu,
+                fallback_role=str(extracted.primary_role or extracted.headline or "Specialist"),
+            )
 
             session.commit()
             session.refresh(profile)

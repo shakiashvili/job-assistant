@@ -1,14 +1,25 @@
 import asyncio
 import logging
+import os
 import re
 from typing import Dict, Any, List, Optional
 from urllib.parse import quote_plus
-from .base_scraper import BasePortalScraper, evaluate_remote_and_language_gate, sanitize_company_name
+from ...config import ENABLE_LINKEDIN_PUBLIC_SCRAPE
+from .base_scraper import (
+    BasePortalScraper,
+    evaluate_remote_and_language_gate,
+    is_georgia_country_location,
+    sanitize_company_name,
+)
 
 logger = logging.getLogger(__name__)
 
 _SENIOR_TITLE_PATTERN = re.compile(
-    r"\b(?:senior|sr\.?|lead|principal|staff|architect|director|vp|head\s+of|chief|manager|iii|iv)\b",
+    r"\b(?:senior|sr\.?|lead|principal|staff|architect|director|vp|head\s+of|chief|engineering\s+manager|qa\s+manager|test\s+manager|iii|iv)\b",
+    re.IGNORECASE,
+)
+_EXP_REQUIREMENT_3PLUS_RE = re.compile(
+    r"(?:(?:minimum|at\s+least|min\.?)\s+)?\b(?:[3-9]|1[0-9])\+?\s*(?:years?|yrs?)(?:\s+of)?\s+(?:[\w/+-]+\s+){0,3}(?:experience|work\s+experience|exp\b)",
     re.IGNORECASE,
 )
 
@@ -19,17 +30,24 @@ def build_linkedin_search_urls(
     cap_exp: float = 2.0,
 ) -> List[str]:
     """
-    Constructs targeted LinkedIn public guest search URLs dynamically filtered by experience level:
-    f_E=1,2,3 (Internship, Entry level, Associate) and Remote / Georgia markets.
+    Constructs targeted LinkedIn public search URLs dynamically filtered by candidate seniority
+    and Remote / Georgia markets.
     """
     role = (primary_role or "Specialist").strip()
     clean_kw = re.sub(r"[/|]+", " ", role).strip()
     words = [w for w in clean_kw.split() if len(w) >= 2]
-    kw_primary = " ".join(words[:3]) if words else "Junior"
+    kw_primary = " ".join(words[:3]) if words else "Specialist"
     skills = [s for s in (verified_skills or []) if s and len(s) >= 2]
 
-    # f_E=1%2C2%2C3 => Internship (1), Entry level (2), Associate (3)
-    exp_filter = "1%2C2" if cap_exp <= 1.0 else "1%2C2%2C3"
+    # f_E: 1=Internship, 2=Entry, 3=Associate, 4=Mid-Senior, 5=Director
+    if cap_exp <= 1.0:
+        exp_filter = "1%2C2"
+    elif cap_exp <= 2.5:
+        exp_filter = "1%2C2%2C3"
+    elif cap_exp <= 5.5:
+        exp_filter = "3%2C4"
+    else:
+        exp_filter = "4%2C5"
     urls = [
         f"https://www.linkedin.com/jobs/search/?keywords={quote_plus(kw_primary)}&location=Georgia&f_E={exp_filter}",
         f"https://www.linkedin.com/jobs/search/?keywords={quote_plus(kw_primary)}&location=Worldwide&f_WT=2&f_E={exp_filter}",
@@ -130,7 +148,7 @@ class LinkedInScraper(BasePortalScraper):
 
             market_tag = (
                 "GE_DOMESTIC"
-                if "georgia" in location_text.lower() or "tbilisi" in location_text.lower()
+                if is_georgia_country_location(location_text.lower())
                 else ("GLOBAL_REMOTE" if is_remote else "INT_HYBRID")
             )
 
@@ -179,7 +197,7 @@ class LinkedInScraper(BasePortalScraper):
                 f"{job['title']} at {job['company']} | Location: {job['location']}\n"
                 f"{full_desc[:3500]}"
             )
-            if max_allowed_years <= 2.5 and re.search(r"\b(?:[3-9]|1[0-9])\+?\s*(?:years?|yrs?)\b", full_desc, re.IGNORECASE):
+            if max_allowed_years <= 2.5 and _EXP_REQUIREMENT_3PLUS_RE.search(full_desc):
                 job["status"] = "FILTERED_OUT"
                 job["filter_out_reason"] = f"Strict Experience Cap: LinkedIn job description exceeds {max_allowed_years:g} yrs limit."
         return job
@@ -193,6 +211,18 @@ class LinkedInScraper(BasePortalScraper):
         max_allowed_years: float = 2.0,
     ) -> List[Dict[str, Any]]:
         if not allow_network:
+            return []
+        enabled_env = os.getenv("ENABLE_LINKEDIN_PUBLIC_SCRAPE")
+        enabled = (
+            enabled_env.strip().lower() in ("1", "true", "yes", "on")
+            if enabled_env is not None
+            else ENABLE_LINKEDIN_PUBLIC_SCRAPE
+        )
+        if not enabled:
+            logger.info(
+                "[linkedin.com] Public scraping disabled (ENABLE_LINKEDIN_PUBLIC_SCRAPE=false); "
+                "use Chrome extension capture or manual job URL/description audit."
+            )
             return []
 
         urls = search_urls or [self.SEARCH_URL]

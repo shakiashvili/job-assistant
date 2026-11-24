@@ -71,7 +71,7 @@ class TabErrorBoundary extends React.Component<
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
-  const [backendHealth, setBackendHealth] = useState<{ connected: boolean; model: string; mode: string } | null>(null);
+  const [backendHealth, setBackendHealth] = useState<{ connected: boolean; model: string; mode: string; provider?: string } | null>(null);
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [isAuthChecking, setIsAuthChecking] = useState<boolean>(() =>
     Boolean(localStorage.getItem('talentflow_token') || localStorage.getItem('talentflow_refresh_token'))
@@ -133,9 +133,10 @@ export const App: React.FC = () => {
     try {
       const data = await fetchHealth();
       setBackendHealth({
-        connected: data.gemini.connected,
-        model: data.gemini.model,
-        mode: data.gemini.mode,
+        connected: Boolean(data.gemini?.connected || data.ai?.connected),
+        model: data.ai?.active_model || data.gemini?.model || '',
+        mode: data.ai?.mode || data.gemini?.mode || 'deterministic',
+        provider: data.ai?.active_provider || (data.gemini?.connected ? 'Gemini' : 'Deterministic'),
       });
     } catch {
       setBackendHealth(null);
