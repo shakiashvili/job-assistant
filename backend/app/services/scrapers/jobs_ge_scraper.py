@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import re
 from typing import Dict, Any, List, Optional
@@ -105,10 +104,6 @@ class JobsGeScraper(BasePortalScraper):
 
         return results
 
-    def _fallback_curated_listings(self) -> List[Dict[str, Any]]:
-        """Purged: never inject dead/mock vacancies when network fails or is disabled."""
-        return []
-
     async def _enrich_and_verify_item(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Fetches the live Jobs.ge detail page, rejects blank/expired pages, and extracts real body."""
         is_live, clean_text, raw_html = await fetch_and_validate_live_vacancy(item["url"], timeout=8.0)
@@ -171,28 +166,13 @@ class JobsGeScraper(BasePortalScraper):
     ) -> List[Dict[str, Any]]:
         if not allow_network:
             return []
-
         urls = search_urls or self.DEFAULT_SEARCH_URLS
-        html_pages = await asyncio.gather(*(self.fetch_html(u) for u in urls), return_exceptions=True)
-
-        candidates: List[Dict[str, Any]] = []
-        seen_ext_ids: set[str] = set()
-        for html in html_pages:
-            if isinstance(html, str) and html:
-                for parsed in self.parse_html_listings(html):
-                    if parsed["external_id"] not in seen_ext_ids:
-                        seen_ext_ids.add(parsed["external_id"])
-                        candidates.append(parsed)
-
-        if not candidates:
-            return []
-
-        # Live health-check and full text enrichment concurrently (cap to top 20 listings)
-        enriched = await asyncio.gather(
-            *(self._enrich_and_verify_item(c) for c in candidates[:20]),
-            return_exceptions=True,
+        return await self.scrape_and_enrich_urls(
+            urls,
+            self.parse_html_listings,
+            self._enrich_and_verify_item,
+            limit=20,
         )
-        return [item for item in enriched if isinstance(item, dict)]
 
 
 jobs_ge_scraper = JobsGeScraper()

@@ -69,6 +69,21 @@ GEMINI_FAST_MODEL = os.getenv("GEMINI_FAST_MODEL", "gemini-3.5-flash-lite")
 GEMINI_TIMEOUT_MS = int(os.getenv("GEMINI_TIMEOUT_MS", "30000"))
 GEMINI_PRICING_TIER = os.getenv("GEMINI_PRICING_TIER", "standard").strip().lower() or "standard"
 
+# Optional Free-Tier / Low-Cost OpenAI-Compatible Fallback (e.g. OpenRouter :free models)
+AI_PROVIDER = os.getenv("AI_PROVIDER", "auto").strip().lower() or "auto"
+AI_FALLBACK_PROVIDER = os.getenv("AI_FALLBACK_PROVIDER", "auto").strip().lower() or "auto"
+AI_ALLOW_PAID_FALLBACK = os.getenv("AI_ALLOW_PAID_FALLBACK", "false").strip().lower() in ("1", "true", "yes", "on")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip().rstrip("/")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemma-3-27b-it:free").strip()
+OPENROUTER_FAST_MODEL = os.getenv("OPENROUTER_FAST_MODEL", "meta-llama/llama-3.3-70b-instruct:free").strip()
+OPENROUTER_TIMEOUT_SECONDS = float(os.getenv("OPENROUTER_TIMEOUT_SECONDS", "25"))
+
+# LinkedIn public scraping is opt-in (disabled by default for ToS-safe operation)
+ENABLE_LINKEDIN_PUBLIC_SCRAPE = os.getenv("ENABLE_LINKEDIN_PUBLIC_SCRAPE", "false").strip().lower() in (
+    "1", "true", "yes", "on"
+)
+
 # Per-1M token (input_usd, output_usd) schedule by model family and tier.
 # Can be overridden at runtime via GEMINI_MODEL_PRICING_JSON without editing application logic.
 GEMINI_DEFAULT_PRICING: Dict[str, Dict[str, Any]] = {

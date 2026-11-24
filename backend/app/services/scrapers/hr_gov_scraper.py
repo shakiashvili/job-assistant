@@ -112,9 +112,6 @@ class HrGovScraper(BasePortalScraper):
 
         return results
 
-    def _fallback_curated_listings(self) -> List[Dict[str, Any]]:
-        return []
-
     async def _enrich_and_verify_item(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Fetches live vacancy.hr.gov.ge detail page to extract salary, requirements, and verified deadline."""
         html = await self.fetch_html(item["url"], timeout=10.0)

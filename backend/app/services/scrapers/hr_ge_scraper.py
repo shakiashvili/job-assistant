@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import re
 from typing import Dict, Any, List, Optional
@@ -94,10 +93,6 @@ class HrGeScraper(BasePortalScraper):
 
         return results
 
-    def _fallback_curated_listings(self) -> List[Dict[str, Any]]:
-        """Purged: never inject dead static vacancies when offline."""
-        return []
-
     async def _enrich_and_verify_item(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         is_live, clean_text, raw_html = await fetch_and_validate_live_vacancy(item["url"], timeout=8.0)
         if not is_live or not clean_text:
@@ -134,27 +129,13 @@ class HrGeScraper(BasePortalScraper):
     ) -> List[Dict[str, Any]]:
         if not allow_network:
             return []
-
         urls = search_urls or ([search_url] if search_url else [self.CATEGORY_IT_QA_URL])
-        pages = await asyncio.gather(*(self.fetch_html(u) for u in urls), return_exceptions=True)
-
-        candidates: List[Dict[str, Any]] = []
-        seen_ids: set[str] = set()
-        for html in pages:
-            if isinstance(html, str) and html:
-                for item in self.parse_html_listings(html, domain_keywords=domain_keywords):
-                    if item["external_id"] not in seen_ids:
-                        seen_ids.add(item["external_id"])
-                        candidates.append(item)
-
-        if not candidates:
-            return []
-
-        enriched = await asyncio.gather(
-            *(self._enrich_and_verify_item(c) for c in candidates[:18]),
-            return_exceptions=True,
+        return await self.scrape_and_enrich_urls(
+            urls,
+            lambda html: self.parse_html_listings(html, domain_keywords=domain_keywords),
+            self._enrich_and_verify_item,
+            limit=18,
         )
-        return [item for item in enriched if isinstance(item, dict)]
 
 
 hr_ge_scraper = HrGeScraper()

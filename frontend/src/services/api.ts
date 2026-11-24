@@ -9,8 +9,10 @@ import {
   PortalVacancyItem,
   SkillsPresetItem,
   DbJobPosting,
+  JobSearchParams,
   PaginatedJobsResponse,
   ParsedSkillsTaxonomy,
+  ScraperSourceHealthItem,
   UserProfile,
   AuthResponse,
   SkillActionPlan,
@@ -104,7 +106,18 @@ export async function apiFetch(url: string, init: RequestInit = {}): Promise<Res
   return res;
 }
 
-export async function fetchHealth(): Promise<{ status: string; gemini: { connected: boolean; model: string; mode: string } }> {
+export async function fetchHealth(): Promise<{
+  status: string;
+  gemini: { connected: boolean; model: string; mode: string };
+  ai?: {
+    connected: boolean;
+    active_provider: string;
+    active_model: string;
+    mode: string;
+    fallback_provider?: string | null;
+    providers?: Record<string, { configured: boolean; model: string; free_tier: boolean }>;
+  };
+}> {
   const res = await fetch(`${API_BASE}/health`);
   if (!res.ok) throw new Error('Backend offline');
   return res.json();
@@ -229,20 +242,10 @@ export async function fetchDbProfile(): Promise<{
   return res.json();
 }
 
-export async function fetchScrapedJobs(params?: {
-  page?: number;
-  limit?: number;
-  portal?: string;
-  status?: string;
-  min_score?: number;
-  tier?: string;
-  search?: string;
-  remote_type?: string;
-  only_new?: boolean;
-  only_saved?: boolean;
-  b2b_only?: boolean;
-  geo_eligible_only?: boolean;
-} | string): Promise<PaginatedJobsResponse> {
+export async function fetchScrapedJobs(
+  params?: JobSearchParams | string,
+  signal?: AbortSignal
+): Promise<PaginatedJobsResponse> {
   const qs = new URLSearchParams();
   if (typeof params === 'string') {
     if (params && params !== 'ALL') qs.set('status', params);
@@ -250,11 +253,21 @@ export async function fetchScrapedJobs(params?: {
     if (params.page) qs.set('page', String(params.page));
     if (params.limit) qs.set('limit', String(params.limit));
     if (params.portal && params.portal !== 'ALL') qs.set('portal', params.portal);
+    if (params.market && params.market !== 'ALL') qs.set('market', params.market);
     if (params.status && params.status !== 'ALL') qs.set('status', params.status);
     if (params.min_score !== undefined) qs.set('min_score', String(params.min_score));
+    if (params.include_filtered) qs.set('include_filtered', 'true');
     if (params.tier && params.tier !== 'ALL') qs.set('tier', params.tier);
     if (params.search && params.search.trim()) qs.set('search', params.search.trim());
+    if (params.country && params.country.trim()) qs.set('country', params.country.trim());
+    if (params.city && params.city.trim()) qs.set('city', params.city.trim());
     if (params.remote_type && params.remote_type !== 'ALL') qs.set('remote_type', params.remote_type);
+    if (params.salary_min !== undefined && params.salary_min > 0) qs.set('salary_min', String(params.salary_min));
+    if (params.language && params.language.trim() && params.language !== 'ALL') qs.set('language', params.language.trim());
+    if (params.technology && params.technology.trim()) qs.set('technology', params.technology.trim());
+    if (params.experience_level && params.experience_level !== 'ALL') qs.set('experience_level', params.experience_level);
+    if (params.employment_type && params.employment_type !== 'ALL') qs.set('employment_type', params.employment_type);
+    if (params.sort_by && params.sort_by !== 'relevance') qs.set('sort_by', params.sort_by);
     if (params.only_new) qs.set('only_new', 'true');
     if (params.only_saved) qs.set('only_saved', 'true');
     if (params.b2b_only) qs.set('b2b_only', 'true');
@@ -263,13 +276,32 @@ export async function fetchScrapedJobs(params?: {
   const queryStr = qs.toString() ? `?${qs.toString()}` : '';
   const res = await apiFetch(`${API_BASE}/jobs${queryStr}`, {
     headers: getAuthHeaders(),
+    signal,
   });
-  if (!res.ok) return { items: [], total: 0, page: 1, limit: 12, total_pages: 1 };
+  if (!res.ok) {
+    let detail = `Failed to load vacancies (HTTP ${res.status})`;
+    try {
+      const errJson = await res.json();
+      if (errJson?.detail) detail = String(errJson.detail);
+    } catch {}
+    throw new Error(detail);
+  }
   const data = await res.json();
   if (Array.isArray(data)) {
     return { items: data, total: data.length, page: 1, limit: data.length || 12, total_pages: 1 };
   }
   return data;
+}
+
+export async function fetchScraperSourceHealth(): Promise<{
+  sources: ScraperSourceHealthItem[];
+  default_portals: string[];
+}> {
+  const res = await apiFetch(`${API_BASE}/jobs/sources/health`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error(`Failed to fetch source health (HTTP ${res.status})`);
+  return res.json();
 }
 
 export async function triggerMultiPortalScrape(allowNetwork = true): Promise<{
@@ -383,6 +415,8 @@ export async function generateCvEdition(params: {
   rendered_html?: string;
   bullet_diffs?: import('../types').BulletDiffItem[];
   ats_parse_report?: import('../types').ATSParseReport;
+  matched_skills?: string[];
+  missing_skills?: string[];
 }> {
   const res = await apiFetch(`${API_BASE}/resumes/generate-edition`, {
     method: 'POST',

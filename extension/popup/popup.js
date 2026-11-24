@@ -158,18 +158,16 @@
       const dlBar = el("cv-download-bar");
       dlBar.classList.remove("hidden");
       el("cv-filename-label").textContent = data.tailored_cv.pdf_filename || "Tailored_CV.pdf";
-      const fullPdfUrl = data.tailored_cv.pdf_url.startsWith("http")
-        ? data.tailored_cv.pdf_url
-        : `${state.apiBaseUrl}${data.tailored_cv.pdf_url}`;
-      el("cv-download-link").href = fullPdfUrl;
+      const pdfLink = el("cv-download-link");
+      pdfLink.dataset.fileUrl = data.tailored_cv.pdf_url;
+      pdfLink.dataset.filename = data.tailored_cv.pdf_filename || "Tailored_CV.pdf";
     }
 
     if (data.tailored_cv?.docx_url && el("cv-docx-download-link")) {
-      const fullDocxUrl = data.tailored_cv.docx_url.startsWith("http")
-        ? data.tailored_cv.docx_url
-        : `${state.apiBaseUrl}${data.tailored_cv.docx_url}`;
-      el("cv-docx-download-link").href = fullDocxUrl;
-      el("cv-docx-download-link").classList.remove("hidden");
+      const docxLink = el("cv-docx-download-link");
+      docxLink.dataset.fileUrl = data.tailored_cv.docx_url;
+      docxLink.dataset.filename = data.tailored_cv.docx_filename || "Tailored_CV.docx";
+      docxLink.classList.remove("hidden");
     }
 
     const matchedSkills = data.matched_skills || [];
@@ -580,61 +578,81 @@
   el("btn-prepare-fill")?.addEventListener("click", () => runPrepareAndFill(true));
   el("btn-fill-step")?.addEventListener("click", () => runPrepareAndFill(false));
 
-  el("btn-mark-applied")?.addEventListener("click", async () => {
-    const app = state.preparedApp || {};
-    const jobUrl = state.pageContext?.url || window.location.href;
-    const payload = {
-      company_name: el("company-input").value.trim() || app.company_name || "Unknown Company",
-      job_title: el("job-title-input").value.trim() || app.job_title || "Unknown Title",
-      job_url: jobUrl,
-      portal: state.pageContext?.portal || app.portal || "custom",
-      salary_offered: app.salary_info?.display || null,
-      cv_pdf_path: app.tailored_cv?.pdf_filename || null,
-      cover_letter_text: app.cover_letter || null,
-      status: "APPLIED",
-    };
-    const res = await sendBg({ type: "LOG_APPLICATION", payload });
-    if (res?.ok) {
-      showStatus(`Saved "${payload.job_title}" at "${payload.company_name}" to your Kanban Tracker!`, "success");
-    } else {
-      showStatus(res?.error || "Could not save application to Kanban tracker.", "error");
+    async function downloadAuthenticatedCv(linkEl) {
+      const fileUrl = linkEl?.dataset?.fileUrl;
+      if (!fileUrl) return;
+      const res = await sendBg({ type: "FETCH_CV_BLOB", fileUrl });
+      if (!res?.ok || !res.base64) {
+        showStatus(res?.error || "Could not download CV file.", "error");
+        return;
+      }
+      const bin = atob(res.base64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const blob = new Blob([bytes], { type: res.mimeType || "application/pdf" });
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = linkEl.dataset.filename || res.filename || "Tailored_CV.pdf";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
     }
-  });
 
-  el("btn-copy-letter")?.addEventListener("click", async () => {
-    const txt = el("cover-letter-preview").textContent || "";
-    if (!txt) return;
-    await navigator.clipboard.writeText(txt);
-    showStatus("Copied cover letter to clipboard.", "success");
-  });
+    el("cv-download-link")?.addEventListener("click", (e) => {
+      e.preventDefault();
+      downloadAuthenticatedCv(el("cv-download-link"));
+    });
+    el("cv-docx-download-link")?.addEventListener("click", (e) => {
+      e.preventDefault();
+      downloadAuthenticatedCv(el("cv-docx-download-link"));
+    });
 
-  el("btn-copy-summary")?.addEventListener("click", async () => {
-    const txt = el("applicant-summary-preview")?.textContent || "";
-    if (!txt) return;
-    await navigator.clipboard.writeText(txt);
-    showStatus("Copied applicant pitch to clipboard.", "success");
-  });
-
-  el("btn-save-job-later")?.addEventListener("click", async () => {
-    const app = state.preparedApp || {};
-    const jobUrl = state.pageContext?.url || window.location.href;
-    const payload = {
-      company_name: el("company-input").value.trim() || app.company_name || "Unknown Company",
-      job_title: el("job-title-input").value.trim() || app.job_title || "Saved Role",
-      job_url: jobUrl,
-      portal: state.pageContext?.portal || app.portal || "custom",
-      salary_offered: app.salary_info?.display || null,
-      cv_pdf_path: app.tailored_cv?.pdf_filename || null,
-      cover_letter_text: app.cover_letter || null,
-      status: "SAVED",
-    };
-    const res = await sendBg({ type: "LOG_APPLICATION", payload });
-    if (res?.ok) {
-      showStatus(`Bookmarked "${payload.job_title}" at "${payload.company_name}" as SAVED in your Tracker!`, "success");
-    } else {
-      showStatus(res?.error || "Could not bookmark job in Kanban tracker.", "error");
+    async function logApplication(status) {
+      const app = state.preparedApp || {};
+      const jobUrl = state.pageContext?.url || state.activeTabUrl || "";
+      if (!jobUrl || !/^https?:\/\//i.test(jobUrl)) {
+        showStatus("Open a valid http(s) vacancy page before saving to your Tracker.", "error");
+        return;
+      }
+      const payload = {
+        company_name: el("company-input").value.trim() || app.company_name || "Unknown Company",
+        job_title: el("job-title-input").value.trim() || app.job_title || (status === "SAVED" ? "Saved Role" : "Unknown Title"),
+        job_url: jobUrl,
+        portal: state.pageContext?.portal || app.portal || "custom",
+        salary_offered: app.salary_info?.display || null,
+        cv_pdf_path: app.tailored_cv?.pdf_filename || null,
+        cover_letter_text: app.cover_letter || null,
+        status,
+      };
+      const res = await sendBg({ type: "LOG_APPLICATION", payload });
+      if (res?.ok) {
+        const msg = status === "SAVED"
+          ? `Bookmarked "${payload.job_title}" at "${payload.company_name}" as SAVED in your Tracker!`
+          : `Saved "${payload.job_title}" at "${payload.company_name}" to your Kanban Tracker!`;
+        showStatus(msg, "success");
+      } else {
+        showStatus(res?.error || "Could not save application to Kanban tracker.", "error");
+      }
     }
-  });
+
+    el("btn-mark-applied")?.addEventListener("click", () => logApplication("APPLIED"));
+    el("btn-save-job-later")?.addEventListener("click", () => logApplication("SAVED"));
+
+    el("btn-copy-letter")?.addEventListener("click", async () => {
+      const txt = el("cover-letter-preview").textContent || "";
+      if (!txt) return;
+      await navigator.clipboard.writeText(txt);
+      showStatus("Copied cover letter to clipboard.", "success");
+    });
+
+    el("btn-copy-summary")?.addEventListener("click", async () => {
+      const txt = el("applicant-summary-preview")?.textContent || "";
+      if (!txt) return;
+      await navigator.clipboard.writeText(txt);
+      showStatus("Copied applicant pitch to clipboard.", "success");
+    });
   }
 
   function startPopup() {

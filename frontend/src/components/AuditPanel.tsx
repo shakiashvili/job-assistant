@@ -27,7 +27,6 @@ import {
   auditJob,
   generateAnswers,
   createApplication,
-  fetchVacancies,
   fetchSkillsMd,
   uploadSkillsMdFile,
   saveSkillsMdText,
@@ -50,28 +49,46 @@ import {
 import {
   JobAuditResponse,
   ScreeningAnswer,
-  PortalVacancyItem,
   DbJobPosting,
+  JobSearchParams,
   SavedSearchItem,
   NotificationItem,
 } from '../types';
 import { StageModal } from './StageModal';
 import { DiscoveryFeed } from './DiscoveryFeed';
 
-export const AuditPanel: React.FC = () => {
-  const [vacancies, setVacancies] = useState<PortalVacancyItem[]>([]);
-  const [selectedPortalFilter, setSelectedPortalFilter] = useState<string>('ALL');
-  const [selectedIndustryFilter, setSelectedIndustryFilter] = useState<string>('ALL');
+const DEFAULT_JOB_FILTERS: JobSearchParams = {
+  page: 1,
+  limit: 12,
+  portal: 'ALL',
+  status: 'ALL',
+  tier: 'ALL',
+  min_score: 60,
+  search: '',
+  remote_type: 'ALL',
+  country: '',
+  city: '',
+  technology: '',
+  language: 'ALL',
+  experience_level: 'ALL',
+  employment_type: 'ALL',
+  sort_by: 'relevance',
+  only_new: false,
+  only_saved: false,
+  b2b_only: false,
+  geo_eligible_only: false,
+};
 
+export const AuditPanel: React.FC = () => {
   // Relational DB Scraped JobPostings State + Server-Side Pagination
   const [scrapedJobs, setScrapedJobs] = useState<DbJobPosting[]>([]);
-  const [dbStatusFilter, setDbStatusFilter] = useState<string>('ALL');
-  const [tierTab, setTierTab] = useState<'ALL' | 'DIRECT' | 'ADJACENT' | 'PUBLIC_INTERNSHIP'>('ALL');
-  const [searchQuery, setSearchQuery] = useState<string>('');
-  const [remoteTypeFilter, setRemoteTypeFilter] = useState<string>('ALL');
-  const [onlySavedFilter, setOnlySavedFilter] = useState<boolean>(false);
-  const [b2bOnlyFilter, setB2bOnlyFilter] = useState<boolean>(false);
-  const [geoEligibleOnlyFilter, setGeoEligibleOnlyFilter] = useState<boolean>(false);
+  const [filters, setFilters] = useState<JobSearchParams>(DEFAULT_JOB_FILTERS);
+  const filtersRef = useRef<JobSearchParams>(DEFAULT_JOB_FILTERS);
+  const searchAbortRef = useRef<AbortController | null>(null);
+  const searchSeqRef = useRef<number>(0);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [isLoadingJobs, setIsLoadingJobs] = useState<boolean>(false);
+  const [jobsError, setJobsError] = useState<string | null>(null);
   const [savedJobIds, setSavedJobIds] = useState<Set<number>>(new Set());
   const [savedSearches, setSavedSearches] = useState<SavedSearchItem[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
@@ -228,38 +245,66 @@ export const AuditPanel: React.FC = () => {
     AUDITED: number;
   }>({ ALL: 0, STAGED: 0, AUDITED: 0 });
 
-  const loadPagedJobs = async (
-    nextPage = page,
-    nextPortal = selectedPortalFilter,
-    nextStatus = dbStatusFilter,
-    nextTier = tierTab,
-    nextSearch = searchQuery,
-    nextRemoteType = remoteTypeFilter,
-    nextOnlySaved = onlySavedFilter,
-    nextB2bOnly = b2bOnlyFilter,
-    nextGeoEligible = geoEligibleOnlyFilter
-  ) => {
-    const res = await fetchScrapedJobs({
-      page: nextPage,
-      limit: 12,
-      portal: nextPortal,
-      status: nextStatus,
-      min_score: 60,
-      tier: nextTier === 'PUBLIC_INTERNSHIP' ? 'internship' : nextTier,
-      search: nextSearch,
-      remote_type: nextRemoteType,
-      only_saved: nextOnlySaved,
-      b2b_only: nextB2bOnly,
-      geo_eligible_only: nextGeoEligible,
-    });
-    setScrapedJobs(res.items || []);
-    setPage(res.page || 1);
-    setTotalPages(res.total_pages || 1);
-    setTotalJobs(res.total || 0);
-    if (res.tier_counts) setTierCounts(res.tier_counts);
-    if (res.status_counts) setStatusCounts(res.status_counts);
-    return res;
+  const loadPagedJobs = async (overrides?: Partial<JobSearchParams>) => {
+    const merged: JobSearchParams = { ...filtersRef.current, ...overrides };
+    filtersRef.current = merged;
+
+    if (searchAbortRef.current) {
+      searchAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    searchAbortRef.current = controller;
+    const seq = ++searchSeqRef.current;
+
+    setIsLoadingJobs(true);
+    setJobsError(null);
+    try {
+      const tierParam = merged.tier === 'PUBLIC_INTERNSHIP' ? 'internship' : merged.tier;
+      const res = await fetchScrapedJobs({ ...merged, tier: tierParam }, controller.signal);
+      if (seq !== searchSeqRef.current) return res;
+      setScrapedJobs(res.items || []);
+      setPage(res.page || 1);
+      setTotalPages(res.total_pages || 1);
+      setTotalJobs(res.total || 0);
+      if (res.tier_counts) setTierCounts(res.tier_counts);
+      if (res.status_counts) setStatusCounts(res.status_counts);
+      return res;
+    } catch (err: any) {
+      if (err?.name === 'AbortError' || seq !== searchSeqRef.current) {
+        return { items: [], total: 0, page: merged.page || 1, limit: merged.limit || 12, total_pages: 1 };
+      }
+      setJobsError(err?.message || 'Failed to load vacancies. Please check your connection and try again.');
+      return { items: [], total: 0, page: merged.page || 1, limit: merged.limit || 12, total_pages: 1 };
+    } finally {
+      if (seq === searchSeqRef.current) {
+        setIsLoadingJobs(false);
+      }
+    }
   };
+
+  const applyFilters = (patch: Partial<JobSearchParams>, debounceMs = 0) => {
+    const next: JobSearchParams = { ...filtersRef.current, ...patch, page: patch.page ?? 1 };
+    filtersRef.current = next;
+    setFilters(next);
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+    if (debounceMs > 0) {
+      debounceTimerRef.current = setTimeout(() => {
+        void loadPagedJobs(next);
+      }, debounceMs);
+    } else {
+      void loadPagedJobs(next);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+      if (searchAbortRef.current) searchAbortRef.current.abort();
+    };
+  }, []);
 
   const handleToggleSaveJob = async (job: DbJobPosting) => {
     try {
@@ -272,8 +317,8 @@ export const AuditPanel: React.FC = () => {
         next.add(job.id);
       }
       setSavedJobIds(next);
-      if (onlySavedFilter) {
-        await loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab, searchQuery, remoteTypeFilter, true);
+      if (filtersRef.current.only_saved) {
+        await loadPagedJobs({ page: 1 });
       }
     } catch (err) {
       console.error('Could not toggle saved job:', err);
@@ -296,7 +341,6 @@ export const AuditPanel: React.FC = () => {
       setNotifications(notifList);
 
       if (!uploaded) {
-        setVacancies([]);
         setScrapedJobs([]);
         setTotalJobs(0);
         setTotalPages(1);
@@ -306,12 +350,8 @@ export const AuditPanel: React.FC = () => {
         return;
       }
 
-      const [vacs, paged] = await Promise.all([
-        fetchVacancies(),
-        loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab),
-      ]);
+      const paged = await loadPagedJobs({ page: 1 });
       const validJobs = (paged.items || []).filter((j) => j.status !== 'FILTERED_OUT');
-      setVacancies(vacs);
       if (validJobs.length > 0) {
         setJobUrl(validJobs[0].url);
         setJobText(validJobs[0].description_raw);
@@ -325,7 +365,7 @@ export const AuditPanel: React.FC = () => {
   const handleRunMultiPortalScrapers = async () => {
     setIsScraping(true);
     setError(null);
-    setScrapeTaskInfo({ status: 'PENDING', progressPct: 10 });
+    setScrapeTaskInfo({ status: 'QUEUED', progressPct: 10 });
     try {
       let filteredOutCount = 0;
       try {
@@ -352,12 +392,8 @@ export const AuditPanel: React.FC = () => {
         filteredOutCount = res.filtered_out_count || 0;
         setScrapeTaskInfo({ status: 'COMPLETED', progressPct: 100 });
       }
-      const [paged, vacs] = await Promise.all([
-        loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab),
-        fetchVacancies(),
-      ]);
+      const paged = await loadPagedJobs({ page: 1 });
       const validJobs = paged.items || [];
-      setVacancies(vacs);
       if (validJobs.length > 0 && !jobUrl) {
         setJobUrl(validJobs[0].url);
         setJobText(validJobs[0].description_raw);
@@ -395,12 +431,8 @@ export const AuditPanel: React.FC = () => {
       setExtractedSkillsCount(res.extracted_skills.length);
       await refreshProfileData();
 
-      const [paged, vacs] = await Promise.all([
-        loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab),
-        fetchVacancies(),
-      ]);
+      const paged = await loadPagedJobs({ page: 1 });
       const validJobs = paged.items || [];
-      setVacancies(vacs);
       if (validJobs.length > 0) {
         setJobUrl(validJobs[0].url);
         setJobText(validJobs[0].description_raw);
@@ -410,7 +442,7 @@ export const AuditPanel: React.FC = () => {
       // Trigger live portal refresh after profile & initial matches are already displayed
       try {
         await triggerMultiPortalScrape(true);
-        const freshPaged = await loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab);
+        const freshPaged = await loadPagedJobs({ page: 1 });
         setSkillsStatusMsg(`Profile indexed: ${res.message}. Found ${freshPaged.total || validJobs.length} live verified vacancies.`);
       } catch (refreshErr: any) {
         setSkillsStatusMsg(`Profile indexed (${res.message}). Live portal scan could not complete automatically: ${refreshErr?.message || 'try clicking Run Live Role Scrapers'}.`);
@@ -433,11 +465,7 @@ export const AuditPanel: React.FC = () => {
       if (scrapeRes.rejection_reasons?.length) {
         console.debug('[TalentFlow Matcher Diagnostics] Rejected vacancies:', scrapeRes.rejection_reasons);
       }
-      const [paged, vacs] = await Promise.all([
-        loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab),
-        fetchVacancies(),
-      ]);
-      setVacancies(vacs);
+      const paged = await loadPagedJobs({ page: 1 });
       await refreshProfileData();
       setSkillsStatusMsg(`✅ Synced CandidateProfile (${res.extracted_skills.length} skills) & scanned ${paged.total} live vacancies!`);
       setShowSkillsEditor(false);
@@ -447,12 +475,6 @@ export const AuditPanel: React.FC = () => {
     } finally {
       setIsScraping(false);
     }
-  };
-
-  const handleSelectVacancy = (vac: PortalVacancyItem) => {
-    setJobUrl(vac.url);
-    setJobText(vac.description);
-    setError(null);
   };
 
   const handleRunAudit = async (overrideLang?: 'en' | 'ka') => {
@@ -550,25 +572,7 @@ export const AuditPanel: React.FC = () => {
     }
   };
 
-  const portalsList = ['ALL', 'jobs.ge', 'hr.ge', 'headhunter.ge', 'remotive.com', 'himalayas.app', 'remoteok.com', 'dou.ua', 'djinni.co', 'justjoin.it', 'greenhouse', 'lever'];
-  const industryFilters = [
-    { id: 'ALL', label: '🌐 All Industries' },
-    { id: 'receptionist_hospitality', label: '🏨 Receptionist & Hospitality' },
-    { id: 'healthcare_hospital', label: '🏥 Hospital & Healthcare' },
-    { id: 'customer_service', label: '🎧 Customer Service' },
-    { id: 'qa_tech', label: '💻 QA & Tech' },
-  ];
-
-  const filteredVacancies = vacancies.filter((v) => {
-    const matchesPortal = selectedPortalFilter === 'ALL' || v.portal === selectedPortalFilter;
-    const matchesInd = selectedIndustryFilter === 'ALL' || v.industry === selectedIndustryFilter;
-    return matchesPortal && matchesInd;
-  });
-
-  // Only genuinely suitable jobs (>= 60% match and passing all gates) are displayed.
-  const visibleJobs = scrapedJobs.filter(
-    (j) => j.status !== 'FILTERED_OUT' && (j.suitability_score ?? 0) >= 60
-  );
+  const visibleJobs = scrapedJobs;
 
   return (
     <div className="space-y-6">
@@ -738,82 +742,95 @@ export const AuditPanel: React.FC = () => {
         visibleJobs={visibleJobs}
         profileUploaded={profileUploaded}
         isScraping={isScraping}
-        selectedPortalFilter={selectedPortalFilter}
-        onSelectPortalFilter={(p) => {
-          setSelectedPortalFilter(p);
-          loadPagedJobs(1, p, dbStatusFilter, tierTab, searchQuery, remoteTypeFilter, onlySavedFilter, b2bOnlyFilter, geoEligibleOnlyFilter);
+        isLoadingJobs={isLoadingJobs}
+        jobsError={jobsError}
+        onRetryJobs={() => void loadPagedJobs()}
+        selectedPortalFilter={filters.portal || 'ALL'}
+        onSelectPortalFilter={(p) => applyFilters({ portal: p })}
+        dbStatusFilter={filters.status || 'ALL'}
+        onSelectStatusFilter={(s) => applyFilters({ status: s })}
+        tierTab={(filters.tier as 'ALL' | 'DIRECT' | 'ADJACENT' | 'PUBLIC_INTERNSHIP') || 'ALL'}
+        onSelectTierTab={(t) => applyFilters({ tier: t })}
+        searchQuery={filters.search || ''}
+        onSearchQueryChange={(q) => applyFilters({ search: q }, 300)}
+        remoteTypeFilter={filters.remote_type || 'ALL'}
+        onRemoteTypeFilterChange={(rt) => applyFilters({ remote_type: rt })}
+        onlySavedFilter={Boolean(filters.only_saved)}
+        onOnlySavedFilterChange={(savedOnly) => applyFilters({ only_saved: savedOnly })}
+        b2bOnlyFilter={Boolean(filters.b2b_only)}
+        onB2bOnlyFilterChange={(b2b) => applyFilters({ b2b_only: b2b })}
+        geoEligibleOnlyFilter={Boolean(filters.geo_eligible_only)}
+        onGeoEligibleOnlyFilterChange={(geo) => applyFilters({ geo_eligible_only: geo })}
+        advancedFilters={filters}
+        onAdvancedFiltersChange={(patch) => {
+          const isTextPatch = 'country' in patch || 'city' in patch || 'technology' in patch || 'salary_min' in patch;
+          applyFilters(patch, isTextPatch ? 300 : 0);
         }}
-        dbStatusFilter={dbStatusFilter}
-        onSelectStatusFilter={(s) => {
-          setDbStatusFilter(s);
-          loadPagedJobs(1, selectedPortalFilter, s, tierTab, searchQuery, remoteTypeFilter, onlySavedFilter, b2bOnlyFilter, geoEligibleOnlyFilter);
-        }}
-        tierTab={tierTab}
-        onSelectTierTab={(t) => {
-          setTierTab(t);
-          loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, t, searchQuery, remoteTypeFilter, onlySavedFilter, b2bOnlyFilter, geoEligibleOnlyFilter);
-        }}
-        searchQuery={searchQuery}
-        onSearchQueryChange={(q) => {
-          setSearchQuery(q);
-          loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab, q, remoteTypeFilter, onlySavedFilter, b2bOnlyFilter, geoEligibleOnlyFilter);
-        }}
-        remoteTypeFilter={remoteTypeFilter}
-        onRemoteTypeFilterChange={(rt) => {
-          setRemoteTypeFilter(rt);
-          loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab, searchQuery, rt, onlySavedFilter, b2bOnlyFilter, geoEligibleOnlyFilter);
-        }}
-        onlySavedFilter={onlySavedFilter}
-        onOnlySavedFilterChange={(savedOnly) => {
-          setOnlySavedFilter(savedOnly);
-          loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab, searchQuery, remoteTypeFilter, savedOnly, b2bOnlyFilter, geoEligibleOnlyFilter);
-        }}
-        b2bOnlyFilter={b2bOnlyFilter}
-        onB2bOnlyFilterChange={(b2b) => {
-          setB2bOnlyFilter(b2b);
-          loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab, searchQuery, remoteTypeFilter, onlySavedFilter, b2b, geoEligibleOnlyFilter);
-        }}
-        geoEligibleOnlyFilter={geoEligibleOnlyFilter}
-        onGeoEligibleOnlyFilterChange={(geo) => {
-          setGeoEligibleOnlyFilter(geo);
-          loadPagedJobs(1, selectedPortalFilter, dbStatusFilter, tierTab, searchQuery, remoteTypeFilter, onlySavedFilter, b2bOnlyFilter, geo);
-        }}
+        onResetFilters={() => applyFilters({ ...DEFAULT_JOB_FILTERS })}
         savedJobIds={savedJobIds}
         onToggleSaveJob={handleToggleSaveJob}
         savedSearches={savedSearches}
         onSaveSearchAlert={async () => {
+          const f = filtersRef.current;
           const parts = [
-            selectedPortalFilter !== 'ALL' ? selectedPortalFilter : null,
-            searchQuery.trim() || null,
-            remoteTypeFilter !== 'ALL' ? remoteTypeFilter : null,
-            b2bOnlyFilter ? 'B2B' : null,
-            geoEligibleOnlyFilter ? 'GE-Eligible' : null,
+            f.portal && f.portal !== 'ALL' ? f.portal : null,
+            f.search?.trim() || null,
+            f.country?.trim() || null,
+            f.city?.trim() || null,
+            f.technology?.trim() || null,
+            f.remote_type && f.remote_type !== 'ALL' ? f.remote_type : null,
+            f.b2b_only ? 'B2B' : null,
+            f.geo_eligible_only ? 'GE-Eligible' : null,
           ].filter(Boolean);
           const name = parts.length > 0 ? parts.join(' • ') : 'All High-Match Roles';
           try {
             const created = await createSavedSearch(name, {
-              portal: selectedPortalFilter,
-              search: searchQuery.trim(),
-              remote_type: remoteTypeFilter,
-              b2b_only: b2bOnlyFilter,
-              geo_eligible_only: geoEligibleOnlyFilter,
+              portal: f.portal || 'ALL',
+              status: f.status || 'ALL',
+              tier: f.tier || 'ALL',
+              search: f.search?.trim() || '',
+              country: f.country?.trim() || '',
+              city: f.city?.trim() || '',
+              technology: f.technology?.trim() || '',
+              language: f.language || 'ALL',
+              experience_level: f.experience_level || 'ALL',
+              employment_type: f.employment_type || 'ALL',
+              salary_min: f.salary_min || undefined,
+              sort_by: f.sort_by || 'relevance',
+              remote_type: f.remote_type || 'ALL',
+              only_new: Boolean(f.only_new),
+              only_saved: Boolean(f.only_saved),
+              b2b_only: Boolean(f.b2b_only),
+              geo_eligible_only: Boolean(f.geo_eligible_only),
             });
             setSavedSearches((prev) => [created, ...prev]);
-          } catch {}
+          } catch (err: any) {
+            setError(err?.message || 'Could not save search alert');
+          }
         }}
         onApplySavedSearch={(ss) => {
           const f = ss.filters || {};
-          const nextP = f.portal || 'ALL';
-          const nextQ = f.search || '';
-          const nextRt = f.remote_type || 'ALL';
-          const nextB2b = Boolean(f.b2b_only);
-          const nextGeo = Boolean(f.geo_eligible_only);
-          setSelectedPortalFilter(nextP);
-          setSearchQuery(nextQ);
-          setRemoteTypeFilter(nextRt);
-          setB2bOnlyFilter(nextB2b);
-          setGeoEligibleOnlyFilter(nextGeo);
-          void loadPagedJobs(1, nextP, dbStatusFilter, tierTab, nextQ, nextRt, onlySavedFilter, nextB2b, nextGeo);
+          applyFilters({
+            ...DEFAULT_JOB_FILTERS,
+            portal: f.portal || 'ALL',
+            status: f.status || 'ALL',
+            tier: f.tier || 'ALL',
+            search: f.search || '',
+            country: f.country || '',
+            city: f.city || '',
+            technology: f.technology || '',
+            language: f.language || 'ALL',
+            experience_level: f.experience_level || 'ALL',
+            employment_type: f.employment_type || 'ALL',
+            salary_min: f.salary_min ? Number(f.salary_min) : undefined,
+            sort_by: f.sort_by || 'relevance',
+            remote_type: f.remote_type || 'ALL',
+            only_new: Boolean(f.only_new),
+            only_saved: Boolean(f.only_saved),
+            b2b_only: Boolean(f.b2b_only),
+            geo_eligible_only: Boolean(f.geo_eligible_only),
+            page: 1,
+          });
         }}
         onDeleteSavedSearch={async (searchId) => {
           await deleteSavedSearch(searchId).catch(() => {});
@@ -829,7 +846,7 @@ export const AuditPanel: React.FC = () => {
         page={page}
         totalPages={totalPages}
         totalJobs={totalJobs}
-        onPageChange={(nextP) => loadPagedJobs(nextP, selectedPortalFilter, dbStatusFilter, tierTab, searchQuery, remoteTypeFilter, onlySavedFilter, b2bOnlyFilter, geoEligibleOnlyFilter)}
+        onPageChange={(nextP) => applyFilters({ page: nextP })}
         scrapeStats={scrapeStats}
         scrapeTaskInfo={scrapeTaskInfo}
         preparedEmailPkg={preparedEmailPkg}

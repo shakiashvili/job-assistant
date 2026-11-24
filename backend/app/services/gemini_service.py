@@ -3,17 +3,25 @@ import json
 import logging
 import os
 import re
-import secrets
 import time
 from datetime import timedelta
 from typing import Dict, Any, Optional, List, Tuple
+import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
 from sqlmodel import Session, select
 from ..config import (
+    AI_ALLOW_PAID_FALLBACK,
+    AI_FALLBACK_PROVIDER,
+    AI_PROVIDER,
     GEMINI_API_KEY,
     GEMINI_MODEL,
     GEMINI_FAST_MODEL,
     GEMINI_TIMEOUT_MS,
+    OPENROUTER_API_KEY,
+    OPENROUTER_BASE_URL,
+    OPENROUTER_FAST_MODEL,
+    OPENROUTER_MODEL,
+    OPENROUTER_TIMEOUT_SECONDS,
     resolve_gemini_model_pricing,
 )
 from ..db.database import engine
@@ -28,12 +36,57 @@ from .gemini_utils import (
 
 logger = logging.getLogger(__name__)
 
+_PII_EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
+_PII_PHONE_RE = re.compile(r"(?<!\d)(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{2,4}\)?[\s.-]?){2,4}\d{3,4}(?!\d)")
+_PII_IBAN_RE = re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b")
+_PII_NATIONAL_ID_RE = re.compile(r"\b\d{11}\b")
+
+
+def minimize_pii_for_llm(text: str) -> str:
+    """Strips sensitive direct PII (email, phone, IBAN, 11-digit national IDs) before external LLM calls."""
+    if not text:
+        return ""
+    cleaned = _PII_EMAIL_RE.sub("[REDACTED_EMAIL]", text)
+    cleaned = _PII_IBAN_RE.sub("[REDACTED_IBAN]", cleaned)
+    cleaned = _PII_NATIONAL_ID_RE.sub("[REDACTED_ID]", cleaned)
+    cleaned = _PII_PHONE_RE.sub(
+        lambda m: "[REDACTED_PHONE]" if sum(ch.isdigit() for ch in m.group(0)) >= 8 else m.group(0),
+        cleaned,
+    )
+    return cleaned
+
+
+def is_free_openrouter_model(model_name: str) -> bool:
+    """Returns True only for explicitly free OpenRouter models (:free or openrouter/free)."""
+    low = (model_name or "").strip().lower()
+    return low.endswith(":free") or low == "openrouter/free"
+
 
 class GeminiService:
-    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
-        self.api_key = api_key or GEMINI_API_KEY or os.getenv("GEMINI_API_KEY", "")
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        openrouter_api_key: Optional[str] = None,
+        provider_mode: Optional[str] = None,
+        allow_paid_fallback: Optional[bool] = None,
+    ):
+        self.api_key = api_key if api_key is not None else (GEMINI_API_KEY or os.getenv("GEMINI_API_KEY", ""))
         self.model_name = model or GEMINI_MODEL
         self.fast_model_name = GEMINI_FAST_MODEL or self.model_name
+        self.openrouter_api_key = (
+            openrouter_api_key
+            if openrouter_api_key is not None
+            else (OPENROUTER_API_KEY or os.getenv("OPENROUTER_API_KEY", "").strip())
+        )
+        self.openrouter_base_url = OPENROUTER_BASE_URL
+        self.openrouter_model = OPENROUTER_MODEL
+        self.openrouter_fast_model = OPENROUTER_FAST_MODEL or OPENROUTER_MODEL
+        self.provider_mode = (provider_mode or AI_PROVIDER or "auto").strip().lower()
+        self.fallback_provider_mode = (AI_FALLBACK_PROVIDER or "auto").strip().lower()
+        self.allow_paid_fallback = AI_ALLOW_PAID_FALLBACK if allow_paid_fallback is None else bool(allow_paid_fallback)
+        self._last_provider_used: Optional[str] = None
+        self._last_error: Optional[str] = None
         self._client = None
         if self.api_key:
             try:
@@ -61,14 +114,85 @@ class GeminiService:
         return self.model_name
 
     @property
+    def openrouter_available(self) -> bool:
+        if not self.openrouter_api_key:
+            return False
+        if not self.allow_paid_fallback and not is_free_openrouter_model(self.openrouter_fast_model):
+            return False
+        return True
+
+    def _resolve_provider_chain(self) -> List[str]:
+        has_gemini = self._client is not None
+        has_openrouter = self.openrouter_available
+        if self.provider_mode == "gemini":
+            chain = ["gemini"] if has_gemini else []
+            if self.fallback_provider_mode in ("auto", "openrouter") and has_openrouter:
+                chain.append("openrouter")
+            return chain
+        if self.provider_mode == "openrouter":
+            chain = ["openrouter"] if has_openrouter else []
+            if self.fallback_provider_mode in ("auto", "gemini") and has_gemini:
+                chain.append("gemini")
+            return chain
+        # auto: prefer Gemini primary, fall back to OpenRouter free tier on 429/error
+        chain = []
+        if has_gemini:
+            chain.append("gemini")
+        if has_openrouter:
+            chain.append("openrouter")
+        return chain
+
+    @property
     def is_available(self) -> bool:
-        return self._client is not None
+        return bool(self._resolve_provider_chain())
+
+    def get_provider_health(self) -> Dict[str, Any]:
+        chain = self._resolve_provider_chain()
+        primary = chain[0] if chain else "deterministic"
+        fallback = chain[1] if len(chain) > 1 else "deterministic"
+        active_model = (
+            self.model_name
+            if primary == "gemini"
+            else (self.openrouter_model if primary == "openrouter" else "ground_truth_heuristic_engine")
+        )
+        return {
+            "connected": bool(chain),
+            "configured_mode": self.provider_mode,
+            "active_provider": primary,
+            "active_model": active_model,
+            "fallback_provider": fallback,
+            "free_tier_guard_enforced": not self.allow_paid_fallback,
+            "mode": f"live_{primary}" if chain else "ground_truth_heuristic_engine",
+            "last_provider_used": self._last_provider_used,
+            "last_error": self._last_error,
+            "providers": {
+                "gemini": {
+                    "configured": self._client is not None,
+                    "model": self.model_name,
+                    "fast_model": self.fast_model_name,
+                    "free_tier": True,
+                },
+                "openrouter": {
+                    "configured": self.openrouter_available,
+                    "model": self.openrouter_model,
+                    "fast_model": self.openrouter_fast_model,
+                    "free_tier": is_free_openrouter_model(self.openrouter_model),
+                },
+            },
+        }
 
     @staticmethod
     def safe_parse_json(text: str) -> Optional[Any]:
         return safe_parse_json(text)
 
-    def _resolve_model(self, model_tier: str = "fast") -> str:
+    def _resolve_model(self, model_tier: str = "fast", provider: str = "gemini") -> str:
+        if provider == "openrouter":
+            chosen = self.openrouter_model if model_tier == "quality" else (self.openrouter_fast_model or self.openrouter_model)
+            if not self.allow_paid_fallback and not is_free_openrouter_model(chosen):
+                raise ValueError(
+                    f"Blocked non-free OpenRouter model '{chosen}' because AI_ALLOW_PAID_FALLBACK=false."
+                )
+            return chosen
         if model_tier == "quality":
             return self.model_name
         return self.fast_model_name or self.model_name
@@ -288,6 +412,154 @@ class GeminiService:
         setattr(resp, "_tf_retry_count", max(0, attempts["count"] - 1))
         return resp
 
+    def _call_openrouter_with_retry(
+        self,
+        prompt: str,
+        *,
+        model_name: str,
+        temperature: float = 0.2,
+        response_mime_type: str = "text/plain",
+        max_output_tokens: Optional[int] = None,
+        system_instruction: Optional[str] = None,
+    ) -> Tuple[str, Optional[int], Optional[int], Optional[int], Optional[float], int]:
+        """Calls an OpenAI-compatible OpenRouter endpoint with bounded retries and strict free-tier guard."""
+        if not self.allow_paid_fallback and not is_free_openrouter_model(model_name):
+            raise ValueError(
+                f"Blocked non-free OpenRouter model '{model_name}' because AI_ALLOW_PAID_FALLBACK=false."
+            )
+        messages: List[Dict[str, str]] = []
+        sys_msg = (system_instruction or "").strip()
+        if response_mime_type == "application/json":
+            sys_msg = f"{sys_msg}\nReturn strictly valid JSON only with no markdown fences.".strip()
+        if sys_msg:
+            messages.append({"role": "system", "content": sys_msg})
+        messages.append({"role": "user", "content": minimize_pii_for_llm(prompt)})
+
+        payload: Dict[str, Any] = {
+            "model": model_name,
+            "messages": messages,
+            "temperature": temperature,
+        }
+        if max_output_tokens is not None:
+            payload["max_tokens"] = max_output_tokens
+        headers = {
+            "Authorization": f"Bearer {self.openrouter_api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://talentflow.local",
+            "X-Title": "TalentFlow AI",
+        }
+        url = f"{self.openrouter_base_url}/chat/completions"
+        attempts = {"count": 0}
+
+        @retry(
+            stop=stop_after_attempt(2),
+            wait=wait_exponential(multiplier=1.0, min=1, max=4),
+            reraise=True,
+        )
+        def _exec():
+            attempts["count"] += 1
+            with httpx.Client(timeout=OPENROUTER_TIMEOUT_SECONDS) as client:
+                r = client.post(url, headers=headers, json=payload)
+                r.raise_for_status()
+                return r.json()
+
+        data = _exec()
+        choices = data.get("choices") or []
+        content = ""
+        if choices and isinstance(choices[0], dict):
+            content = str(((choices[0].get("message") or {}).get("content")) or "")
+        usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+        pt = usage.get("prompt_tokens")
+        ot = usage.get("completion_tokens")
+        tt = usage.get("total_tokens")
+        cost = 0.0 if is_free_openrouter_model(model_name) else None
+        return content, pt, ot, tt, cost, max(0, attempts["count"] - 1)
+
+    def _invoke_provider_chain(
+        self,
+        prompt: str,
+        *,
+        task_type: str,
+        model_tier: str,
+        temperature: float,
+        response_mime_type: str,
+        response_schema=None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        max_output_tokens: Optional[int] = None,
+        system_instruction: Optional[str] = None,
+        user_id: Optional[int] = None,
+    ) -> Tuple[Optional[str], str]:
+        """Executes across configured provider chain (primary -> fallback) with telemetry and rate-limit handling."""
+        chain = self._resolve_provider_chain()
+        for provider in chain:
+            if provider == "openrouter" and tools:
+                # Google Search grounding tools are Gemini-only; skip OpenRouter for grounded web-tool prompts
+                continue
+            p_start = time.perf_counter()
+            try:
+                p_model = self._resolve_model(model_tier, provider=provider)
+                if provider == "gemini":
+                    resp = self._call_gemini_with_retry(
+                        prompt,
+                        temperature=temperature,
+                        response_schema=response_schema,
+                        model_name=p_model,
+                        response_mime_type=response_mime_type,
+                        tools=tools,
+                        max_output_tokens=max_output_tokens,
+                        system_instruction=system_instruction,
+                    )
+                    text_out = getattr(resp, "text", None) or ""
+                    pt, ot, tt, cost = self._extract_usage(resp, p_model)
+                    retries = getattr(resp, "_tf_retry_count", 0)
+                else:
+                    text_out, pt, ot, tt, cost, retries = self._call_openrouter_with_retry(
+                        prompt,
+                        model_name=p_model,
+                        temperature=temperature,
+                        response_mime_type=response_mime_type,
+                        max_output_tokens=max_output_tokens,
+                        system_instruction=system_instruction,
+                    )
+                self._last_provider_used = provider
+                self._last_error = None
+                self._log_operation(
+                    task_type=task_type,
+                    model_name=p_model,
+                    status="SUCCESS" if text_out else "VALIDATION_ERROR",
+                    latency_ms=int((time.perf_counter() - p_start) * 1000),
+                    retry_count=retries,
+                    cache_hit=False,
+                    user_id=user_id,
+                    prompt_tokens=pt,
+                    output_tokens=ot,
+                    total_tokens=tt,
+                    estimated_cost_usd=cost,
+                )
+                if text_out:
+                    return text_out, p_model
+            except Exception as exc:
+                err_str = str(exc)
+                low_err = err_str.lower()
+                op_status = (
+                    "RATE_LIMITED"
+                    if ("429" in err_str or "quota" in low_err or "rate" in low_err or "resource_exhausted" in low_err)
+                    else "FAILED"
+                )
+                self._last_error = f"{provider}:{op_status}"
+                self._log_operation(
+                    task_type=task_type,
+                    model_name=f"{provider}:{model_tier}",
+                    status=op_status,
+                    latency_ms=int((time.perf_counter() - p_start) * 1000),
+                    user_id=user_id,
+                    error_type=type(exc).__name__,
+                    error_message=err_str[:250],
+                )
+                logger.warning("AI provider %s failed for %s (%s): %s", provider, task_type, op_status, err_str[:180])
+                continue
+        return None, self._resolve_model(model_tier, provider=chain[0] if chain else "gemini")
+
     def generate_text(
         self,
         prompt: str,
@@ -305,8 +577,10 @@ class GeminiService:
         user_id: Optional[int] = None,
     ) -> Optional[str]:
         t0 = time.perf_counter()
-        target_model = self._resolve_model(model_tier)
-        if not self.is_available:
+        chain = self._resolve_provider_chain()
+        primary_provider = chain[0] if chain else "gemini"
+        target_model = self._resolve_model(model_tier, provider=primary_provider) if chain else self._resolve_model(model_tier)
+        if not chain:
             self._log_operation(
                 task_type=task_type,
                 model_name=target_model,
@@ -349,62 +623,28 @@ class GeminiService:
                 )
                 return cached
 
-        try:
-            resp = self._call_gemini_with_retry(
-                prompt,
-                temperature=temperature,
-                response_schema=response_schema,
-                model_name=target_model,
-                response_mime_type=response_mime_type,
-                tools=tools,
-                max_output_tokens=max_output_tokens,
-                system_instruction=system_instruction,
-            )
-            text_out = getattr(resp, "text", None)
-            pt, ot, tt, cost = self._extract_usage(resp, target_model)
-            retries = getattr(resp, "_tf_retry_count", 0)
-            self._log_operation(
+        text_out, used_model = self._invoke_provider_chain(
+            prompt,
+            task_type=task_type,
+            model_tier=model_tier,
+            temperature=temperature,
+            response_mime_type=response_mime_type,
+            response_schema=response_schema,
+            tools=tools,
+            max_output_tokens=max_output_tokens,
+            system_instruction=system_instruction,
+            user_id=user_id,
+        )
+        if text_out and can_cache:
+            self._write_cache(
+                cache_key=cache_key,
                 task_type=task_type,
-                model_name=target_model,
-                status="SUCCESS" if text_out else "VALIDATION_ERROR",
-                latency_ms=int((time.perf_counter() - t0) * 1000),
-                retry_count=retries,
-                cache_hit=False,
-                user_id=user_id,
-                prompt_tokens=pt,
-                output_tokens=ot,
-                total_tokens=tt,
-                estimated_cost_usd=cost,
+                model_name=used_model,
+                response_text=text_out,
+                response_json=None,
+                ttl_seconds=ttl_seconds,
             )
-            if text_out and can_cache:
-                self._write_cache(
-                    cache_key=cache_key,
-                    task_type=task_type,
-                    model_name=target_model,
-                    response_text=text_out,
-                    response_json=None,
-                    ttl_seconds=ttl_seconds,
-                )
-            return text_out
-        except Exception as exc:
-            err_str = str(exc)
-            low_err = err_str.lower()
-            op_status = (
-                "RATE_LIMITED"
-                if ("429" in err_str or "quota" in low_err or "rate" in low_err or "resource_exhausted" in low_err)
-                else "FAILED"
-            )
-            self._log_operation(
-                task_type=task_type,
-                model_name=target_model,
-                status=op_status,
-                latency_ms=int((time.perf_counter() - t0) * 1000),
-                user_id=user_id,
-                error_type=type(exc).__name__,
-                error_message=err_str[:250],
-            )
-            logger.warning("Gemini %s failed (%s): %s", task_type, op_status, err_str[:180])
-            return None
+        return text_out
 
     def generate_json(
         self,
@@ -422,8 +662,10 @@ class GeminiService:
         user_id: Optional[int] = None,
     ) -> Optional[Any]:
         t0 = time.perf_counter()
-        target_model = self._resolve_model(model_tier)
-        if not self.is_available:
+        chain = self._resolve_provider_chain()
+        primary_provider = chain[0] if chain else "gemini"
+        target_model = self._resolve_model(model_tier, provider=primary_provider) if chain else self._resolve_model(model_tier)
+        if not chain:
             self._log_operation(
                 task_type=task_type,
                 model_name=target_model,
@@ -452,108 +694,75 @@ class GeminiService:
         if cache_key:
             cached = self._read_cache(cache_key)
             if cached is not None:
+                parsed_cached = None
                 if response_schema is not None:
                     try:
-                        validated = response_schema.model_validate_json(cached)
-                        self._log_operation(
-                            task_type=task_type,
-                            model_name=target_model,
-                            status="SUCCESS",
-                            latency_ms=int((time.perf_counter() - t0) * 1000),
-                            cache_hit=True,
-                            user_id=user_id,
-                            prompt_tokens=0,
-                            output_tokens=0,
-                            total_tokens=0,
-                            estimated_cost_usd=0.0,
-                        )
-                        return validated
+                        parsed_cached = response_schema.model_validate_json(cached)
                     except Exception:
-                        pass
+                        parsed_cached = None
                 else:
                     parsed_cached = safe_parse_json(cached)
-                    if parsed_cached is not None:
-                        self._log_operation(
-                            task_type=task_type,
-                            model_name=target_model,
-                            status="SUCCESS",
-                            latency_ms=int((time.perf_counter() - t0) * 1000),
-                            cache_hit=True,
-                            user_id=user_id,
-                            prompt_tokens=0,
-                            output_tokens=0,
-                            total_tokens=0,
-                            estimated_cost_usd=0.0,
-                        )
-                        return parsed_cached
+                if parsed_cached is not None:
+                    self._log_operation(
+                        task_type=task_type,
+                        model_name=target_model,
+                        status="SUCCESS",
+                        latency_ms=int((time.perf_counter() - t0) * 1000),
+                        cache_hit=True,
+                        user_id=user_id,
+                        prompt_tokens=0,
+                        output_tokens=0,
+                        total_tokens=0,
+                        estimated_cost_usd=0.0,
+                    )
+                    return parsed_cached
+
+        raw_text, used_model = self._invoke_provider_chain(
+            prompt,
+            task_type=task_type,
+            model_tier=model_tier,
+            temperature=temperature,
+            response_mime_type=mime,
+            response_schema=response_schema,
+            tools=tools,
+            max_output_tokens=max_output_tokens,
+            system_instruction=system_instruction,
+            user_id=user_id,
+        )
+        if not raw_text:
+            return None
 
         try:
-            resp = self._call_gemini_with_retry(
-                prompt,
-                temperature=temperature,
-                response_schema=response_schema,
-                model_name=target_model,
-                response_mime_type=mime,
-                tools=tools,
-                max_output_tokens=max_output_tokens,
-                system_instruction=system_instruction,
-            )
-            raw_text = getattr(resp, "text", None) or ""
-            pt, ot, tt, cost = self._extract_usage(resp, target_model)
-            retries = getattr(resp, "_tf_retry_count", 0)
-
-            parsed_val: Any = None
             if response_schema is not None:
                 parsed_val = response_schema.model_validate_json(raw_text)
             else:
                 parsed_val = safe_parse_json(raw_text)
                 if parsed_val is None:
                     raise ValueError("Response text was not valid JSON")
-
-            self._log_operation(
-                task_type=task_type,
-                model_name=target_model,
-                status="SUCCESS",
-                latency_ms=int((time.perf_counter() - t0) * 1000),
-                retry_count=retries,
-                cache_hit=False,
-                user_id=user_id,
-                prompt_tokens=pt,
-                output_tokens=ot,
-                total_tokens=tt,
-                estimated_cost_usd=cost,
-            )
-            if cache_key and raw_text:
-                store_json = parsed_val.model_dump(mode="json") if response_schema is not None else parsed_val
-                self._write_cache(
-                    cache_key=cache_key,
-                    task_type=task_type,
-                    model_name=target_model,
-                    response_text=raw_text,
-                    response_json=store_json,
-                    ttl_seconds=ttl_seconds,
-                )
-            return parsed_val
         except Exception as exc:
-            err_str = str(exc)
-            low_err = err_str.lower()
-            if "429" in err_str or "quota" in low_err or "rate" in low_err or "resource_exhausted" in low_err:
-                op_status = "RATE_LIMITED"
-            elif isinstance(exc, (ValueError, json.JSONDecodeError)) or "validation" in low_err:
-                op_status = "VALIDATION_ERROR"
-            else:
-                op_status = "FAILED"
             self._log_operation(
                 task_type=task_type,
-                model_name=target_model,
-                status=op_status,
+                model_name=used_model,
+                status="VALIDATION_ERROR",
                 latency_ms=int((time.perf_counter() - t0) * 1000),
                 user_id=user_id,
                 error_type=type(exc).__name__,
-                error_message=err_str[:250],
+                error_message=str(exc)[:250],
             )
-            logger.warning("Gemini JSON %s failed (%s): %s", task_type, op_status, err_str[:180])
+            logger.warning("AI JSON validation failed for %s: %s", task_type, str(exc)[:180])
             return None
+
+        if cache_key:
+            store_json = parsed_val.model_dump(mode="json") if response_schema is not None else parsed_val
+            self._write_cache(
+                cache_key=cache_key,
+                task_type=task_type,
+                model_name=used_model,
+                response_text=raw_text,
+                response_json=store_json,
+                ttl_seconds=ttl_seconds,
+            )
+        return parsed_val
 
     def detect_industry(self, text: str) -> str:
         lower = text.lower()
@@ -1066,7 +1275,7 @@ Return STRICT JSON: {{"answers": [{{"index": 0, "answer": "..."}}]}}"""
 
         return fallback
 
-    def _fallback_extract_job_details(self, text: str, portal: str = "generic", industry: str = "qa_tech") -> Dict[str, Any]:
+    def _fallback_extract_job_details(self, text: str, portal: str = "generic", industry: str = "general_professional") -> Dict[str, Any]:
         extraction_failed = False
         lower = text.lower()
 

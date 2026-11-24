@@ -1,4 +1,3 @@
-import asyncio
 import hashlib
 import logging
 import re
@@ -100,9 +99,6 @@ class JustJoinScraper(BasePortalScraper):
 
         return results
 
-    def _fallback_curated_listings(self) -> List[Dict[str, Any]]:
-        return []
-
     async def _enrich_and_verify_item(
         self,
         item: Dict[str, Any],
@@ -167,30 +163,17 @@ class JustJoinScraper(BasePortalScraper):
     ) -> List[Dict[str, Any]]:
         if not allow_network:
             return []
-
         target_url = search_url or self.SEARCH_URL
         urls = [target_url]
         if "experience-level=" not in target_url:
             urls.append(f"{target_url}&experience-level=junior,mid")
-
-        pages = await asyncio.gather(*(self.fetch_html(u) for u in urls), return_exceptions=True)
-        candidates: List[Dict[str, Any]] = []
-        seen_urls: set[str] = set()
-        for html in pages:
-            if isinstance(html, str) and html:
-                for item in self.parse_html_listings(html):
-                    if item["url"] not in seen_urls:
-                        seen_urls.add(item["url"])
-                        candidates.append(item)
-
-        if not candidates:
-            return []
-
-        enriched = await asyncio.gather(
-            *(self._enrich_and_verify_item(c, candidate_languages=candidate_languages) for c in candidates[:20]),
-            return_exceptions=True,
+        return await self.scrape_and_enrich_urls(
+            urls,
+            self.parse_html_listings,
+            lambda c: self._enrich_and_verify_item(c, candidate_languages=candidate_languages),
+            limit=20,
+            dedupe_key="url",
         )
-        return [x for x in enriched if isinstance(x, dict)]
 
 
 justjoin_scraper = JustJoinScraper()

@@ -295,14 +295,113 @@ class ProfileRepository:
 
         return self._ensure_seeded()
 
-    def get_profession_presets(self) -> Dict[str, Dict[str, str]]:
-        return PROFESSION_MD_PRESETS
-
     def get_preset_md(self, preset_id: str) -> str:
         preset = PROFESSION_MD_PRESETS.get(preset_id)
         if not preset:
             raise ValueError(f"Unknown preset_id: {preset_id}")
         return preset["content"]
+
+    @staticmethod
+    def sync_relational_children(
+        session: Session,
+        profile: CandidateProfile,
+        *,
+        skills_payload: Optional[Dict[str, Any]] = None,
+        work_history: Optional[List[Any]] = None,
+        education_entries: Optional[List[Any]] = None,
+        fallback_role: str = "Role",
+    ) -> None:
+        """Single authoritative sync for CandidateSkill, CandidateExperience, and CandidateEducation rows."""
+        if profile.id is None:
+            return
+        from sqlmodel import delete
+        from .models import CandidateSkill, CandidateExperience, CandidateEducation
+
+        if skills_payload is not None:
+            session.exec(delete(CandidateSkill).where(CandidateSkill.profile_id == profile.id))
+            seen_skills: set[str] = set()
+            for cat_name, items in [
+                ("qa_automation", skills_payload.get("qa_automation", [])),
+                ("manual_qa", skills_payload.get("manual_qa", [])),
+                ("languages", skills_payload.get("languages", [])),
+                ("api_and_performance", skills_payload.get("api_and_performance", [])),
+                ("cicd_and_devops", skills_payload.get("cicd_and_devops", [])),
+                ("tools", skills_payload.get("tools", [])),
+                ("frameworks", skills_payload.get("frameworks", [])),
+                ("general", skills_payload.get("all_skills", [])),
+            ]:
+                for sk in (items or []):
+                    sk_clean = str(sk).strip()
+                    if not sk_clean or sk_clean.lower() in seen_skills:
+                        continue
+                    seen_skills.add(sk_clean.lower())
+                    session.add(
+                        CandidateSkill(
+                            profile_id=profile.id,
+                            user_id=profile.user_id,
+                            skill_name=sk_clean,
+                            category=cat_name,
+                            is_verified=True,
+                        )
+                    )
+
+        if work_history is not None:
+            session.exec(delete(CandidateExperience).where(CandidateExperience.profile_id == profile.id))
+            if work_history:
+                for wh_item in work_history:
+                    if isinstance(wh_item, dict):
+                        session.add(
+                            CandidateExperience(
+                                profile_id=profile.id,
+                                user_id=profile.user_id,
+                                company=str(wh_item.get("company") or "Experience"),
+                                role_title=str(wh_item.get("role") or wh_item.get("title") or fallback_role),
+                                location=str(wh_item.get("location") or ""),
+                                start_date=str(wh_item.get("dates") or wh_item.get("start_date") or ""),
+                                highlights=list(wh_item.get("highlights") or wh_item.get("bullets") or []),
+                            )
+                        )
+            elif skills_payload and skills_payload.get("achievements"):
+                session.add(
+                    CandidateExperience(
+                        profile_id=profile.id,
+                        user_id=profile.user_id,
+                        company="Professional Experience",
+                        role_title=str(fallback_role or "Specialist"),
+                        highlights=list(skills_payload.get("achievements", [])[:10]),
+                    )
+                )
+
+        if education_entries is not None:
+            session.exec(delete(CandidateEducation).where(CandidateEducation.profile_id == profile.id))
+            for edu_item in education_entries:
+                if isinstance(edu_item, dict):
+                    inst = str(edu_item.get("institution") or edu_item.get("school") or "").strip()
+                    deg = str(edu_item.get("degree") or edu_item.get("field") or inst).strip()
+                    if not (inst or deg):
+                        continue
+                    session.add(
+                        CandidateEducation(
+                            profile_id=profile.id,
+                            user_id=profile.user_id,
+                            institution=(inst or deg)[:120],
+                            degree=deg[:200],
+                            field_of_study=str(edu_item.get("field_of_study") or edu_item.get("focus") or "")[:250] or None,
+                            graduation_year=str(edu_item.get("dates") or edu_item.get("years") or edu_item.get("graduation_year") or "")[:32],
+                            coursework=[str(m).strip() for m in (edu_item.get("modules") or []) if str(m).strip()],
+                        )
+                    )
+                else:
+                    edu_str = str(edu_item).strip()
+                    if edu_str:
+                        session.add(
+                            CandidateEducation(
+                                profile_id=profile.id,
+                                user_id=profile.user_id,
+                                institution=edu_str[:120],
+                                degree=edu_str[:200],
+                            )
+                        )
 
     def _default_faq_bank(self, cand: Dict[str, Any]) -> List[Dict[str, Any]]:
         items: List[Dict[str, Any]] = []
@@ -492,9 +591,6 @@ class ProfileRepository:
         owner_email: Optional[str] = None,
         user_id: Optional[int] = None,
     ) -> Dict[str, Any]:
-        from sqlmodel import delete
-        from .models import CandidateExperience, CandidateEducation
-
         save_copy = dict(data)
         raw_md = save_copy.pop("skills_md_raw", None)
         save_copy.pop("parsed_skills_taxonomy", None)
@@ -589,37 +685,12 @@ class ProfileRepository:
             profile.updated_at = utc_now()
             session.add(profile)
 
-            if profile.id is not None and isinstance(save_copy.get("work_history"), list):
-                session.exec(delete(CandidateExperience).where(CandidateExperience.profile_id == profile.id))
-                for wh_item in save_copy["work_history"]:
-                    if isinstance(wh_item, dict):
-                        session.add(
-                            CandidateExperience(
-                                profile_id=profile.id,
-                                user_id=profile.user_id,
-                                company=str(wh_item.get("company") or "Experience"),
-                                role_title=str(wh_item.get("role") or wh_item.get("title") or "Role"),
-                                location=str(wh_item.get("location") or ""),
-                                start_date=str(wh_item.get("dates") or wh_item.get("start_date") or ""),
-                                highlights=list(wh_item.get("highlights") or []),
-                            )
-                        )
-            if profile.id is not None and isinstance(save_copy.get("education"), list):
-                session.exec(delete(CandidateEducation).where(CandidateEducation.profile_id == profile.id))
-                for edu_item in save_copy["education"]:
-                    if isinstance(edu_item, dict):
-                        session.add(
-                            CandidateEducation(
-                                profile_id=profile.id,
-                                user_id=profile.user_id,
-                                institution=str(edu_item.get("institution") or "")[:120],
-                                degree=str(edu_item.get("degree") or "")[:200],
-                                field_of_study=str(edu_item.get("field_of_study") or edu_item.get("focus") or "")[:250],
-                                graduation_year=str(edu_item.get("dates") or edu_item.get("graduation_year") or "")[:32],
-                                coursework=list(edu_item.get("modules") or []),
-                            )
-                        )
-
+            self.sync_relational_children(
+                session,
+                profile,
+                work_history=save_copy["work_history"] if isinstance(save_copy.get("work_history"), list) else None,
+                education_entries=save_copy["education"] if isinstance(save_copy.get("education"), list) else None,
+            )
             session.commit()
 
         return self.get_data(owner_email=owner_email, user_id=user_id)
@@ -670,9 +741,15 @@ class ProfileRepository:
         if loc_m:
             result["location"] = loc_m.group(1).strip()
 
-        name_m = re.search(r"(?:Full Name|სახელი და გვარი|Name)\**\s*:\**\s*([^\n]+)", md_content, re.I)
+        name_m = re.search(
+            r"(?:\*\*Author:\*\*|\*\*Name:\*\*|Full Name|Author|Candidate|სახელი და გვარი|Name)\**\s*:\**\s*([^\n\r*]+)",
+            md_content,
+            re.I,
+        )
         if name_m:
-            result["full_name"] = name_m.group(1).strip()
+            cand_val = name_m.group(1).strip()
+            if len(cand_val) > 2 and not any(w in cand_val.lower() for w in ("http", "api", "case study")):
+                result["full_name"] = cand_val
 
         notice_m = re.search(
             r"(?:Availability\s*/\s*Notice\s*Period|Notice\s*Period|Availability|Earliest\s*Start|დაწყების\s*თარიღი)\**\s*:\**\s*([^\n]+)",
@@ -681,6 +758,13 @@ class ProfileRepository:
         )
         if notice_m:
             result["notice_period"] = re.sub(r"[*_`]+", "", notice_m.group(1)).strip()
+
+        gh_m = re.search(r"https?://(?:www\.)?github\.com/[^\s)]+", md_content, re.I)
+        if gh_m:
+            result["github_url"] = gh_m.group(0)
+        li_m = re.search(r"https?://(?:www\.)?linkedin\.com/in/[^\s)]+", md_content, re.I)
+        if li_m:
+            result["linkedin_url"] = li_m.group(0)
 
         summary_lines = []
         in_summary = False
@@ -971,78 +1055,10 @@ class ProfileRepository:
         owner_email: Optional[str] = None,
         user_id: Optional[int] = None,
     ) -> CandidateProfile:
-        from sqlmodel import delete
-        from .models import CandidateExperience, CandidateEducation
         from ..services.profile_service import profile_service
-        profile = profile_service.upsert_candidate_profile(
+        return profile_service.upsert_candidate_profile(
             md_content, mark_uploaded=True, owner_email=owner_email, user_id=user_id
         )
-        parsed = self.parse_profile_from_md(md_content)
-        with Session(engine, expire_on_commit=False) as session:
-            db_prof = session.get(CandidateProfile, profile.id)
-            if db_prof:
-                skills_copy = dict(db_prof.parsed_skills or {})
-                vault = dict(skills_copy.get("ground_truth_vault") or {})
-                cand_v = dict(vault.get("candidate") or {})
-                comp_v = dict(cand_v.get("compensation") or {})
-                comp_v["notice_period"] = parsed.get("notice_period") or ""
-                cand_v["compensation"] = comp_v
-                vault["candidate"] = cand_v
-                vault["work_history"] = list(parsed.get("work_history") or [])
-                if parsed.get("projects"):
-                    vault["projects"] = list(parsed["projects"])
-                    skills_copy["projects"] = list(parsed["projects"])
-                if parsed.get("certifications"):
-                    vault["certifications"] = list(parsed["certifications"])
-                    skills_copy["courses_and_certifications"] = list(parsed["certifications"])
-                if parsed.get("spoken_languages"):
-                    cand_v = dict(vault.get("candidate") or {})
-                    cand_v["languages"] = list(parsed["spoken_languages"])
-                    vault["candidate"] = cand_v
-                    skills_copy["spoken_languages"] = [
-                        f"{l['language']} ({l['proficiency']})" if l.get("proficiency") else l["language"]
-                        for l in parsed["spoken_languages"]
-                    ]
-                if db_prof.id is not None:
-                    session.exec(delete(CandidateExperience).where(CandidateExperience.profile_id == db_prof.id))
-                    for wh_item in vault["work_history"]:
-                        if isinstance(wh_item, dict):
-                            session.add(
-                                CandidateExperience(
-                                    profile_id=db_prof.id,
-                                    user_id=db_prof.user_id,
-                                    company=str(wh_item.get("company") or "Experience"),
-                                    role_title=str(wh_item.get("role") or wh_item.get("title") or "Role"),
-                                    location=str(wh_item.get("location") or ""),
-                                    start_date=str(wh_item.get("dates") or wh_item.get("start_date") or ""),
-                                    highlights=list(wh_item.get("highlights") or []),
-                                )
-                            )
-                grouped_edu = list(parsed.get("education") or vault.get("education") or [])
-                vault["education"] = grouped_edu
-                skills_copy["education"] = grouped_edu
-                if db_prof.id is not None and grouped_edu:
-                    session.exec(delete(CandidateEducation).where(CandidateEducation.profile_id == db_prof.id))
-                    for edu_item in grouped_edu:
-                        if isinstance(edu_item, dict):
-                            session.add(
-                                CandidateEducation(
-                                    profile_id=db_prof.id,
-                                    user_id=db_prof.user_id,
-                                    institution=str(edu_item.get("institution") or "")[:120],
-                                    degree=str(edu_item.get("degree") or "")[:200],
-                                    field_of_study=str(edu_item.get("field_of_study") or edu_item.get("focus") or "")[:250],
-                                    graduation_year=str(edu_item.get("dates") or edu_item.get("graduation_year") or "")[:32],
-                                    coursework=list(edu_item.get("modules") or []),
-                                )
-                            )
-                skills_copy["ground_truth_vault"] = vault
-                db_prof.parsed_skills = skills_copy
-                session.add(db_prof)
-                session.commit()
-                session.refresh(db_prof)
-                profile = db_prof
-        return profile
 
     def save_skills_md(
         self,
@@ -1059,20 +1075,8 @@ class ProfileRepository:
         taxonomy = matcher_service.parse_skills_markdown(md_content)
         return list(taxonomy.get("all_skills") or [])
 
-    def get_candidate(self) -> Dict[str, Any]:
-        return self.get_data().get("candidate", {})
-
-    def get_skills(self) -> Dict[str, Any]:
-        return self.get_data().get("skills", {})
-
-    def get_work_history(self) -> list:
-        return self.get_data().get("work_history", [])
-
     def get_cv_variants(self) -> Dict[str, Any]:
         return self.get_data().get("cv_variants", {})
-
-    def get_faq_bank(self) -> list:
-        return self.get_data().get("faq_bank", [])
 
 
 profile_repository = ProfileRepository()

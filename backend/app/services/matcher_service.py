@@ -1,6 +1,6 @@
-import json
 import logging
 import re
+from datetime import datetime
 from typing import Dict, Any, Iterable, List, Optional, Tuple
 from .gemini_service import MULTI_INDUSTRY_SKILLS, gemini_service
 
@@ -202,6 +202,61 @@ def dedupe_skills_case_insensitive(items: List[str]) -> List[str]:
     return [seen[k] for k in ordered_keys]
 
 
+_WORK_SECTION_RE = re.compile(
+    r"^##+\s*(?:work\s+experience|professional\s+experience|employment(?:\s+history)?|experience|career\s+history|სამუშაო\s+გამოცდილება|გამოცდილება)\b",
+    re.I,
+)
+_NON_WORK_SECTION_RE = re.compile(
+    r"^##+\s*(?:education|academic|skills|certifications|projects|languages|courses|references|განათლება|უნარები|პროექტები)\b",
+    re.I,
+)
+_DATE_RANGE_RE = re.compile(
+    r"(?:(?:0?[1-9]|1[0-2])\s*/\s*)?(20\d{2}|19[89]\d)\s*[–—\-]\s*(?:(?:0?[1-9]|1[0-2])\s*/\s*)?(20\d{2}|present|current|now|დღემდე)",
+    re.I,
+)
+
+
+def _infer_experience_years_from_dates(text: str) -> Optional[float]:
+    """Infers cumulative non-overlapping years from explicit Work Experience date ranges (excluding internships/education)."""
+    in_work = False
+    intervals: List[Tuple[int, int]] = []
+    curr_year = datetime.now().year
+    for raw_line in (text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("##"):
+            if _WORK_SECTION_RE.match(line):
+                in_work = True
+                continue
+            if _NON_WORK_SECTION_RE.match(line):
+                in_work = False
+                continue
+        if not in_work:
+            continue
+        low = line.lower()
+        if any(w in low for w in ("intern", "internship", "trainee", "student", "bootcamp", "სტაჟიორ", "სასწავლო")):
+            continue
+        for m in _DATE_RANGE_RE.finditer(line):
+            start_y = int(m.group(1))
+            end_raw = m.group(2).lower()
+            end_y = curr_year if end_raw in ("present", "current", "now", "დღემდე") else int(end_raw)
+            if 1990 <= start_y <= curr_year and start_y <= end_y <= curr_year + 1:
+                intervals.append((start_y, max(start_y, end_y)))
+    if not intervals:
+        return None
+    intervals.sort()
+    merged: List[Tuple[int, int]] = [intervals[0]]
+    for s, e in intervals[1:]:
+        ps, pe = merged[-1]
+        if s <= pe:
+            merged[-1] = (ps, max(pe, e))
+        else:
+            merged.append((s, e))
+    total = sum(max(1, e - s) if e > s else 0.5 for s, e in merged)
+    return round(min(30.0, float(total)), 1) if total > 0 else None
+
+
 class MatcherService:
     """
     1. Parses uploaded skills.md into structured QA/SDET + Multi-Industry JSON taxonomy
@@ -242,14 +297,19 @@ class MatcherService:
             "all_skills": [],
         }
 
-        # Extract years of experience ONLY when explicitly stated (never fabricate 1.5 yrs)
+        # Extract years of experience from explicit statement or verified Work Experience date ranges
         yr_match = re.search(r"(\d+(?:\.\d+)?)\s*\+?\s*(?:years?|yrs?|წელი|წლიანი)", lower_text)
         if yr_match:
             taxonomy["years_of_experience"] = float(yr_match.group(1))
             taxonomy["experience_status"] = "confirmed"
-        elif any(w in lower_text for w in ["portfolio project", "entry-level", "junior", "intern", "trainee", "დამწყები", "სტაჟირება"]):
-            taxonomy["years_of_experience"] = None
-            taxonomy["experience_status"] = "internship_or_project"
+        else:
+            inferred_years = _infer_experience_years_from_dates(text)
+            if inferred_years is not None and inferred_years >= 1.0:
+                taxonomy["years_of_experience"] = inferred_years
+                taxonomy["experience_status"] = "confirmed"
+            elif any(w in lower_text for w in ["portfolio project", "entry-level", "junior", "intern", "trainee", "დამწყები", "სტაჟირება"]):
+                taxonomy["years_of_experience"] = None
+                taxonomy["experience_status"] = "internship_or_project"
 
         # Infer seniority level transparently (treat unknown/entry as JUNIOR ceiling)
         exp = float(taxonomy["years_of_experience"]) if taxonomy["years_of_experience"] is not None else 0.0
@@ -373,9 +433,9 @@ Markdown:
         return taxonomy
 
     SPECIALIZED_PLATFORMS = [
-        "Salesforce", "WordPress", "Shopify", "SAP", "Game Testing",
-        "Gamedev", "Unity", "iGaming", "Swift", "Kotlin", "Ruby", "PHP"
+        "Game Testing", "Gamedev", "Unity", "iGaming", "Swift", "Kotlin", "Ruby", "PHP",
     ]
+    TECH_ONLY_SPECIALTIES = ["Salesforce", "WordPress", "Shopify", "SAP"]
 
     def extract_job_requirements(self, title: str, description: str) -> List[str]:
         """Extracts actual required technical and domain skills from job title + description without fabrication."""
@@ -536,17 +596,6 @@ Markdown:
 
         return (True, "Seniority and experience requirements satisfied.")
 
-    def validate_domain_gate(
-        self,
-        parsed_skills: Dict[str, Any],
-        job_title: str,
-        job_description: str,
-        portal: str = "custom",
-    ) -> Tuple[bool, str]:
-        """Backwards-compatible wrapper around universal domain-agnostic alignment classifier."""
-        tier, reason = self.classify_domain_alignment(parsed_skills, job_title, job_description, portal=portal)
-        return (tier != "NONE", reason)
-
     def classify_domain_alignment(
         self,
         parsed_skills: Dict[str, Any],
@@ -560,35 +609,44 @@ Markdown:
         Universal Domain-Agnostic Alignment Classifier:
         Returns (tier_hint, aligned_role_or_reason) where tier_hint is:
         - "DIRECT" -> directly matches candidate's primary role/industry
-        - "ADJACENT" -> transferable skills overlap with an optimal adjacent role (e.g., QA SQL/Postman -> Technical Support)
+        - "ADJACENT" -> transferable skills overlap with an optimal adjacent role
         - "PUBLIC_INTERNSHIP" -> vacancy.hr.gov.ge public administration / entry internship
         - "NONE" -> off-domain mismatch
         """
         title_lower = (job_title or "").lower()
         combined = f"{job_title}\n{job_description}".lower()
-        target_industry = str(parsed_skills.get("target_industry") or "qa_tech").lower()
+        target_industry = str(parsed_skills.get("target_industry") or "general_professional").lower()
         search_q = parsed_skills.get("search_queries") or {}
         primary_role = str(parsed_skills.get("primary_role") or parsed_skills.get("headline") or "").lower()
         adjacent_roles = [str(r) for r in (parsed_skills.get("adjacent_roles") or []) if r]
 
-        # Build direct domain signals from search_queries + primary_role tokens + catalog
+        # Build direct domain signals from search_queries + primary_role tokens + domain catalog
+        default_domain_signals = {
+            "qa_tech": ["qa", "quality assurance", "quality engineer", "test", "tester", "sdet", "automation", "ტესტ", "ხარისხ"],
+            "software_engineering": ["developer", "software engineer", "backend", "frontend", "full stack", "პროგრამისტი", "დეველოპერი"],
+            "data_analytics": ["data analyst", "business intelligence", "bi analyst", "analytics", "sql", "power bi", "tableau", "ანალიტიკოს"],
+            "finance_accounting": ["accountant", "accounting", "finance", "financial", "audit", "tax", "payroll", "ifrs", "treasury", "controller", "ბუღალტ", "ფინანს", "აუდიტ"],
+            "hr_recruiting": ["hr", "human resources", "recruiter", "talent acquisition", "people operations", "onboarding", "hrbp", "ადამიანური რესურს", "რეკრუტ"],
+            "marketing_growth": ["marketing", "seo", "smm", "content", "brand", "growth", "performance marketing", "copywriter", "მარკეტინგ"],
+            "sales_bd": ["sales", "account executive", "account manager", "business development", "b2b", "გაყიდვ"],
+            "logistics_supply_chain": ["logistics", "supply chain", "procurement", "warehouse", "freight", "dispatch", "inventory", "ლოჯისტიკ", "შესყიდვ", "მომარაგებ"],
+            "public_admin_legal": ["legal", "lawyer", "counsel", "compliance", "public policy", "procurement", "იურისტ", "საჯარო"],
+            "receptionist_hospitality": ["reception", "front desk", "hospitality", "concierge", "hotel", "guest", "მიმღებ", "რეცეფც", "სასტუმრ", "ადმინისტრატორ"],
+            "healthcare_hospital": ["medical", "hospital", "clinic", "patient", "სამედიცინო", "კლინიკ", "პაციენტ", "რეგისტრატორ"],
+            "customer_service": ["support", "customer", "client", "call center", "helpdesk", "მხარდაჭერ", "ოპერატორ", "ქოლ"],
+        }
         direct_signals = [str(s).lower() for s in (search_q.get("domain_keywords") or []) if len(str(s)) >= 2]
-        if target_industry == "qa_tech" and not direct_signals:
-            direct_signals = ["qa", "quality assurance", "quality engineer", "test", "tester", "sdet", "automation", "ტესტ", "ხარისხ"]
-        elif target_industry == "receptionist_hospitality" and not direct_signals:
-            direct_signals = ["reception", "front desk", "hospitality", "concierge", "hotel", "guest", "მიმღებ", "რეცეფც", "სასტუმრ", "ადმინისტრატორ"]
-        elif target_industry == "healthcare_hospital" and not direct_signals:
-            direct_signals = ["medical", "hospital", "clinic", "patient", "სამედიცინო", "კლინიკ", "პაციენტ", "რეგისტრატორ"]
-        elif target_industry == "customer_service" and not direct_signals:
-            direct_signals = ["support", "customer", "client", "call center", "helpdesk", "მხარდაჭერ", "ოპერატორ", "ქოლ"]
+        if not direct_signals:
+            direct_signals = list(default_domain_signals.get(target_industry, []))
         for tok in re.split(r"[\s/&|,-]+", primary_role):
-            if len(tok) >= 4 and tok not in ("engineer", "specialist", "coordinator", "junior", "associate", "senior") and tok not in direct_signals:
+            if len(tok) >= 4 and tok not in ("engineer", "specialist", "coordinator", "junior", "associate", "senior", "manager") and tok not in direct_signals:
                 direct_signals.append(tok)
 
         adj_signals = [str(s).lower() for s in (search_q.get("adjacent_keywords") or []) if len(str(s)) >= 3]
-        c_list = [str(s).lower() for s in (candidate_skills or parsed_skills.get("verified_skills") or parsed_skills.get("all_skills") or [])]
-        r_list = [str(s).lower() for s in (required_skills or [])]
-        overlap_count = sum(1 for r in r_list if any(r in c or c in r for c in c_list))
+        c_list = [str(s) for s in (candidate_skills or parsed_skills.get("verified_skills") or parsed_skills.get("all_skills") or [])]
+        c_blob = " ".join(c_list).lower()
+        r_list = [str(s) for s in (required_skills or [])]
+        overlap_count = sum(1 for r in r_list if skills_match_token(r, c_list, c_blob))
 
         edu_entries = parsed_skills.get("education") or []
         courses_list = [str(c).lower() for c in (parsed_skills.get("courses_and_certifications") or []) if c]
@@ -703,14 +761,19 @@ Markdown:
             }
 
         # Fail-Safe Foreign Remote Gate: Foreign portal jobs (Djinni, JustJoin, DOU, LinkedIn non-GE)
-        # MUST be 100% remote from Georgia — disqualify any hybrid or on-site role.
+        # MUST be 100% remote from Georgia unless the posting is explicitly located in Georgia (Tbilisi/Batumi/Kutaisi).
         if portal in ("djinni.co", "justjoin.it", "dou.ua") or portal.startswith("linkedin"):
             from .scrapers.base_scraper import evaluate_remote_and_language_gate
             cand_langs = parsed_skills.get("spoken_languages") or []
+            td_low = f"{title}\n{description}".lower()
+            is_local_ge = any(k in td_low for k in ("tbilisi", "batumi", "kutaisi", "თბილის", "ბათუმ", "ქუთაის", "საქართველო"))
+            loc_hint = "Tbilisi, Georgia" if (portal.startswith("linkedin") and is_local_ge) else (
+                "Remote" if portal in ("djinni.co", "justjoin.it", "dou.ua") else "International"
+            )
             _, gate_status, gate_reason, _ = evaluate_remote_and_language_gate(
                 title=title,
                 description=description,
-                location_text="Remote" if portal in ("djinni.co", "justjoin.it", "dou.ua") else "International",
+                location_text=loc_hint,
                 portal=portal,
                 candidate_languages=cand_langs,
             )
@@ -793,9 +856,13 @@ Markdown:
         desc_lower = (description or "").lower()
 
         # Check for unpossessed specialized platforms mentioned prominently in title
+        target_ind = str(parsed_skills.get("target_industry") or "general_professional").lower()
+        active_specialties = list(self.SPECIALIZED_PLATFORMS) + (
+            self.TECH_ONLY_SPECIALTIES if target_ind in ("qa_tech", "software_engineering") else []
+        )
         title_specialty_mismatch = any(
             re.search(r"\b" + re.escape(sp.lower()) + r"\b", title_lower) and sp.lower() not in cand_blob
-            for sp in self.SPECIALIZED_PLATFORMS
+            for sp in active_specialties
         )
         if title_specialty_mismatch:
             return {

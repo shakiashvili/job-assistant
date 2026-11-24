@@ -35,7 +35,7 @@ def list_portal_vacancies(current_user: User = Depends(get_current_user)):
         if not _is_profile_uploaded_for_user(profile, current_user.email):
             return []
 
-        industry = str((profile.parsed_skills or {}).get("target_industry") or "qa_tech")
+        industry = str((profile.parsed_skills or {}).get("target_industry") or "general_professional")
         is_guest = (current_user.email or "").strip().lower() == "guest@talentflow.local"
         rows: List[JobPosting] = []
         if not is_guest:
@@ -110,7 +110,7 @@ async def audit_job_endpoint(
         response = await audit_service.audit_job(
             raw_text=request.raw_text,
             job_url=request.job_url,
-            variant=request.variant or "qa_automation",
+            variant=request.variant or "tailored",
             skills_md_override=request.skills_md_override,
             cv_language=request.cv_language or "en",
             owner_email=current_user.email,

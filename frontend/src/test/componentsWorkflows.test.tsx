@@ -8,6 +8,7 @@ import { ApplicationTracker } from '../components/ApplicationTracker';
 import { StageModal } from '../components/StageModal';
 import { AuthModal } from '../components/AuthModal';
 import { B2BMarketHub } from '../components/B2BMarketHub';
+import { Navbar } from '../components/Navbar';
 import * as api from '../services/api';
 import { DbJobPosting, GroundTruth } from '../types';
 
@@ -420,5 +421,92 @@ describe('Core Frontend Component Workflows', () => {
 
     expect(await screen.findByText(/Passwordless Email OTP is not enabled on this deployment/i)).toBeInTheDocument();
     expect(screen.queryByText(/Configure Gmail SMTP Sender/i)).not.toBeInTheDocument();
+  });
+
+  it('Navbar exposes primary desktop links, accessible More dropdown, and mobile More menu for all sections', async () => {
+    const user = userEvent.setup();
+    const onTab = vi.fn();
+
+    render(
+      <Navbar
+        activeTab="audit"
+        setActiveTab={onTab}
+        backendHealth={{ connected: true, model: 'gemini-2.5-flash', mode: 'live', provider: 'Gemini' }}
+        currentUser={{ id: 1, email: 'nino@example.ge', full_name: 'Nino Beridze', is_admin: true, is_active: true, has_gmail_oauth: false }}
+        onOpenAuth={vi.fn()}
+        onLogout={vi.fn()}
+      />
+    );
+
+    const jobsButtons = screen.getAllByRole('button', { name: /^jobs$/i });
+    expect(jobsButtons[0]).toHaveAttribute('aria-current', 'page');
+
+    const moreBtn = screen.getByRole('button', { name: /more navigation sections/i });
+    expect(moreBtn).toHaveAttribute('aria-expanded', 'false');
+    await user.click(moreBtn);
+    expect(moreBtn).toHaveAttribute('aria-expanded', 'true');
+
+    await user.click(screen.getByRole('menuitem', { name: /remote & b2b/i }));
+    expect(onTab).toHaveBeenCalledWith('b2b');
+    expect(moreBtn).toHaveAttribute('aria-expanded', 'false');
+
+    const mobileMore = screen.getByRole('button', { name: /more sections/i });
+    await user.click(mobileMore);
+    expect(screen.getByRole('menuitem', { name: /action plans/i })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /admin panel/i })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    expect(mobileMore).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('DiscoveryFeed surfaces API errors with Retry and toggles advanced filters and sorting', async () => {
+    const user = userEvent.setup();
+    const onRetry = vi.fn();
+    const onFilters = vi.fn();
+
+    render(
+      <DiscoveryFeed
+        candidateProfile={{ full_name: 'Nino Kapanadze', headline: 'Financial Analyst' }}
+        visibleJobs={[]}
+        profileUploaded={true}
+        isScraping={false}
+        isLoadingJobs={false}
+        jobsError="Server unavailable (503)"
+        onRetryJobs={onRetry}
+        advancedFilters={{ sort_by: 'relevance' }}
+        onAdvancedFiltersChange={onFilters}
+        selectedPortalFilter="ALL"
+        onSelectPortalFilter={vi.fn()}
+        dbStatusFilter="ALL"
+        onSelectStatusFilter={vi.fn()}
+        tierTab="ALL"
+        onSelectTierTab={vi.fn()}
+        tierCounts={{ ALL: 0, DIRECT: 0, ADJACENT: 0, PUBLIC_INTERNSHIP: 0 }}
+        statusCounts={{ ALL: 0, STAGED: 0, AUDITED: 0 }}
+        page={1}
+        totalPages={1}
+        totalJobs={0}
+        onPageChange={vi.fn()}
+        searchQuery=""
+        onSearchQueryChange={vi.fn()}
+        scrapeStats={null}
+        preparedEmailPkg={null}
+        onDismissEmailPkg={vi.fn()}
+        draftingJobId={null}
+        onRunScrapers={vi.fn()}
+        onUploadClick={vi.fn()}
+        onSelectJob={vi.fn()}
+        onDraftInGmail={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText(/Server unavailable \(503\)/i)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /retry/i }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+
+    await user.selectOptions(screen.getByLabelText(/sort vacancies/i), 'salary_desc');
+    expect(onFilters).toHaveBeenCalledWith(expect.objectContaining({ sort_by: 'salary_desc' }));
+
+    await user.click(screen.getByRole('button', { name: /filters/i }));
+    expect(screen.getByLabelText(/filter by experience level/i)).toBeInTheDocument();
   });
 });

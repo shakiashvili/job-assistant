@@ -6,7 +6,7 @@ import uuid
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query, Depends
 from pydantic import BaseModel
-from sqlalchemy import func, case
+from sqlalchemy import String, cast, func, case
 from sqlmodel import Session, select, or_, and_
 
 from ..db.database import engine, init_db
@@ -295,6 +295,16 @@ def get_scrape_task_status(
         }
 
 
+@router.get("/jobs/sources/health")
+def get_job_sources_health(current_user: User = Depends(get_current_user)) -> Dict[str, Any]:
+    """Returns per-portal scraper health, last successful sync, latency, and error diagnostics."""
+    del current_user
+    return {
+        "sources": scraper_orchestrator.get_source_health(),
+        "default_portals": list(scraper_orchestrator.DEFAULT_PORTALS),
+    }
+
+
 @router.get("/jobs")
 async def list_scraped_jobs(
     page: int = Query(1, ge=1, description="1-based page index"),
@@ -305,13 +315,16 @@ async def list_scraped_jobs(
     tier: Optional[str] = Query(None, description="Optional tier filter: direct, adjacent, or internship"),
     min_score: Optional[float] = Query(60.0, description="Minimum suitability score threshold."),
     include_filtered: bool = Query(False, description="Include FILTERED_OUT (blocked/disqualified) jobs."),
-    search: Optional[str] = Query(None, description="Keyword search across title, company, description"),
+    search: Optional[str] = Query(None, description="Multi-keyword search across title, company, description, rationale"),
     country: Optional[str] = Query(None),
     city: Optional[str] = Query(None),
     remote_type: Optional[str] = Query(None, description="REMOTE, HYBRID, or ONSITE"),
     salary_min: Optional[float] = Query(None),
     language: Optional[str] = Query(None),
     technology: Optional[str] = Query(None),
+    experience_level: Optional[str] = Query(None, description="intern, junior, mid, or senior"),
+    employment_type: Optional[str] = Query(None, description="full_time, part_time, contract, or internship"),
+    sort_by: str = Query("relevance", description="relevance, newest, salary_desc, or company_asc"),
     only_new: bool = Query(False, description="Exclude jobs already applied to or saved"),
     only_saved: bool = Query(False, description="Only return jobs bookmarked by current user"),
     b2b_only: bool = Query(False, description="Only return remote B2B / international contractor eligible roles"),
@@ -359,14 +372,19 @@ async def list_scraped_jobs(
             return val.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
         if search and search.strip():
-            kw = f"%{_esc_like(search.strip())}%"
-            base_conds.append(
-                or_(
-                    JobPosting.title.ilike(kw, escape="\\"),
-                    JobPosting.company.ilike(kw, escape="\\"),
-                    JobPosting.description_raw.ilike(kw, escape="\\"),
+            tokens = [tok for tok in _re.split(r"[\s,;]+", search.strip()) if len(tok) >= 2][:6]
+            if not tokens:
+                tokens = [search.strip()]
+            for tok in tokens:
+                kw = f"%{_esc_like(tok)}%"
+                base_conds.append(
+                    or_(
+                        JobPosting.title.ilike(kw, escape="\\"),
+                        JobPosting.company.ilike(kw, escape="\\"),
+                        JobPosting.description_raw.ilike(kw, escape="\\"),
+                        JobPosting.match_rationale.ilike(kw, escape="\\"),
+                    )
                 )
-            )
         if country and country.strip():
             c_clean = country.strip()
             ckw = f"%{_esc_like(c_clean)}%"
@@ -406,16 +424,62 @@ async def list_scraped_jobs(
         if salary_min is not None and salary_min > 0:
             base_conds.append(JobPosting.salary_max >= salary_min)
         if technology and technology.strip():
-            tkw = f"%{_esc_like(technology.strip())}%"
-            base_conds.append(
-                or_(
-                    JobPosting.title.ilike(tkw, escape="\\"),
-                    JobPosting.description_raw.ilike(tkw, escape="\\"),
+            tech_tokens = [tok for tok in _re.split(r"[,;]+", technology.strip()) if tok.strip()][:5]
+            for tech_tok in tech_tokens:
+                tkw = f"%{_esc_like(tech_tok.strip())}%"
+                base_conds.append(
+                    or_(
+                        JobPosting.title.ilike(tkw, escape="\\"),
+                        JobPosting.description_raw.ilike(tkw, escape="\\"),
+                        JobPosting.match_rationale.ilike(tkw, escape="\\"),
+                    )
                 )
-            )
         if language and language.strip():
             lkw = f"%{_esc_like(language.strip())}%"
-            base_conds.append(JobPosting.description_raw.ilike(lkw, escape="\\"))
+            base_conds.append(
+                or_(
+                    JobPosting.description_raw.ilike(lkw, escape="\\"),
+                    cast(JobPosting.language_requirements, String).ilike(lkw, escape="\\"),
+                )
+            )
+        if experience_level and experience_level.strip().lower() not in ("all", ""):
+            exp_low = experience_level.strip().lower()
+            exp_patterns = {
+                "intern": ["intern", "trainee", "სტაჟირ", "graduate", "entry"],
+                "junior": ["junior", "entry", "associate", "0-2", "1-2", "1+ year"],
+                "mid": ["mid", "middle", "2-4", "3-5", "3+ year", "regular"],
+                "senior": ["senior", "lead", "principal", "staff", "5+ year", "architect"],
+            }.get(exp_low, [exp_low])
+            base_conds.append(
+                or_(
+                    *[
+                        or_(
+                            JobPosting.title.ilike(f"%{_esc_like(p)}%", escape="\\"),
+                            JobPosting.description_raw.ilike(f"%{_esc_like(p)}%", escape="\\"),
+                        )
+                        for p in exp_patterns
+                    ]
+                )
+            )
+        if employment_type and employment_type.strip().lower() not in ("all", ""):
+            emp_low = employment_type.strip().lower()
+            emp_patterns = {
+                "full_time": ["full-time", "full time", "სრული განაკვეთ"],
+                "part_time": ["part-time", "part time", "ნახევარი განაკვეთ"],
+                "contract": ["contract", "b2b", "freelance", "contractor"],
+                "internship": ["intern", "internship", "სტაჟირ"],
+            }.get(emp_low, [emp_low])
+            base_conds.append(
+                or_(
+                    *[
+                        or_(
+                            JobPosting.title.ilike(f"%{_esc_like(p)}%", escape="\\"),
+                            JobPosting.description_raw.ilike(f"%{_esc_like(p)}%", escape="\\"),
+                        )
+                        for p in emp_patterns
+                    ]
+                )
+            )
         if only_saved and current_user.id is not None:
             saved_sub = select(SavedJob.job_posting_id).where(SavedJob.user_id == current_user.id)
             base_conds.append(JobPosting.id.in_(saved_sub))
@@ -492,6 +556,16 @@ async def list_scraped_jobs(
             dumped.update(geo_info)
             return dumped
 
+        sort_norm = (sort_by or "relevance").strip().lower()
+        if sort_norm == "newest":
+            order_clauses = (JobPosting.scraped_at.desc(), score_col.desc())
+        elif sort_norm == "salary_desc":
+            order_clauses = (func.coalesce(JobPosting.salary_max, JobPosting.salary_min, -1).desc(), score_col.desc())
+        elif sort_norm == "company_asc":
+            order_clauses = (JobPosting.company.asc(), score_col.desc())
+        else:
+            order_clauses = (score_col.desc(), JobPosting.scraped_at.desc())
+
         if geo_eligible_only:
             if use_user_matches:
                 base_stmt = select(JobPosting, UserJobMatch).outerjoin(
@@ -502,7 +576,7 @@ async def list_scraped_jobs(
                 base_stmt = select(JobPosting)
             if base_conds:
                 base_stmt = base_stmt.where(*base_conds)
-            base_stmt = base_stmt.order_by(score_col.desc(), JobPosting.scraped_at.desc())
+            base_stmt = base_stmt.order_by(*order_clauses)
             all_geo_items = [
                 dumped
                 for entry in session.exec(base_stmt).all()
@@ -628,7 +702,7 @@ async def list_scraped_jobs(
         if conditions:
             stmt = stmt.where(*conditions)
         stmt = (
-            stmt.order_by(score_col.desc(), JobPosting.scraped_at.desc())
+            stmt.order_by(*order_clauses)
             .offset((page - 1) * limit)
             .limit(limit)
         )

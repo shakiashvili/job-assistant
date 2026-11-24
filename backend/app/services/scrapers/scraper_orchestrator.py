@@ -1,16 +1,17 @@
 import asyncio
 from datetime import timedelta, timezone
 import logging
-from typing import Dict, Any, List, Optional, Tuple, Set
+import re
+import time
+from urllib.parse import parse_qsl, urlencode, urlparse
+from typing import Dict, Any, List, Optional, Tuple
 from sqlmodel import Session, select
 from ...db.database import engine, init_db, delete_job_posting_cascade
 from ...db.models import (
-    CandidateProfile,
     JobPosting,
     UserJobMatch,
     SavedSearch,
     Notification,
-    ApplicationRecord,
     utc_now,
 )
 from ...db.profile_repository import ground_truth_store
@@ -32,14 +33,49 @@ from .remote_b2b_scrapers import remotive_scraper, himalayas_scraper, remoteok_s
 
 logger = logging.getLogger(__name__)
 
+_TRACKING_PARAM_PREFIXES = ("utm_", "ref", "fbclid", "gclid", "trk", "source", "gh_src")
+_NON_ALNUM_RE = re.compile(r"[^\w\u10A0-\u10FF]+", re.UNICODE)
+
+
+def normalize_job_url(url: str) -> str:
+    """Normalizes a vacancy URL for cross-run and cross-source deduplication."""
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urlparse(raw)
+        host = (parsed.netloc or "").lower()
+        if host.startswith("www."):
+            host = host[4:]
+        path = re.sub(r"/+", "/", parsed.path or "").rstrip("/")
+        kept_params = [
+            (k, v)
+            for k, v in parse_qsl(parsed.query, keep_blank_values=False)
+            if not any(k.lower().startswith(p) for p in _TRACKING_PARAM_PREFIXES)
+        ]
+        kept_params.sort()
+        query = urlencode(kept_params)
+        return f"{host}{path}?{query}" if query else f"{host}{path}"
+    except Exception:
+        return raw.lower().rstrip("/")
+
+
+def canonical_title_company(title: str, company: str) -> Optional[Tuple[str, str]]:
+    """Builds a normalized (title, company) dedupe key when both are meaningful."""
+    t_norm = _NON_ALNUM_RE.sub(" ", (title or "").lower()).strip()
+    c_norm = _NON_ALNUM_RE.sub(" ", (company or "").lower()).strip()
+    if not t_norm or not c_norm or c_norm in ("hiring company", "unknown", "confidential", "company"):
+        return None
+    return (t_norm, c_norm)
+
 
 class ScraperOrchestrator:
     """
     Universal Domain-Agnostic Multi-Portal Scraper Orchestrator:
-    1. Builds primary, adjacent, public-sector internship, and remote B2B queries dynamically from CandidateProfile.
-    2. Scrapes Jobs.ge, HR.ge, HeadHunter.ge, HR.gov.ge, Remotive, Himalayas, RemoteOK, DOU.ua, Djinni.co, JustJoin.it, LinkedIn, Greenhouse, and Lever.
-    3. Deduplicates across (portal, external_id), (url), and (title, company) using O(1) batch lookup maps.
-    4. Commits all JobPosting, UserJobMatch, and ApplicationRecord upserts in a single database transaction.
+    1. Builds primary, adjacent, public-sector, and remote B2B queries dynamically from CandidateProfile.
+    2. Dispatches configured scrapers via SCRAPER_MAP with per-portal health & timing telemetry.
+    3. Deduplicates across normalized URL, (portal, external_id), and canonical (title, company).
+    4. Commits all JobPosting and UserJobMatch upserts in a single database transaction.
     """
 
     SCRAPER_MAP = {
@@ -58,6 +94,11 @@ class ScraperOrchestrator:
         "lever.co": lever_scraper,
     }
 
+    PORTAL_ALIASES = {
+        "greenhouse": "greenhouse.io",
+        "lever": "lever.co",
+    }
+
     DEFAULT_PORTALS = [
         "jobs.ge",
         "hr.ge",
@@ -69,8 +110,94 @@ class ScraperOrchestrator:
         "dou.ua",
         "djinni.co",
         "justjoin.it",
+        "greenhouse.io",
+        "lever.co",
         "linkedin.com",
     ]
+
+    def __init__(self) -> None:
+        self._source_health: Dict[str, Dict[str, Any]] = {}
+
+    def get_source_health(self) -> List[Dict[str, Any]]:
+        """Returns per-portal health and latest scrape telemetry for all known sources."""
+        items: List[Dict[str, Any]] = []
+        for portal in self.SCRAPER_MAP:
+            entry = self._source_health.get(portal)
+            if entry:
+                items.append(dict(entry))
+            else:
+                items.append({
+                    "portal": portal,
+                    "status": "idle",
+                    "last_run_at": None,
+                    "last_count": 0,
+                    "last_latency_ms": 0,
+                    "last_error": None,
+                    "consecutive_failures": 0,
+                })
+        return items
+
+    def _record_source_health(
+        self,
+        portal: str,
+        status: str,
+        count: int,
+        latency_ms: int,
+        error: Optional[str] = None,
+    ) -> None:
+        prev = self._source_health.get(portal) or {}
+        failures = 0 if status in ("ok", "disabled") else int(prev.get("consecutive_failures", 0)) + 1
+        self._source_health[portal] = {
+            "portal": portal,
+            "status": status,
+            "last_run_at": utc_now().isoformat(),
+            "last_count": count,
+            "last_latency_ms": latency_ms,
+            "last_error": error,
+            "consecutive_failures": failures,
+        }
+
+    def _build_portal_coro(
+        self,
+        portal: str,
+        search_cfg: Dict[str, Any],
+        combined_kw: List[str],
+        cand_langs: List[str],
+        max_allowed_years: float,
+    ):
+        canonical = self.PORTAL_ALIASES.get(portal, portal)
+        scraper = self.SCRAPER_MAP.get(canonical)
+        if not scraper:
+            return None, canonical
+
+        if canonical == "jobs.ge":
+            return scraper.scrape(allow_network=True, search_urls=search_cfg.get("jobs_ge_urls")), canonical
+        if canonical == "hr.ge":
+            return scraper.scrape(allow_network=True, search_urls=search_cfg.get("hr_ge_urls"), domain_keywords=combined_kw), canonical
+        if canonical == "hr.gov.ge":
+            return scraper.scrape(allow_network=True, queries=search_cfg.get("hr_gov_queries"), domain_keywords=combined_kw), canonical
+        if canonical == "headhunter.ge":
+            hh_urls = search_cfg.get("headhunter_urls") or ([search_cfg["headhunter_url"]] if search_cfg.get("headhunter_url") else [])
+            return (scraper.scrape(allow_network=True, search_urls=hh_urls, domain_keywords=combined_kw, candidate_languages=cand_langs) if hh_urls else None), canonical
+        if canonical == "dou.ua":
+            url = search_cfg.get("dou_url")
+            return (scraper.scrape(allow_network=True, search_url=url, candidate_languages=cand_langs) if url else None), canonical
+        if canonical == "djinni.co":
+            url = search_cfg.get("djinni_exp_url") or search_cfg.get("djinni_url")
+            return (scraper.scrape(allow_network=True, search_url=url, candidate_languages=cand_langs) if url else None), canonical
+        if canonical == "justjoin.it":
+            url = search_cfg.get("justjoin_url")
+            return (scraper.scrape(allow_network=True, search_url=url, candidate_languages=cand_langs) if url else None), canonical
+        if canonical == "linkedin.com":
+            return scraper.scrape(
+                allow_network=True,
+                search_urls=search_cfg.get("linkedin_urls") or [],
+                domain_keywords=combined_kw,
+                candidate_languages=cand_langs,
+                max_allowed_years=max_allowed_years,
+            ), canonical
+        # Greenhouse, Lever, Remotive, Himalayas, RemoteOK share a unified signature
+        return scraper.scrape(allow_network=True, domain_keywords=combined_kw, candidate_languages=cand_langs), canonical
 
     async def run_scrapers(
         self,
@@ -100,97 +227,40 @@ class ScraperOrchestrator:
             (search_cfg.get("domain_keywords") or []) + (search_cfg.get("adjacent_keywords") or [])
         ))
 
-        tasks = []
+        scheduled: List[Tuple[str, Any]] = []
         for p in target_portals:
-            if p == "jobs.ge":
-                tasks.append(jobs_ge_scraper.scrape(allow_network=True, search_urls=search_cfg.get("jobs_ge_urls")))
-            elif p == "hr.ge":
-                tasks.append(hr_ge_scraper.scrape(
-                    allow_network=True,
-                    search_urls=search_cfg.get("hr_ge_urls"),
-                    domain_keywords=combined_kw,
-                ))
-            elif p == "hr.gov.ge":
-                tasks.append(hr_gov_scraper.scrape(
-                    allow_network=True,
-                    queries=search_cfg.get("hr_gov_queries"),
-                    domain_keywords=combined_kw,
-                ))
-            elif p == "headhunter.ge":
-                hh_urls = search_cfg.get("headhunter_urls") or ([search_cfg.get("headhunter_url")] if search_cfg.get("headhunter_url") else [])
-                if hh_urls:
-                    tasks.append(headhunter_scraper.scrape(
-                        allow_network=True,
-                        search_urls=hh_urls,
-                        domain_keywords=combined_kw,
-                        candidate_languages=cand_langs,
-                    ))
-            elif p == "dou.ua":
-                dou_url = search_cfg.get("dou_url")
-                if dou_url:
-                    tasks.append(dou_scraper.scrape(allow_network=True, search_url=dou_url, candidate_languages=cand_langs))
-            elif p == "djinni.co":
-                djinni_url = search_cfg.get("djinni_exp_url") or search_cfg.get("djinni_url")
-                if djinni_url:
-                    tasks.append(djinni_scraper.scrape(allow_network=True, search_url=djinni_url, candidate_languages=cand_langs))
-            elif p == "justjoin.it":
-                justjoin_url = search_cfg.get("justjoin_url")
-                if justjoin_url:
-                    tasks.append(justjoin_scraper.scrape(allow_network=True, search_url=justjoin_url, candidate_languages=cand_langs))
-            elif p == "linkedin.com":
-                li_urls = search_cfg.get("linkedin_urls") or []
-                tasks.append(linkedin_scraper.scrape(
-                    allow_network=True,
-                    search_urls=li_urls,
-                    domain_keywords=combined_kw,
-                    candidate_languages=cand_langs,
-                    max_allowed_years=max_allowed_years,
-                ))
-            elif p in ("greenhouse.io", "greenhouse"):
-                tasks.append(greenhouse_scraper.scrape(
-                    allow_network=True,
-                    domain_keywords=combined_kw,
-                    candidate_languages=cand_langs,
-                ))
-            elif p in ("lever.co", "lever"):
-                tasks.append(lever_scraper.scrape(
-                    allow_network=True,
-                    domain_keywords=combined_kw,
-                    candidate_languages=cand_langs,
-                ))
-            elif p == "remotive.com":
-                tasks.append(remotive_scraper.scrape(
-                    allow_network=True,
-                    domain_keywords=combined_kw,
-                    candidate_languages=cand_langs,
-                ))
-            elif p == "himalayas.app":
-                tasks.append(himalayas_scraper.scrape(
-                    allow_network=True,
-                    domain_keywords=combined_kw,
-                    candidate_languages=cand_langs,
-                ))
-            elif p == "remoteok.com":
-                tasks.append(remoteok_scraper.scrape(
-                    allow_network=True,
-                    domain_keywords=combined_kw,
-                    candidate_languages=cand_langs,
-                ))
+            coro, canonical = self._build_portal_coro(p, search_cfg, combined_kw, cand_langs, max_allowed_years)
+            if coro is not None:
+                scheduled.append((canonical, coro))
 
         raw_discovered: List[Dict[str, Any]] = []
-        if tasks:
+        if scheduled:
             sem = asyncio.Semaphore(8)
 
-            async def _bounded_task(coro):
-                async with sem:
-                    return await asyncio.wait_for(coro, timeout=18.0)
+            async def _bounded_task(portal_name: str, coro):
+                started = time.perf_counter()
+                try:
+                    async with sem:
+                        data = await asyncio.wait_for(coro, timeout=18.0)
+                    latency_ms = int((time.perf_counter() - started) * 1000)
+                    items = data if isinstance(data, list) else []
+                    self._record_source_health(portal_name, "ok", len(items), latency_ms)
+                    return items
+                except asyncio.TimeoutError:
+                    latency_ms = int((time.perf_counter() - started) * 1000)
+                    self._record_source_health(portal_name, "timeout", 0, latency_ms, "Timed out after 18s")
+                    logger.debug("Portal scraper %s timed out", portal_name)
+                    return []
+                except Exception as exc:
+                    latency_ms = int((time.perf_counter() - started) * 1000)
+                    self._record_source_health(portal_name, "error", 0, latency_ms, str(exc)[:180])
+                    logger.debug("Portal scraper %s failed: %s", portal_name, exc)
+                    return []
 
-            batches = await asyncio.gather(*(_bounded_task(t) for t in tasks), return_exceptions=True)
+            batches = await asyncio.gather(*(_bounded_task(name, coro) for name, coro in scheduled))
             for b in batches:
                 if isinstance(b, list):
                     raw_discovered.extend(b)
-                elif isinstance(b, Exception):
-                    logger.debug(f"Portal scraper task timeout/error: {b}")
 
         result = self.ingest_scraped_jobs(raw_discovered, owner_email=owner_email, user_id=user_id)
         if not result.get("jobs"):
@@ -364,18 +434,24 @@ class ScraperOrchestrator:
             all_existing = session.exec(select(JobPosting)).all()
             by_url: Dict[str, JobPosting] = {}
             by_portal_ext: Dict[Tuple[str, str], JobPosting] = {}
+            by_title_company: Dict[Tuple[str, str], JobPosting] = {}
             for j in all_existing:
                 if j.url:
-                    by_url[j.url] = j
+                    by_url[normalize_job_url(j.url)] = j
                 if j.portal and j.external_id:
                     by_portal_ext[(j.portal, j.external_id)] = j
+                tc_key = canonical_title_company(j.title or "", j.company or "")
+                if tc_key and tc_key not in by_title_company:
+                    by_title_company[tc_key] = j
 
             active_records_to_serialize: List[Tuple[JobPosting, Dict[str, Any]]] = []
+            seen_in_batch: set[Tuple[str, str]] = set()
 
             for item in raw_jobs:
                 portal = str(item.get("portal") or "custom")
                 ext_id = str(item.get("external_id") or "")
                 url = str(item.get("url") or "")
+                norm_url = normalize_job_url(url)
                 title = str(item.get("title") or "Specialist")
                 company = sanitize_company_name(
                     item.get("company"),
@@ -386,10 +462,20 @@ class ScraperOrchestrator:
                 market = str(item.get("market") or "GLOBAL_REMOTE")
                 initial_status = str(item.get("status") or "DISCOVERED")
                 initial_rationale = item.get("filter_out_reason") or item.get("match_rationale") or ""
+                tc_key = canonical_title_company(title, company)
 
-                existing = by_url.get(url) if url else None
+                existing = by_url.get(norm_url) if norm_url else None
                 if not existing and ext_id:
                     existing = by_portal_ext.get((portal, ext_id))
+                if not existing and tc_key:
+                    existing = by_title_company.get(tc_key)
+
+                # Skip duplicate postings within the same scrape batch unless richer description
+                if tc_key and tc_key in seen_in_batch and existing and len(desc) <= len(existing.description_raw or "") + 40:
+                    cache_hits += 1
+                    continue
+                if tc_key:
+                    seen_in_batch.add(tc_key)
 
                 # 24h DB evaluation cache: skip re-auditing identical posting if profile hasn't changed
                 if existing and existing.scraped_at and existing.status != "FILTERED_OUT":
@@ -459,10 +545,12 @@ class ScraperOrchestrator:
                             and existing.status not in ("APPLIED", "REJECTED")
                         ):
                             delete_job_posting_cascade(session, existing)
-                            if url and url in by_url:
-                                by_url.pop(url, None)
+                            if norm_url and norm_url in by_url:
+                                by_url.pop(norm_url, None)
                             if ext_id and (portal, ext_id) in by_portal_ext:
                                 by_portal_ext.pop((portal, ext_id), None)
+                            if tc_key and tc_key in by_title_company:
+                                by_title_company.pop(tc_key, None)
                     continue
                 elif final_status == "STAGED":
                     staged_count += 1
@@ -540,10 +628,12 @@ class ScraperOrchestrator:
                         scraped_at=now_utc,
                     )
                     session.add(job_record)
-                    if url:
-                        by_url[url] = job_record
+                    if norm_url:
+                        by_url[norm_url] = job_record
                     if ext_id:
                         by_portal_ext[(portal, ext_id)] = job_record
+                    if tc_key:
+                        by_title_company[tc_key] = job_record
 
                 active_records_to_serialize.append((
                     job_record,

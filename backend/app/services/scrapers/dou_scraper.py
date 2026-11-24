@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import re
 from typing import Dict, Any, List, Optional
@@ -77,10 +76,6 @@ class DouScraper(BasePortalScraper):
 
         return results
 
-    def _fallback_curated_listings(self) -> List[Dict[str, Any]]:
-        """Purged: never inject dead static vacancies when offline."""
-        return []
-
     async def _enrich_and_verify_item(
         self,
         item: Dict[str, Any],
@@ -130,25 +125,12 @@ class DouScraper(BasePortalScraper):
         urls = [target_url]
         if "category=QA" in target_url and "search=" not in target_url:
             urls.append("https://jobs.dou.ua/vacancies/?category=QA&search=Automation&remote")
-
-        pages = await asyncio.gather(*(self.fetch_html(u) for u in urls), return_exceptions=True)
-        candidates: List[Dict[str, Any]] = []
-        seen_ids: set[str] = set()
-        for html in pages:
-            if isinstance(html, str) and html:
-                for item in self.parse_html_listings(html, candidate_languages=candidate_languages):
-                    if item["external_id"] not in seen_ids:
-                        seen_ids.add(item["external_id"])
-                        candidates.append(item)
-
-        if not candidates:
-            return []
-
-        enriched = await asyncio.gather(
-            *(self._enrich_and_verify_item(c, candidate_languages=candidate_languages) for c in candidates[:18]),
-            return_exceptions=True,
+        return await self.scrape_and_enrich_urls(
+            urls,
+            lambda html: self.parse_html_listings(html, candidate_languages=candidate_languages),
+            lambda c: self._enrich_and_verify_item(c, candidate_languages=candidate_languages),
+            limit=18,
         )
-        return [x for x in enriched if isinstance(x, dict)]
 
 
 dou_scraper = DouScraper()

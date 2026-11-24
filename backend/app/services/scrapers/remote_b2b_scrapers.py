@@ -1,13 +1,13 @@
+import hashlib
 import logging
 import re
 from typing import Dict, Any, List, Optional
-import httpx
 from bs4 import BeautifulSoup
 
-from .base_scraper import evaluate_remote_and_language_gate, sanitize_company_name
-from ..salary_service import salary_service
+from .base_scraper import BasePortalScraper, evaluate_remote_and_language_gate, sanitize_company_name
 
 logger = logging.getLogger(__name__)
+_FEED_HEADERS = {"User-Agent": "TalentFlowAI/2.0 (Remote Job Discovery)"}
 
 
 def _strip_html(raw_html: str) -> str:
@@ -28,11 +28,8 @@ def _matches_domain(title: str, body: str, domain_keywords: Optional[List[str]])
     return any(k.lower() in haystack for k in domain_keywords[:14] if k and len(k) >= 2)
 
 
-class RemotiveScraper:
-    """
-    Live Global Remote B2B Scraper using Remotive's public JSON feed
-    (https://remotive.com/api/remote-jobs).
-    """
+class RemotiveScraper(BasePortalScraper):
+    """Live Global Remote B2B Scraper using Remotive's public JSON feed."""
 
     portal_name = "remotive.com"
     API_URL = "https://remotive.com/api/remote-jobs?limit=60"
@@ -45,39 +42,24 @@ class RemotiveScraper:
     ) -> List[Dict[str, Any]]:
         if not allow_network:
             return []
-
-        results: List[Dict[str, Any]] = []
-        try:
-            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-                resp = await client.get(
-                    self.API_URL,
-                    headers={"User-Agent": "TalentFlowAI/2.0 (Remote Job Discovery)"},
-                )
-                if resp.status_code != 200:
-                    return []
-                payload = resp.json()
-        except Exception as exc:
-            logger.debug(f"[remotive.com] fetch skipped: {exc}")
+        payload = await self.fetch_json(self.API_URL, timeout=10.0, headers=_FEED_HEADERS)
+        if not isinstance(payload, dict):
             return []
 
+        results: List[Dict[str, Any]] = []
         for job in (payload.get("jobs") or [])[:60]:
             title = str(job.get("title") or "").strip()
             company = sanitize_company_name(job.get("company_name"), fallback="Remotive Employer")
             req_loc = str(job.get("candidate_required_location") or "Worldwide").strip()
             raw_desc = _strip_html(str(job.get("description") or ""))
             sal_raw = str(job.get("salary") or "").strip()
-            if not title:
-                continue
-            if not _matches_domain(title, raw_desc, domain_keywords):
+            if not title or not _matches_domain(title, raw_desc, domain_keywords):
                 continue
 
             combined_desc = f"Location: {req_loc} | Contract: {job.get('job_type') or 'Remote'} | {sal_raw}\n{raw_desc}".strip()
             is_rem, gate_status, _, langs = evaluate_remote_and_language_gate(
-                title=title,
-                description=combined_desc,
-                location_text=req_loc,
-                portal=self.portal_name,
-                candidate_languages=candidate_languages,
+                title=title, description=combined_desc, location_text=req_loc,
+                portal=self.portal_name, candidate_languages=candidate_languages,
             )
             if gate_status == "FILTERED_OUT":
                 continue
@@ -97,15 +79,11 @@ class RemotiveScraper:
                 "description_raw": combined_desc[:4500],
                 "status": "DISCOVERED",
             })
-
         return results
 
 
-class HimalayasScraper:
-    """
-    Live Global Remote B2B Scraper using Himalayas' public JSON API
-    (https://himalayas.app/jobs/api?limit=50), preserving explicit salary & country restrictions.
-    """
+class HimalayasScraper(BasePortalScraper):
+    """Live Global Remote B2B Scraper using Himalayas' public JSON API."""
 
     portal_name = "himalayas.app"
     API_URL = "https://himalayas.app/jobs/api?limit=50"
@@ -118,22 +96,12 @@ class HimalayasScraper:
     ) -> List[Dict[str, Any]]:
         if not allow_network:
             return []
-
-        results: List[Dict[str, Any]] = []
-        try:
-            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-                resp = await client.get(
-                    self.API_URL,
-                    headers={"User-Agent": "TalentFlowAI/2.0 (Remote Job Discovery)"},
-                )
-                if resp.status_code != 200:
-                    return []
-                payload = resp.json()
-        except Exception as exc:
-            logger.debug(f"[himalayas.app] fetch skipped: {exc}")
+        payload = await self.fetch_json(self.API_URL, timeout=10.0, headers=_FEED_HEADERS)
+        if not isinstance(payload, dict):
             return []
 
-        for idx, job in enumerate((payload.get("jobs") or [])[:50]):
+        results: List[Dict[str, Any]] = []
+        for job in (payload.get("jobs") or [])[:50]:
             title = str(job.get("title") or "").strip()
             company = sanitize_company_name(job.get("companyName"), fallback="Himalayas Employer")
             locs = job.get("locationRestrictions") or []
@@ -141,27 +109,16 @@ class HimalayasScraper:
             tzs = job.get("timezoneRestrictions") or []
             tz_str = f"Timezones: {', '.join(str(t) for t in tzs)}" if isinstance(tzs, list) and tzs else ""
             raw_desc = _strip_html(str(job.get("description") or job.get("excerpt") or ""))
-            if not title:
-                continue
-            if not _matches_domain(title, raw_desc, domain_keywords):
+            if not title or not _matches_domain(title, raw_desc, domain_keywords):
                 continue
 
-            sal_prefix = ""
-            min_s = job.get("minSalary")
-            max_s = job.get("maxSalary")
+            min_s, max_s = job.get("minSalary"), job.get("maxSalary")
             cur = str(job.get("currency") or "USD").strip().upper()
-            if min_s or max_s:
-                lo = min_s or max_s
-                hi = max_s or min_s
-                sal_prefix = f"Salary: {lo}-{hi} {cur}. "
-
+            sal_prefix = f"Salary: {min_s or max_s}-{max_s or min_s} {cur}. " if (min_s or max_s) else ""
             combined_desc = f"{sal_prefix}Allowed Locations: {loc_str}. {tz_str}\n{raw_desc}".strip()
             is_rem, gate_status, _, langs = evaluate_remote_and_language_gate(
-                title=title,
-                description=combined_desc,
-                location_text=loc_str,
-                portal=self.portal_name,
-                candidate_languages=candidate_languages,
+                title=title, description=combined_desc, location_text=loc_str,
+                portal=self.portal_name, candidate_languages=candidate_languages,
             )
             if gate_status == "FILTERED_OUT":
                 continue
@@ -170,11 +127,11 @@ class HimalayasScraper:
             if not url or not url.startswith(("https://", "http://")):
                 continue
 
-            import hashlib
-            url_digest = hashlib.md5(url.encode("utf-8")).hexdigest()[:8]
+            # Deterministic external_id independent of volatile list position
+            url_digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:12]
             results.append({
                 "portal": self.portal_name,
-                "external_id": f"himalayas-{job.get('companySlug') or 'co'}-{idx}-{url_digest}",
+                "external_id": f"himalayas-{job.get('companySlug') or 'co'}-{url_digest}",
                 "title": title,
                 "company": company,
                 "url": url,
@@ -187,15 +144,11 @@ class HimalayasScraper:
                 "description_raw": combined_desc[:4500],
                 "status": "DISCOVERED",
             })
-
         return results
 
 
-class RemoteOkScraper:
-    """
-    Live Global Remote & Contractor Scraper using RemoteOK's public JSON API
-    (https://remoteok.com/api).
-    """
+class RemoteOkScraper(BasePortalScraper):
+    """Live Global Remote & Contractor Scraper using RemoteOK's public JSON API."""
 
     portal_name = "remoteok.com"
     API_URL = "https://remoteok.com/api"
@@ -208,24 +161,11 @@ class RemoteOkScraper:
     ) -> List[Dict[str, Any]]:
         if not allow_network:
             return []
-
-        results: List[Dict[str, Any]] = []
-        try:
-            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-                resp = await client.get(
-                    self.API_URL,
-                    headers={"User-Agent": "TalentFlowAI/2.0 (Remote Job Discovery)"},
-                )
-                if resp.status_code != 200:
-                    return []
-                items = resp.json()
-        except Exception as exc:
-            logger.debug(f"[remoteok.com] fetch skipped: {exc}")
-            return []
-
+        items = await self.fetch_json(self.API_URL, timeout=10.0, headers=_FEED_HEADERS)
         if not isinstance(items, list):
             return []
 
+        results: List[Dict[str, Any]] = []
         for job in items:
             if not isinstance(job, dict) or not job.get("position"):
                 continue
@@ -240,17 +180,12 @@ class RemoteOkScraper:
             if not _matches_domain(f"{title} {tags}", raw_desc, domain_keywords):
                 continue
 
-            sal_min = job.get("salary_min") or 0
-            sal_max = job.get("salary_max") or 0
+            sal_min, sal_max = job.get("salary_min") or 0, job.get("salary_max") or 0
             sal_str = f"Compensation: ${int(sal_min):,} - ${int(sal_max):,} USD. " if sal_min and sal_max else ""
             combined_desc = f"{sal_str}Location: {req_loc}. Tags: {tags}.\n{raw_desc}".strip()
-
             is_rem, gate_status, _, langs = evaluate_remote_and_language_gate(
-                title=title,
-                description=combined_desc,
-                location_text=req_loc,
-                portal=self.portal_name,
-                candidate_languages=candidate_languages,
+                title=title, description=combined_desc, location_text=req_loc,
+                portal=self.portal_name, candidate_languages=candidate_languages,
             )
             if gate_status == "FILTERED_OUT":
                 continue
@@ -276,7 +211,6 @@ class RemoteOkScraper:
                 "description_raw": combined_desc[:4500],
                 "status": "DISCOVERED",
             })
-
         return results
 
 
