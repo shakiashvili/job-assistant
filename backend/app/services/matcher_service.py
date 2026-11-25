@@ -201,7 +201,28 @@ CANONICAL_SKILL_NAMES: Dict[str, str] = {
     "xml": "XML",
     "chrome devtools": "Chrome DevTools",
     "devtools": "Chrome DevTools",
+    "fastapi": "FastAPI",
+    "postgresql": "PostgreSQL",
+    "postgres": "PostgreSQL",
+    "mysql": "MySQL",
+    "mongodb": "MongoDB",
+    "vividus": "VIVIDUS",
+    "allure": "Allure",
+    "agile": "Agile",
+    "scrum": "Scrum",
+    "sdlc": "SDLC",
+    "stlc": "STLC",
+    "pom": "POM",
+    "bva": "Boundary Value Analysis",
+    "ep": "Equivalence Partitioning",
 }
+
+_AI_PERSONA_OR_META_SKILL_RE = re.compile(
+    r"\b(?:hiring\s+manager|technical\s+recruiter|career\s+strategist|interview\s+coach|"
+    r"interviewer|automation\s+mentor|career\s+coach|ai\s+assistant|senior\s+qa\s+automation\s+engineer|"
+    r"do\s+not\s+claim|treat\s+the|potential\s+transferable|verified\s+work\s+experience)\b",
+    re.I,
+)
 
 _DATE_OR_PROSE_RE = re.compile(
     r"\b(?:19\d{2}|20\d{2}|january|february|march|april|may|june|july|august|"
@@ -219,12 +240,23 @@ _PROSE_START_RE = re.compile(
 
 def _clean_skill_token(raw: str) -> str:
     s = re.sub(r"[*_`~]+", "", raw or "").strip()
-    s = s.strip("•·–—-.,:;()[]{}").strip()
+    s = s.strip("•·–—-.,:;()[]{}\uf0b7").strip()
     if not s or len(s) < 2 or len(s) > 36:
         return ""
     if "@" in s or "http" in s.lower() or "://" in s or "•" in raw:
         return ""
-    if _DATE_OR_PROSE_RE.search(s) or _PROSE_START_RE.search(s):
+    if ("(" in s) != (")" in s):
+        return ""
+    if s.lower() in {
+        "test", "functional", "regression", "console", "severity", "priority",
+        "technical tools", "headers", "payload analysis", "reproduction steps",
+        "defect reporting", "auth tokens", "network",
+    }:
+        return ""
+    if _DATE_OR_PROSE_RE.search(s) or _PROSE_START_RE.search(s) or _AI_PERSONA_OR_META_SKILL_RE.search(s):
+        return ""
+    # Reject hyphenated slug identifiers (e.g. giorgi-career-intelligence-interview-coach)
+    if re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+){2,}", s):
         return ""
     # Reject full sentence fragments (> 4 words or trailing period in original)
     if len(s.split()) > 4 or raw.strip().endswith("."):
@@ -327,7 +359,8 @@ class MatcherService:
         Parses raw_markdown (from skills.md) into structured taxonomy for CandidateProfile.parsed_skills.
         Uses Gemini 2.5 Flash if available, enriched with deterministic taxonomy matching.
         """
-        text = raw_markdown or ""
+        text = re.sub(r"\A---\s*\n[\s\S]*?\n---\s*\n", "", raw_markdown or "")
+        text = text.replace("\uf0b7", "- ").replace("", "- ")
         lower_text = text.lower()
 
         taxonomy: Dict[str, Any] = {
@@ -423,25 +456,32 @@ class MatcherService:
                     if all(existing.lower() != canonical.lower() for existing in all_skills):
                         all_skills.append(canonical)
 
-        # Extract bullet items strictly under dedicated ## Skills headings (stop before ### roles or Experience)
+        # Extract bullet items strictly under dedicated Skills headings (including plain-text PDF/DOCX headings)
         in_skills = False
+        _plain_sec_re = re.compile(
+            r"^(?:##+\s*|#\s*)?(?:core\s+competencies(?:\s*&\s*technical\s+skills)?|technical\s+skills(?:\s*&\s*stack)?|"
+            r"core\s+skills|skills|summary|professional\s+summary|work\s+experience|professional\s+experience|"
+            r"experience|education(?:\s*&\s*(?:technical\s+training|specialized\s+training|certifications))?|"
+            r"projects|relevant\s+projects|languages|spoken\s+languages)\s*:?$",
+            re.I,
+        )
         for line in text.splitlines():
             s = line.strip()
-            if s.startswith("## "):
+            if s.startswith("## ") or _plain_sec_re.match(s):
                 header_l = s.lower()
-                is_exp_header = any(w in header_l for w in ["experience", "history", "work", "project", "education", "გამოცდილება"])
+                is_exp_header = any(w in header_l for w in ["experience", "history", "work", "project", "education", "summary", "language", "გამოცდილება"])
                 in_skills = (not is_exp_header) and any(
-                    w in header_l for w in ["skill", "stack", "tech", "უნარ", "კომპეტენც"]
+                    w in header_l for w in ["skill", "stack", "tech", "competenc", "უნარ", "კომპეტენც"]
                 )
                 continue
             if s.startswith("### ") or (s.startswith("# ") and not s.startswith("## ")):
                 in_skills = False
                 continue
-            if in_skills and s.startswith(("-", "*")):
+            if in_skills and s.startswith(("-", "*", "•")):
                 # Stop collecting as skills if bullet looks like a company/date sub-header
                 if _DATE_OR_PROSE_RE.search(s):
                     continue
-                cleaned = re.sub(r"^[-*]\s*(?:\*\*[^*]+?\*\*:?)?\s*", "", s)
+                cleaned = re.sub(r"^[-*•]\s*(?:\*\*[^*]+?\*\*:?|[A-Za-z &/]{2,36}:)\s*", "", s)
                 for part in re.split(r"[,;/|]", cleaned):
                     token = _clean_skill_token(part)
                     if token and all(existing.lower() != token.lower() for existing in all_skills):

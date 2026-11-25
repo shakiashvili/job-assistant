@@ -1,6 +1,5 @@
 import io
 import logging
-import re
 import zipfile
 from pathlib import Path
 from typing import Dict, Any, List, Tuple
@@ -111,7 +110,9 @@ class CVParserService:
         section_aliases = {
             "skills": "## Core Skills",
             "technical skills": "## Core Skills",
+            "technical skills & stack": "## Core Skills",
             "core competencies": "## Core Skills",
+            "core competencies & technical skills": "## Core Skills",
             "competencies": "## Core Skills",
             "technologies": "## Core Skills",
             "experience": "## Work Experience",
@@ -124,6 +125,7 @@ class CVParserService:
             "relevant qa & automation project": "## Technical Projects",
             "education": "## Education",
             "education & certifications": "## Education",
+            "education & technical training": "## Education",
             "education & specialized training": "## Education",
             "certifications": "## Courses & Certifications",
             "courses & certifications": "## Courses & Certifications",
@@ -136,7 +138,8 @@ class CVParserService:
         }
         out: List[str] = []
         for idx, ln in enumerate(lines):
-            stripped = ln.strip()
+            ln_clean = ln.replace("\uf0b7", "- ").replace("", "- ")
+            stripped = ln_clean.strip()
             low = stripped.lower().rstrip(":")
             if idx == 0 and stripped and not stripped.startswith("#") and len(stripped.split()) <= 8:
                 out.append(f"# {stripped}")
@@ -144,7 +147,7 @@ class CVParserService:
             if low in section_aliases and not stripped.startswith("#"):
                 out.append(section_aliases[low])
                 continue
-            out.append(ln)
+            out.append(ln_clean)
         return "\n".join(out).strip()
 
     @staticmethod

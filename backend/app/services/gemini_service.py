@@ -890,6 +890,9 @@ class GeminiService:
         ltr_company = self._clean_foreign_script(raw_company, target_letter_lang) or "Hiring Company"
         ltr_title = self._clean_foreign_script(raw_title, target_letter_lang) or "Specialist"
         industry = job_details.get("industry", "qa_tech")
+        # Never sign letters with AI skill slugs such as `giorgi-career-intelligence-interview-coach`
+        if re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+){2,}", str(candidate_name or "").strip()):
+            candidate_name = "Candidate"
         top_skills = ", ".join(matched_skills[:6]) if matched_skills else "core domain skills"
         ev = self._extract_cv_evidence_for_letter(skills_md, job_details, matched_skills, missing_skills)
         job_excerpt = str(job_details.get("description") or job_details.get("summary") or "")[:1400]
@@ -920,7 +923,7 @@ STRICT STYLE CONSTRAINTS:
 1. BANNED CLICHÉS (NEVER use): "passionate", "results-driven", "fast-paced environment", "synergy", "dynamic", "responsible for", "detail-oriented team player", "hardworking".
 2. DO NOT include availability timing or notice period phrases (e.g., NEVER write "1 week after offer" or "notice period") anywhere in the summary or cover letter.
 3. Match SPECIFIC vacancy requirements from <{job_tag}> directly against the candidate's real roles, tools, outcomes, and education in <{cand_tag}>. NEVER invent employers, metrics, degrees, honors, Erasmus awards, or skills.
-4. Keep cover_letter (concise 2 paragraphs) and dou_motivational_letter (deeper 3-4 paragraphs) DISTINCT in structure and content.
+4. Write a SUBSTANTIVE, recruiter-grade 3–4 paragraph `cover_letter` (200–280 words): Paragraph 1 = targeted opening connecting role & company; Paragraph 2 = concrete verified achievements/roles/metrics from work history (NEVER just repeating the same skill list twice); Paragraph 3 = relevant technical stack, academic/domain strengths, and honest bridge for any stretch areas; Paragraph 4 = confident close.
 5. Candidate sign-off name: {candidate_name}
 
 Target Role: {ltr_title} at {ltr_company} (Industry: {industry})
@@ -933,10 +936,10 @@ Stretch / Ramp Areas: {ev["gap_focus"] or "None"}
 {wrapped_skills}
 
 Return JSON with keys:
-- "human_tone_summary": Top-1% recruiter & ATS 3-sentence CV profile summary highlighting verified tooling/stack and domain experience tailored naturally to {title} requirements—WITHOUT writing "tailored for [Company]", WITHOUT copying foreign-language/Cyrillic tokens into English, and WITHOUT inventing Honors or Erasmus.
+- "human_tone_summary": Top-1% recruiter & ATS 3-sentence CV profile summary highlighting verified tooling/stack, named commercial employers, and academic foundation tailored naturally to {title} requirements—WITHOUT writing "tailored for [Company]", WITHOUT repeating prepositions ("across ... across ..."), WITHOUT copying foreign-language/Cyrillic tokens into English, and WITHOUT inventing Honors or Erasmus.
 - "motivation_statement": Concise 2-3 sentence rationale connecting verified skills and accomplishments to {ltr_company}'s requirements for {ltr_title}.
-- "cover_letter": Concise 2-paragraph hiring-team email/cover letter focusing on direct vacancy-to-skill fit, ending cleanly with "Best regards,\\n{candidate_name}" (or Georgian "პატივისცემით,\\n{candidate_name}").
-- "dou_motivational_letter": 3-4 paragraph deeper motivational letter addressed to {ltr_company}'s hiring team explaining genuine interest in {ltr_company}, connecting concrete prior roles/projects and academic background without fabrication, bridging transferable gaps, and closing cleanly with "Best regards,\\n{candidate_name}" (or Georgian "პატივისცემით,\\n{candidate_name}"), with ZERO mention of notice period.
+- "cover_letter": Full, compelling 3–4 paragraph (200–280 word) cover letter addressed to {ltr_company}'s hiring team connecting concrete prior work achievements, verified skills, and academic background to {ltr_title}, ending cleanly with "Best regards,\\n{candidate_name}" (or Georgian "პატივისცემით,\\n{candidate_name}"). NEVER duplicate the same skill list twice in one sentence.
+- "dou_motivational_letter": 3–4 paragraph deeper motivational letter addressed to {ltr_company}'s hiring team explaining genuine interest in {ltr_company}, connecting concrete prior roles/projects and academic background without fabrication, bridging transferable gaps, and closing cleanly with "Best regards,\\n{candidate_name}" (or Georgian "პატივისცემით,\\n{candidate_name}"), with ZERO mention of notice period.
 STRICT PURITY RULE: Zero Cyrillic/Russian words in English/Georgian outputs. Use ONLY English in English outputs and Georgian (+ exact technical tool names) in Georgian outputs."""
                 parsed = self.generate_json(
                     prompt,
@@ -975,6 +978,12 @@ STRICT PURITY RULE: Zero Cyrillic/Russian words in English/Georgian outputs. Use
             ("qa", industry == "qa_tech" or any(w in t_low for w in ("qa", "quality assurance", "tester", "sdet", "ტესტ", "ხარისხის უზრუნველყოფ"))),
         )
         dom_key = next((k for k, hit in domain_detectors if hit), "other")
+        work_companies = list(dict.fromkeys(
+            item.split(" at ", 1)[1].strip() if " at " in item else item
+            for item in ev["work_items"]
+            if item
+        ))
+        companies_phrase = ", ".join(work_companies[:3])
         work_phrase = ", ".join(ev["work_items"])
         req_focus = ev["req_focus"] or top_skills
         sign_off_name = candidate_name if candidate_name and candidate_name != "Candidate" else ""
@@ -983,7 +992,7 @@ STRICT PURITY RULE: Zero Cyrillic/Russian words in English/Georgian outputs. Use
             if lang == "ka":
                 skills_s = ", ".join(GEORGIAN_SKILL_TRANSLATIONS.get(s, s) for s in matched_skills[:6]) or top_skills
                 req_s = ", ".join(GEORGIAN_SKILL_TRANSLATIONS.get(s, s) for s in (job_details.get("required_skills") or [])[:5]) or skills_s
-                exp_ctx = f" ({work_phrase})" if work_phrase else ""
+                exp_ctx = f" ({companies_phrase or work_phrase})" if (companies_phrase or work_phrase) else ""
                 edu_sum = f" აკადემიური საფუძველი: {ev['edu_snippet']}." if ev["edu_snippet"] else ""
                 edu_ctx = f" ამასთანავე, ჩემი აკადემიური განათლება ({ev['edu_snippet']}) აძლიერებს ანალიტიკურ სიზუსტეს." if ev["edu_snippet"] else ""
                 ev_line = f" წინა გამოცდილებისას ვახორციელებდი: {ev['bullets'][0]}." if ev["bullets"] else ""
@@ -1004,35 +1013,46 @@ STRICT PURITY RULE: Zero Cyrillic/Russian words in English/Georgian outputs. Use
                     "qa": (f"QA და პროგრამული უზრუნველყოფის ტესტირების სპეციალისტი, პრაქტიკული გამოცდილებით ({skills_s}){exp_ctx}.{edu_sum}", f"{cur_company}-ში ჩემი უნარებით ({skills_s}) გავაძლიერებ პროდუქტის ხარისხს და რელიზების სტაბილურობას."),
                 }
                 summary, motiv = ka_copy.get(dom_key, (f"{cur_title} პრაქტიკული გამოცდილებით ({skills_s}){exp_ctx}.{edu_sum}", f"მინდა ჩემი უნარები ({skills_s}) მივმართო {cur_company}-ის მიზნების მისაღწევად."))
-                dou_l = f"მოგესალმებით, {cur_company}-ის გუნდს,\n\nდიდი ინტერესით გიგზავნით განაცხადს „{cur_title}“ პოზიციაზე. ჩემი პრაქტიკული გამოცდილება ({skills_s}) შეესაბამება მოთხოვნებს ({req_s}).\n\nსამუშაო გამოცდილების{exp_ctx} განმავლობაში პრაქტიკულად ვიყენებდი ({skills_s}) სტაბილური შედეგების მისაღწევად.{ev_line}{edu_ctx}\n\nთანდართულია პოზიციაზე მორგებული ჩემი CV და მოხარული ვიქნები გასაუბრებაზე დეტალების განხილვით.{sig}"
-                cov_l = f"მოგესალმებით, {cur_company}-ის გუნდს,\n\nგწერთ „{cur_title}“ პოზიციაზე ჩემი კანდიდატურის განსახილველად. ჩემი პრაქტიკული გამოცდილება ({skills_s}) ფარავს ძირითად მოთხოვნებს ({req_s}){exp_ctx}.\n\nთანდართულია ჩემი რეზიუმე და მოხარული ვიქნები გასაუბრებაზე შეხვედრით.{sig}"
+                cov_l = f"მოგესალმებით, {cur_company}-ის გუნდს,\n\nგიგზავნით განაცხადს „{cur_title}“ პოზიციაზე. ჩემი პრაქტიკული გამოცდილება ({skills_s}){exp_ctx} პირდაპირ შეესაბამება პოზიციის ძირითად ამოცანებს ({req_s}).{ev_line}{edu_ctx}\n\nთანდართულია პოზიციაზე მორგებული ჩემი CV და მოხარული ვიქნები გასაუბრებაზე შეხვედრით.{sig}"
+                dou_l = f"მოგესალმებით, {cur_company}-ის გუნდს,\n\nდიდი მოტივაციით გიგზავნით სამოტივაციო წერილს „{cur_title}“ პოზიციაზე. თქვენი გუნდის ამოცანები ({req_s}) პირდაპირ თანხვედრაშია ჩემს პროფესიულ მიმართულებასთან ({skills_s}).\n\nსამუშაო გამოცდილების{exp_ctx} განმავლობაში პრაქტიკულად ვიყენებდი {skills_s} სტაბილური შედეგების მისაღწევად.{ev_line}{edu_ctx}\n\nთანდართულია პოზიციაზე მორგებული ჩემი CV და მოხარული ვიქნები გასაუბრებაზე დეტალების განხილვით.{sig}"
                 return {"human_tone_summary": summary, "motivation_statement": motiv, "cover_letter": cov_l, "dou_motivational_letter": dou_l}
 
-            exp_ctx = f" across {work_phrase}" if work_phrase else ""
-            edu_sum = f" Backed by formal training in {ev['edu_snippet']}." if ev["edu_snippet"] else ""
-            edu_ctx = f" My academic foundation ({ev['edu_snippet']}) reinforces analytical rigor." if ev["edu_snippet"] else ""
+            exp_ctx = f" with commercial and lab experience at {companies_phrase}" if companies_phrase else ""
+            edu_sum = f" Backed by formal academic training in {ev['edu_snippet']}." if ev["edu_snippet"] else ""
+            edu_ctx = f" My academic foundation ({ev['edu_snippet']}) reinforces analytical rigor and structured business-logic validation." if ev["edu_snippet"] else ""
             gap_ctx = f" Where your stack extends into {ev['gap_focus']}, my foundation in {top_skills} supports fast ramp-up." if ev["gap_focus"] else ""
-            ev_line = f" Notably, I delivered: {ev['bullets'][0]}." if ev["bullets"] else ""
+            ev_line = f" Notably, {ev['bullets'][0].rstrip('.')}." if ev["bullets"] else ""
             sig = f"\n\nBest regards,\n{sign_off_name}" if sign_off_name else "\n\nBest regards"
-            # Top 1% Executive CV summaries: candidate-value focused, factual, zero clichés, never mentioning target company awkwardly
+            # Top 1% Executive CV summaries: clean, factual, zero double-prepositions, zero clichés
             en_copy = {
-                "rec": (f"Front Desk and Hospitality Specialist with hands-on expertise in {top_skills}{exp_ctx}. Delivers seamless guest check-in, reservation accuracy, and calm multilingual front-office operations.{edu_sum}", f"My verified background in {top_skills} directly supports {cur_company}'s front-desk operations."),
-                "sup": (f"Technical Support and Monitoring Specialist experienced with {top_skills}{exp_ctx}. Investigates production incidents, validates API/SQL workflows, and resolves customer escalations cleanly within SLA.{edu_sum}", f"Applying my diagnostic experience with {top_skills}, I can help {cur_company} maintain reliable support operations."),
-                "health": (f"Patient Coordinator and Medical Administration Specialist experienced with {top_skills}{exp_ctx}. Maintains accurate patient registration, scheduling workflows, and insurance verification.{edu_sum}", f"My administrative experience across {top_skills} equips me to support {cur_company}'s patient intake team."),
+                "rec": (f"Front Desk and Hospitality Specialist skilled in {top_skills}{exp_ctx}. Delivers seamless guest check-in, reservation accuracy, and calm multilingual front-office operations.{edu_sum}", f"My verified background in {top_skills} directly supports {cur_company}'s front-desk operations."),
+                "sup": (f"Technical Support and Monitoring Specialist skilled in {top_skills}{exp_ctx}. Investigates production incidents, validates API/SQL workflows, and resolves customer escalations cleanly within SLA.{edu_sum}", f"Applying my diagnostic experience with {top_skills}, I can help {cur_company} maintain reliable support operations."),
+                "health": (f"Patient Coordinator and Medical Administration Specialist skilled in {top_skills}{exp_ctx}. Maintains accurate patient registration, scheduling workflows, and insurance verification.{edu_sum}", f"My administrative experience across {top_skills} equips me to support {cur_company}'s patient intake team."),
                 "cust": (f"Customer Service and Client Operations Specialist skilled in {top_skills}{exp_ctx}. Resolves client inquiries accurately across CRM channels while maintaining clear documentation and high service quality.{edu_sum}", f"Working daily with {top_skills}, I can help {cur_company}'s support team resolve client requests efficiently."),
-                "fin": (f"Finance and Accounting Specialist with verified experience in {top_skills}{exp_ctx}. Produces accurate financial reconciliations, structured analytical reporting, and audit-ready compliance controls.{edu_sum}", f"I want to apply my verified financial background in {top_skills} directly to {cur_company}'s reporting and controls."),
-                "mkt": (f"Digital Marketing and Growth Specialist experienced with {top_skills}{exp_ctx}. Plans and optimizes measurable acquisition campaigns, content workflows, and conversion analytics.{edu_sum}", f"I want to apply my hands-on marketing experience in {top_skills} directly to {cur_company}'s growth goals."),
-                "log": (f"Logistics and Supply Chain Coordinator experienced across {top_skills}{exp_ctx}. Manages shipment coordination, inventory accuracy, vendor schedules, and customs compliance documentation.{edu_sum}", f"My operational background in {top_skills} aligns directly with {cur_company}'s supply chain execution."),
-                "hr": (f"HR and Talent Acquisition Specialist experienced across {top_skills}{exp_ctx}. Drives structured candidate sourcing, interview coordination, onboarding workflows, and people-operations accuracy.{edu_sum}", f"I want to apply my verified recruiting and HR background in {top_skills} to support {cur_company}'s hiring goals."),
-                "sales": (f"Sales and Business Development Specialist with verified experience in {top_skills}{exp_ctx}. Builds disciplined client pipelines, manages consultative negotiations, and sustains long-term account retention.{edu_sum}", f"I want to apply my verified sales experience in {top_skills} directly to {cur_company}'s revenue growth."),
-                "legal": (f"Legal and Compliance Specialist experienced across {top_skills}{exp_ctx}. Supports contract review, regulatory documentation, and structured policy administration with high precision.{edu_sum}", f"My verified legal and compliance skills in {top_skills} align directly with {cur_company}'s governance needs."),
-                "data": (f"Data and Business Intelligence Analyst experienced with {top_skills}{exp_ctx}. Translates raw datasets into accurate SQL queries, executive dashboards, and clear operational insights.{edu_sum}", f"I want to apply my analytical background in {top_skills} directly to {cur_company}'s data initiatives."),
-                "swe": (f"Software Engineer with hands-on experience in {top_skills}{exp_ctx}. Builds maintainable, well-tested backend and web services with clean architecture and reliable production delivery.{edu_sum}", f"I want to apply my engineering background in {top_skills} directly to {cur_company}'s product roadmap."),
-                "qa": (f"QA and Software Testing Specialist with hands-on experience across {top_skills}{exp_ctx}. Delivers structured test design, defect isolation, API/UI verification, and reliable release quality.{edu_sum}", f"I want to apply my hands-on QA background in {top_skills} directly to {cur_company}'s release workflow."),
+                "fin": (f"Finance and Accounting Specialist skilled in {top_skills}{exp_ctx}. Produces accurate financial reconciliations, structured analytical reporting, and audit-ready compliance controls.{edu_sum}", f"I want to apply my verified financial background in {top_skills} directly to {cur_company}'s reporting and controls."),
+                "mkt": (f"Digital Marketing and Growth Specialist skilled in {top_skills}{exp_ctx}. Plans and optimizes measurable acquisition campaigns, content workflows, and conversion analytics.{edu_sum}", f"I want to apply my hands-on marketing experience in {top_skills} directly to {cur_company}'s growth goals."),
+                "log": (f"Logistics and Supply Chain Coordinator skilled in {top_skills}{exp_ctx}. Manages shipment coordination, inventory accuracy, vendor schedules, and customs compliance documentation.{edu_sum}", f"My operational background in {top_skills} aligns directly with {cur_company}'s supply chain execution."),
+                "hr": (f"HR and Talent Acquisition Specialist skilled in {top_skills}{exp_ctx}. Drives structured candidate sourcing, interview coordination, onboarding workflows, and people-operations accuracy.{edu_sum}", f"I want to apply my verified recruiting and HR background in {top_skills} to support {cur_company}'s hiring goals."),
+                "sales": (f"Sales and Business Development Specialist skilled in {top_skills}{exp_ctx}. Builds disciplined client pipelines, manages consultative negotiations, and sustains long-term account retention.{edu_sum}", f"I want to apply my verified sales experience in {top_skills} directly to {cur_company}'s revenue growth."),
+                "legal": (f"Legal and Compliance Specialist skilled in {top_skills}{exp_ctx}. Supports contract review, regulatory documentation, and structured policy administration with high precision.{edu_sum}", f"My verified legal and compliance skills in {top_skills} align directly with {cur_company}'s governance needs."),
+                "data": (f"Data and Business Intelligence Analyst skilled in {top_skills}{exp_ctx}. Translates raw datasets into accurate SQL queries, executive dashboards, and clear operational insights.{edu_sum}", f"I want to apply my analytical background in {top_skills} directly to {cur_company}'s data initiatives."),
+                "swe": (f"Software Engineer skilled in {top_skills}{exp_ctx}. Builds maintainable, well-tested backend and web services with clean architecture and reliable production delivery.{edu_sum}", f"I want to apply my engineering background in {top_skills} directly to {cur_company}'s product roadmap."),
+                "qa": (f"QA Specialist skilled in {top_skills}{exp_ctx}. Delivers structured test design (EP, BVA, Decision Tables), REST API and SQL data validation, defect isolation in Jira, and dependable release quality.{edu_sum}", f"I want to apply my hands-on QA background in {top_skills} directly to {cur_company}'s release workflow."),
             }
-            summary, motiv = en_copy.get(dom_key, (f"{cur_title} with verified hands-on experience in {top_skills}{exp_ctx}. Delivers structured execution, clear documentation, and dependable operational outcomes.{edu_sum}", f"I want to apply my verified skills in {top_skills} directly to {cur_company}'s goals."))
-            dou_l = f"Dear {cur_company} Hiring Team,\n\nI am applying for the {cur_title} role at {cur_company}. Your requirements around {req_focus} align with my verified experience in {top_skills}.\n\nAcross my work{exp_ctx}, I applied {top_skills} to deliver accurate, dependable outcomes.{ev_line}{gap_ctx}{edu_ctx}\n\nPlease find my tailored CV attached, and I look forward to discussing how I can contribute to {cur_company}'s team.{sig}"
-            cov_l = f"Dear {cur_company} Hiring Team,\n\nI am applying for the {cur_title} opening at {cur_company}. My verified skills in {top_skills} align directly with your core focus ({req_focus}){exp_ctx}.\n\nThank you for reviewing my attached CV; I welcome a brief conversation about supporting your team.{sig}"
+            summary, motiv = en_copy.get(dom_key, (f"{cur_title} skilled in {top_skills}{exp_ctx}. Delivers structured execution, clear documentation, and dependable operational outcomes.{edu_sum}", f"I want to apply my verified skills in {top_skills} directly to {cur_company}'s goals."))
+            distinct_req = req_focus if req_focus.lower() != top_skills.lower() else "high-accuracy delivery and dependable execution"
+            cov_l = (
+                f"Dear {cur_company} Hiring Team,\n\n"
+                f"I am writing to apply for the {cur_title} role at {cur_company}. My verified background in {top_skills}{exp_ctx} aligns directly with your priorities around {distinct_req}.\n\n"
+                f"Across recent roles, I applied {top_skills} to deliver structured, accurate outcomes.{ev_line}{gap_ctx}{edu_ctx}\n\n"
+                f"Please find my tailored CV attached, and I look forward to discussing how I can contribute to {cur_company}'s team.{sig}"
+            )
+            dou_l = (
+                f"Dear {cur_company} Hiring Team,\n\n"
+                f"I am excited to share my motivation for joining {cur_company} as a {cur_title}. Your focus on {distinct_req} closely matches the work I enjoy delivering with {top_skills}{exp_ctx}.\n\n"
+                f"In practice, I have used {top_skills} to maintain reliable, high-accuracy delivery.{ev_line}{gap_ctx}{edu_ctx}\n\n"
+                f"I would welcome the opportunity to connect with your hiring team and explore how my skills can add immediate value at {cur_company}.{sig}"
+            )
             return {"human_tone_summary": summary, "motivation_statement": motiv, "cover_letter": cov_l, "dou_motivational_letter": dou_l}
 
         cv_pack = _build_pack(cv_language, company, title)

@@ -13,8 +13,14 @@ from reportlab.lib.units import mm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
 
 from ..db.document_repository import record_candidate_document, resolve_user_id_by_email, user_generated_resumes_dir
-from ..db.profile_repository import ground_truth_store, filter_spoken_language_entries
+from ..db.profile_repository import (
+    ground_truth_store,
+    filter_spoken_language_entries,
+    sanitize_person_name,
+    is_corrupted_education_entry,
+)
 from ..services.gemini_service import GEORGIAN_SKILL_TRANSLATIONS
+from ..services.matcher_service import dedupe_skills_case_insensitive
 from ..services.scrapers.base_scraper import sanitize_company_name
 from .ats_checker import check_pdf_ats_parseability
 from .cv_formatting_utils import (
@@ -60,19 +66,17 @@ def _prepare_cv_render_context(
 ) -> Dict[str, Any]:
     """Shared header, contact, and profession-aware section-label builder for DOCX, PDF, and HTML renderers."""
     is_ka = cv_language == "ka"
-    full_name = _clean_foreign_script_text(candidate.get("full_name", "Candidate"), cv_language) or str(
-        candidate.get("full_name", "Candidate")
-    )
-    role_heading = (
-        _clean_foreign_script_text(candidate_headline or str(candidate.get("headline") or "Specialist"), cv_language)
-        or "Specialist"
-    )
-    email = str(candidate.get("email") or "").strip()
+    raw_cand_name = sanitize_person_name(candidate.get("full_name", "")) or "Candidate"
+    full_name = _clean_foreign_script_text(raw_cand_name, cv_language) or raw_cand_name
+    raw_role = re.sub(r"[*_`]+", "", str(candidate_headline or candidate.get("headline") or "Specialist")).strip()
+    role_heading = _clean_foreign_script_text(raw_role, cv_language) or "Specialist"
+    email = re.sub(r"[*_`]+", "", str(candidate.get("email") or "")).strip()
     if email == "candidate@example.com":
         email = ""
-    raw_phone = str(candidate.get("phone") or "").strip()
+    raw_phone = re.sub(r"[*_`]+", "", str(candidate.get("phone") or "")).strip()
     phone = "" if (not raw_phone or "+000" in raw_phone or re.fullmatch(r"[+\s0()-]+", raw_phone)) else raw_phone
-    loc = _clean_foreign_script_text(_format_candidate_location(candidate.get("location")), cv_language)
+    raw_loc = re.sub(r"[*_`]+", "", _format_candidate_location(candidate.get("location"))).strip()
+    loc = _clean_foreign_script_text(raw_loc, cv_language)
     links = candidate.get("links", {}) if isinstance(candidate.get("links"), dict) else {}
     linkedin = str(links.get("linkedin", "")).strip()
     github = str(links.get("github", "")).strip()
@@ -116,7 +120,7 @@ def group_skills_into_ats_buckets(
     across Tech/QA, Software/Data, Finance, Marketing, Logistics, HR, Sales, Legal, Healthcare,
     and Hospitality — with zero fabrication.
     """
-    clean_skills = [str(raw or "").strip() for raw in (skills or []) if str(raw or "").strip()]
+    clean_skills = dedupe_skills_case_insensitive([str(raw or "").strip() for raw in (skills or []) if str(raw or "").strip()])
     if not clean_skills:
         return []
 
@@ -426,11 +430,13 @@ def _format_candidate_languages(candidate: Dict[str, Any], skills_md: str, is_ka
 
 
 def _format_education_row(edu: Dict[str, Any], is_ka: bool) -> Dict[str, Any]:
-    """Normalizes a single grouped degree entry into clean header + detail metadata (no duplicates)."""
-    deg = _clean_foreign_script_text(edu.get("degree") or "", "ka" if is_ka else "en")
-    inst = _clean_foreign_script_text(edu.get("institution") or "", "ka" if is_ka else "en")
+    """Normalizes a single grouped degree entry into clean header + detail metadata (no duplicates or meta-prose)."""
+    if is_corrupted_education_entry(edu):
+        return {"title": "", "detail": ""}
+    deg = _clean_foreign_script_text(re.sub(r"[*_`]+", "", str(edu.get("degree") or "")), "ka" if is_ka else "en")
+    inst = _clean_foreign_script_text(re.sub(r"[*_`]+", "", str(edu.get("institution") or "")), "ka" if is_ka else "en")
     dates = _clean_foreign_script_text(
-        edu.get("dates") or edu.get("graduation_year") or "",
+        re.sub(r"[*_`]+", "", str(edu.get("dates") or edu.get("graduation_year") or "")),
         "ka" if is_ka else "en",
     )
     if inst.lower() == deg.lower():
@@ -569,6 +575,10 @@ class CVGeneratorService:
             education = gt.get("education") if gt.get("education") else (parsed_md.get("education") or [])
             projects = gt.get("projects") if gt.get("projects") else (parsed_md.get("projects") or [])
             certifications = gt.get("certifications") or parsed_md.get("certifications") or ps.get("courses_and_certifications") or []
+
+        core_skills = dedupe_skills_case_insensitive([str(s) for s in core_skills])
+        education = [e for e in (education or []) if not is_corrupted_education_entry(e)]
+        candidate["full_name"] = sanitize_person_name(candidate.get("full_name") or "") or sanitize_person_name(parsed_md.get("full_name") or "") or "Candidate"
 
         # Sanitize target role, company & summary strictly into the target CV language
         clean_job_title = _clean_foreign_script_text(job_title, cv_language) or "Specialist"
@@ -837,13 +847,14 @@ class CVGeneratorService:
     ) -> Dict[str, Any]:
         """Re-renders HTML, PDF, and DOCX cleanly from user-edited structured CV JSON sections."""
         cand = dict(sections.get("candidate") or {})
-        headline = str(sections.get("headline") or cand.get("headline") or sections.get("target_role") or "Specialist").strip()
+        cand["full_name"] = sanitize_person_name(cand.get("full_name") or "") or "Candidate"
+        headline = re.sub(r"[*_`]+", "", str(sections.get("headline") or cand.get("headline") or sections.get("target_role") or "Specialist")).strip()
         target_role = str(sections.get("target_role") or headline).strip()
         target_company = str(sections.get("target_company") or "Tailored").strip()
         cv_language = str(sections.get("cv_language") or "en").strip() or "en"
         cv_style = str(sections.get("cv_style") or "tailored").strip() or "tailored"
         human_summary = str(sections.get("summary") or "").strip()
-        display_skills = [str(s).strip() for s in (sections.get("skills") or []) if str(s).strip()]
+        display_skills = dedupe_skills_case_insensitive([str(s).strip() for s in (sections.get("skills") or []) if str(s).strip()])
         work_history = []
         for raw_w in (sections.get("work_history") or []):
             if isinstance(raw_w, dict):
@@ -871,7 +882,7 @@ class CVGeneratorService:
             human_summary=human_summary,
             display_skills=display_skills,
             work_history=work_history,
-            education=list(sections.get("education") or []),
+            education=[e for e in (sections.get("education") or []) if not is_corrupted_education_entry(e)],
             projects=list(sections.get("projects") or []),
             certifications=list(sections.get("certifications") or []),
             cv_language=cv_language,
@@ -1594,8 +1605,9 @@ class CVGeneratorService:
                 candidate["full_name"] = override_name
             cand_skills = override_skills
         else:
-            cand_skills = [str(s) for s in (gt.get("skills", {}).get("core") or [])]
-        cand_name = str(candidate.get("full_name") or "Candidate").strip()
+            cand_skills = dedupe_skills_case_insensitive([str(s) for s in (gt.get("skills", {}).get("core") or [])])
+        cand_name = sanitize_person_name(candidate.get("full_name") or "") or "Candidate"
+        candidate["full_name"] = cand_name
         raw_phone = str(candidate.get("phone") or "").strip(" -\t\r\n")
         # Never inject placeholder '+000 000 0000' or '-' into outgoing emails
         cand_phone = "" if (not raw_phone or re.fullmatch(r"[+\s0()-]+", raw_phone) or "000 000" in raw_phone) else raw_phone
@@ -1752,41 +1764,192 @@ class CVGeneratorService:
             closing = f"პატივისცემით,\n{contact_footer}" if cover_lang == "ka" else f"Best regards,\n{contact_footer}"
             return f"{cleaned}\n\n{closing}".strip()
 
+        # Gather verified work highlights & education for rich, non-repetitive, recruiter-grade letters
+        work_entries = [w for w in (gt.get("work_history") or []) if isinstance(w, dict)]
+        letter_kws = [k.lower() for k in (req_skills + matched + re.findall(r"[A-Za-z]{3,}", f"{job_title} {real_company}")) if k]
+        ranked_bullets: List[tuple[str, str]] = []
+        for w in work_entries:
+            w_comp = sanitize_company_name(w.get("company"), fallback="")
+            w_role = str(w.get("role") or "").strip()
+            for b in clean_bullets(w.get("highlights")):
+                if len(b) > 25:
+                    ranked_bullets.append((w_comp or w_role, b.rstrip(".")))
+        if ranked_bullets and letter_kws:
+            ranked_bullets.sort(key=lambda pair: (-sum(1 for kw in letter_kws if kw in pair[1].lower()), len(pair[1])))
+        # Prefer 2 distinct employers in the cover letter so proof points showcase breadth
+        top_proof_bullets: List[tuple[str, str]] = []
+        seen_proof_comps: set[str] = set()
+        for pair in ranked_bullets:
+            c_key = pair[0].lower()
+            if c_key not in seen_proof_comps:
+                top_proof_bullets.append(pair)
+                seen_proof_comps.add(c_key)
+                if len(top_proof_bullets) == 2:
+                    break
+        if len(top_proof_bullets) < 2:
+            for pair in ranked_bullets:
+                if pair not in top_proof_bullets:
+                    top_proof_bullets.append(pair)
+                    if len(top_proof_bullets) == 2:
+                        break
+
+        clean_edu_entries = [e for e in (gt.get("education") or []) if not is_corrupted_education_entry(e)]
+        edu_by_inst: Dict[str, List[str]] = {}
+        edu_labels: List[str] = []
+        for e in clean_edu_entries[:2]:
+            d_s = str(e.get("degree") or "").strip()
+            i_s = str(e.get("institution") or "").strip()
+            if d_s and i_s and i_s.lower() != d_s.lower():
+                edu_by_inst.setdefault(i_s, []).append(d_s)
+            elif d_s or i_s:
+                edu_labels.append(d_s or i_s)
+        for inst_k, deg_list in edu_by_inst.items():
+            edu_labels.append(f"{' and '.join(deg_list)} at {inst_k}")
+        edu_phrase = "; ".join(edu_labels)
+
+        is_bank_or_fin_target = any(
+            w in f"{real_company} {job_title} {description[:600]}".lower()
+            for w in ("bank", "procredit", "tbc", "bog", "fintech", "financial", "payment", "ბანკ", "ფინანს")
+        )
+        has_econ_edu = any(w in edu_phrase.lower() for w in ("economic", "finance", "business", "ეკონომიკ", "ფინანს"))
+        has_distinct_reqs = bool(req_skills) and {r.lower() for r in req_skills[:5]} != {m.lower() for m in (matched or cand_skills)[:6]}
+
         ai_cover = (narratives.get("cover_letter") or "").strip()
         ai_motiv = (narratives.get("dou_motivational_letter") or "").strip()
-        if gemini_service.is_available and (ai_cover or ai_motiv):
-            cover_letter = _finalize_ai_letter(ai_cover or ai_motiv)
-            motivational_letter = _finalize_ai_letter(ai_motiv or ai_cover)
+        if gemini_service.is_available and (len(ai_cover) >= 320 or len(ai_motiv) >= 320):
+            cover_letter = _finalize_ai_letter(ai_cover if len(ai_cover) >= 320 else ai_motiv)
+            motivational_letter = _finalize_ai_letter(ai_motiv if len(ai_motiv) >= 320 else ai_cover)
         elif cover_lang == "ka":
             ka_area, ka_action, ka_goal = ka_tuple
             salutation = f"მოგესალმებით, {real_company}-ის გუნდს," if real_company else "მოგესალმებით, გუნდს,"
             hook_company = f"{real_company}-ში" if real_company else "თქვენს კომპანიაში"
-            req_snippet = ", ".join(req_skills[:4]) if req_skills else skills_highlight
-            exp_phrase = f"ჩემი {exp_years:g} წლიანი გამოცდილება" if exp_years is not None else "ჩემი პრაქტიკული გამოცდილება"
-            proof_para = (
-                f"{companies_phrase}-ში მუშაობისას პრაქტიკულად გამოვიყენე {skills_highlight} — ვუზრუნველყოფდი {ka_action}, რაც პასუხობს ვაკანსიის მოთხოვნებს ({req_snippet})."
-                if companies_phrase
-                else f"ჩემს პრაქტიკაში ({skills_highlight}) ფოკუსირებული ვარ {ka_action}-ზე, რაც შეესაბამება პოზიციის მოთხოვნებს ({req_snippet})."
-            )
-            gap_ka = f" დამატებითი მიმართულებების ({', '.join(missing[:2])}) სწრაფ ათვისებას ჩემი პრაქტიკული საფუძველი უზრუნველყოფს." if missing and not is_non_tech_domain else ""
             cta_company = f"{real_company}-ის" if real_company else "თქვენი გუნდის"
-            cover_letter = f"{salutation}\n\nგიგზავნით განაცხადს „{job_title}“ პოზიციაზე {hook_company}. {exp_phrase} ({skills_highlight}) პირდაპირ შეესაბამება მოთხოვნებს ({req_snippet}).\n\nთანდართულია განახლებული რეზიუმე (CV) და მოხარული ვიქნები გასაუბრებაზე შეხვედრით.\n\nპატივისცემით,\n{contact_footer}"
-            motivational_letter = f"{salutation}\n\nდიდი ინტერესით გიგზავნით სამოტივაციო წერილს „{job_title}“ პოზიციაზე {hook_company}. თქვენი პრიორიტეტები ({req_snippet}) თანხვედრაშია ჩემს გამოცდილებასთან {ka_area} ({skills_highlight}).\n\n{proof_para}{gap_ka}\n\nმოხარული ვიქნები შევუერთდე {cta_company} გუნდს და წვლილი შევიტანო {ka_goal}. თანდართულია პოზიციისთვის მორგებული ჩემი CV.\n\nპატივისცემით,\n{contact_footer}"
+            req_clause = (
+                f"ვაკანსიაში გამოკვეთილი მოთხოვნები ({', '.join(req_skills[:5])}) პირდაპირ ემთხვევა ჩემს პრაქტიკულ გამოცდილებას {ka_area}."
+                if has_distinct_reqs
+                else f"ჩემი პრაქტიკული გამოცდილება {ka_area} და სისტემური მიდგომა პირდაპირ შეესაბამება აღნიშნული პოზიციის ამოცანებს."
+            )
+            exp_origin = f"{companies_phrase}-ში მუშაობისას" if companies_phrase else "პრაქტიკული პროექტებისა და გამოცდილების განმავლობაში"
+            if top_proof_bullets:
+                b_ka = "; ".join(f"{comp}: {txt}" if comp else txt for comp, txt in top_proof_bullets)
+                proof_para = (
+                    f"{exp_origin} ყოველდღიურად ვიყენებდი {skills_highlight} — ვფარავდი {ka_action}. "
+                    f"კონკრეტული გამოცდილებიდან გამოვარჩევდი: {b_ka}."
+                )
+            else:
+                proof_para = f"{exp_origin} პრაქტიკულად გამოვიყენე {skills_highlight}, რაც მოიცავდა {ka_action}."
+            edu_ka_para = ""
+            if edu_phrase:
+                fin_ka = " რაც განსაკუთრებით ღირებულია საბანკო და კრიტიკული ბიზნეს-ლოგიკის სისტემების ტესტირებისას." if (is_bank_or_fin_target and has_econ_edu) else "."
+                edu_ka_para = f"აკადემიური საფუძველი ({edu_phrase}) მაძლევს ძლიერ ანალიტიკურ და რაოდენობრივ აზროვნებას{fin_ka}"
+            gap_ka = f" რაც შეეხება დამატებით მიმართულებებს ({', '.join(missing[:2])}), ჩემი არსებული ტექნიკური საფუძველი უზრუნველყოფს სწრაფ ონბორდინგს." if missing and not is_non_tech_domain else ""
+            third_ka = f"{edu_ka_para}{gap_ka}".strip()
+
+            paragraphs_ka = [
+                salutation,
+                f"დიდი ინტერესით გიგზავნით განაცხადს „{job_title}“ პოზიციაზე {hook_company}. {req_clause}",
+                proof_para,
+            ]
+            if third_ka:
+                paragraphs_ka.append(third_ka)
+            paragraphs_ka.append(
+                f"თანდართულია პოზიციისთვის მორგებული ჩემი რეზიუმე (CV). მოხარული ვიქნები შევუერთდე {cta_company} გუნდს, წვლილი შევიტანო {ka_goal} და გასაუბრებაზე დეტალურად განვიხილო ჩემი გამოცდილება."
+            )
+            paragraphs_ka.append(f"პატივისცემით,\n{contact_footer}")
+            cover_letter = "\n\n".join(paragraphs_ka)
+            motiv_paragraphs_ka = [
+                salutation,
+                f"განსაკუთრებული მოტივაციით გიგზავნით სამოტივაციო წერილს „{job_title}“ პოზიციაზე {hook_company}. ჩემთვის მნიშვნელოვანია იმ გუნდში მუშაობა, სადაც ხარისხი, სიზუსტე და პასუხისმგებლობა მთავარი პრიორიტეტია.",
+                proof_para,
+                *( [third_ka] if third_ka else [] ),
+                f"დარწმუნებული ვარ, ჩემი გამოცდილება ({skills_highlight}) და სწრაფი განვითარების მოტივაცია მნიშვნელოვან ღირებულებას შეუქმნის {cta_company} გუნდს ({ka_goal}). თანდართულია ჩემი რეზიუმე (CV) და მოხარული ვიქნები გასაუბრებაზე შეხვედრით.",
+                f"პატივისცემით,\n{contact_footer}",
+            ]
+            motivational_letter = "\n\n".join(motiv_paragraphs_ka)
         else:
             en_area, en_action, en_goal = en_tuple
             salutation = f"Dear {real_company} Hiring Team," if real_company else "Dear Hiring Team,"
             target_phrase = f"at {real_company}" if real_company else "with your team"
-            req_snippet = ", ".join(req_skills[:5]) if req_skills else skills_highlight
-            exp_txt = f"{exp_years:g} years of verified experience" if exp_years is not None else "verified hands-on experience"
-            gap_bridge = f" Where ramp-up is helpful ({', '.join(missing[:2])}), my core foundation supports fast onboarding." if missing and not is_non_tech_domain else ""
             cta_team = f"{real_company}'s" if real_company else "your team's"
-            proof_para = (
-                f"Across my roles at {companies_phrase}, I applied {skills_highlight}—focusing on {en_action} to meet core requirements ({req_snippet}).{gap_bridge}"
-                if companies_phrase
-                else f"In my hands-on work spanning {skills_highlight}, I focus on {en_action} aligned with your priorities ({req_snippet}).{gap_bridge}"
+            exp_intro = (
+                f"Backed by {exp_years:g} years of verified experience across {companies_phrase}"
+                if (exp_years is not None and companies_phrase)
+                else (
+                    f"With hands-on experience across {companies_phrase}"
+                    if companies_phrase
+                    else f"With verified hands-on experience in {en_area}"
+                )
             )
-            cover_letter = f"{salutation}\n\nPlease find attached my tailored CV for the {job_title} position {target_phrase}. With {exp_txt} in {skills_highlight}, my background aligns directly with {req_snippet}.\n\nI look forward to discussing how I can contribute to {cta_team} {en_goal}.\n\nBest regards,\n{contact_footer}"
-            motivational_letter = f"{salutation}\n\nI am excited to apply for the {job_title} role {target_phrase}. With {exp_txt} in {en_area} ({skills_highlight}), I want to contribute dependable execution toward {req_snippet}.\n\n{proof_para}\n\nI would welcome the chance to connect with {cta_team} team and share how my experience supports {en_goal}.\n\nBest regards,\n{contact_footer}"
+            req_bridge = (
+                f"your priorities around {', '.join(req_skills[:5])}"
+                if has_distinct_reqs
+                else f"your team's focus on {en_action}"
+            )
+            opening_para = (
+                f"I am writing to apply for the {job_title} position {target_phrase}. "
+                f"{exp_intro}, I bring structured execution in {en_area} that aligns directly with {req_bridge}."
+            )
+
+            if top_proof_bullets:
+                b_lines = []
+                for comp_lbl, b_txt in top_proof_bullets:
+                    prefix = f"At {comp_lbl}, I " if comp_lbl and not b_txt.lower().startswith("i ") else ""
+                    if prefix:
+                        body_clause = b_txt[0].lower() + b_txt[1:] if len(b_txt) > 1 and not b_txt[:2].isupper() else b_txt
+                        b_lines.append(f"{prefix}{body_clause}.")
+                    else:
+                        b_lines.append(f"{b_txt}.")
+                proof_para = (
+                    f"My hands-on toolkit spans {skills_highlight}. "
+                    + " ".join(b_lines)
+                )
+            else:
+                proof_para = (
+                    f"Across my hands-on work with {skills_highlight}, I have focused on {en_action}—"
+                    f"translating business requirements into verifiable, defect-free releases."
+                )
+
+            value_parts: List[str] = []
+            if edu_phrase:
+                if is_bank_or_fin_target and has_econ_edu:
+                    value_parts.append(
+                        f"Beyond core technical execution, my academic training ({edu_phrase}) equips me with analytical rigor and financial-domain intuition—directly valuable when verifying banking workflows, calculation rules, and core-system data integrity."
+                    )
+                else:
+                    value_parts.append(
+                        f"My academic foundation ({edu_phrase}) complements this technical stack with disciplined analytical reasoning, quantitative validation, and structured problem-solving."
+                    )
+            if missing and not is_non_tech_domain:
+                value_parts.append(
+                    f"Where your environment extends into {', '.join(missing[:2])}, my verified tooling foundation enables fast, self-directed ramp-up."
+                )
+            value_para = " ".join(value_parts)
+
+            closing_para = (
+                f"Please find my tailored CV attached for your review. I would welcome the opportunity to speak with {cta_team} hiring team "
+                f"about how my background can contribute immediately to {en_goal}."
+            )
+
+            paragraphs_en = [salutation, opening_para, proof_para]
+            if value_para:
+                paragraphs_en.append(value_para)
+            paragraphs_en.append(closing_para)
+            paragraphs_en.append(f"Best regards,\n{contact_footer}")
+            cover_letter = "\n\n".join(paragraphs_en)
+            motiv_opening_en = (
+                f"I am excited to submit my motivational letter for the {job_title} opportunity {target_phrase}. "
+                f"What draws me to {real_company or 'your organization'} is the chance to apply my verified background in {en_area} "
+                f"where precision, dependability, and measurable quality directly matter."
+            )
+            motiv_closing_en = (
+                f"I am eager to bring disciplined execution, fast onboarding, and long-term commitment to {cta_team} team, "
+                f"helping strengthen {en_goal}. Thank you for reviewing my attached CV—I would love to connect in an interview."
+            )
+            motiv_paragraphs_en = [salutation, motiv_opening_en, proof_para]
+            if value_para:
+                motiv_paragraphs_en.append(value_para)
+            motiv_paragraphs_en.extend([motiv_closing_en, f"Best regards,\n{contact_footer}"])
+            motivational_letter = "\n\n".join(motiv_paragraphs_en)
 
         # Deterministic ground-truth safety sanitization across outputs
         def _sanitize_letter_output(txt: str) -> str:

@@ -796,3 +796,96 @@ def test_ingest_scraped_jobs_sibling_delete_no_foreign_key_error(tmp_path):
     with Session(engine) as session:
         rows = session.exec(select(JobPosting).where(JobPosting.user_id == uid)).all()
         assert len(rows) == 1 and "Junior QA" in rows[0].title
+
+
+def test_yaml_skill_meta_never_leaks_and_pdf_cv_with_cover_letter_is_recruiter_grade():
+    from app.db.profile_repository import profile_repository
+    from app.services.cv_generator_service import cv_generator_service
+    from app.services.matcher_service import matcher_service
+
+    # 1. AI SKILL.md with YAML frontmatter & coaching prompts must NEVER pollute name, skills, or education
+    ai_skill_md = """---
+name: giorgi-career-intelligence-interview-coach
+description: Career coach prompt
+---
+# Career Intelligence Coach
+- **Location:** **Tbilisi, Georgia**
+
+## Core Skills
+- Playwright, FastAPI, PostgreSQL, Senior QA Automation Engineer, Technical QA Hiring Manager, Interview Coach, QA Automation Mentor
+
+## Education
+- Tbilisi State University (TSU), Faculty of Economics
+- 2022–2026
+- Graduated with honors
+- Treat the Economics degree as a source of transferable value rather than automatically as a disadvantage.
+- Potential transferable strengths include:
+- analytical reasoning
+- Do not claim experience in a domain unless evidence supports it.
+# 2. Verified Work Experience
+- Use these as the baseline unless Giorgi provides updated documentation.
+"""
+    parsed_ai = profile_repository.parse_profile_from_md(ai_skill_md)
+    assert "giorgi-career-intelligence-interview-coach" not in (parsed_ai.get("full_name") or "").lower()
+    assert "**" not in (parsed_ai.get("location") or "")
+    edu_degs = [e.get("degree", "") for e in (parsed_ai.get("education") or [])]
+    assert len(edu_degs) <= 1
+    assert not any("Treat the Economics" in d or "Do not claim" in d or "Verified Work" in d for d in edu_degs)
+    tax = matcher_service.parse_skills_markdown(ai_skill_md)
+    skills_low = [s.lower() for s in tax["all_skills"]]
+    assert "FastAPI" in tax["all_skills"] and "PostgreSQL" in tax["all_skills"]
+    for persona in ("interview coach", "technical qa hiring manager", "qa automation mentor"):
+        assert persona not in skills_low
+
+    # 2. Real PDF-extracted CV with ALL-CAPS headers, \uf0b7 bullets, and pipe-separated languages parses cleanly
+    pdf_cv_md = """# GIORGI SHAKIASHVILI
+Junior QA Specialist | Web Application Testing | API & SQL Validation
+Tbilisi, Georgia | +995 571 15 68 07 | giorgishakiashvili21@gmail.com
+## Summary
+Detail-oriented Junior QA Specialist with commercial testing experience at EPAM Systems and Exactpro Systems.
+CORE COMPETENCIES & TECHNICAL SKILLS
+\uf0b7 API & Database Testing: REST API, Postman, SQL, PostgreSQL, FastAPI, Playwright, Jira
+## Work Experience
+Full-Stack QA Trainee (Lab) — Vention Teams May 2026 – Sep 2026
+\uf0b7 Executed 30+ REST API test cases in Postman and ran PostgreSQL queries to verify backend records.
+EPAM Systems Aug 2024 – Jun 2025
+Junior Software Testing Engineer Jan 2025 – Jun 2025
+\uf0b7 Validated REST API responses in Postman and logged reproducible defects in Jira.
+Software Quality Assurance Intern — Exactpro Systems Sep 2023 – Jan 2024
+\uf0b7 Executed manual functional testing of financial systems following STLC procedures.
+EDUCATION & TECHNICAL TRAINING
+\uf0b7 M.Sc. in Economics - Tbilisi State University (TSU) | 2026 – Present — Focus on financial markets.
+\uf0b7 B.Sc. in Economics - Tbilisi State University (TSU) | Sep 2022 – Jul 2026 — Qua
+ntitative foundation in statistics and financial logic.
+\uf0b7 Technical Programs: EPAM Python Test Automation Mentoring Program (2025) • Quantori Python & Docker School (2024).
+## Languages
+Georgian: Native | English: Professional Working Proficiency
+"""
+    p = profile_repository.parse_profile_from_md(pdf_cv_md)
+    assert p["full_name"] == "GIORGI SHAKIASHVILI"
+    assert len(p["education"]) == 2
+    assert "Quantitative foundation" in p["education"][1]["field_of_study"]
+    assert len(p["certifications"]) == 2
+    assert len(p["work_history"]) == 3
+    assert [w["company"] for w in p["work_history"]] == ["Vention Teams", "EPAM Systems", "Exactpro Systems"]
+    assert len(p["spoken_languages"]) == 2
+    assert {l["language"] for l in p["spoken_languages"]} == {"Georgian", "English"}
+
+    # 3. Generated ProCredit Bank Junior QA Cover Letter & CV are full, tailored, and clean
+    pkg = cv_generator_service.prepare_email_application_package(
+        job_title="Junior QA Specialist",
+        company="ProCredit Bank",
+        description="",
+        cv_language="en",
+        cv_style="tailored",
+        skills_md_override=pdf_cv_md,
+    )
+    cl = pkg["cover_letter"]
+    assert len(cl) >= 480, f"Cover letter too short ({len(cl)} chars): {cl}"
+    assert cl.count("\n\n") >= 4
+    assert "giorgi-career-intelligence-interview-coach" not in cl.lower()
+    assert "GIORGI SHAKIASHVILI" in cl
+    assert "across" not in pkg["human_tone_summary"].lower() or pkg["human_tone_summary"].lower().count("across") <= 1
+    assert "ProCredit Bank" in cl
+    assert "Tbilisi State University" in cl
+    assert "**Tbilisi" not in pkg["rendered_html"]

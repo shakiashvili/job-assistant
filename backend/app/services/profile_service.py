@@ -233,18 +233,21 @@ class ProfileService:
         github_url = ""
         linkedin_url = ""
 
-        from ..db.profile_repository import profile_repository, filter_spoken_language_entries
+        from ..db.profile_repository import (
+            profile_repository,
+            filter_spoken_language_entries,
+            sanitize_person_name,
+            strip_yaml_frontmatter,
+            is_corrupted_education_entry,
+        )
 
+        text = strip_yaml_frontmatter(text)
+        lower_text = text.lower()
         md_parsed = profile_repository.parse_profile_from_md(text)
-        cand_name_raw = str(md_parsed.get("full_name") or "").strip()
-        if cand_name_raw and not any(
-            w in cand_name_raw.lower()
-            for w in ("http", "api", "case study", "project", "sticker", "portfolio", "guide", "docs", "documentation", "readme")
-        ):
-            full_name = cand_name_raw
+        full_name = sanitize_person_name(str(md_parsed.get("full_name") or ""))
         email = str(md_parsed.get("email") or "")
         phone = str(md_parsed.get("phone") or "")
-        location = str(md_parsed.get("location") or "")
+        location = re.sub(r"[*_`]+", "", str(md_parsed.get("location") or "")).strip()
         github_url = str(md_parsed.get("github_url") or "")
         linkedin_url = str(md_parsed.get("linkedin_url") or "")
 
@@ -434,14 +437,12 @@ CRITICAL INSTRUCTIONS:
                 ttl_seconds=3600,
             )
             if isinstance(gem_parsed, ParsedCandidateProfileSchema):
-                if not (gem_parsed.full_name or "").strip() and full_name:
-                    gem_parsed.full_name = full_name
+                gem_parsed.full_name = sanitize_person_name(gem_parsed.full_name) or full_name
+                gem_parsed.location = re.sub(r"[*_`]+", "", str(gem_parsed.location or "")).strip() or location
                 if not (gem_parsed.email or "").strip() and email:
                     gem_parsed.email = email
                 if not (gem_parsed.phone or "").strip() and phone:
                     gem_parsed.phone = phone
-                if not (gem_parsed.location or "").strip() and location:
-                    gem_parsed.location = location
                 if not (gem_parsed.github_url or "").strip() and github_url:
                     gem_parsed.github_url = github_url
                 if not (gem_parsed.linkedin_url or "").strip() and linkedin_url:
@@ -467,12 +468,13 @@ CRITICAL INSTRUCTIONS:
                     existing_list = getattr(gem_parsed.parsed_skills, k)
                     merged = list(dict.fromkeys(existing_list + taxonomy_dict.get(k, [])))
                     setattr(gem_parsed.parsed_skills, k, merged)
-                # Keep deterministically grouped education when Gemini splits university/dates/modules across separate entries
-                if education_entries and (
-                    not gem_parsed.parsed_skills.education
-                    or len(gem_parsed.parsed_skills.education) > len(education_entries)
-                ):
-                    gem_parsed.parsed_skills.education = education_entries
+                # Keep deterministically grouped education and purge any corrupted AI-meta entries
+                clean_gem_edu = [e for e in (gem_parsed.parsed_skills.education or []) if not is_corrupted_education_entry(e)]
+                clean_det_edu = [e for e in education_entries if not is_corrupted_education_entry(e)]
+                if clean_det_edu and (not clean_gem_edu or len(clean_gem_edu) > len(clean_det_edu)):
+                    gem_parsed.parsed_skills.education = clean_det_edu
+                else:
+                    gem_parsed.parsed_skills.education = clean_gem_edu
                 if projects_entries and not gem_parsed.parsed_skills.projects:
                     gem_parsed.parsed_skills.projects = projects_entries
                 gem_spoken = [
@@ -657,19 +659,27 @@ CRITICAL INSTRUCTIONS:
                 except Exception:
                     existing_vault = {}
 
-            from ..db.profile_repository import profile_repository
+            from ..db.profile_repository import profile_repository, sanitize_person_name, is_corrupted_education_entry
 
             parsed_md = profile_repository.parse_profile_from_md(raw_markdown)
+            resolved_full_name = sanitize_person_name(extracted.full_name)
+            if not resolved_full_name and resolved_user_id is not None:
+                u_owner = session.get(User, resolved_user_id)
+                if u_owner and u_owner.full_name:
+                    resolved_full_name = sanitize_person_name(u_owner.full_name)
+            extracted.full_name = resolved_full_name
             cand = existing_vault.setdefault("candidate", {})
-            cand["full_name"] = extracted.full_name
-            parts = extracted.full_name.split()
+            cand["full_name"] = resolved_full_name
+            parts = resolved_full_name.split()
             cand["first_name"] = parts[0] if parts else "Candidate"
             cand["last_name"] = " ".join(parts[1:]) if len(parts) > 1 else ""
             cand["headline"] = extracted.headline
             cand["email"] = extracted.email
             cand["phone"] = extracted.phone
             if extracted.location:
-                loc_parts = [p.strip() for p in extracted.location.split(",", 1)]
+                clean_loc = re.sub(r"[*_`]+", "", extracted.location).strip()
+                extracted.location = clean_loc
+                loc_parts = [p.strip() for p in clean_loc.split(",", 1)]
                 loc_dict = dict(cand.get("location") or {}) if isinstance(cand.get("location"), dict) else {}
                 loc_dict["city"] = loc_parts[0]
                 loc_dict["country"] = loc_parts[1] if len(loc_parts) > 1 else loc_dict.get("country", "")
@@ -686,15 +696,27 @@ CRITICAL INSTRUCTIONS:
                     for l in parsed_md["spoken_languages"]
                 ]
             existing_vault.setdefault("skills", {})["core"] = skills_payload.get("all_skills", [])
-            if parsed_md.get("work_history") or mark_uploaded:
-                existing_vault["work_history"] = list(parsed_md.get("work_history") or existing_vault.get("work_history") or [])
-            if parsed_md.get("projects"):
-                existing_vault["projects"] = list(parsed_md["projects"])
-                skills_payload["projects"] = list(parsed_md["projects"])
-            if parsed_md.get("certifications"):
-                existing_vault["certifications"] = list(parsed_md["certifications"])
-                skills_payload["courses_and_certifications"] = list(parsed_md["certifications"])
-            grouped_edu = list(parsed_md.get("education") or skills_payload.get("education") or existing_vault.get("education") or [])
+            if mark_uploaded:
+                # Fresh upload replaces stale vault sections instead of merging old corrupted rows
+                existing_vault["work_history"] = list(parsed_md.get("work_history") or [])
+                existing_vault["projects"] = list(parsed_md.get("projects") or skills_payload.get("projects") or [])
+                skills_payload["projects"] = existing_vault["projects"]
+                existing_vault["certifications"] = list(
+                    parsed_md.get("certifications") or skills_payload.get("courses_and_certifications") or []
+                )
+                skills_payload["courses_and_certifications"] = existing_vault["certifications"]
+                raw_edu = list(parsed_md.get("education") or skills_payload.get("education") or [])
+            else:
+                if parsed_md.get("work_history"):
+                    existing_vault["work_history"] = list(parsed_md["work_history"])
+                if parsed_md.get("projects"):
+                    existing_vault["projects"] = list(parsed_md["projects"])
+                    skills_payload["projects"] = list(parsed_md["projects"])
+                if parsed_md.get("certifications"):
+                    existing_vault["certifications"] = list(parsed_md["certifications"])
+                    skills_payload["courses_and_certifications"] = list(parsed_md["certifications"])
+                raw_edu = list(parsed_md.get("education") or skills_payload.get("education") or existing_vault.get("education") or [])
+            grouped_edu = [e for e in raw_edu if not is_corrupted_education_entry(e)]
             existing_vault["education"] = grouped_edu
             skills_payload["education"] = grouped_edu
 
