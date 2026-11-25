@@ -34,6 +34,7 @@ _DOMAIN_QUERY_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "adjacent_ge": ["SQL", "Python"],
         "remote_int": ["QA", "Tester", "Automation"],
         "is_it_category": True,
+        "jobs_ge_cid": 6,
         "djinni_kw": "QA",
         "dou_cat": "QA",
         "justjoin_cat": "testing",
@@ -45,6 +46,7 @@ _DOMAIN_QUERY_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "adjacent_ge": ["Backend", "Support"],
         "remote_int": ["Python", "Developer", "JavaScript"],
         "is_it_category": True,
+        "jobs_ge_cid": 6,
         "djinni_kw": "Python",
         "dou_cat": "Python",
         "justjoin_cat": "python",
@@ -56,7 +58,8 @@ _DOMAIN_QUERY_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "adjacent_ge": ["BI", "Operations"],
         "remote_int": ["Data Analyst", "BI"],
         "is_it_category": True,
-        "djinni_kw": "Data+Analyst",
+        "jobs_ge_cid": 6,
+        "djinni_kw": "Data Analyst",
         "dou_cat": "Analyst",
         "justjoin_cat": "data",
         "domain_kw": ["analyst", "data", "power bi", "tableau", "sql", "reporting", "ანალიტიკოს"],
@@ -67,7 +70,8 @@ _DOMAIN_QUERY_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "adjacent_ge": ["შესყიდვები", "Operations"],
         "remote_int": ["Logistics", "Supply Chain"],
         "is_it_category": False,
-        "djinni_kw": None,
+        "jobs_ge_cid": 5,
+        "djinni_kw": "kw:Logistics",
         "dou_cat": None,
         "justjoin_cat": None,
         "domain_kw": ["logistics", "supply chain", "procurement", "warehouse", "dispatch", "freight", "customs", "ლოჯისტიკ", "შესყიდვ", "საწყობ", "მომარაგებ"],
@@ -75,91 +79,99 @@ _DOMAIN_QUERY_TEMPLATES: Dict[str, Dict[str, Any]] = {
     },
     "finance_accounting": {
         "primary_ge": ["ბუღალტერი", "Finance"],
-        "adjacent_ge": ["Audit", "Operations"],
-        "remote_int": ["Finance", "Analyst"],
+        "adjacent_ge": ["Audit", "Financial Analyst"],
+        "remote_int": ["Finance", "Accounting", "Financial Analyst"],
         "is_it_category": False,
-        "djinni_kw": None,
-        "dou_cat": None,
-        "justjoin_cat": None,
-        "domain_kw": ["finance", "accountant", "accounting", "audit", "bookkeeper", "ifrs", "1c", "oris", "ბუღალტ", "ფინანს", "აუდიტ"],
-        "adjacent_kw": ["analyst", "billing", "treasury", "operations", "excel", "ოპერაციებ", "ანალიტიკ"],
+        "jobs_ge_cid": 3,
+        "djinni_kw": "kw:Finance",
+        "dou_cat": "Finance",
+        "justjoin_cat": "analytics",
+        "domain_kw": ["finance", "accountant", "accounting", "audit", "bookkeeper", "ifrs", "1c", "oris", "financial analyst", "ბუღალტ", "ფინანს", "აუდიტ"],
+        "adjacent_kw": ["analyst", "billing", "treasury", "controller", "excel", "fp&a", "ანალიტიკ"],
     },
     "marketing_growth": {
         "primary_ge": ["მარკეტინგი", "Marketing"],
-        "adjacent_ge": ["Content", "Sales"],
-        "remote_int": ["Marketing", "SEO"],
+        "adjacent_ge": ["Content", "SMM"],
+        "remote_int": ["Marketing", "SEO", "Growth"],
         "is_it_category": False,
+        "jobs_ge_cid": 4,
         "djinni_kw": "Marketing",
         "dou_cat": "Marketing",
         "justjoin_cat": None,
-        "domain_kw": ["marketing", "seo", "smm", "social media", "copywriter", "ads", "brand", "მარკეტინგ", "კონტენტ"],
-        "adjacent_kw": ["sales", "pr", "communications", "e-commerce", "გაყიდვ", "კომუნიკაცი"],
+        "domain_kw": ["marketing", "seo", "smm", "social media", "copywriter", "ads", "brand", "growth", "მარკეტინგ", "კონტენტ"],
+        "adjacent_kw": ["pr", "communications", "e-commerce", "digital", "კომუნიკაცი"],
     },
     "sales_bd": {
         "primary_ge": ["გაყიდვები", "Sales"],
-        "adjacent_ge": ["Support", "Account"],
+        "adjacent_ge": ["Account Manager", "Business Development"],
         "remote_int": ["Sales", "Business Development"],
         "is_it_category": False,
+        "jobs_ge_cid": 2,
         "djinni_kw": "Sales",
         "dou_cat": "Sales",
         "justjoin_cat": None,
-        "domain_kw": ["sales", "business development", "account manager", "b2b", "გაყიდვ", "კონსულტანტ"],
-        "adjacent_kw": ["customer", "support", "crm", "onboarding", "marketing", "მომხმარებელ"],
+        "domain_kw": ["sales", "business development", "account manager", "account executive", "b2b", "გაყიდვ", "კონსულტანტ"],
+        "adjacent_kw": ["customer", "crm", "onboarding", "partnerships", "მომხმარებელ"],
     },
     "hr_recruiting": {
         "primary_ge": ["HR", "ადამიანური რესურსები"],
-        "adjacent_ge": ["Admin", "Coordinator"],
-        "remote_int": ["HR", "Recruiter"],
+        "adjacent_ge": ["Recruiter", "People Operations"],
+        "remote_int": ["HR", "Recruiter", "Talent Acquisition"],
         "is_it_category": False,
+        "jobs_ge_cid": 1,
         "djinni_kw": "HR",
         "dou_cat": "HR",
         "justjoin_cat": None,
-        "domain_kw": ["hr", "recruiter", "talent acquisition", "human resources", "onboarding", "ადამიანური რესურს", "რეკრუტ"],
-        "adjacent_kw": ["office manager", "coordinator", "administrative", "operations", "ადმინისტრ"],
+        "domain_kw": ["hr", "recruiter", "talent acquisition", "human resources", "people operations", "onboarding", "ადამიანური რესურს", "რეკრუტ"],
+        "adjacent_kw": ["office manager", "coordinator", "administrative", "ადმინისტრ"],
     },
     "public_admin_legal": {
         "primary_ge": ["იურისტი", "Legal"],
-        "adjacent_ge": ["ადმინისტრაციული", "Coordinator"],
+        "adjacent_ge": ["Compliance", "ადმინისტრაციული"],
         "remote_int": ["Legal", "Compliance"],
         "is_it_category": False,
-        "djinni_kw": None,
-        "dou_cat": None,
+        "jobs_ge_cid": 7,
+        "djinni_kw": "kw:Legal",
+        "dou_cat": "Legal",
         "justjoin_cat": None,
-        "domain_kw": ["legal", "lawyer", "compliance", "policy", "public administration", "იურისტ", "სამართლ", "შესყიდვ", "ადმინისტრაცი"],
+        "domain_kw": ["legal", "lawyer", "counsel", "compliance", "policy", "public administration", "იურისტ", "სამართლ", "შესყიდვ", "ადმინისტრაცი"],
         "adjacent_kw": ["coordinator", "specialist", "clerk", "analyst", "სტაჟიორი", "სპეციალისტ"],
     },
     "receptionist_hospitality": {
         "primary_ge": ["Receptionist", "მიმღები"],
         "adjacent_ge": ["ადმინისტრატორი", "Hospitality"],
-        "remote_int": [],
+        "remote_int": ["Hospitality", "Guest"],
         "is_it_category": False,
+        "jobs_ge_cid": 10,
         "djinni_kw": None,
         "dou_cat": None,
         "justjoin_cat": None,
         "domain_kw": ["receptionist", "front desk", "hospitality", "concierge", "hotel", "guest", "მიმღები", "რეცეფციონისტი", "სასტუმრო", "ადმინისტრატორი"],
-        "adjacent_kw": ["customer service", "office manager", "coordinator", "მომხმარებელ", "მენეჯერი"],
+        "adjacent_kw": ["customer service", "office manager", "coordinator", "მომხმარებელ"],
     },
     "healthcare_hospital": {
         "primary_ge": ["სამედიცინო", "Medical"],
-        "adjacent_ge": ["კლინიკა", "Coordinator"],
-        "remote_int": [],
+        "adjacent_ge": ["კლინიკა", "Nurse"],
+        "remote_int": ["Healthcare", "Clinical", "Medical"],
         "is_it_category": False,
+        "jobs_ge_cid": 8,
         "djinni_kw": None,
         "dou_cat": None,
         "justjoin_cat": None,
-        "domain_kw": ["medical", "hospital", "clinic", "patient", "coordinator", "სამედიცინო", "კლინიკა", "პაციენტ", "რეგისტრატორი"],
-        "adjacent_kw": ["reception", "support", "administrator", "ადმინისტრატორი", "ოპერატორი"],
+        "domain_kw": ["medical", "hospital", "clinic", "patient", "clinical", "nurse", "pharmacy", "სამედიცინო", "კლინიკა", "პაციენტ", "ექთანი", "რეგისტრატორი"],
+        "adjacent_kw": ["reception", "coordinator", "administrator", "ადმინისტრატორი"],
     },
     "customer_service": {
         "primary_ge": ["Support", "მხარდაჭერა"],
-        "adjacent_ge": ["Customer", "Operations"],
-        "remote_int": ["Support"],
+        "adjacent_ge": ["Customer", "Operator"],
+        "remote_int": ["Customer Support", "Support"],
         "is_it_category": False,
+        "jobs_ge_cid": 1,
         "djinni_kw": "Support",
         "dou_cat": "Support",
         "justjoin_cat": "support",
         "domain_kw": ["support", "customer service", "client care", "call center", "helpdesk", "მხარდაჭერა", "ოპერატორი", "ქოლ"],
-        "adjacent_kw": ["onboarding", "sales", "coordinator", "client success", "ადმინისტრატორი"],
+        "adjacent_kw": ["onboarding", "coordinator", "client success", "ადმინისტრატორი"],
     },
 }
 
@@ -189,6 +201,7 @@ def build_search_queries(
         adjacent_ge = list(tmpl["adjacent_ge"])
         remote_int = list(tmpl["remote_int"])
         is_it = bool(tmpl["is_it_category"])
+        jobs_ge_cid = tmpl.get("jobs_ge_cid")
         djinni_kw = tmpl["djinni_kw"]
         dou_cat = tmpl["dou_cat"]
         justjoin_cat = tmpl["justjoin_cat"]
@@ -201,6 +214,7 @@ def build_search_queries(
         adjacent_ge = [r.split()[0] for r in adj_roles[:2] if len(r.split()[0]) >= 3] or (verified[:2] if verified else ["Coordinator"])
         remote_int = role_tokens[:2]
         is_it = any(s.lower() in ("python", "sql", "javascript", "typescript", "docker", "aws", "qa") for s in verified)
+        jobs_ge_cid = 6 if is_it else None
         djinni_kw = role_tokens[0] if (is_it and role_tokens) else None
         dou_cat = None
         justjoin_cat = None
@@ -230,19 +244,19 @@ def build_search_queries(
     if eligible_internships and primary_ge:
         internship_queries.append(f"{primary_ge[0]} სტაჟიორი")
 
-    # Jobs.ge: always include newest IT category feed for tech profiles + localized primary & internship queries
-    cid_suffix = "&cid=6" if is_it else ""
+    # Jobs.ge: always include the newest industry category feed (cid=...) + localized queries + internship feed
+    cid_suffix = f"&cid={jobs_ge_cid}" if jobs_ge_cid else ""
     jobs_ge_urls: List[str] = []
-    if is_it:
-        jobs_ge_urls.append("https://jobs.ge/ge/?page=1&cid=6")
-    for idx, q in enumerate((primary_ge[:3] + adjacent_ge[:1])):
+    if jobs_ge_cid:
+        jobs_ge_urls.append(f"https://jobs.ge/ge/?page=1&cid={jobs_ge_cid}")
+    for idx, q in enumerate((primary_ge[:2] + adjacent_ge[:1])):
         enc = quote_plus(q)
-        cat_part = cid_suffix if idx < len(primary_ge[:3]) else ""
+        cat_part = cid_suffix if idx < len(primary_ge[:2]) else ""
         u = f"https://jobs.ge/ge/?page=1&q={enc}{cat_part}"
         if u not in jobs_ge_urls:
             jobs_ge_urls.append(u)
     if eligible_internships:
-        intern_url = f"https://jobs.ge/ge/?page=1&q={quote_plus('სტაჟირება')}"
+        intern_url = f"https://jobs.ge/ge/?page=1&q={quote_plus('სტაჟირება')}{cid_suffix}"
         if intern_url not in jobs_ge_urls:
             jobs_ge_urls.append(intern_url)
 
@@ -251,7 +265,7 @@ def build_search_queries(
         for q in dict.fromkeys(primary_ge[:2] + adjacent_ge[:1])
     ]
     headhunter_urls = [
-        f"https://tbilisi.headhunter.ge/search/vacancy?text={quote_plus(q)}&area=28"
+        f"https://headhunter.ge/search/vacancy?text={quote_plus(q)}&area=28&order_by=publication_time"
         for q in dict.fromkeys(primary_ge[:2] + adjacent_ge[:1])
     ]
 
@@ -259,7 +273,10 @@ def build_search_queries(
     djinni_url = None
     djinni_exp_url = None
     if djinni_kw:
-        djinni_url = f"https://djinni.co/jobs/?primary_keyword={quote_plus(djinni_kw)}&employment=remote"
+        if djinni_kw.startswith("kw:"):
+            djinni_url = f"https://djinni.co/jobs/?keywords={quote_plus(djinni_kw[3:])}&employment=remote"
+        else:
+            djinni_url = f"https://djinni.co/jobs/?primary_keyword={quote_plus(djinni_kw)}&employment=remote"
         if cap_exp <= 1.5:
             exp_param = "&exp_years=0-1"
         elif cap_exp <= 2.5:

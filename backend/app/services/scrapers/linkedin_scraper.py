@@ -9,6 +9,8 @@ from .base_scraper import (
     BasePortalScraper,
     evaluate_remote_and_language_gate,
     is_georgia_country_location,
+    matches_domain_keywords,
+    parse_portal_published_at,
     sanitize_company_name,
 )
 
@@ -49,14 +51,13 @@ def build_linkedin_search_urls(
     else:
         exp_filter = "4%2C5"
     urls = [
-        f"https://www.linkedin.com/jobs/search/?keywords={quote_plus(kw_primary)}&location=Georgia&f_E={exp_filter}",
-        f"https://www.linkedin.com/jobs/search/?keywords={quote_plus(kw_primary)}&location=Worldwide&f_WT=2&f_E={exp_filter}",
-        f"https://www.linkedin.com/jobs/search/?keywords={quote_plus(kw_primary)}&location=Tbilisi&f_E={exp_filter}",
+        f"https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords={quote_plus(kw_primary)}&location=Tbilisi%2C+Georgia&f_E={exp_filter}&f_TPR=r604800",
+        f"https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords={quote_plus(kw_primary)}&location=Worldwide&f_WT=2&f_E={exp_filter}&f_TPR=r604800",
     ]
     if skills:
         alt_kw = f"{words[0]} {skills[0]}" if words else skills[0]
         urls.append(
-            f"https://www.linkedin.com/jobs/search/?keywords={quote_plus(alt_kw)}&location=Worldwide&f_WT=2&f_E={exp_filter}"
+            f"https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords={quote_plus(alt_kw)}&location=Tbilisi%2C+Georgia&f_E={exp_filter}&f_TPR=r604800"
         )
     return list(dict.fromkeys(urls))
 
@@ -117,6 +118,11 @@ class LinkedInScraper(BasePortalScraper):
             )
             location_text = loc_el.get_text(" ", strip=True) if loc_el else "Remote"
 
+            time_el = card.select_one("time[datetime], time")
+            pub_dt, pub_str = parse_portal_published_at(
+                (time_el.get("datetime") or time_el.get_text(" ", strip=True)) if time_el else None
+            )
+
             card_blob = card.get_text(" ", strip=True)
             is_easy_apply = bool(
                 re.search(r"\beasy\s+apply\b", card_blob, re.IGNORECASE)
@@ -171,6 +177,8 @@ class LinkedInScraper(BasePortalScraper):
                     "status": status,
                     "filter_out_reason": reason,
                     "detected_languages": langs,
+                    "published_at": pub_dt,
+                    "posting_date": pub_str,
                 }
             )
 
@@ -242,14 +250,14 @@ class LinkedInScraper(BasePortalScraper):
                 if item["external_id"] in seen_ids:
                     continue
                 seen_ids.add(item["external_id"])
-                if domain_keywords:
-                    blob = f"{item['title']} {item['description_raw']}".lower()
-                    if not any(kw.lower() in blob for kw in domain_keywords):
-                        continue
+                if domain_keywords and not matches_domain_keywords(f"{item['title']} {item['description_raw']}", domain_keywords):
+                    continue
                 raw_jobs.append(item)
 
         if not raw_jobs:
             return []
+
+        raw_jobs.sort(key=lambda x: x["published_at"].timestamp() if x.get("published_at") else 0.0, reverse=True)
 
         # Enrich top non-filtered cards with full descriptions (polite concurrency) and drop failed detail fetches
         candidates = [j for j in raw_jobs if j.get("status") != "FILTERED_OUT"][:6]

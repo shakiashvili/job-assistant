@@ -4,7 +4,9 @@ from typing import Dict, Any, List, Optional
 from .base_scraper import (
     BasePortalScraper,
     evaluate_remote_and_language_gate,
+    matches_domain_keywords,
     parse_contact_method_and_email,
+    parse_portal_published_at,
     sanitize_company_name,
 )
 
@@ -13,14 +15,14 @@ logger = logging.getLogger(__name__)
 
 class HeadhunterScraper(BasePortalScraper):
     """
-    Live Georgia & Regional Tech Scraper for headhunter.ge (tbilisi.headhunter.ge).
-    Extracts real live vacancies matching the candidate's target role keywords, verifies
-    detail descriptions live, and gates Russian-language vacancies by candidate_languages.
+    Live Georgia & Regional Multi-Industry Scraper for headhunter.ge.
+    Extracts live vacancies across any profession (area=28 Georgia, sorted by publication_time),
+    parses publication dates, verifies detail descriptions, and applies spoken-language gates.
     """
 
     portal_name = "headhunter.ge"
     market = "GE_DOMESTIC"
-    SEARCH_URL = "https://tbilisi.headhunter.ge/search/vacancy?text=QA&area=28"
+    SEARCH_URL = "https://headhunter.ge/search/vacancy?text=QA&area=28&order_by=publication_time"
 
     def parse_html_listings(
         self,
@@ -32,14 +34,8 @@ class HeadhunterScraper(BasePortalScraper):
         results: List[Dict[str, Any]] = []
         seen_ids: set[str] = set()
 
-        kw_list = [
-            k.lower()
-            for k in (domain_keywords or ["qa", "quality assurance", "tester", "test", "sdet", "ტესტ"])
-        ]
-
         cards = soup.select("[data-qa='vacancy-serp__vacancy']")
         if not cards:
-            # Fallback wrapper detection around HH vacancy links
             seen_parents = set()
             cards = []
             for a_tag in soup.select("a[href*='/vacancy/']"):
@@ -50,23 +46,24 @@ class HeadhunterScraper(BasePortalScraper):
 
         for idx, item in enumerate(cards):
             title_el = item.select_one(
-                "[data-qa='serp-item__title'], [data-qa='vacancy-serp__vacancy-title'], a[href*='/vacancy/']"
+                "a[data-qa='serp-item__title'], [data-qa='serp-item__title'], [data-qa='vacancy-serp__vacancy-title'], a[href*='/vacancy/']"
             )
-            if not title_el or not title_el.get("href"):
+            if not title_el:
+                continue
+            href_raw = title_el.get("href") or (title_el.find("a", href=True) or {}).get("href")
+            if not href_raw:
                 continue
 
-            href = str(title_el["href"]).split("?")[0]
+            href = str(href_raw).split("?")[0]
             if "/vacancy/" not in href:
                 continue
-            url = href if href.startswith("http") else f"https://tbilisi.headhunter.ge{href}"
+            url = href if href.startswith("http") else f"https://headhunter.ge{href}"
 
             title = re.sub(r"\s+", " ", title_el.get_text(" ", strip=True)).strip()
             if not title or len(title) < 3:
                 continue
 
-            # Keep IT/QA search results relevant
-            lower_title = title.lower()
-            if not any(kw in lower_title for kw in kw_list):
+            if domain_keywords and not matches_domain_keywords(title, domain_keywords):
                 continue
 
             id_match = re.search(r"/vacancy/(\d+)", url)
@@ -75,7 +72,9 @@ class HeadhunterScraper(BasePortalScraper):
                 continue
             seen_ids.add(ext_id)
 
-            comp_el = item.select_one("[data-qa='vacancy-serp__vacancy-employer'], a[href*='/employer/']")
+            comp_el = item.select_one(
+                "[data-qa='vacancy-serp__vacancy-employer'], [data-qa='vacancy-serp__vacancy-employer-text'], a[href*='/employer/']"
+            )
             raw_company = comp_el.get_text(" ", strip=True) if comp_el else ""
             company = sanitize_company_name(raw_company, fallback="HeadHunter Employer")
 
@@ -84,6 +83,9 @@ class HeadhunterScraper(BasePortalScraper):
 
             sal_el = item.select_one("[data-qa*='compensation']")
             sal_text = sal_el.get_text(" ", strip=True) if sal_el else ""
+
+            dt_el = item.select_one("[data-qa='vacancy-serp__vacancy-date']")
+            pub_dt, pub_str = parse_portal_published_at(dt_el.get_text(" ", strip=True) if dt_el else None)
 
             snip_parts = [
                 el.get_text(" ", strip=True)
@@ -117,6 +119,8 @@ class HeadhunterScraper(BasePortalScraper):
                 "email_subject": email_subj,
                 "detected_languages": langs,
                 "language_requirements": langs,
+                "published_at": pub_dt,
+                "posting_date": pub_str,
                 "description_raw": desc_body[:4000],
                 "status": status,
                 "filter_out_reason": filter_reason or None,
@@ -130,16 +134,26 @@ class HeadhunterScraper(BasePortalScraper):
         item: Dict[str, Any],
         candidate_languages: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Fetches live detail page, extracts full description, contact email, and language gate."""
-        html = await self.fetch_html(item["url"], timeout=8.0)
+        """Fetches live detail page, extracts full description, publication date, contact email, and language gate."""
+        html = await self.fetch_html(item["url"], timeout=7.0)
         if not html:
-            return None
+            return item
 
         soup = self.make_soup(html)
         desc_el = soup.select_one("[data-qa='vacancy-description']")
         body_text = desc_el.get_text(" ", strip=True) if desc_el else ""
         if len(body_text) < 40:
             return item
+
+        # Extract exact datePosted from meta / JSON-LD / creation-time label
+        if not item.get("published_at"):
+            dp_m = re.search(r'"datePosted"\s*:\s*"([^"]+)"', html)
+            dt_el = soup.select_one("[data-qa='vacancy-view-creation-time']")
+            raw_dt = dp_m.group(1) if dp_m else (dt_el.get_text(" ", strip=True) if dt_el else None)
+            pub_dt, pub_str = parse_portal_published_at(raw_dt)
+            if pub_dt:
+                item["published_at"] = pub_dt
+                item["posting_date"] = pub_str
 
         sal_el = soup.select_one("[data-qa='vacancy-salary']")
         sal_txt = sal_el.get_text(" ", strip=True) if sal_el else ""
@@ -200,6 +214,8 @@ class HeadhunterScraper(BasePortalScraper):
             lambda c: self._enrich_and_verify_item(c, candidate_languages=candidate_languages),
             limit=18,
             dedupe_title_company=True,
+            page_timeout=10.0,
+            sort_newest_first=True,
         )
 
 

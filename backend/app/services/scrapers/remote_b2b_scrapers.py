@@ -4,8 +4,13 @@ import re
 from typing import Dict, Any, List, Optional
 from bs4 import BeautifulSoup
 
-from .base_scraper import BasePortalScraper, evaluate_remote_and_language_gate, sanitize_company_name
-from ..link_validator import parse_vacancy_published_date
+from .base_scraper import (
+    BasePortalScraper,
+    evaluate_remote_and_language_gate,
+    matches_domain_keywords,
+    parse_portal_published_at,
+    sanitize_company_name,
+)
 
 logger = logging.getLogger(__name__)
 _FEED_HEADERS = {"User-Agent": "TalentFlowAI/2.0 (Remote Job Discovery)"}
@@ -22,18 +27,23 @@ def _strip_html(raw_html: str) -> str:
     return re.sub(r"\s+", " ", soup.get_text(" ", strip=True)).strip()
 
 
-def _matches_domain(title: str, body: str, domain_keywords: Optional[List[str]]) -> bool:
+def _matches_domain(title: str, tags_or_cat: str, domain_keywords: Optional[List[str]]) -> bool:
+    """Matches strictly against title + category/tags with word boundaries (prevents body boilerplate false positives)."""
     if not domain_keywords:
         return True
-    haystack = f"{title} {body[:1200]}".lower()
-    return any(k.lower() in haystack for k in domain_keywords[:14] if k and len(k) >= 2)
+    return matches_domain_keywords(f"{title} {tags_or_cat}", domain_keywords[:16])
+
+
+def _sort_newest(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    items.sort(key=lambda x: x["published_at"].timestamp() if x.get("published_at") else 0.0, reverse=True)
+    return items
 
 
 class RemotiveScraper(BasePortalScraper):
     """Live Global Remote B2B Scraper using Remotive's public JSON feed."""
 
     portal_name = "remotive.com"
-    API_URL = "https://remotive.com/api/remote-jobs?limit=60"
+    API_URL = "https://remotive.com/api/remote-jobs?limit=100"
 
     async def scrape(
         self,
@@ -48,13 +58,14 @@ class RemotiveScraper(BasePortalScraper):
             return []
 
         results: List[Dict[str, Any]] = []
-        for job in (payload.get("jobs") or [])[:60]:
+        for job in (payload.get("jobs") or [])[:100]:
             title = str(job.get("title") or "").strip()
             company = sanitize_company_name(job.get("company_name"), fallback="Remotive Employer")
             req_loc = str(job.get("candidate_required_location") or "Worldwide").strip()
+            cat_tags = f"{job.get('category') or ''} {' '.join(str(t) for t in (job.get('tags') or []) if t)}"
             raw_desc = _strip_html(str(job.get("description") or ""))
             sal_raw = str(job.get("salary") or "").strip()
-            if not title or not _matches_domain(title, raw_desc, domain_keywords):
+            if not title or not _matches_domain(title, cat_tags, domain_keywords):
                 continue
 
             combined_desc = f"Location: {req_loc} | Contract: {job.get('job_type') or 'Remote'} | {sal_raw}\n{raw_desc}".strip()
@@ -65,7 +76,7 @@ class RemotiveScraper(BasePortalScraper):
             if gate_status == "FILTERED_OUT":
                 continue
 
-            pub_dt, pub_str = parse_vacancy_published_date(str(job.get("publication_date") or ""), standalone=True)
+            pub_dt, pub_str = parse_portal_published_at(job.get("publication_date"))
             results.append({
                 "portal": self.portal_name,
                 "external_id": f"remotive-{job.get('id', '')}",
@@ -83,7 +94,7 @@ class RemotiveScraper(BasePortalScraper):
                 "published_at": pub_dt,
                 "status": "DISCOVERED",
             })
-        return results
+        return _sort_newest(results)[:30]
 
 
 class HimalayasScraper(BasePortalScraper):
@@ -112,8 +123,9 @@ class HimalayasScraper(BasePortalScraper):
             loc_str = ", ".join(str(x) for x in locs if x) if isinstance(locs, list) and locs else "Worldwide"
             tzs = job.get("timezoneRestrictions") or []
             tz_str = f"Timezones: {', '.join(str(t) for t in tzs)}" if isinstance(tzs, list) and tzs else ""
+            cats = " ".join(str(c) for c in (job.get("categories") or []) if c)
             raw_desc = _strip_html(str(job.get("description") or job.get("excerpt") or ""))
-            if not title or not _matches_domain(title, raw_desc, domain_keywords):
+            if not title or not _matches_domain(title, cats, domain_keywords):
                 continue
 
             min_s, max_s = job.get("minSalary"), job.get("maxSalary")
@@ -131,9 +143,8 @@ class HimalayasScraper(BasePortalScraper):
             if not url or not url.startswith(("https://", "http://")):
                 continue
 
-            # Deterministic external_id independent of volatile list position
             url_digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:12]
-            pub_dt, pub_str = parse_vacancy_published_date(str(job.get("pubDate") or job.get("createdAt") or ""), standalone=True)
+            pub_dt, pub_str = parse_portal_published_at(job.get("pubDate") or job.get("createdAt"))
             results.append({
                 "portal": self.portal_name,
                 "external_id": f"himalayas-{job.get('companySlug') or 'co'}-{url_digest}",
@@ -151,7 +162,7 @@ class HimalayasScraper(BasePortalScraper):
                 "published_at": pub_dt,
                 "status": "DISCOVERED",
             })
-        return results
+        return _sort_newest(results)[:30]
 
 
 class RemoteOkScraper(BasePortalScraper):
@@ -176,15 +187,13 @@ class RemoteOkScraper(BasePortalScraper):
         for job in items:
             if not isinstance(job, dict) or not job.get("position"):
                 continue
-            if len(results) >= 35:
-                break
 
             title = str(job.get("position") or "").strip()
             company = sanitize_company_name(job.get("company"), fallback="RemoteOK Employer")
             req_loc = str(job.get("location") or "Worldwide").strip() or "Worldwide"
             tags = " ".join(str(t) for t in (job.get("tags") or []) if t)
             raw_desc = _strip_html(str(job.get("description") or ""))
-            if not _matches_domain(f"{title} {tags}", raw_desc, domain_keywords):
+            if not _matches_domain(title, tags, domain_keywords):
                 continue
 
             sal_min, sal_max = job.get("salary_min") or 0, job.get("salary_max") or 0
@@ -203,7 +212,7 @@ class RemoteOkScraper(BasePortalScraper):
             if not url:
                 continue
 
-            pub_dt, pub_str = parse_vacancy_published_date(str(job.get("date") or job.get("epoch") or ""), standalone=True)
+            pub_dt, pub_str = parse_portal_published_at(job.get("date") or job.get("epoch"))
             results.append({
                 "portal": self.portal_name,
                 "external_id": f"remoteok-{job.get('id', '')}",
@@ -221,7 +230,7 @@ class RemoteOkScraper(BasePortalScraper):
                 "published_at": pub_dt,
                 "status": "DISCOVERED",
             })
-        return results
+        return _sort_newest(results)[:30]
 
 
 remotive_scraper = RemotiveScraper()

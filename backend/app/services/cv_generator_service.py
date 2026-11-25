@@ -105,53 +105,125 @@ def _prepare_cv_render_context(
     }
 
 
-def group_skills_into_ats_buckets(skills: List[str], cv_language: str = "en") -> List[tuple[str, List[str]]]:
-    """Categorizes genuine candidate skills into 5 structured ATS scanner buckets without fabrication."""
-    buckets = {
-        "auto": [],
-        "lang": [],
-        "api": [],
-        "infra": [],
-        "mgmt": [],
-    }
-    labels = (
-        {
-            "auto": "ტესტ-ავტომატიზაცია და ფრეიმვორქები",
-            "lang": "პროგრამირება და სკრიპტინგი",
-            "api": "API და Backend ვალიდაცია",
-            "infra": "CI/CD და ინფრასტრუქტურა",
-            "mgmt": "ძირითადი პროფესიული კომპეტენციები",
-        }
-        if cv_language == "ka"
-        else {
-            "auto": "Test Automation & Frameworks",
-            "lang": "Programming & Technical Stack",
-            "api": "API & Backend Validation",
-            "infra": "CI/CD, Cloud & Infrastructure",
-            "mgmt": "Core Domain Competencies",
-        }
+def group_skills_into_ats_buckets(
+    skills: List[str],
+    cv_language: str = "en",
+    target_industry: Optional[str] = None,
+    headline: str = "",
+) -> List[tuple[str, List[str]]]:
+    """
+    Categorizes genuine candidate skills into 3-5 profession-adaptive ATS & recruiter buckets
+    across Tech/QA, Software/Data, Finance, Marketing, Logistics, HR, Sales, Legal, Healthcare,
+    and Hospitality — with zero fabrication.
+    """
+    clean_skills = [str(raw or "").strip() for raw in (skills or []) if str(raw or "").strip()]
+    if not clean_skills:
+        return []
+
+    is_ka = cv_language == "ka"
+    ind = (target_industry or "").lower().strip()
+    probe = f"{ind} {headline} {' '.join(clean_skills[:16])}".lower()
+
+    if not ind or ind == "general_professional":
+        if any(k in probe for k in ("qa", "sdet", "playwright", "selenium", "cypress", "tester", "manual testing", "test automation", "ტესტ")):
+            ind = "qa_tech"
+        elif any(k in probe for k in ("ifrs", "gaap", "accountant", "accounting", "financial model", "audit", "1c", "oris", "ბუღალტ", "ფინანს")):
+            ind = "finance_accounting"
+        elif any(k in probe for k in ("seo", "sem", "google ads", "meta ads", "smm", "copywriting", "marketing", "მარკეტინგ")):
+            ind = "marketing_growth"
+        elif any(k in probe for k in ("logistics", "supply chain", "procurement", "customs", "freight", "wms", "incoterms", "ლოჯისტიკ")):
+            ind = "logistics_supply_chain"
+        elif any(k in probe for k in ("recruiting", "talent acquisition", "hris", "human resources", "onboarding", "რეკრუტ")):
+            ind = "hr_recruiting"
+        elif _TECH_ROLE_RE.search(probe):
+            ind = "software_engineering"
+
+    def _bucketize(rules: List[tuple[str, str, str, tuple[str, ...]]], fallback_key: str, fallback_en: str, fallback_ka: str) -> List[tuple[str, List[str]]]:
+        buckets: Dict[str, List[str]] = {k: [] for k, _, _, _ in rules}
+        buckets[fallback_key] = []
+        lbls: Dict[str, str] = {k: (ka if is_ka else en) for k, en, ka, _ in rules}
+        lbls[fallback_key] = fallback_ka if is_ka else fallback_en
+        for s in clean_skills:
+            low = s.lower()
+            placed = False
+            for k, _, _, kws in rules:
+                if any((low == kw or (len(kw) >= 3 and kw in low)) for kw in kws):
+                    buckets[k].append(s)
+                    placed = True
+                    break
+            if not placed:
+                buckets[fallback_key].append(s)
+        return [(lbls[k], vals) for k, vals in buckets.items() if vals]
+
+    if ind == "finance_accounting":
+        return _bucketize(
+            [
+                ("rep", "Financial Reporting & Analysis", "ფინანსური რეპორტინგი და ანალიზი", ("ifrs", "gaap", "audit", "reconcil", "budget", "forecast", "model", "valuation", "tax", "payroll", "fp&a", "p&l", "accounting", "ბუღალტ", "აუდიტ", "ფინანს")),
+                ("sys", "Accounting, ERP & BI Systems", "საბუღალტრო, ERP და ანალიტიკური სისტემები", ("1c", "oris", "sap", "oracle", "netsuite", "quickbooks", "excel", "power bi", "tableau", "sql", "python", "bloomberg", "erp")),
+            ],
+            "ops", "Risk, Compliance & Operations", "რისკები, შესაბამისობა და ოპერაციები",
+        )
+    if ind == "marketing_growth":
+        return _bucketize(
+            [
+                ("perf", "Acquisition & Performance Marketing", "ციფრული რეკლამა და ზრდა", ("seo", "sem", "ppc", "google ads", "meta ads", "facebook ads", "paid", "growth", "cro", "funnel", "performance", "campaign", "lead gen")),
+                ("cont", "Content, Brand & Social Media", "კონტენტი, ბრენდი და სოციალური მედია", ("content", "copywrit", "smm", "social media", "brand", "pr", "email", "crm", "storytell", "კონტენტ")),
+                ("martech", "Analytics & Marketing Stack", "ანალიტიკა და მარკეტინგული ინსტრუმენტები", ("ga4", "google analytics", "tag manager", "hubspot", "salesforce", "mailchimp", "looker", "figma", "canva", "a/b", "sql", "excel")),
+            ],
+            "strat", "Strategy & Communications", "სტრატეგია და კომუნიკაცია",
+        )
+    if ind == "logistics_supply_chain":
+        return _bucketize(
+            [
+                ("sc", "Supply Chain & Procurement", "მიწოდების ჯაჭვი და შესყიდვები", ("supply chain", "procurement", "sourcing", "vendor", "freight", "customs", "import", "export", "incoterms", "logistics", "ლოჯისტიკ", "შესყიდვ")),
+                ("wms", "Warehouse, Inventory & ERP", "საწყობი, მარაგები და ERP სისტემები", ("wms", "erp", "sap", "inventory", "warehouse", "dispatch", "3pl", "excel", "sql", "1c", "საწყობ", "მარაგ")),
+            ],
+            "coord", "Operations & Compliance", "ოპერაციები და დოკუმენტაცია",
+        )
+    if ind == "hr_recruiting":
+        return _bucketize(
+            [
+                ("ta", "Talent Acquisition & Sourcing", "ტალანტების მოზიდვა და შერჩევა", ("recruit", "sourcing", "linkedin recruiter", "screening", "interview", "ats", "employer brand", "headhunt", "რეკრუტ")),
+                ("ops", "People Operations & HR Systems", "HR ოპერაციები და სისტემები", ("onboarding", "hris", "bamboohr", "workday", "payroll", "performance", "compensation", "l&d", "training", "excel")),
+            ],
+            "rel", "Employee Relations & Compliance", "შრომითი ურთიერთობები და ადმინისტრირება",
+        )
+    if ind in ("qa_tech", "software_engineering", "data_analytics"):
+        is_qa = ind == "qa_tech"
+        rules = [
+            ("auto", "Test Automation & Frameworks" if is_qa else "Frameworks & Libraries", "ტესტ-ავტომატიზაცია და ფრეიმვორქები" if is_qa else "ფრეიმვორქები და ბიბლიოთეკები", ("playwright", "selenium", "cypress", "pytest", "robot framework", "appium", "testng", "junit", "webdriver", "react", "next.js", "fastapi", "django", "node", "spring", "pandas", "spark", "ავტომატ")),
+            ("lang", "Programming & Query Languages", "პროგრამირება და სკრიპტინგი", ("python", "typescript", "javascript", "sql", "bash", "java", "c#", "go", "html", "css", "r")),
+            ("api", "API, Data & Validation", "API, მონაცემები და ვალიდაცია", ("postman", "rest api", "swagger", "openapi", "graphql", "k6", "jmeter", "http", "json", "xml", "chrome devtools", "api", "power bi", "tableau", "postgresql", "mysql", "mongodb")),
+            ("infra", "CI/CD, Cloud & Tooling", "CI/CD, ქლაუდი და ინფრასტრუქტურა", ("github actions", "gitlab ci", "ci/cd", "docker", "linux", "git", "jenkins", "kubernetes", "aws", "gcp", "azure", "terraform", "jira", "cloud")),
+        ]
+        fb_en = "Methodologies & Quality Practices" if is_qa else "Core Engineering Competencies"
+        fb_ka = "მეთოდოლოგიები და ტესტ-მენეჯმენტი" if is_qa else "ძირითადი პროფესიული კომპეტენციები"
+        return _bucketize(rules, "mgmt", fb_en, fb_ka)
+
+    # Universal non-tech professional taxonomy (Sales, Legal, Healthcare, Hospitality, Customer Service, etc.)
+    return _bucketize(
+        [
+            ("tools", "Systems, Platforms & Tools", "სისტემები და პროგრამული ინსტრუმენტები", ("crm", "salesforce", "hubspot", "zendesk", "jira", "opera", "pms", "emr", "ehr", "excel", "sap", "erp", "pos", "sql", "power bi", "ms office", "google workspace", "slack")),
+            ("ops", "Client, Regulatory & Operational Execution", "კლიენტებთან ურთიერთობა და ოპერაციები", ("client", "customer", "guest", "patient", "stakeholder", "negotiation", "compliance", "contract", "legal", "sla", "scheduling", "billing", "insurance", "sales", "b2b", "კომუნიკაც", "მომსახურებ")),
+        ],
+        "core", "Core Domain Competencies", "ძირითადი პროფესიული კომპეტენციები",
     )
 
-    for raw in skills:
-        s = str(raw or "").strip()
-        if not s:
-            continue
-        low = s.lower()
-        if any(k in low for k in ["playwright", "selenium", "cypress", "pytest", "robot framework", "appium", "testng", "junit", "webdriver", "კაპი", "ავტომატ"]):
-            buckets["auto"].append(s)
-        elif low in ("python", "typescript", "javascript", "sql", "bash", "java", "c#", "go", "html", "css") or any(k in low for k in ["python", "typescript", "javascript", "sql", "bash"]):
-            buckets["lang"].append(s)
-        elif any(k in low for k in ["postman", "rest api", "swagger", "openapi", "graphql", "k6", "jmeter", "http", "json", "xml", "chrome devtools", "api"]):
-            buckets["api"].append(s)
-        elif any(k in low for k in ["github actions", "gitlab ci", "ci/cd", "docker", "linux", "git", "jenkins", "kubernetes", "aws", "cloud"]):
-            buckets["infra"].append(s)
-        else:
-            buckets["mgmt"].append(s)
 
-    if buckets["auto"] and buckets["mgmt"]:
-        labels["mgmt"] = "მეთოდოლოგიები და ტესტ-მენეჯმენტი" if cv_language == "ka" else "Methodologies & Test Management"
+def _add_docx_bottom_border(paragraph, color_hex: str = "CBD5E1", sz: str = "6") -> None:
+    """Adds a crisp subtle bottom rule under section headings in Word (.docx) without tables/textboxes."""
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
 
-    return [(labels[key], vals) for key, vals in buckets.items() if vals]
+    pPr = paragraph._p.get_or_add_pPr()
+    pBdr = OxmlElement("w:pBdr")
+    bottom = OxmlElement("w:bottom")
+    bottom.set(qn("w:val"), "single")
+    bottom.set(qn("w:sz"), sz)
+    bottom.set(qn("w:space"), "3")
+    bottom.set(qn("w:color"), color_hex)
+    pBdr.append(bottom)
+    pPr.append(pBdr)
 
 
 def _apply_docx_run_font(run, font_name: str = "Calibri") -> None:
@@ -931,12 +1003,13 @@ class CVGeneratorService:
             except Exception:
                 pass
         for sec in doc.sections:
-            sec.top_margin = Inches(0.55)
-            sec.bottom_margin = Inches(0.55)
-            sec.left_margin = Inches(0.65)
-            sec.right_margin = Inches(0.65)
+            sec.top_margin = Inches(0.50)
+            sec.bottom_margin = Inches(0.50)
+            sec.left_margin = Inches(0.60)
+            sec.right_margin = Inches(0.60)
 
         accent = RGBColor(0x0F, 0x17, 0x2A) if cv_style == "ats" else RGBColor(0x03, 0x69, 0xA1)
+        accent_hex = "0F172A" if cv_style == "ats" else "0369A1"
         subtle = RGBColor(0x47, 0x55, 0x69)
 
         ctx = _prepare_cv_render_context(candidate, candidate_headline, display_skills, cv_language, cv_style)
@@ -955,20 +1028,23 @@ class CVGeneratorService:
 
         def add_section_heading(title_text: str) -> None:
             p_h = doc.add_paragraph()
-            p_h.paragraph_format.space_before = Pt(8)
-            p_h.paragraph_format.space_after = Pt(3)
+            p_h.paragraph_format.space_before = Pt(9)
+            p_h.paragraph_format.space_after = Pt(4)
+            p_h.paragraph_format.keep_with_next = True
+            _add_docx_bottom_border(p_h, color_hex="CBD5E1", sz="6")
             add_styled_run(p_h, title_text, size=10.5, bold=True, color=accent)
 
         p_name = doc.add_paragraph()
-        p_name.paragraph_format.space_after = Pt(2)
-        add_styled_run(p_name, full_name, size=18, bold=True, color=RGBColor(0x0F, 0x17, 0x2A))
+        p_name.paragraph_format.space_after = Pt(1.5)
+        add_styled_run(p_name, full_name, size=19, bold=True, color=RGBColor(0x0F, 0x17, 0x2A))
 
         p_role = doc.add_paragraph()
         p_role.paragraph_format.space_after = Pt(3)
         add_styled_run(p_role, role_heading, size=11.5, bold=True, color=accent)
 
         p_contact = doc.add_paragraph()
-        p_contact.paragraph_format.space_after = Pt(8)
+        p_contact.paragraph_format.space_after = Pt(6)
+        _add_docx_bottom_border(p_contact, color_hex=accent_hex, sz="12")
         contact_items = [
             (val, href)
             for val, href in (
@@ -993,24 +1069,27 @@ class CVGeneratorService:
             lbl["summary"], lbl["skills"], lbl["exp"], lbl["proj"], lbl["edu"], lbl["lang"]
         )
 
-        add_section_heading(lbl_summary)
-        p_sum = doc.add_paragraph()
-        p_sum.paragraph_format.space_after = Pt(4)
-        add_styled_run(p_sum, _clean_foreign_script_text(human_summary, cv_language), size=10)
+        if (clean_sum := _clean_foreign_script_text(human_summary, cv_language)):
+            add_section_heading(lbl_summary)
+            p_sum = doc.add_paragraph()
+            p_sum.paragraph_format.space_after = Pt(4)
+            p_sum.paragraph_format.line_spacing = 1.15
+            add_styled_run(p_sum, clean_sum, size=9.8)
 
         if display_skills:
             add_section_heading(lbl_skills)
-            grouped = group_skills_into_ats_buckets(display_skills[:60], cv_language=cv_language)
+            grouped = group_skills_into_ats_buckets(display_skills[:60], cv_language=cv_language, headline=role_heading)
             if grouped:
                 for bucket_title, bucket_items in grouped:
                     p_sk = doc.add_paragraph(style="List Bullet")
                     p_sk.paragraph_format.space_after = Pt(2)
+                    p_sk.paragraph_format.line_spacing = 1.12
                     add_styled_run(p_sk, f"{bucket_title}: ", bold=True)
                     add_styled_run(p_sk, ", ".join(bucket_items))
             else:
                 p_sk = doc.add_paragraph()
                 p_sk.paragraph_format.space_after = Pt(4)
-                add_styled_run(p_sk, ", ".join(display_skills[:24]), size=10)
+                add_styled_run(p_sk, ", ".join(display_skills[:24]), size=9.8)
 
         if work_history:
             add_section_heading(lbl_exp)
@@ -1021,12 +1100,14 @@ class CVGeneratorService:
                 p_j = doc.add_paragraph()
                 p_j.paragraph_format.space_before = Pt(4)
                 p_j.paragraph_format.space_after = Pt(2)
+                p_j.paragraph_format.keep_with_next = True
                 add_styled_run(p_j, f"{job.get('role', '')} | {job.get('company', '')}", size=10.5, bold=True)
                 if meta_tail:
                     add_styled_run(p_j, meta_tail, color=subtle)
                 for b in clean_bullets(job.get("highlights"))[:5]:
                     p_b = doc.add_paragraph(style="List Bullet")
                     p_b.paragraph_format.space_after = Pt(2)
+                    p_b.paragraph_format.line_spacing = 1.12
                     add_styled_run(p_b, str(b))
 
         if projects:
@@ -1040,12 +1121,14 @@ class CVGeneratorService:
                 p_hdr = doc.add_paragraph()
                 p_hdr.paragraph_format.space_before = Pt(3)
                 p_hdr.paragraph_format.space_after = Pt(1.5)
+                p_hdr.paragraph_format.keep_with_next = True
                 add_styled_run(p_hdr, f"{p_t} | {p_org}" if p_org else p_t, size=10, bold=True)
                 if p_dt:
                     add_styled_run(p_hdr, f"  •  {p_dt}", size=9, color=subtle)
                 for b in clean_bullets(proj.get("highlights"))[:3]:
                     p_pb = doc.add_paragraph(style="List Bullet")
                     p_pb.paragraph_format.space_after = Pt(1.5)
+                    p_pb.paragraph_format.line_spacing = 1.12
                     add_styled_run(p_pb, _clean_foreign_script_text(b, cv_language))
 
         if education or certifications:
@@ -1107,13 +1190,14 @@ class CVGeneratorService:
             title=f"{candidate.get('full_name', 'Candidate')} - {target_role}",
         )
 
+        accent_hex = "#0f172a" if cv_style == "ats" else "#0369a1"
         styles = getSampleStyleSheet()
         header_style = ParagraphStyle(
             "CVHeaderName",
             parent=styles["Normal"],
             fontName=font_name,
-            fontSize=18,
-            leading=22,
+            fontSize=19,
+            leading=23,
             textColor=colors.HexColor("#0f172a"),
             spaceAfter=2,
         )
@@ -1123,7 +1207,7 @@ class CVGeneratorService:
             fontName=font_name,
             fontSize=11.5,
             leading=15,
-            textColor=colors.HexColor("#0284c7"),
+            textColor=colors.HexColor(accent_hex),
             spaceAfter=4,
         )
         contact_style = ParagraphStyle(
@@ -1133,7 +1217,7 @@ class CVGeneratorService:
             fontSize=9,
             leading=13,
             textColor=colors.HexColor("#475569"),
-            spaceAfter=6,
+            spaceAfter=5,
         )
         sec_title_style = ParagraphStyle(
             "CVSectionTitle",
@@ -1141,9 +1225,21 @@ class CVGeneratorService:
             fontName=font_name,
             fontSize=10.5,
             leading=14,
-            textColor=colors.HexColor("#0369a1"),
-            spaceBefore=8,
-            spaceAfter=4,
+            textColor=colors.HexColor(accent_hex),
+            spaceBefore=7,
+            spaceAfter=3.5,
+            keepWithNext=True,
+        )
+        role_hdr_style = ParagraphStyle(
+            "CVRoleHeader",
+            parent=styles["Normal"],
+            fontName=font_name,
+            fontSize=10,
+            leading=13.5,
+            textColor=colors.HexColor("#0f172a"),
+            spaceBefore=3,
+            spaceAfter=2,
+            keepWithNext=True,
         )
         body_style = ParagraphStyle(
             "CVBody",
@@ -1152,13 +1248,14 @@ class CVGeneratorService:
             fontSize=9.5,
             leading=13.5,
             textColor=colors.HexColor("#1e293b"),
-            spaceAfter=4,
+            spaceAfter=3.5,
         )
         bullet_style = ParagraphStyle(
             "CVBullet",
             parent=body_style,
-            leftIndent=12,
-            spaceAfter=2.5,
+            leftIndent=11,
+            firstLineIndent=-7,
+            spaceAfter=2.2,
         )
 
         ctx = _prepare_cv_render_context(candidate, candidate_headline, display_skills, cv_language, cv_style)
@@ -1169,7 +1266,7 @@ class CVGeneratorService:
         pdf_links = []
         if email:
             pdf_links.append(
-                f'<link href="{escape(normalize_contact_href(ctx["email"], is_email=True))}" color="#0369a1"><u>{email}</u></link>'
+                f'<link href="{escape(normalize_contact_href(ctx["email"], is_email=True))}" color="{accent_hex}"><u>{email}</u></link>'
             )
         if phone:
             pdf_links.append(phone)
@@ -1178,7 +1275,7 @@ class CVGeneratorService:
         for raw_url in (ctx["linkedin"], ctx["github"], ctx["portfolio"]):
             if raw_url:
                 pdf_links.append(
-                    f'<link href="{escape(normalize_contact_href(raw_url))}" color="#0369a1"><u>{escape(raw_url)}</u></link>'
+                    f'<link href="{escape(normalize_contact_href(raw_url))}" color="{accent_hex}"><u>{escape(raw_url)}</u></link>'
                 )
 
         lbl = ctx["labels"]
@@ -1188,45 +1285,52 @@ class CVGeneratorService:
 
         story = []
 
-        # 1. Header (ALWAYS showcase true candidate persona headline without ugly tags)
+        # 1. Header
         role_display = ctx["role_heading"]
         story.append(Paragraph(f"<b>{_format_pdf_mixed_script(str(candidate.get('full_name', 'Candidate')), font_name, GEORGIAN_PDF_FONT_NAME)}</b>", header_style))
-        story.append(Paragraph(_format_pdf_mixed_script(role_display, font_name, GEORGIAN_PDF_FONT_NAME), role_style))
+        story.append(Paragraph(f"<b>{_format_pdf_mixed_script(role_display, font_name, GEORGIAN_PDF_FONT_NAME)}</b>", role_style))
         if pdf_links:
             story.append(Paragraph("  |  ".join(x for x in pdf_links if x), contact_style))
-        story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#0284c7"), spaceAfter=6))
+        story.append(HRFlowable(width="100%", thickness=1.2, color=colors.HexColor(accent_hex), spaceAfter=5))
 
         # 2. Summary
-        story.append(Paragraph(f"<b>{lbl_summary}</b>", sec_title_style))
-        story.append(Paragraph(_format_pdf_mixed_script(_clean_foreign_script_text(human_summary, cv_language), font_name, GEORGIAN_PDF_FONT_NAME), body_style))
+        clean_sum_pdf = _clean_foreign_script_text(human_summary, cv_language)
+        if clean_sum_pdf:
+            story.append(Paragraph(f"<b>{lbl_summary}</b>", sec_title_style))
+            story.append(Paragraph(_format_pdf_mixed_script(clean_sum_pdf, font_name, GEORGIAN_PDF_FONT_NAME), body_style))
 
-        # 3. Technical Skills Matrix (grouped by ATS domains)
-        story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#cbd5e1"), spaceBefore=4, spaceAfter=4))
-        story.append(Paragraph(f"<b>{lbl_skills}</b>", sec_title_style))
-        grouped_pdf = group_skills_into_ats_buckets(display_skills[:60], cv_language=cv_language)
-        if grouped_pdf:
-            for b_title, b_items in grouped_pdf:
-                items_esc = ", ".join(_format_pdf_mixed_script(x, font_name, GEORGIAN_PDF_FONT_NAME) for x in b_items)
-                story.append(Paragraph(f"<b>{_format_pdf_mixed_script(b_title, font_name, GEORGIAN_PDF_FONT_NAME)}:</b> {items_esc}", body_style))
-        else:
-            skills_text = " • ".join(_format_pdf_mixed_script(s, font_name, GEORGIAN_PDF_FONT_NAME) for s in display_skills[:20])
-            story.append(Paragraph(skills_text, body_style))
+        # 3. Profession-Adaptive ATS Skills Matrix
+        if display_skills:
+            story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#cbd5e1"), spaceBefore=3, spaceAfter=3))
+            story.append(Paragraph(f"<b>{lbl_skills}</b>", sec_title_style))
+            grouped_pdf = group_skills_into_ats_buckets(display_skills[:60], cv_language=cv_language, headline=role_display)
+            if grouped_pdf:
+                for b_title, b_items in grouped_pdf:
+                    items_esc = ", ".join(_format_pdf_mixed_script(x, font_name, GEORGIAN_PDF_FONT_NAME) for x in b_items)
+                    story.append(Paragraph(f"<b>{_format_pdf_mixed_script(b_title, font_name, GEORGIAN_PDF_FONT_NAME)}:</b> {items_esc}", body_style))
+            else:
+                skills_text = " • ".join(_format_pdf_mixed_script(s, font_name, GEORGIAN_PDF_FONT_NAME) for s in display_skills[:20])
+                story.append(Paragraph(skills_text, body_style))
 
-        # 4. Work Experience
-        story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#cbd5e1"), spaceBefore=4, spaceAfter=4))
-        story.append(Paragraph(f"<b>{lbl_exp}</b>", sec_title_style))
-        for job in work_history[:4]:
-            r_title = _format_pdf_mixed_script(str(job.get("role", "")), font_name, GEORGIAN_PDF_FONT_NAME)
-            r_comp = _format_pdf_mixed_script(str(job.get("company", "")), font_name, GEORGIAN_PDF_FONT_NAME)
-            r_dates = _format_pdf_mixed_script(f"{job.get('start_date', '')} - {job.get('end_date', '')}".strip(" -"), font_name, GEORGIAN_PDF_FONT_NAME)
-            story.append(Paragraph(f"<b>{r_title}</b> | {r_comp} ({r_dates})", body_style))
-            for b in clean_bullets(job.get("highlights"))[:4]:
-                story.append(Paragraph(f"• {_format_pdf_mixed_script(str(b), font_name, GEORGIAN_PDF_FONT_NAME)}", bullet_style))
-            story.append(Spacer(1, 3))
+        # 4. Work Experience (only rendered when candidate has verified roles)
+        if work_history:
+            story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#cbd5e1"), spaceBefore=3, spaceAfter=3))
+            story.append(Paragraph(f"<b>{lbl_exp}</b>", sec_title_style))
+            for job in work_history[:5]:
+                r_title = _format_pdf_mixed_script(str(job.get("role", "")), font_name, GEORGIAN_PDF_FONT_NAME)
+                r_comp = _format_pdf_mixed_script(str(job.get("company", "")), font_name, GEORGIAN_PDF_FONT_NAME)
+                r_dates = _format_pdf_mixed_script(f"{job.get('start_date', '')} – {job.get('end_date', '')}".strip(" –"), font_name, GEORGIAN_PDF_FONT_NAME)
+                r_loc = _format_pdf_mixed_script(_clean_foreign_script_text(job.get("location") or "", cv_language), font_name, GEORGIAN_PDF_FONT_NAME)
+                meta_parts = [p for p in (r_dates, r_loc) if p]
+                meta_html = f' <font color="#475569">• {" | ".join(meta_parts)}</font>' if meta_parts else ""
+                story.append(Paragraph(f"<b>{r_title}</b> | {r_comp}{meta_html}", role_hdr_style))
+                for b in clean_bullets(job.get("highlights"))[:5]:
+                    story.append(Paragraph(f"• {_format_pdf_mixed_script(str(b), font_name, GEORGIAN_PDF_FONT_NAME)}", bullet_style))
+                story.append(Spacer(1, 2.5))
 
         # 5. Relevant Projects (when present)
         if projects:
-            story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#cbd5e1"), spaceBefore=4, spaceAfter=4))
+            story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#cbd5e1"), spaceBefore=3, spaceAfter=3))
             story.append(Paragraph(f"<b>{lbl_proj}</b>", sec_title_style))
             for proj in projects[:3]:
                 if not isinstance(proj, dict):
@@ -1238,8 +1342,8 @@ class CVGeneratorService:
                 if p_org:
                     hdr += f" | {p_org}"
                 if p_dt:
-                    hdr += f" ({p_dt})"
-                story.append(Paragraph(hdr, body_style))
+                    hdr += f' <font color="#475569">• {p_dt}</font>'
+                story.append(Paragraph(hdr, role_hdr_style))
                 for b in clean_bullets(proj.get("highlights"))[:3]:
                     story.append(Paragraph(f"• {_format_pdf_mixed_script(_clean_foreign_script_text(b, cv_language), font_name, GEORGIAN_PDF_FONT_NAME)}", bullet_style))
 
@@ -1309,7 +1413,7 @@ class CVGeneratorService:
             lbl["summary"], lbl["skills"], lbl["exp"], lbl["proj"], lbl["edu"], lbl["lang"]
         )
 
-        grouped_html = group_skills_into_ats_buckets(display_skills[:60], cv_language=cv_language)
+        grouped_html = group_skills_into_ats_buckets(display_skills[:60], cv_language=cv_language, headline=ctx["role_heading"])
         if grouped_html:
             skills_badges = "".join(
                 f'<div style="font-size:11.5px; margin-bottom:4px;"><strong>{esc(b_t)}:</strong> '
@@ -1324,20 +1428,23 @@ class CVGeneratorService:
             )
 
         exp_blocks = ""
-        for job in work_history[:4]:
-            bullets = "".join(f"<li style='margin-bottom:4px;'>{esc(b)}</li>" for b in clean_bullets(job.get("highlights"))[:4])
+        for job in work_history[:5]:
+            bullets = "".join(f"<li style='margin-bottom:3.5px;'>{esc(b)}</li>" for b in clean_bullets(job.get("highlights"))[:5])
             dates = f"{job.get('start_date', '')} – {job.get('end_date', '')}".strip(" –")
+            loc_j = _clean_foreign_script_text(job.get("location") or "", cv_language)
+            meta_right = " | ".join(p for p in (dates, loc_j) if p)
             exp_blocks += f"""
-            <div style="margin-bottom:14px;">
-              <div style="display:flex; justify-content:space-between; align-items:baseline;">
+            <div class="exp-item" style="margin-bottom:13px;">
+              <div class="role-hdr" style="display:flex; justify-content:space-between; align-items:baseline; gap:12px;">
                 <strong style="font-size:13px; color:#0f172a;">{esc(job.get('role', ''))} | <span style="color:#0284c7;">{esc(job.get('company', ''))}</span></strong>
-                <span style="font-size:11px; color:#64748b;">{esc(dates)}</span>
+                <span style="font-size:11px; color:#64748b; white-space:nowrap;">{esc(meta_right)}</span>
               </div>
-              <ul style="margin:6px 0 0 18px; padding:0; font-size:12px; color:#334155; line-height:1.5;">
+              <ul style="margin:5px 0 0 18px; padding:0; font-size:12px; color:#334155; line-height:1.5;">
                 {bullets}
               </ul>
             </div>
             """
+        exp_section = f'<div class="section-title">{lbl_exp}</div>\n{exp_blocks}' if exp_blocks else ""
 
         proj_section = ""
         if projects:
@@ -1410,6 +1517,12 @@ class CVGeneratorService:
       margin: 16px 0 10px 0;
     }}
     .summary {{ font-size: 12.5px; color: #1e293b; margin: 0; }}
+    @media print {{
+      @page {{ size: A4; margin: 12mm; }}
+      body {{ padding: 0; }}
+      .section-title, .role-hdr {{ break-after: avoid; page-break-after: avoid; }}
+      .exp-item {{ break-inside: avoid; page-break-inside: avoid; }}
+    }}
   </style>
 </head>
 <body>
@@ -1428,8 +1541,7 @@ class CVGeneratorService:
     <div class="section-title">{lbl_skills}</div>
     <div>{skills_badges}</div>
 
-    <div class="section-title">{lbl_exp}</div>
-    {exp_blocks}
+    {exp_section}
 
     {proj_section}
 

@@ -653,34 +653,44 @@ Markdown:
             if any(m in title_lower for m in markers) and lang_key not in cand_spoken:
                 return ("NONE", f"Language Gate: '{job_title}' requires {lang_key.title()}, which is not in candidate's CV.")
 
-        # Recruiter Off-Domain Exclusion: Tech/QA profiles must NEVER receive Customer Service, Call Center, Retail, or Hospitality roles
-        is_tech_profile = target_industry in ("qa_tech", "software_engineering", "data_analytics")
-        if is_tech_profile:
-            off_domain_title_signals = (
-                "customer service", "customer advisor", "customer care", "call center", "call-center",
-                "sales consultant", "sales representative", "receptionist", "front desk", "cashier",
-                "waiter", "bartender", "courier", "driver", "warehouse", "storekeeper", "housekeeper",
-                "მომხმარებელთა მრჩეველი", "მომხმარებელთა მომსახურებ", "ქოლ-ცენტრ", "ქოლ ცენტრ",
-                "გაყიდვების კონსულტანტ", "კონსულტანტი", "მიმღები", "რეცეფციონისტ", "მოლარე",
-                "მძღოლი", "კურიერი", "საწყობის",
-            )
-            tech_override_signals = (
-                "qa", "quality assurance", "tester", "sdet", "playwright", "selenium", "cypress",
-                "postman", "rest api", "sql", "python", "linux", "devops", "developer", "engineer",
-                "ტესტერ", "ტესტირებ", "ხარისხის უზრუნველყოფ", "პროგრამისტ", "დეველოპერ",
-            )
-            if any(sig in title_lower for sig in off_domain_title_signals) and not any(
-                t in combined for t in tech_override_signals
-            ):
-                return (
-                    "NONE",
-                    f"Domain Gate: '{job_title}' is a non-technical customer/service role outside {target_industry}.",
-                )
-
-        # Build direct domain signals from search_queries + primary_role tokens + domain catalog
+        # Multi-Industry Recruiter Off-Domain Exclusion Matrix:
+        # Prevents clearly unrelated specialist roles (e.g. Call Center for QA/Finance, Nurse for Marketing,
+        # Software Engineer for Logistics, Accountant for HR) from leaking into any profession's feed.
+        _conflict_groups = (
+            (
+                "manual_retail",
+                ("cashier", "waiter", "bartender", "housekeeper", "driver", "courier", "cleaner", "security guard", "მოლარე", "მიმტანი", "მძღოლი", "კურიერი", "დამლაგებელ", "დაცვის თანამშრომელ"),
+                {"receptionist_hospitality", "logistics_supply_chain", "general_professional"},
+            ),
+            (
+                "customer_reception",
+                ("customer service", "customer advisor", "customer care", "call center", "call-center", "sales consultant", "sales representative", "receptionist", "front desk", "მომხმარებელთა მრჩეველი", "მომხმარებელთა მომსახურებ", "ქოლ-ცენტრ", "ქოლ ცენტრ", "გაყიდვების კონსულტანტ", "კონსულტანტი", "მიმღები", "რეცეფციონისტ"),
+                {"customer_service", "receptionist_hospitality", "sales_bd", "healthcare_hospital", "general_professional"},
+            ),
+            (
+                "clinical_medical",
+                ("nurse", "doctor", "physician", "dentist", "pharmacist", "ექთანი", "ექიმი", "ფარმაცევტ"),
+                {"healthcare_hospital", "general_professional"},
+            ),
+            (
+                "software_qa_engineering",
+                ("software engineer", "backend developer", "frontend developer", "full stack developer", "devops engineer", "qa automation", "sdet", "qa engineer", "პროგრამისტი", "დეველოპერი", "ტესტერი"),
+                {"qa_tech", "software_engineering", "data_analytics", "general_professional"},
+            ),
+            (
+                "accounting_audit",
+                ("chief accountant", "accountant", "bookkeeper", "tax auditor", "ბუღალტერი", "ბუღალტერ", "აუდიტორი"),
+                {"finance_accounting", "public_admin_legal", "general_professional"},
+            ),
+            (
+                "legal_practice",
+                ("lawyer", "attorney", "legal counsel", "იურისტი", "ადვოკატი"),
+                {"public_admin_legal", "finance_accounting", "general_professional"},
+            ),
+        )
         default_domain_signals = {
-            "qa_tech": ["qa", "quality assurance", "quality engineer", "test", "tester", "sdet", "automation", "ტესტ", "ხარისხის უზრუნველყოფ", "ხარისხ"],
-            "software_engineering": ["developer", "software engineer", "backend", "frontend", "full stack", "პროგრამისტი", "დეველოპერი"],
+            "qa_tech": ["qa", "quality assurance", "quality engineer", "test", "tester", "sdet", "automation", "playwright", "selenium", "cypress", "postman", "sql", "python", "ტესტ", "ხარისხის უზრუნველყოფ", "ხარისხ"],
+            "software_engineering": ["developer", "software engineer", "backend", "frontend", "full stack", "python", "typescript", "devops", "პროგრამისტი", "დეველოპერი"],
             "data_analytics": ["data analyst", "business intelligence", "bi analyst", "analytics", "sql", "power bi", "tableau", "ანალიტიკოს"],
             "finance_accounting": ["accountant", "accounting", "finance", "financial", "audit", "tax", "payroll", "ifrs", "treasury", "controller", "ბუღალტ", "ფინანს", "აუდიტ"],
             "hr_recruiting": ["hr", "human resources", "recruiter", "talent acquisition", "people operations", "onboarding", "hrbp", "ადამიანური რესურს", "რეკრუტ"],
@@ -689,9 +699,22 @@ Markdown:
             "logistics_supply_chain": ["logistics", "supply chain", "procurement", "warehouse", "freight", "dispatch", "inventory", "ლოჯისტიკ", "შესყიდვ", "მომარაგებ"],
             "public_admin_legal": ["legal", "lawyer", "counsel", "compliance", "public policy", "procurement", "იურისტ", "საჯარო"],
             "receptionist_hospitality": ["reception", "front desk", "hospitality", "concierge", "hotel", "guest", "მიმღებ", "რეცეფც", "სასტუმრ", "ადმინისტრატორ"],
-            "healthcare_hospital": ["medical", "hospital", "clinic", "patient", "სამედიცინო", "კლინიკ", "პაციენტ", "რეგისტრატორ"],
+            "healthcare_hospital": ["medical", "hospital", "clinic", "patient", "nurse", "pharmacy", "სამედიცინო", "კლინიკ", "პაციენტ", "ექთანი", "რეგისტრატორ"],
             "customer_service": ["support", "customer", "client", "call center", "helpdesk", "მხარდაჭერ", "ოპერატორ", "ქოლ"],
         }
+        own_override_signals = default_domain_signals.get(target_industry, [])
+        for grp_name, grp_signals, allowed_inds in _conflict_groups:
+            if target_industry in allowed_inds:
+                continue
+            if any(sig in title_lower for sig in grp_signals) and not any(
+                ov in combined for ov in own_override_signals
+            ):
+                return (
+                    "NONE",
+                    f"Domain Gate: '{job_title}' belongs to {grp_name.replace('_', ' ')} outside {target_industry}.",
+                )
+
+        # Build direct domain signals from search_queries + primary_role tokens + domain catalog
         direct_signals = [str(s).lower() for s in (search_q.get("domain_keywords") or []) if len(str(s)) >= 2]
         if not direct_signals:
             direct_signals = list(default_domain_signals.get(target_industry, []))
@@ -725,10 +748,23 @@ Markdown:
             "business": ["business", "analyst", "operations", "ბიზნეს", "ანალიტ", "ოპერაცი"],
             "economics": ["economic", "finance", "analyst", "ეკონომიკ", "ფინანს", "ანალიტ"],
             "finance": ["finance", "accounting", "audit", "ფინანს", "ბუღალტ", "აუდიტ"],
+            "accounting": ["accounting", "finance", "audit", "ბუღალტ", "ფინანს", "აუდიტ"],
             "management": ["project", "coordinator", "operations", "მენეჯმენტ", "პროექტ"],
+            "marketing": ["marketing", "brand", "digital", "content", "მარკეტინგ", "კონტენტ"],
+            "communications": ["communications", "pr", "marketing", "კომუნიკაცი", "მარკეტინგ"],
+            "journalism": ["content", "copywriter", "pr", "media", "კონტენტ", "მედია"],
+            "psychology": ["hr", "recruiter", "talent", "people", "ადამიანური რესურს", "რეკრუტ"],
+            "logistics": ["logistics", "supply", "procurement", "ლოჯისტიკ", "შესყიდვ"],
+            "transport": ["logistics", "freight", "dispatch", "ლოჯისტიკ", "ტრანსპორტ"],
+            "tourism": ["hospitality", "hotel", "guest", "ტურიზმ", "სასტუმრ"],
+            "hospitality": ["hospitality", "hotel", "front desk", "სასტუმრ", "მიმღებ"],
+            "medicine": ["medical", "clinical", "healthcare", "სამედიცინო", "კლინიკ"],
+            "pharmacy": ["pharmacy", "clinical", "medical", "ფარმაც", "სამედიცინო"],
             "law": ["legal", "compliance", "იურისტ", "სამართალ"],
+            "public": ["public", "policy", "administration", "საჯარო", "ადმინისტრ"],
             "international": ["international", "relations", "policy", "საერთაშორისო", "პოლიტიკ"],
             "mathematics": ["data", "analyst", "analytics", "მონაცემ", "ანალიტ"],
+            "statistics": ["data", "analyst", "analytics", "სტატისტიკ", "ანალიტ"],
         }
         for e in edu_entries:
             if not isinstance(e, dict):

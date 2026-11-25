@@ -1,7 +1,7 @@
 import logging
 import re
 from typing import Dict, Any, List, Optional
-from .base_scraper import BasePortalScraper, evaluate_remote_and_language_gate
+from .base_scraper import BasePortalScraper, evaluate_remote_and_language_gate, parse_portal_published_at
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,8 @@ class DouScraper(BasePortalScraper):
             location_text = city_el.get_text(strip=True) if city_el else "Remote"
             desc_el = item.select_one("div.sh-info")
             description = desc_el.get_text(" ", strip=True) if desc_el else title
+            date_el = item.select_one("div.date, .date")
+            pub_dt, pub_str = parse_portal_published_at(date_el.get_text(" ", strip=True) if date_el else None)
 
             id_match = re.search(r"vacancies/(\d+)", url)
             ext_id = f"dou-{id_match.group(1)}" if id_match else f"dou-row-{idx}"
@@ -68,6 +70,8 @@ class DouScraper(BasePortalScraper):
                 "channel": "WEB_FORM",
                 "detected_languages": langs,
                 "language_requirements": langs,
+                "published_at": pub_dt,
+                "posting_date": pub_str,
                 "description_raw": description,
                 "status": status,
                 "filter_out_reason": filter_reason or None,
@@ -82,9 +86,9 @@ class DouScraper(BasePortalScraper):
         candidate_languages: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Fetches full DOU vacancy body so English/language requirements evaluate accurately."""
-        html = await self.fetch_html(item["url"], timeout=8.0)
+        html = await self.fetch_html(item["url"], timeout=7.0)
         if not html:
-            return None
+            return item
 
         soup = self.make_soup(html)
         desc_el = soup.select_one("div.b-typo.vacancy-section, div.l-vacancy")
@@ -130,6 +134,8 @@ class DouScraper(BasePortalScraper):
             lambda html: self.parse_html_listings(html, candidate_languages=candidate_languages),
             lambda c: self._enrich_and_verify_item(c, candidate_languages=candidate_languages),
             limit=18,
+            page_timeout=10.0,
+            sort_newest_first=True,
         )
 
 

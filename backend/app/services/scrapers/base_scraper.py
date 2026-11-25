@@ -1,11 +1,89 @@
 import asyncio
+from datetime import datetime, timezone
 import logging
 import re
+import ssl
 from typing import Dict, Any, List, Optional, Tuple
 import httpx
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
+
+_SHARED_SSL_CONTEXT: Optional[ssl.SSLContext] = None
+
+
+def get_shared_ssl_context() -> ssl.SSLContext:
+    """Caches one default TLS context per process so concurrent httpx calls never stall reloading OS certs."""
+    global _SHARED_SSL_CONTEXT
+    if _SHARED_SSL_CONTEXT is None:
+        _SHARED_SSL_CONTEXT = ssl.create_default_context()
+    return _SHARED_SSL_CONTEXT
+
+_UA_RU_MONTHS = {
+    "січня": 1, "января": 1, "лютого": 2, "февраля": 2, "березня": 3, "марта": 3,
+    "квітня": 4, "апреля": 4, "травня": 5, "мая": 5, "червня": 6, "июня": 6,
+    "липня": 7, "июля": 7, "серпня": 8, "августа": 8, "вересня": 9, "сентября": 9,
+    "жовтня": 10, "октября": 10, "листопада": 11, "ноября": 11, "грудня": 12, "декабря": 12,
+}
+
+
+def matches_domain_keywords(text: str, keywords: Optional[List[str]]) -> bool:
+    """Word-boundary-safe multi-script keyword matcher (prevents 'qa' matching 'equal' or 'hr' matching 'three')."""
+    if not keywords:
+        return True
+    low = (text or "").lower()
+    if not low:
+        return False
+    for raw_kw in keywords:
+        kw = str(raw_kw or "").strip().lower()
+        if len(kw) < 2:
+            continue
+        if kw.isascii() and len(kw) <= 5 and kw.isalnum():
+            if re.search(rf"\b{re.escape(kw)}\b", low):
+                return True
+        elif kw in low:
+            return True
+    return False
+
+
+def parse_portal_published_at(raw_val: Any) -> Tuple[Optional[datetime], Optional[str]]:
+    """Parses ISO strings, Unix sec/ms epochs, or Slavic/English/Georgian dates into (utc_datetime, YYYY-MM-DD)."""
+    if raw_val is None or raw_val == "":
+        return None, None
+    try:
+        if isinstance(raw_val, (int, float)):
+            ts = float(raw_val)
+            if ts > 1e12:
+                ts /= 1000.0
+            if ts > 1e8:
+                dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+                return dt, dt.date().isoformat()
+        s = str(raw_val).strip()
+        if not s:
+            return None, None
+        # ISO-8601 fast path (handles Z, fractional seconds, +00:00)
+        iso_m = re.match(r"^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2}:\d{2}))?", s)
+        if iso_m:
+            base = f"{iso_m.group(1)}T{iso_m.group(2) or '00:00:00'}+00:00"
+            dt = datetime.fromisoformat(base)
+            return dt, dt.date().isoformat()
+        # Ukrainian / Russian day + month (e.g. "18 листопада", "5 ноября")
+        sl_m = re.search(r"\b(\d{1,2})\s+([а-яіїєґё]+)(?:\s+(\d{4}))?", s.lower())
+        if sl_m and sl_m.group(2) in _UA_RU_MONTHS:
+            now = datetime.now(timezone.utc)
+            day, month = int(sl_m.group(1)), _UA_RU_MONTHS[sl_m.group(2)]
+            year = int(sl_m.group(3)) if sl_m.group(3) else now.year
+            dt = datetime(year, month, day, tzinfo=timezone.utc)
+            if not sl_m.group(3) and (dt - now).days > 45:
+                dt = datetime(year - 1, month, day, tzinfo=timezone.utc)
+            return dt, dt.date().isoformat()
+        from ..link_validator import parse_vacancy_published_date
+        dt = parse_vacancy_published_date(s)
+        if dt is not None:
+            return dt, dt.date().isoformat()
+    except Exception:
+        pass
+    return None, None
 
 _COMPANY_LOCATION_BLACKLIST = {
     "საქართველოს მასშტაბით",
@@ -589,6 +667,7 @@ class BasePortalScraper:
                         headers=merged_headers,
                         follow_redirects=True,
                         timeout=timeout,
+                        verify=get_shared_ssl_context(),
                     ) as client:
                         response = await client.get(url)
                 if response.status_code == 200:

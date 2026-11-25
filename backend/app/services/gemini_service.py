@@ -958,13 +958,21 @@ STRICT PURITY RULE: Zero Cyrillic/Russian words in English/Georgian outputs. Use
                 logger.warning(f"Gemini narrative generation fallback: {e}")
 
         # Zero-fabrication deterministic fallbacks strictly anchored to candidate-verified skills & experience
-        t_low = f"{title} {ltr_title}".lower()
+        t_low = f"{title} {ltr_title} {industry}".lower()
         domain_detectors = (
-            ("rec", industry in ("hospitality_reception", "receptionist_hospitality") or any(w in t_low for w in ("reception", "front desk", "ადმინისტრატორ", "რეცეფციონ", "მიმღებ", "სასტუმრო"))),
-            ("sup", industry in ("technical_support", "it_support") or any(w in t_low for w in ("support", "monitoring", "მხარდაჭერ", "მონიტორინგ", "helpdesk", "service desk"))),
+            ("rec", industry in ("hospitality_reception", "receptionist_hospitality") or any(w in t_low for w in ("reception", "front desk", "რეცეფციონ", "მიმღებ", "სასტუმრო"))),
+            ("sup", industry in ("technical_support", "it_support") or any(w in t_low for w in ("technical support", "monitoring", "ტექნიკური მხარდაჭერ", "helpdesk", "service desk"))),
             ("health", industry == "healthcare_hospital" or any(w in t_low for w in ("პაციენტ", "კლინიკ", "საავადმყოფ", "medical", "clinic", "hospital"))),
-            ("cust", industry == "customer_service" or any(w in t_low for w in ("ქოლ-ცენტრ", "call center", "მომხმარებელ", "customer"))),
-            ("qa", industry == "qa_tech" or any(w in t_low for w in ("qa", "quality assurance", "tester", "ტესტ", "ავტომატიზ"))),
+            ("cust", industry == "customer_service" or any(w in t_low for w in ("ქოლ-ცენტრ", "call center", "მომხმარებელ", "customer support", "customer service"))),
+            ("fin", industry == "finance_accounting" or any(w in t_low for w in ("finance", "accountant", "accounting", "audit", "ifrs", "ფინანს", "ბუღალტ", "აუდიტ"))),
+            ("mkt", industry == "marketing_growth" or any(w in t_low for w in ("marketing", "seo", "smm", "growth", "brand", "მარკეტინგ"))),
+            ("log", industry == "logistics_supply_chain" or any(w in t_low for w in ("logistics", "supply chain", "procurement", "freight", "ლოჯისტიკ", "შესყიდვ"))),
+            ("hr", industry == "hr_recruiting" or any(w in t_low for w in ("recruiter", "human resources", "talent acquisition", "people operations", "რეკრუტ", "ადამიანური რესურს"))),
+            ("sales", industry == "sales_bd" or any(w in t_low for w in ("sales", "account executive", "business development", "გაყიდვ"))),
+            ("legal", industry == "public_admin_legal" or any(w in t_low for w in ("legal", "lawyer", "compliance", "იურისტ", "სამართალ"))),
+            ("data", industry == "data_analytics" or any(w in t_low for w in ("data analyst", "business intelligence", "analytics", "ანალიტიკოს"))),
+            ("swe", industry == "software_engineering" or any(w in t_low for w in ("software engineer", "developer", "backend", "frontend", "პროგრამისტ", "დეველოპერ"))),
+            ("qa", industry == "qa_tech" or any(w in t_low for w in ("qa", "quality assurance", "tester", "sdet", "ტესტ", "ხარისხის უზრუნველყოფ"))),
         )
         dom_key = next((k for k, hit in domain_detectors if hit), "other")
         work_phrase = ", ".join(ev["work_items"])
@@ -976,34 +984,53 @@ STRICT PURITY RULE: Zero Cyrillic/Russian words in English/Georgian outputs. Use
                 skills_s = ", ".join(GEORGIAN_SKILL_TRANSLATIONS.get(s, s) for s in matched_skills[:6]) or top_skills
                 req_s = ", ".join(GEORGIAN_SKILL_TRANSLATIONS.get(s, s) for s in (job_details.get("required_skills") or [])[:5]) or skills_s
                 exp_ctx = f" ({work_phrase})" if work_phrase else ""
+                edu_sum = f" აკადემიური საფუძველი: {ev['edu_snippet']}." if ev["edu_snippet"] else ""
                 edu_ctx = f" ამასთანავე, ჩემი აკადემიური განათლება ({ev['edu_snippet']}) აძლიერებს ანალიტიკურ სიზუსტეს." if ev["edu_snippet"] else ""
                 ev_line = f" წინა გამოცდილებისას ვახორციელებდი: {ev['bullets'][0]}." if ev["bullets"] else ""
                 sig = f"\n\nპატივისცემით,\n{sign_off_name}" if sign_off_name else "\n\nპატივისცემით"
                 ka_copy = {
-                    "rec": (f"სასტუმროს მიმღების (Front Desk) და სტუმართმოყვარეობის სპეციალისტი ({skills_s}){exp_ctx}.", f"{cur_company}-ის გუნდში გამოვიყენებ გამოცდილებას ({skills_s}) სტუმრების სწრაფ მომსახურებაში."),
-                    "sup": (f"ტექნიკური მხარდაჭერისა და მონიტორინგის სპეციალისტი ({skills_s}){exp_ctx}.", f"{cur_company}-ის გუნდში გამოვიყენებ უნარებს ({skills_s}) ინციდენტების ოპერატიულ გადაჭრაში."),
-                    "health": (f"პაციენტთა კოორდინატორი და სამედიცინო ადმინისტრატორი ({skills_s}){exp_ctx}.", f"{cur_company}-ში ჩემი უნარები ({skills_s}) უზრუნველყოფს პაციენტთა გამართულ კოორდინაციას."),
-                    "cust": (f"მომხმარებელთა მხარდაჭერის სპეციალისტი ({skills_s}){exp_ctx}.", f"ჩემი გამოცდილება ({skills_s}) დაეხმარება {cur_company}-ის მომხმარებლებს ოპერატიულად."),
-                    "qa": (f"QA და პროგრამული უზრუნველყოფის ტესტირების სპეციალისტი ({skills_s}){exp_ctx}.", f"{cur_company}-ში ჩემი უნარებით ({skills_s}) გავაძლიერებ პროდუქტის ხარისხს."),
+                    "rec": (f"სტუმარმასპინძლობისა და Front Desk ოპერაციების სპეციალისტი, პრაქტიკული გამოცდილებით ({skills_s}){exp_ctx}.{edu_sum}", f"{cur_company}-ის გუნდში გამოვიყენებ გამოცდილებას ({skills_s}) სტუმრების გამართულ მომსახურებაში."),
+                    "sup": (f"ტექნიკური მხარდაჭერისა და მონიტორინგის სპეციალისტი, პრაქტიკული გამოცდილებით ({skills_s}){exp_ctx}.{edu_sum}", f"{cur_company}-ის გუნდში გამოვიყენებ უნარებს ({skills_s}) ინციდენტების ოპერატიულ გადაჭრაში."),
+                    "health": (f"პაციენტთა კოორდინაციისა და სამედიცინო ადმინისტრირების სპეციალისტი ({skills_s}){exp_ctx}.{edu_sum}", f"{cur_company}-ში ჩემი უნარები ({skills_s}) უზრუნველყოფს პაციენტთა გამართულ კოორდინაციას."),
+                    "cust": (f"მომხმარებელთა მხარდაჭერისა და კლიენტთა მომსახურების სპეციალისტი ({skills_s}){exp_ctx}.{edu_sum}", f"ჩემი გამოცდილება ({skills_s}) დაეხმარება {cur_company}-ის მომხმარებლებს ოპერატიულად."),
+                    "fin": (f"ფინანსების, ბუღალტერიისა და ანალიტიკური რეპორტინგის სპეციალისტი, პრაქტიკული გამოცდილებით ({skills_s}){exp_ctx}.{edu_sum}", f"{cur_company}-ის გუნდში გამოვიყენებ გამოცდილებას ({skills_s}) ფინანსური სიზუსტისა და რეპორტინგის გასაძლიერებლად."),
+                    "mkt": (f"ციფრული მარკეტინგისა და ზრდის კამპანიების სპეციალისტი, პრაქტიკული გამოცდილებით ({skills_s}){exp_ctx}.{edu_sum}", f"{cur_company}-ის გუნდში ჩემი გამოცდილება ({skills_s}) გაზრდის კამპანიების ეფექტურობას."),
+                    "log": (f"ლოჯისტიკისა და მიწოდების ჯაჭვის კოორდინატორი, პრაქტიკული გამოცდილებით ({skills_s}){exp_ctx}.{edu_sum}", f"{cur_company}-ის გუნდში გამოვიყენებ უნარებს ({skills_s}) მარაგებისა და ტვირთების ზუსტ მართვაში."),
+                    "hr": (f"ადამიანური რესურსებისა და რეკრუტინგის სპეციალისტი, პრაქტიკული გამოცდილებით ({skills_s}){exp_ctx}.{edu_sum}", f"{cur_company}-ის გუნდში გამოვიყენებ გამოცდილებას ({skills_s}) შერჩევისა და HR პროცესების გასამართად."),
+                    "sales": (f"გაყიდვებისა და ბიზნესის განვითარების სპეციალისტი, პრაქტიკული გამოცდილებით ({skills_s}){exp_ctx}.{edu_sum}", f"{cur_company}-ის გუნდში გამოვიყენებ გამოცდილებას ({skills_s}) კლიენტთა პორტფელისა და შედეგების გასაზრდელად."),
+                    "legal": (f"სამართლისა და შესაბამისობის სპეციალისტი, პრაქტიკული გამოცდილებით ({skills_s}){exp_ctx}.{edu_sum}", f"{cur_company}-ის გუნდში გამოვიყენებ ცოდნას ({skills_s}) სამართლებრივი დოკუმენტაციისა და რეგულაციების კონტროლში."),
+                    "data": (f"მონაცემთა ანალიტიკოსი, პრაქტიკული გამოცდილებით ({skills_s}){exp_ctx}.{edu_sum}", f"{cur_company}-ის გუნდში გამოვიყენებ ანალიტიკურ უნარებს ({skills_s}) ბიზნეს-გადაწყვეტილებების მხარდასაჭერად."),
+                    "swe": (f"პროგრამული უზრუნველყოფის ინჟინერი, პრაქტიკული გამოცდილებით ({skills_s}){exp_ctx}.{edu_sum}", f"{cur_company}-ის გუნდში გამოვიყენებ ტექნიკურ სტეკს ({skills_s}) საიმედო სისტემების განვითარებაში."),
+                    "qa": (f"QA და პროგრამული უზრუნველყოფის ტესტირების სპეციალისტი, პრაქტიკული გამოცდილებით ({skills_s}){exp_ctx}.{edu_sum}", f"{cur_company}-ში ჩემი უნარებით ({skills_s}) გავაძლიერებ პროდუქტის ხარისხს და რელიზების სტაბილურობას."),
                 }
-                summary, motiv = ka_copy.get(dom_key, (f"{cur_title}-ის სპეციალისტი პრაქტიკული გამოცდილებით ({skills_s}){exp_ctx}.", f"მინდა ჩემი უნარები ({skills_s}) მივმართო {cur_company}-ის მიზნების მისაღწევად."))
+                summary, motiv = ka_copy.get(dom_key, (f"{cur_title} პრაქტიკული გამოცდილებით ({skills_s}){exp_ctx}.{edu_sum}", f"მინდა ჩემი უნარები ({skills_s}) მივმართო {cur_company}-ის მიზნების მისაღწევად."))
                 dou_l = f"მოგესალმებით, {cur_company}-ის გუნდს,\n\nდიდი ინტერესით გიგზავნით განაცხადს „{cur_title}“ პოზიციაზე. ჩემი პრაქტიკული გამოცდილება ({skills_s}) შეესაბამება მოთხოვნებს ({req_s}).\n\nსამუშაო გამოცდილების{exp_ctx} განმავლობაში პრაქტიკულად ვიყენებდი ({skills_s}) სტაბილური შედეგების მისაღწევად.{ev_line}{edu_ctx}\n\nთანდართულია პოზიციაზე მორგებული ჩემი CV და მოხარული ვიქნები გასაუბრებაზე დეტალების განხილვით.{sig}"
                 cov_l = f"მოგესალმებით, {cur_company}-ის გუნდს,\n\nგწერთ „{cur_title}“ პოზიციაზე ჩემი კანდიდატურის განსახილველად. ჩემი პრაქტიკული გამოცდილება ({skills_s}) ფარავს ძირითად მოთხოვნებს ({req_s}){exp_ctx}.\n\nთანდართულია ჩემი რეზიუმე და მოხარული ვიქნები გასაუბრებაზე შეხვედრით.{sig}"
                 return {"human_tone_summary": summary, "motivation_statement": motiv, "cover_letter": cov_l, "dou_motivational_letter": dou_l}
 
             exp_ctx = f" across {work_phrase}" if work_phrase else ""
+            edu_sum = f" Backed by formal training in {ev['edu_snippet']}." if ev["edu_snippet"] else ""
             edu_ctx = f" My academic foundation ({ev['edu_snippet']}) reinforces analytical rigor." if ev["edu_snippet"] else ""
             gap_ctx = f" Where your stack extends into {ev['gap_focus']}, my foundation in {top_skills} supports fast ramp-up." if ev["gap_focus"] else ""
             ev_line = f" Notably, I delivered: {ev['bullets'][0]}." if ev["bullets"] else ""
             sig = f"\n\nBest regards,\n{sign_off_name}" if sign_off_name else "\n\nBest regards"
+            # Top 1% Executive CV summaries: candidate-value focused, factual, zero clichés, never mentioning target company awkwardly
             en_copy = {
-                "rec": (f"Front Desk Receptionist and Hospitality Specialist experienced with {top_skills}{exp_ctx}, maintaining accurate guest check-in and reservation coordination for {cur_company}.", f"My verified background in {top_skills} directly supports {cur_company}'s front-desk operations."),
-                "sup": (f"Technical Support Specialist experienced with {top_skills}{exp_ctx}, investigating issues and resolving escalations cleanly for {cur_company}.", f"Applying my diagnostic experience with {top_skills}, I can help {cur_company} maintain reliable support operations."),
-                "health": (f"Patient Coordinator and Medical Administrator experienced with {top_skills}{exp_ctx}, managing clinical intake and scheduling accurately for {cur_company}.", f"My administrative experience across {top_skills} equips me to support {cur_company}'s patient intake team."),
-                "cust": (f"Customer Service and Client Care Specialist experienced with {top_skills}{exp_ctx}, delivering responsive troubleshooting for {cur_company}.", f"Working daily with {top_skills}, I can help {cur_company}'s support team resolve client requests efficiently."),
-                "qa": (f"QA and Software Testing Specialist experienced across {top_skills}{exp_ctx}, delivering structured test execution and quality verification tailored to {cur_company}.", f"I want to apply my hands-on QA background in {top_skills} directly to {cur_company}'s release workflow."),
+                "rec": (f"Front Desk and Hospitality Specialist with hands-on expertise in {top_skills}{exp_ctx}. Delivers seamless guest check-in, reservation accuracy, and calm multilingual front-office operations.{edu_sum}", f"My verified background in {top_skills} directly supports {cur_company}'s front-desk operations."),
+                "sup": (f"Technical Support and Monitoring Specialist experienced with {top_skills}{exp_ctx}. Investigates production incidents, validates API/SQL workflows, and resolves customer escalations cleanly within SLA.{edu_sum}", f"Applying my diagnostic experience with {top_skills}, I can help {cur_company} maintain reliable support operations."),
+                "health": (f"Patient Coordinator and Medical Administration Specialist experienced with {top_skills}{exp_ctx}. Maintains accurate patient registration, scheduling workflows, and insurance verification.{edu_sum}", f"My administrative experience across {top_skills} equips me to support {cur_company}'s patient intake team."),
+                "cust": (f"Customer Service and Client Operations Specialist skilled in {top_skills}{exp_ctx}. Resolves client inquiries accurately across CRM channels while maintaining clear documentation and high service quality.{edu_sum}", f"Working daily with {top_skills}, I can help {cur_company}'s support team resolve client requests efficiently."),
+                "fin": (f"Finance and Accounting Specialist with verified experience in {top_skills}{exp_ctx}. Produces accurate financial reconciliations, structured analytical reporting, and audit-ready compliance controls.{edu_sum}", f"I want to apply my verified financial background in {top_skills} directly to {cur_company}'s reporting and controls."),
+                "mkt": (f"Digital Marketing and Growth Specialist experienced with {top_skills}{exp_ctx}. Plans and optimizes measurable acquisition campaigns, content workflows, and conversion analytics.{edu_sum}", f"I want to apply my hands-on marketing experience in {top_skills} directly to {cur_company}'s growth goals."),
+                "log": (f"Logistics and Supply Chain Coordinator experienced across {top_skills}{exp_ctx}. Manages shipment coordination, inventory accuracy, vendor schedules, and customs compliance documentation.{edu_sum}", f"My operational background in {top_skills} aligns directly with {cur_company}'s supply chain execution."),
+                "hr": (f"HR and Talent Acquisition Specialist experienced across {top_skills}{exp_ctx}. Drives structured candidate sourcing, interview coordination, onboarding workflows, and people-operations accuracy.{edu_sum}", f"I want to apply my verified recruiting and HR background in {top_skills} to support {cur_company}'s hiring goals."),
+                "sales": (f"Sales and Business Development Specialist with verified experience in {top_skills}{exp_ctx}. Builds disciplined client pipelines, manages consultative negotiations, and sustains long-term account retention.{edu_sum}", f"I want to apply my verified sales experience in {top_skills} directly to {cur_company}'s revenue growth."),
+                "legal": (f"Legal and Compliance Specialist experienced across {top_skills}{exp_ctx}. Supports contract review, regulatory documentation, and structured policy administration with high precision.{edu_sum}", f"My verified legal and compliance skills in {top_skills} align directly with {cur_company}'s governance needs."),
+                "data": (f"Data and Business Intelligence Analyst experienced with {top_skills}{exp_ctx}. Translates raw datasets into accurate SQL queries, executive dashboards, and clear operational insights.{edu_sum}", f"I want to apply my analytical background in {top_skills} directly to {cur_company}'s data initiatives."),
+                "swe": (f"Software Engineer with hands-on experience in {top_skills}{exp_ctx}. Builds maintainable, well-tested backend and web services with clean architecture and reliable production delivery.{edu_sum}", f"I want to apply my engineering background in {top_skills} directly to {cur_company}'s product roadmap."),
+                "qa": (f"QA and Software Testing Specialist with hands-on experience across {top_skills}{exp_ctx}. Delivers structured test design, defect isolation, API/UI verification, and reliable release quality.{edu_sum}", f"I want to apply my hands-on QA background in {top_skills} directly to {cur_company}'s release workflow."),
             }
-            summary, motiv = en_copy.get(dom_key, (f"Focused {cur_title} specialist with verified experience in {top_skills}{exp_ctx}, delivering structured execution aligned with {cur_company}'s priorities.", f"I want to apply my verified skills in {top_skills} directly to {cur_company}'s goals."))
+            summary, motiv = en_copy.get(dom_key, (f"{cur_title} with verified hands-on experience in {top_skills}{exp_ctx}. Delivers structured execution, clear documentation, and dependable operational outcomes.{edu_sum}", f"I want to apply my verified skills in {top_skills} directly to {cur_company}'s goals."))
             dou_l = f"Dear {cur_company} Hiring Team,\n\nI am applying for the {cur_title} role at {cur_company}. Your requirements around {req_focus} align with my verified experience in {top_skills}.\n\nAcross my work{exp_ctx}, I applied {top_skills} to deliver accurate, dependable outcomes.{ev_line}{gap_ctx}{edu_ctx}\n\nPlease find my tailored CV attached, and I look forward to discussing how I can contribute to {cur_company}'s team.{sig}"
             cov_l = f"Dear {cur_company} Hiring Team,\n\nI am applying for the {cur_title} opening at {cur_company}. My verified skills in {top_skills} align directly with your core focus ({req_focus}){exp_ctx}.\n\nThank you for reviewing my attached CV; I welcome a brief conversation about supporting your team.{sig}"
             return {"human_tone_summary": summary, "motivation_statement": motiv, "cover_letter": cov_l, "dou_motivational_letter": dou_l}

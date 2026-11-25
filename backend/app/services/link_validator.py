@@ -375,8 +375,14 @@ async def fetch_and_validate_live_vacancy(url: str, timeout: float = 4.0) -> Tup
     }
 
     try:
+        from .scrapers.base_scraper import get_shared_ssl_context
         current_url = clean_url
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, headers=headers) as client:
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            follow_redirects=False,
+            headers=headers,
+            verify=get_shared_ssl_context(),
+        ) as client:
             resp = None
             for _ in range(5):
                 validate_safe_external_url(current_url, require_dns=True)

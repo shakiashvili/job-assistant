@@ -475,3 +475,160 @@ def test_legacy_pre_alembic_database_adopted_cleanly_by_migrations(tmp_path):
     assert "published_at" in cols
     assert "alembic_version" in set(insp.get_table_names())
     eng_after.dispose()
+
+
+def test_multi_industry_query_builder_covers_all_jobs_ge_categories_and_portals():
+    from app.services.scrapers.query_builder import build_search_queries
+
+    cases = [
+        ("finance_accounting", "Financial Analyst", "cid=3", "keywords=Finance"),
+        ("marketing_growth", "Digital Marketing Specialist", "cid=4", "primary_keyword=Marketing"),
+        ("logistics_supply_chain", "Logistics Coordinator", "cid=5", "keywords=Logistics"),
+        ("hr_recruiting", "HR Generalist", "cid=1", "primary_keyword=HR"),
+        ("public_admin_legal", "Legal Counsel", "cid=7", "keywords=Legal"),
+        ("healthcare_hospital", "Clinical Coordinator", "cid=8", None),
+        ("receptionist_hospitality", "Front Desk Receptionist", "cid=10", None),
+    ]
+    for ind, role, expected_cid, expected_djinni in cases:
+        cfg = build_search_queries({"target_industry": ind, "primary_role": role, "years_of_experience": 1.5}, headline=role)
+        assert any(expected_cid in u for u in cfg["jobs_ge_urls"]), f"{ind} missing {expected_cid}"
+        assert any("area=28" in u and "order_by=publication_time" in u for u in cfg["headhunter_urls"])
+        assert any("Tbilisi%2C+Georgia" in u for u in cfg["linkedin_urls"])
+        if expected_djinni:
+            assert expected_djinni in (cfg["djinni_url"] or "")
+
+
+def test_hr_ge_ng_state_and_dou_ukrainian_date_and_word_boundary_matching():
+    from app.services.scrapers.base_scraper import matches_domain_keywords, parse_portal_published_at
+    from app.services.scrapers.hr_ge_scraper import HrGeScraper
+
+    # Word boundary safety
+    assert matches_domain_keywords("Senior QA Automation Engineer", ["qa"]) is True
+    assert matches_domain_keywords("Equal Opportunity Manager", ["qa"]) is False
+    assert matches_domain_keywords("Three Years Operations Lead", ["hr"]) is False
+    assert matches_domain_keywords("HR Business Partner", ["hr"]) is True
+
+    # Ukrainian/Russian & millisecond epoch date parsing
+    dt_ua, str_ua = parse_portal_published_at("18 листопада")
+    assert dt_ua is not None and dt_ua.month == 11 and dt_ua.day == 18 and str_ua.endswith("-11-18")
+    dt_ms, str_ms = parse_portal_published_at(1795521600000)
+    assert dt_ms is not None and str_ms is not None
+
+    # HR.ge Angular ng-state JSON extraction
+    ng_html = """<html><body><script id="ng-state" type="application/json">
+    {"items":[{"announcementId":503759,"title":"ფინანსური ანალიტიკოსი","customerName":"TBC Bank","publishDate":"2026-11-24T13:09:21.107","deadlineDate":"2026-12-23T19:59:00","locations":["თბილისი"]}]}
+    </script></body></html>"""
+    parsed = HrGeScraper().parse_html_listings(ng_html, domain_keywords=["ფინანს", "finance"])
+    assert len(parsed) == 1
+    assert parsed[0]["company"] == "TBC Bank"
+    assert parsed[0]["posting_date"] == "2026-11-24"
+    assert parsed[0]["published_at"] is not None
+
+
+def test_multi_industry_off_domain_matching_excludes_unrelated_professions():
+    from app.services.matcher_service import matcher_service
+
+    finance_profile = {
+        "target_industry": "finance_accounting",
+        "primary_role": "Financial Analyst",
+        "verified_skills": ["IFRS", "Financial Modeling", "Excel", "Audit", "SQL"],
+        "years_of_experience": 1.5,
+        "max_allowed_years": 2.0,
+        "spoken_languages": ["English", "Georgian"],
+        "education": [{"degree": "BSc", "field_of_study": "Finance and Economics"}],
+    }
+    res_nurse = matcher_service.evaluate_job_tiered(
+        title="Clinic Nurse / ექთანი",
+        description="Patient intake, clinical nursing care, blood sampling.",
+        parsed_skills=finance_profile,
+        portal="jobs.ge",
+    )
+    assert res_nurse["status"] == "FILTERED_OUT"
+
+    res_swe = matcher_service.evaluate_job_tiered(
+        title="Backend Software Engineer (Go/Kubernetes)",
+        description="Build microservices in Go, Docker, Kubernetes.",
+        parsed_skills=finance_profile,
+        portal="jobs.ge",
+    )
+    assert res_swe["status"] == "FILTERED_OUT"
+
+    res_fin = matcher_service.evaluate_job_tiered(
+        title="Junior Financial Analyst",
+        description="Prepare IFRS financial reports, Excel financial modeling, audit support.",
+        parsed_skills=finance_profile,
+        portal="jobs.ge",
+    )
+    assert res_fin["status"] != "FILTERED_OUT"
+    assert res_fin["suitability_score"] >= 70.0
+
+
+def test_top_one_percent_cv_adaptive_skill_buckets_and_ats_pass_multi_industry(tmp_path):
+    from app.services.cv_generator_service import CVGeneratorService, group_skills_into_ats_buckets
+
+    fin_buckets = group_skills_into_ats_buckets(
+        ["IFRS", "Financial Modeling", "Audit", "Excel", "1C", "SQL", "Risk Controls"],
+        cv_language="en",
+        headline="Financial Analyst",
+    )
+    fin_titles = [b[0] for b in fin_buckets]
+    assert "Financial Reporting & Analysis" in fin_titles
+    assert "Accounting, ERP & BI Systems" in fin_titles
+    assert not any("Test Automation" in t for t in fin_titles)
+
+    mkt_buckets = group_skills_into_ats_buckets(
+        ["SEO", "Google Ads", "Content Marketing", "GA4", "HubSpot"],
+        cv_language="en",
+        headline="Digital Marketing Specialist",
+    )
+    assert any("Acquisition" in b[0] for b in mkt_buckets)
+    assert any("Analytics" in b[0] for b in mkt_buckets)
+
+    # Full PDF + DOCX + HTML render + deterministic ATS check for non-IT Financial Analyst
+    svc = CVGeneratorService()
+    vault = {
+        "candidate": {
+            "full_name": "Nino Beridze",
+            "headline": "Financial Analyst",
+            "email": "nino.beridze@example.ge",
+            "phone": "+995 599 123 456",
+            "location": {"city": "Tbilisi", "country": "Georgia"},
+            "links": {"linkedin": "https://linkedin.com/in/nino-beridze"},
+            "languages": [{"language": "Georgian", "proficiency": "Native"}, {"language": "English", "proficiency": "C1"}],
+        },
+        "skills": {"core": ["IFRS", "Financial Modeling", "Audit", "Excel", "1C", "Power BI", "Budgeting"]},
+        "work_history": [
+            {
+                "role": "Junior Financial Analyst",
+                "company": "Credo Bank",
+                "location": "Tbilisi, Georgia",
+                "start_date": "2024-06",
+                "end_date": "Present",
+                "highlights": [
+                    "Built automated monthly IFRS P&L and cash-flow variance models in Excel and Power BI.",
+                    "Reconciled 1,200+ monthly ledger entries in 1C with 99.8% audit accuracy.",
+                ],
+            }
+        ],
+        "education": [{"degree": "BSc in Finance", "institution": "Tbilisi State University", "dates": "2020 - 2024", "gpa": "3.8/4.0"}],
+        "projects": [],
+        "certifications": ["ACCA Financial Accounting (FA)"],
+        "_parsed_skills": {"target_industry": "finance_accounting", "primary_role": "Financial Analyst"},
+    }
+    res = svc.generate_vacancy_cv(
+        job_title="Financial Analyst",
+        company="TBC Bank",
+        portal="jobs.ge",
+        matched_skills=["IFRS", "Financial Modeling", "Excel", "Power BI"],
+        missing_skills=[],
+        human_summary="Financial Analyst with verified experience in IFRS reporting, budgeting, and Power BI analytics across Credo Bank.",
+        motivation_statement="Applying to support TBC Bank's FP&A reporting.",
+        dou_motivational_letter="Dear TBC Bank team...",
+        cv_language="en",
+        cv_style="tailored",
+        vault_override=vault,
+    )
+    assert res["ats_parse_report"]["status"] == "PASS", res["ats_parse_report"]
+    assert res["ats_parse_report"]["score"] >= 90
+    assert "Financial Reporting &amp; Analysis" in res["rendered_html"]
+    assert "@media print" in res["rendered_html"]
