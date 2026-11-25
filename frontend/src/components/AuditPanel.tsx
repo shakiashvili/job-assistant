@@ -3,7 +3,6 @@ import {
   Sparkles,
   Search,
   AlertOctagon,
-  Play,
   BookmarkPlus,
   RefreshCw,
   ExternalLink,
@@ -48,7 +47,6 @@ import {
   SavedSearchItem,
   NotificationItem,
 } from '../types';
-import { StageModal } from './StageModal';
 import { DiscoveryFeed } from './DiscoveryFeed';
 
 const DEFAULT_JOB_FILTERS: JobSearchParams = {
@@ -110,7 +108,7 @@ export const AuditPanel: React.FC = () => {
   const [candidateProfile, setCandidateProfile] = useState<{
     full_name?: string;
     experience_years?: number;
-    max_allowed_years?: number;
+    target_seniority_label?: string;
     seniority_level?: string;
     target_industry?: string;
     detected_industry?: string;
@@ -192,7 +190,6 @@ export const AuditPanel: React.FC = () => {
   };
 
   // Staging Modal
-  const [isStageModalOpen, setIsStageModalOpen] = useState(false);
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
 
   useEffect(() => {
@@ -208,9 +205,7 @@ export const AuditPanel: React.FC = () => {
         setCandidateProfile({
           full_name: p.full_name || 'Candidate',
           experience_years: p.experience_years ?? null,
-          max_allowed_years:
-            p.parsed_skills?.max_allowed_years ??
-            (p.experience_years != null ? Math.min(p.experience_years + 0.5, 2.0) : 2.0),
+          target_seniority_label: p.parsed_skills?.target_seniority_label || undefined,
           seniority_level: p.parsed_skills?.seniority_level || 'JUNIOR',
           target_industry: p.parsed_skills?.target_industry || 'general_professional',
           detected_industry: p.parsed_skills?.detected_industry || p.parsed_skills?.target_industry || 'Domain-Agnostic',
@@ -779,10 +774,6 @@ export const AuditPanel: React.FC = () => {
         onRunScrapers={handleRunMultiPortalScrapers}
         onUploadClick={() => fileInputRef.current?.click()}
         onSelectJob={handleSelectScrapedDbJob}
-        onOpenFillForm={(job) => {
-          handleSelectScrapedDbJob(job);
-          setIsStageModalOpen(true);
-        }}
         onDraftInGmail={handleDraftInGmail}
       />
 
@@ -850,14 +841,6 @@ export const AuditPanel: React.FC = () => {
                 </button>
               ))}
             </div>
-
-            <button
-              onClick={() => setIsStageModalOpen(true)}
-              className="w-full flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-xs text-teal-200 bg-teal-950/60 hover:bg-teal-900/70 border border-teal-700/60 transition-all"
-            >
-              <Play className="w-4 h-4 fill-current" aria-hidden="true" />
-              <span>Launch Form Auto-Fill Stager (Fills Application &amp; Attaches Tailored CV)</span>
-            </button>
 
             {error && (
               <div className="p-3 bg-rose-950/30 border border-rose-900/60 rounded-xl text-xs text-rose-300 flex items-center gap-2">
@@ -1050,14 +1033,6 @@ export const AuditPanel: React.FC = () => {
                   <BookmarkPlus className="w-4 h-4 text-emerald-400" />
                   <span>Save to SQL Tracker</span>
                 </button>
-
-                <button
-                  onClick={() => setIsStageModalOpen(true)}
-                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-gradient-to-r from-emerald-700 to-teal-700 hover:from-emerald-400 hover:to-teal-500 text-xs font-semibold text-white shadow-md shadow-emerald-600/20 transition-all"
-                >
-                  <Play className="w-4 h-4 fill-current" />
-                  <span>Apply / Stage with Playwright</span>
-                </button>
               </div>
 
               {saveSuccessMsg && (
@@ -1136,18 +1111,6 @@ export const AuditPanel: React.FC = () => {
           )}
         </div>
       )}
-
-      {/* Stage Modal */}
-      <StageModal
-        isOpen={isStageModalOpen}
-        onClose={() => setIsStageModalOpen(false)}
-        jobUrl={jobUrl}
-        variant={selectedVariant}
-        jobTitle={auditResult?.job_details.title}
-        company={auditResult?.job_details.company}
-        companyValidation={auditResult?.company_validation}
-        tailoredCv={auditResult?.tailored_cv}
-      />
     </div>
   );
 };

@@ -6,6 +6,54 @@ from .gemini_service import MULTI_INDUSTRY_SKILLS, gemini_service
 
 logger = logging.getLogger(__name__)
 
+_PUBLIC_SECTOR_ORG_PATTERNS = (
+    "სსიპ",
+    "ა(ა)იპ",
+    "სამინისტრო",
+    "მერია",
+    "საკრებულო",
+    "პარლამენტ",
+    "სასამართლო",
+    "პროკურატურ",
+    "ეროვნული ბანკ",
+    "სახელმწიფო",
+    "საჯარო რეესტრ",
+    "შემოსავლების სამსახურ",
+    "საქსტატ",
+    "მუნიციპალიტეტ",
+    "საელჩო",
+    "გუბერნატორ",
+    "ministry of",
+    "municipality of",
+    "parliament of",
+    "national bank of georgia",
+    "public service hall",
+    "state agency",
+    "lepl ",
+    "embassy of",
+)
+
+
+def is_public_sector_vacancy(portal: str, company: str = "", title: str = "", description: str = "") -> bool:
+    """
+    Returns True ONLY for genuine state/government public-sector roles:
+    - All listings on vacancy.hr.gov.ge
+    - Verified state ministries, LEPLs (სსიპ / ა(ა)იპ), municipalities, or public agencies on jobs.ge / hr.ge.
+    Private companies (e.g. Andersen, Itransition, ProCredit, TBC) NEVER return True.
+    """
+    p_low = (portal or "").strip().lower()
+    if p_low == "hr.gov.ge":
+        return True
+    if p_low not in ("jobs.ge", "hr.ge"):
+        return False
+    comp_low = f"{company} {title}".lower()
+    header_slice = (description or "")[:220].lower()
+    if any(tok in comp_low for tok in _PUBLIC_SECTOR_ORG_PATTERNS):
+        return True
+    if any(tok in header_slice for tok in ("სსიპ ", "ა(ა)იპ ", "საქართველოს სამინისტრო", "მუნიციპალიტეტის მერია")):
+        return True
+    return False
+
 SKILL_MATCH_ALIASES: Dict[str, set[str]] = {
     "js": {"javascript", "js"},
     "javascript": {"javascript", "js"},
@@ -439,7 +487,8 @@ Markdown:
 
     def extract_job_requirements(self, title: str, description: str) -> List[str]:
         """Extracts actual required technical and domain skills from job title + description without fabrication."""
-        combined = f"{title}\n{description}".lower()
+        cleaned_desc = re.sub(r"(?:https?://\S+|www\.\S+|\S+@\S+)", " ", description or "")
+        combined = f"{title}\n{cleaned_desc}".lower()
         required: List[str] = []
 
         for category, items in QA_TAXONOMY_CATALOG.items():
@@ -488,22 +537,34 @@ Markdown:
         """
         combined = f"{job_title}\n{job_description}".lower()
         title_lower = (job_title or "").lower()
+        # Capture opening role announcement sentence (e.g. ProCredit "აცხადებს ვაკანსიას ... (Middle / Senior QA) პოზიციაზე")
+        opening_m = re.search(
+            r"(?:აცხადებს\s+ვაკანსიას[^\n.]{0,160}|opening\s+for\s+the\s+position\s+of[^\n.]{0,120}|ad\s+title:\s*[^\n|]{0,100})",
+            (job_description or "")[:650],
+            re.IGNORECASE,
+        )
+        opening_scope = f"{title_lower} {opening_m.group(0).lower() if opening_m else ''}"
 
         exec_titles = [
             "lead", "principal", "head of", "staff", "director", "architect", "chief", "vp",
-            "middle+", "mid+", "mid/senior", "middle/senior",
+            "middle+", "mid+", "mid/senior", "middle/senior", "middle / senior", "mid / senior", "mid-senior",
             "ლიდი", "ხელმძღვანელი", "დირექტორი", "მთავარი", "წამყვანი",
         ]
         senior_titles = ["senior", "sr.", "sr ", "უფროსი", "სინიორ"]
         tech_manager_titles = ["qa manager", "engineering manager", "test manager", "it manager"]
 
-        # Extract all experience requirement signals (ranges e.g. "2-3 years", "3-5 years", "3+ years", "მინიმუმ 3 წელი", "від 3 років")
+        # Extract all experience requirement signals (ranges e.g. "2-3 years", "3-5 years", "2+ years", "მინიმუმ 2 წელი", "ორწლიანი")
         found_years: List[float] = []
+        for ka_word, yrs_val in (("ორწლიან", 2.0), ("სამწლიან", 3.0), ("ოთხწლიან", 4.0), ("ხუთწლიან", 5.0)):
+            if ka_word in combined:
+                found_years.append(yrs_val)
 
-        # 1. Range format (e.g. "2-3 years", "3-5 წელი", "2–4 роки")
+        # 1. Range format (e.g. "1-2 years", "2-3 years", "3-5 წელი", "2–4 роки")
+        # Use lower bound for entry ranges ("1-2 years" requires >=1 yr), upper bound for >=2 yr ranges ("2-3 years")
         for rm in re.finditer(r"(\d+(?:\.\d+)?)\s*[–\-]\s*(\d+(?:\.\d+)?)\s*(?:years?|yrs?|წ(?:ელი|ლიანი)?|років|лет)", combined):
             try:
-                found_years.append(float(rm.group(2)))
+                low_v, high_v = float(rm.group(1)), float(rm.group(2))
+                found_years.append(high_v if low_v >= 2.0 else low_v)
             except Exception:
                 pass
 
@@ -548,24 +609,35 @@ Markdown:
 
         if max_allowed_years is not None:
             cap = float(max_allowed_years)
-        elif candidate_years < 1.0:
+        elif candidate_years <= 0.5:
             cap = 1.0
         elif candidate_years <= 2.0:
-            cap = min(candidate_years + 0.5, 2.0)
+            cap = min(round(candidate_years + 0.5, 1), 2.0)
+        elif candidate_years <= 2.5:
+            cap = round(candidate_years + 0.5, 1)
+        elif candidate_years <= 5.0:
+            cap = round(candidate_years + 1.5, 1)
         else:
-            cap = round(candidate_years + 1.0, 1)
+            cap = round(candidate_years + 2.5, 1)
 
-        # Gate 1: Strict Entry / Junior Experience Guard
+        # Gate 1: Entry / Junior Experience Guard (adapts dynamically to 1.0 yr entry vs 1.5 yr junior vs 2.0-2.5 yr junior-mid)
         if candidate_years <= 2.5:
             for s in exec_titles + senior_titles + tech_manager_titles:
-                if s in ("middle+", "mid+", "sr."):
-                    matched_s = s in title_lower
+                if any(ch in s for ch in ("+", "/", ".")):
+                    matched_s = s in opening_scope
                 else:
-                    matched_s = bool(re.search(r"\b" + re.escape(s) + r"\b", title_lower))
+                    matched_s = bool(re.search(r"\b" + re.escape(s) + r"\b", opening_scope))
                 if matched_s:
                     return (
                         False,
-                        f"Disqualified by Seniority Gate: Role requires {s.title()}, exceeding candidate cap ({cap:.1f} yrs max).",
+                        f"Disqualified by Seniority Gate: Role requires {s.title()}, exceeding candidate experience ({cap:.1f} yrs max).",
+                    )
+            # Entry-level (<1.5 yrs, cap <=1.5) candidates also reject standalone Middle / Mid-Level titles (unless Junior/Middle)
+            if cap <= 1.5 and not any(j in opening_scope for j in ("junior", "intern", "trainee", "უმცროს", "სტაჟიორ", "დამწყებ")):
+                if re.search(r"\b(?:middle|mid-level|mid\s+level)\b", opening_scope):
+                    return (
+                        False,
+                        f"Disqualified by Seniority Gate: Role targets Mid-Level experience, exceeding entry/junior ceiling ({cap:.1f} yrs).",
                     )
             if cap <= 2.0 and has_3_plus_guard:
                 return (
@@ -622,6 +694,7 @@ Markdown:
         portal: str = "custom",
         candidate_skills: Optional[List[str]] = None,
         required_skills: Optional[List[str]] = None,
+        company: str = "",
     ) -> Tuple[str, str]:
         """
         Universal Domain-Agnostic Alignment Classifier:
@@ -689,9 +762,9 @@ Markdown:
             ),
         )
         default_domain_signals = {
-            "qa_tech": ["qa", "quality assurance", "quality engineer", "test", "tester", "sdet", "automation", "playwright", "selenium", "cypress", "postman", "sql", "python", "ტესტ", "ხარისხის უზრუნველყოფ", "ხარისხ"],
-            "software_engineering": ["developer", "software engineer", "backend", "frontend", "full stack", "python", "typescript", "devops", "პროგრამისტი", "დეველოპერი"],
-            "data_analytics": ["data analyst", "business intelligence", "bi analyst", "analytics", "sql", "power bi", "tableau", "ანალიტიკოს"],
+            "qa_tech": ["qa", "quality assurance", "quality engineer", "test engineer", "software test", "manual test", "tester", "sdet", "qa automation", "test automation", "ტესტერ", "ტესტირებ", "ხარისხის უზრუნველყოფ"],
+            "software_engineering": ["developer", "software engineer", "backend", "frontend", "full stack", "python engineer", "devops", "პროგრამისტი", "დეველოპერი"],
+            "data_analytics": ["data analyst", "business intelligence", "bi analyst", "analytics", "power bi", "tableau", "ანალიტიკოს"],
             "finance_accounting": ["accountant", "accounting", "finance", "financial", "audit", "tax", "payroll", "ifrs", "treasury", "controller", "ბუღალტ", "ფინანს", "აუდიტ"],
             "hr_recruiting": ["hr", "human resources", "recruiter", "talent acquisition", "people operations", "onboarding", "hrbp", "ადამიანური რესურს", "რეკრუტ"],
             "marketing_growth": ["marketing", "seo", "smm", "content", "brand", "growth", "performance marketing", "copywriter", "მარკეტინგ"],
@@ -702,6 +775,19 @@ Markdown:
             "healthcare_hospital": ["medical", "hospital", "clinic", "patient", "nurse", "pharmacy", "სამედიცინო", "კლინიკ", "პაციენტ", "ექთანი", "რეგისტრატორ"],
             "customer_service": ["support", "customer", "client", "call center", "helpdesk", "მხარდაჭერ", "ოპერატორ", "ქოლ"],
         }
+        # QA-specific off-discipline guard: prevent pure Software/Cloud/Security/BizDev/PM titles from leaking via Python/Git overlap
+        if target_industry == "qa_tech":
+            qa_title_keep = ("qa", "quality", "test automation", "software test", "manual test", "sdet", "support", "data quality", "ტესტ", "ხარისხ", "მხარდაჭერ")
+            qa_off_titles = (
+                "cloud platform", "backend engineer", "backend developer", "frontend engineer", "frontend developer",
+                "full stack", "fullstack", "software engineer", "python engineer", "devops engineer", "site reliability",
+                "sre ", "penetration tester", "security engineer", "offensive security", "alliances field",
+                "sales engineer", "solutions architect", "analyst relations", "business development",
+                "account executive", "product manager", "project manager",
+            )
+            if any(off in title_lower for off in qa_off_titles) and not any(kp in title_lower for kp in qa_title_keep):
+                return ("NONE", f"Domain Gate: '{job_title}' is a non-QA specialist role outside QA & Software Testing.")
+
         own_override_signals = default_domain_signals.get(target_industry, [])
         for grp_name, grp_signals, allowed_inds in _conflict_groups:
             if target_industry in allowed_inds:
@@ -714,10 +800,11 @@ Markdown:
                     f"Domain Gate: '{job_title}' belongs to {grp_name.replace('_', ' ')} outside {target_industry}.",
                 )
 
-        # Build direct domain signals from search_queries + primary_role tokens + domain catalog
-        direct_signals = [str(s).lower() for s in (search_q.get("domain_keywords") or []) if len(str(s)) >= 2]
-        if not direct_signals:
-            direct_signals = list(default_domain_signals.get(target_industry, []))
+        # Always merge canonical domain signals with search_queries so localized titles (e.g. "ხარისხის უზრუნველყოფის სპეციალისტი") always match DIRECT
+        direct_signals = list(dict.fromkeys(
+            list(default_domain_signals.get(target_industry, []))
+            + [str(s).lower() for s in (search_q.get("domain_keywords") or []) if len(str(s)) >= 2 and str(s).lower() not in ("python", "sql", "test")]
+        ))
         for tok in re.split(r"[\s/&|,-]+", primary_role):
             if len(tok) >= 4 and tok not in ("engineer", "specialist", "coordinator", "junior", "associate", "senior", "manager") and tok not in direct_signals:
                 direct_signals.append(tok)
@@ -786,9 +873,10 @@ Markdown:
                             edu_tokens.append(mapped)
 
         is_intern_role = any(w in title_lower for w in ("intern", "trainee", "graduate", "apprentice", "სტაჟიორ", "სტაჟირებ", "დამწყებ", "სასწავლო"))
+        is_pub_sector = is_public_sector_vacancy(portal, company=company, title=job_title, description=job_description)
 
-        # 1. Public Sector & Internship Portal (hr.gov.ge) — match by domain, tech, or academic/internship track
-        if portal == "hr.gov.ge":
+        # 1. Genuine Public Sector Vacancy (hr.gov.ge or verified state ministries/LEPLs on jobs.ge/hr.ge)
+        if is_pub_sector:
             it_gov_signals = ["it", "ინფორმაციულ ტექნოლოგ", "ტექნოლოგ", "პროგრამ", "მონაცემ", "ანალიტ", "სისტემ", "კიბერ", "ქსელ", "ტესტ", "sql", "developer"]
             is_tech_cand = target_industry in ("qa_tech", "software_engineering", "data_analytics")
             has_domain_hit = any(sig in combined for sig in (direct_signals + adj_signals + edu_tokens))
@@ -797,22 +885,27 @@ Markdown:
                 for t in it_gov_signals
             )
             if has_domain_hit or has_tech_hit or overlap_count >= 1 or target_industry == "public_admin_legal" or (eligible_internships and is_intern_role and any(tok in combined for tok in (direct_signals + edu_tokens))):
-                return ("PUBLIC_INTERNSHIP", "Public Sector & Graduate Internship (HR.gov.ge)")
-            return ("NONE", f"Domain Gate: '{job_title}' on HR.gov.ge does not match candidate's {target_industry} / education profile.")
+                return ("PUBLIC_INTERNSHIP", "Public Sector Vacancy")
+            return ("NONE", f"Domain Gate: '{job_title}' does not match candidate's {target_industry} / education profile.")
 
-        # Graduate / Entry-Level Internship matching compiled from Education + CV skills
-        if is_intern_role and eligible_internships and (
-            any(sig in combined for sig in (direct_signals + adj_signals + edu_tokens)) or overlap_count >= 1
-        ):
-            edu_hit = any(tok in combined for tok in edu_tokens)
-            label = "Education-Aligned Entry / Internship" if edu_hit else f"Internship / Graduate Track ({parsed_skills.get('primary_role') or target_industry})"
-            return ("PUBLIC_INTERNSHIP" if edu_hit else "ADJACENT", label)
-
-        if any(sig in title_lower for sig in direct_signals) or (
+        # 2. Private-Sector Direct Role Match (including direct-domain Traineeships/Internships like 'QA Manual Trainee' at Andersen!)
+        if any(
+            (re.search(r"\b" + re.escape(sig) + r"\b", title_lower) if len(sig) <= 3 and sig.isascii() else (sig in title_lower))
+            for sig in direct_signals
+        ) or (
             target_industry in ("receptionist_hospitality", "healthcare_hospital", "customer_service", "logistics_supply_chain", "finance_accounting")
             and any(sig in combined[:240] for sig in direct_signals)
         ):
-            return ("DIRECT", parsed_skills.get("primary_role") or "Direct Role Match")
+            role_lbl = "Entry-Level / Internship" if is_intern_role else (parsed_skills.get("primary_role") or "Direct Role Match")
+            return ("DIRECT", role_lbl)
+
+        # 3. Private-Sector Graduate / Entry-Level Internship matching compiled from Education + CV skills (NEVER labeled Public Sector!)
+        if is_intern_role and eligible_internships and (
+            any(sig in combined for sig in (adj_signals + edu_tokens)) or overlap_count >= 1
+        ):
+            edu_hit = any(tok in combined for tok in edu_tokens)
+            label = "Entry-Level / Graduate Internship" if edu_hit else "Entry-Level / Internship"
+            return ("ADJACENT", label)
 
         # 2. Adjacent Role / Transferable Skill Alignment (require real technical alignment for tech profiles)
         matched_adj_role = adjacent_roles[0] if adjacent_roles else "Transferable Adjacent Role"
@@ -849,12 +942,12 @@ Markdown:
         current_status: str = "DISCOVERED",
         existing_rationale: str = "",
         portal: str = "custom",
+        company: str = "",
     ) -> Dict[str, Any]:
         """
         Universal Multi-Tier Optimal Matching Algorithm:
-        - Enforces Strict 2.0-Year Experience Guard.
-        - Categorizes matches into Tier 1 DIRECT (>= 80%), Tier 2 ADJACENT (65-79% / transferable skills),
-          and Tier 3 PUBLIC_INTERNSHIP (hr.gov.ge).
+        - Enforces Dynamic Person-Adaptive Experience Guard.
+        - Categorizes matches into Tier 1 DIRECT, Tier 2 ADJACENT, and Tier 3 PUBLIC_INTERNSHIP (strictly separating state roles from private internships).
         """
         if current_status == "FILTERED_OUT":
             return {
@@ -870,7 +963,12 @@ Markdown:
 
         raw_cand_years = parsed_skills.get("years_of_experience")
         candidate_years = float(raw_cand_years) if raw_cand_years is not None else 0.0
-        max_allowed = parsed_skills.get("max_allowed_years")
+        raw_max_allowed = parsed_skills.get("max_allowed_years")
+        # Normalize legacy stored 2.0 default when candidate_years is unstated (0.0 -> 1.0 yr entry ceiling)
+        if raw_max_allowed is not None and raw_cand_years is None and float(raw_max_allowed) == 2.0:
+            max_allowed: Optional[float] = 1.0
+        else:
+            max_allowed = float(raw_max_allowed) if raw_max_allowed is not None else None
         candidate_seniority = str(parsed_skills.get("seniority_level") or "JUNIOR")
 
         sen_passed, sen_reason = self.validate_seniority_gate(
@@ -937,6 +1035,7 @@ Markdown:
         tier_hint, tier_label = self.classify_domain_alignment(
             parsed_skills, title, description, portal=portal,
             candidate_skills=candidate_skills, required_skills=required_skills,
+            company=company,
         )
         if tier_hint == "NONE":
             logger.info("[MATCHER REJECT] [%s] '%s' -> %s", portal, title, tier_label)
@@ -1030,15 +1129,24 @@ Markdown:
         overlap_pct = int(round((len(matched) / len(required_skills)) * 100)) if required_skills else int(round(score))
         overlap_pct = max(65, min(98, overlap_pct)) if tier_hint == "ADJACENT" else overlap_pct
 
-        # Determine final Match Tier cleanly
+        is_pub_vacancy = is_public_sector_vacancy(portal, company=company, title=title, description=description)
+
+        # Determine final Match Tier cleanly (Direct domain matches stay DIRECT even at 65-79% so e.g. ProCredit Junior QA is never mislabeled ADJACENT)
         if tier_hint == "PUBLIC_INTERNSHIP":
             final_tier = "PUBLIC_INTERNSHIP"
-        elif tier_hint == "ADJACENT" or (tier_hint == "DIRECT" and 60.0 <= score < 80.0):
-            final_tier = "ADJACENT" if (tier_hint == "ADJACENT" or score < 75.0) else "DIRECT"
+        elif tier_hint == "ADJACENT":
+            final_tier = "ADJACENT"
         else:
             final_tier = "DIRECT"
 
-        adjacent_tag = f"Adjacent Opportunity: {overlap_pct}% Skill Overlap ({tier_label})" if final_tier == "ADJACENT" else None
+        if final_tier == "ADJACENT":
+            adjacent_tag = f"Adjacent Opportunity: {overlap_pct}% Skill Overlap ({tier_label})"
+        elif is_pub_vacancy:
+            adjacent_tag = "Public Sector Vacancy"
+        elif final_tier == "PUBLIC_INTERNSHIP" or tier_label == "Entry-Level / Internship":
+            adjacent_tag = "Entry-Level / Internship"
+        else:
+            adjacent_tag = None
 
         if current_status in ("APPLIED", "REJECTED"):
             new_status = current_status
@@ -1053,7 +1161,7 @@ Markdown:
                 "adjacent_role_tag": None,
                 "skill_overlap_pct": None,
             }
-        elif score >= 75.0:
+        elif score >= 75.0 or (final_tier == "DIRECT" and score >= 72.0):
             new_status = "STAGED"
         else:
             new_status = "AUDITED"
@@ -1065,11 +1173,12 @@ Markdown:
                 f"Your {matched_str} skills cover {overlap_pct}% of this {tier_label} role. | "
                 f"Match: {score}% | Missing: {missing_str}"
             )
+        elif is_pub_vacancy:
+            rationale = f"Public Sector Vacancy ({score}% fit) | Matched: {matched_str}"
         elif final_tier == "PUBLIC_INTERNSHIP":
-            rationale = (
-                f"Public Sector & Entry/Internship Opportunity ({score}% fit) | "
-                f"Matched: {matched_str}"
-            )
+            rationale = f"Entry-Level & Graduate Internship ({score}% fit) | Matched: {matched_str}"
+        elif tier_label == "Entry-Level / Internship":
+            rationale = f"Entry-Level & Internship Match ({score}% fit) | Matched: {matched_str}"
         else:
             queue_note = "Direct Role Match — auto-promoted to STAGED." if new_status == "STAGED" else "Direct Role Match (60-74%)."
             rationale = (

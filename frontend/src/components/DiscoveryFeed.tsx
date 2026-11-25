@@ -5,7 +5,6 @@ import {
   Mail,
   Download,
   ExternalLink,
-  Play,
   Upload,
   Compass,
   Sparkles,
@@ -33,7 +32,7 @@ export interface CandidateRoleHeaderInfo {
   education?: Array<{ degree?: string; field_of_study?: string; institution?: string }>;
   courses_and_certifications?: string[];
   experience_years?: number;
-  max_allowed_years?: number;
+  target_seniority_label?: string;
   target_industry?: string;
 }
 
@@ -88,7 +87,6 @@ interface DiscoveryFeedProps {
   onRunScrapers: () => void;
   onUploadClick: () => void;
   onSelectJob: (job: DbJobPosting) => void;
-  onOpenFillForm?: (job: DbJobPosting) => void;
   onDraftInGmail: (job: DbJobPosting) => void;
   searchQuery?: string;
   onSearchQueryChange?: (q: string) => void;
@@ -182,7 +180,6 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
   onRunScrapers,
   onUploadClick,
   onSelectJob,
-  onOpenFillForm,
   onDraftInGmail,
   searchQuery = '',
   onSearchQueryChange,
@@ -242,9 +239,15 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
   });
 
   const expVal = candidateProfile?.experience_years ?? null;
-  const capVal =
-    candidateProfile?.max_allowed_years ??
-    (expVal != null ? Math.min(expVal + 0.5, 2.0) : 2.0);
+  const levelLabel =
+    candidateProfile?.target_seniority_label ||
+    (expVal == null || expVal <= 0.5
+      ? 'Entry-Level / Intern'
+      : expVal <= 2.5
+      ? `Junior (${expVal} yrs)`
+      : expVal <= 5
+      ? `Mid-Level (${expVal} yrs)`
+      : `Senior (${expVal} yrs)`);
   const primaryRole = candidateProfile?.primary_role || candidateProfile?.headline || 'Upload skills.md';
   const detectedIndustry = candidateProfile?.detected_industry || candidateProfile?.target_industry || 'Domain-Agnostic';
   const adjacentRoles = candidateProfile?.adjacent_roles || [];
@@ -285,10 +288,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
               </span>
               <span className="text-slate-600">|</span>
               <span className="text-slate-400">
-                Experience:{' '}
-                <strong className="text-amber-300">
-                  {expVal != null ? `${expVal} Yrs` : 'Not specified'} (Cap: {capVal.toFixed(1)} Yrs)
-                </strong>
+                Target level: <strong className="text-amber-300">{levelLabel}</strong>
               </span>
             </div>
             {adjacentRoles.length > 0 && (
@@ -318,9 +318,6 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
               </div>
             )}
           </div>
-          <span className="text-[10px] px-2.5 py-1 rounded-full bg-emerald-950/60 border border-emerald-700/50 text-emerald-300 font-semibold self-start lg:self-center">
-            Strict &le; {capVal.toFixed(1)} Yr Experience Guard Active
-          </span>
         </div>
       )}
 
@@ -383,7 +380,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
           { id: 'ALL' as const, label: `All Tiers (${tierCounts?.ALL ?? totalJobs ?? visibleJobs.length})`, active: 'bg-slate-800 text-white border border-slate-600' },
           { id: 'DIRECT' as const, label: `🎯 Direct Matches (${tierCounts?.DIRECT ?? directJobs.length})`, active: 'bg-emerald-700 text-white shadow-sm shadow-emerald-600/20', Icon: Target },
           { id: 'ADJACENT' as const, label: `🚀 Optimal Adjacent Roles (${tierCounts?.ADJACENT ?? adjacentJobs.length})`, active: 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/20', Icon: Sparkles },
-          { id: 'PUBLIC_INTERNSHIP' as const, label: `🏛️ Public Sector & Internships (${tierCounts?.PUBLIC_INTERNSHIP ?? publicJobs.length})`, active: 'bg-cyan-700 text-white shadow-sm shadow-cyan-600/20', Icon: Landmark },
+          { id: 'PUBLIC_INTERNSHIP' as const, label: `🏛️ Public Sector (${tierCounts?.PUBLIC_INTERNSHIP ?? publicJobs.length})`, active: 'bg-cyan-700 text-white shadow-sm shadow-cyan-600/20', Icon: Landmark },
         ]).map(({ id, label, active, Icon }) => (
           <button
             key={id}
@@ -793,7 +790,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
       {(Boolean(totalJobs) || visibleJobs.length > 0 || Boolean(scrapeStats)) && (
         <div className="text-xs bg-emerald-950/30 border border-emerald-800/60 text-emerald-300 px-3.5 py-2 rounded-xl flex items-center justify-between flex-wrap gap-2">
           <span>
-            ✅ Found <strong>{totalJobs ?? visibleJobs.length}</strong> suitable opportunities ({tierCounts?.DIRECT ?? directJobs.length} Direct • {tierCounts?.ADJACENT ?? adjacentJobs.length} Adjacent • {tierCounts?.PUBLIC_INTERNSHIP ?? publicJobs.length} Public/Intern)
+            ✅ Found <strong>{totalJobs ?? visibleJobs.length}</strong> suitable opportunities ({tierCounts?.DIRECT ?? directJobs.length} Direct • {tierCounts?.ADJACENT ?? adjacentJobs.length} Adjacent • {tierCounts?.PUBLIC_INTERNSHIP ?? publicJobs.length} Public Sector)
             <span className="text-emerald-300 ml-1.5">(showing {visibleJobs.length} on page {page} of {totalPages})</span>
             {scrapeStats && scrapeStats.filteredOut > 0 && (
               <span className="text-slate-400 ml-1.5">
@@ -849,7 +846,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 Upload your skills.md file to scan tailored live vacancies
               </h4>
               <p className="text-xs text-slate-400 max-w-md mx-auto">
-                Your discovery feed adapts automatically to any domain. Upload <code className="text-emerald-300">skills.md</code> to discover Direct Matches, Adjacent Transferable Roles, and Public Sector Internships.
+                Your discovery feed adapts automatically to any domain. Upload <code className="text-emerald-300">skills.md</code> to discover Direct Matches, Adjacent Transferable Roles, and Public Sector vacancies.
               </p>
               <button
                 onClick={onUploadClick}
@@ -869,7 +866,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                   ? 'Many postings on DOU.ua require local Ukrainian or Russian language fluency. If you speak Ukrainian or Russian, add it to your skills.md to unlock Ukrainian remote roles; otherwise, explore English remote roles or switch to other portals.'
                   : selectedPortalFilter === 'headhunter.ge'
                   ? 'HeadHunter.ge postings often require Russian language. Add Russian to your skills.md to unlock them, or switch to Jobs.ge / HR.ge.'
-                  : `Currently no active listings on ${selectedPortalFilter} match your strict experience cap (<= ${capVal.toFixed(1)} yrs) and location criteria.`}
+                  : `Currently no active listings on ${selectedPortalFilter} match your experience level and location criteria.`}
               </p>
               <div className="flex items-center justify-center gap-2 pt-2">
                 <button
@@ -981,7 +978,13 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 {tier === 'PUBLIC_INTERNSHIP' && (
                   <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-cyan-950/90 text-cyan-200 border border-cyan-700/60">
                     <Landmark className="w-2.5 h-2.5" aria-hidden="true" />
-                    <span>{job.adjacent_role_tag || 'Public Sector / Internship'}</span>
+                    <span>Public Sector</span>
+                  </div>
+                )}
+
+                {tier === 'DIRECT' && job.adjacent_role_tag === 'Entry-Level / Internship' && (
+                  <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-950/90 text-emerald-200 border border-emerald-700/60">
+                    <span>Entry-Level / Internship</span>
                   </div>
                 )}
 
@@ -1023,16 +1026,11 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                     )}
                   </div>
                 ) : (
-                  <div className="text-[10px] text-slate-300 pt-0.5 flex items-center gap-1.5">
-                    <span>
-                      {(job.description_raw || '').includes('არ ითვალისწინებს ანაზღაურებას') ||
-                      (job.description_raw || '').toLowerCase().includes('unpaid')
-                        ? 'Salary: Unpaid Internship'
-                        : 'Salary: Not Listed'}
-                    </span>
-                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-900 text-slate-300 border border-slate-700">
-                      Not Listed
-                    </span>
+                  <div className="text-[10px] text-slate-400 pt-0.5">
+                    {(job.description_raw || '').includes('არ ითვალისწინებს ანაზღაურებას') ||
+                    (job.description_raw || '').toLowerCase().includes('unpaid')
+                      ? 'Salary: Unpaid Internship'
+                      : 'Salary: Not Listed'}
                   </div>
                 )}
 
@@ -1072,48 +1070,45 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
 
                 <div className="flex items-center gap-1.5 pt-1">
                   {job.delivery_channel === 'EMAIL' || Boolean(job.target_email) ? (
-                    <button
-                      type="button"
-                      disabled={draftingJobId === job.id}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDraftInGmail(job);
-                      }}
-                      className="flex-1 flex items-center justify-center gap-1 py-1 px-2 rounded-lg bg-rose-700 hover:bg-rose-500 text-white font-semibold transition-colors disabled:opacity-50"
-                      title="Generate Tailored Word CV (.docx) + Cover Letter and save Gmail Draft"
-                    >
-                      <Mail className="w-3 h-3" />
-                      <span>{draftingJobId === job.id ? 'Preparing...' : 'Draft in Gmail'}</span>
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        disabled={draftingJobId === job.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDraftInGmail(job);
+                        }}
+                        className="flex-1 flex items-center justify-center gap-1 py-1 px-2 rounded-lg bg-rose-700 hover:bg-rose-500 text-white font-semibold transition-colors disabled:opacity-50"
+                        title="Generate Tailored Word CV (.docx) + Cover Letter and save Gmail Draft"
+                      >
+                        <Mail className="w-3 h-3" />
+                        <span>{draftingJobId === job.id ? 'Preparing...' : 'Draft in Gmail'}</span>
+                      </button>
+                      <a
+                        href={job.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700"
+                        aria-label={`Open original posting for ${job.title}`}
+                        title="Open live job page in new tab"
+                      >
+                        <ExternalLink className="w-3 h-3" aria-hidden="true" />
+                      </a>
+                    </>
                   ) : (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (onOpenFillForm) {
-                          onOpenFillForm(job);
-                        } else {
-                          onSelectJob(job);
-                        }
-                      }}
-                      className="flex-1 flex items-center justify-center gap-1 py-1 px-2 rounded-lg bg-emerald-700 hover:bg-emerald-500 text-white font-semibold transition-colors"
+                    <a
+                      href={job.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      className="flex-1 flex items-center justify-center gap-1 py-1 px-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-100 border border-slate-700 font-semibold transition-colors"
+                      aria-label={`Open original posting for ${job.title}`}
                     >
-                      <Play className="w-3 h-3" />
-                      <span>Open &amp; Fill Form</span>
-                    </button>
+                      <ExternalLink className="w-3 h-3" aria-hidden="true" />
+                      <span>Open on {job.portal}</span>
+                    </a>
                   )}
-
-                  <a
-                    href={job.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={(e) => e.stopPropagation()}
-                    className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700"
-                    aria-label={`Open original posting for ${job.title}`}
-                    title="Open live job page in new tab"
-                  >
-                    <ExternalLink className="w-3 h-3" aria-hidden="true" />
-                  </a>
                 </div>
               </div>
             </div>

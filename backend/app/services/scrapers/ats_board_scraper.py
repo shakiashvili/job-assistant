@@ -31,8 +31,8 @@ class GreenhouseScraper(BasePortalScraper):
         kw_lower: List[str],
         candidate_languages: Optional[List[str]],
     ) -> List[Dict[str, Any]]:
-        api_url = f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs"
-        data = await self.fetch_json(api_url, timeout=9.0)
+        api_url = f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs?content=true"
+        data = await self.fetch_json(api_url, timeout=12.0)
         if not isinstance(data, dict):
             return []
         items: List[Dict[str, Any]] = []

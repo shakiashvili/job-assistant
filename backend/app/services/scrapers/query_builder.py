@@ -193,7 +193,19 @@ def build_search_queries(
     verified = [str(s) for s in (skills.get("verified_skills") or skills.get("all_skills") or []) if s]
     raw_exp = skills.get("years_of_experience")
     exp_years = float(raw_exp) if raw_exp is not None else 0.0
-    cap_exp = min(exp_years + 0.5, 2.0) if exp_years <= 2.0 else round(exp_years + 0.5, 1)
+    explicit_cap = skills.get("max_allowed_years")
+    if explicit_cap is not None and not (raw_exp is None and float(explicit_cap) == 2.0):
+        cap_exp = float(explicit_cap)
+    elif exp_years <= 0.5:
+        cap_exp = 1.0
+    elif exp_years <= 1.5:
+        cap_exp = 1.5
+    elif exp_years <= 2.5:
+        cap_exp = round(exp_years + 0.5, 1)
+    elif exp_years <= 5.0:
+        cap_exp = round(exp_years + 1.5, 1)
+    else:
+        cap_exp = round(exp_years + 3.0, 1)
 
     tmpl = _DOMAIN_QUERY_TEMPLATES.get(target_industry)
     if tmpl:
@@ -229,7 +241,9 @@ def build_search_queries(
 
     edu_entries = skills.get("education") or []
     courses_certs = skills.get("courses_and_certifications") or []
-    eligible_internships = bool(skills.get("eligible_internships") or edu_entries or courses_certs or exp_years <= 2.5)
+    eligible_internships = bool(
+        exp_years <= 2.5 and (skills.get("eligible_internships", True) or edu_entries or courses_certs or raw_exp is None)
+    )
     for e in edu_entries:
         if isinstance(e, dict):
             fos = str(e.get("field_of_study") or "").strip()
@@ -249,9 +263,9 @@ def build_search_queries(
     jobs_ge_urls: List[str] = []
     if jobs_ge_cid:
         jobs_ge_urls.append(f"https://jobs.ge/ge/?page=1&cid={jobs_ge_cid}")
-    for idx, q in enumerate((primary_ge[:2] + adjacent_ge[:1])):
+    for idx, q in enumerate((primary_ge[:3] + adjacent_ge[:1])):
         enc = quote_plus(q)
-        cat_part = cid_suffix if idx < len(primary_ge[:2]) else ""
+        cat_part = cid_suffix if idx < len(primary_ge[:3]) else ""
         u = f"https://jobs.ge/ge/?page=1&q={enc}{cat_part}"
         if u not in jobs_ge_urls:
             jobs_ge_urls.append(u)
@@ -264,9 +278,18 @@ def build_search_queries(
         f"https://www.hr.ge/search-posting?q={quote_plus(q)}"
         for q in dict.fromkeys(primary_ge[:2] + adjacent_ge[:1])
     ]
+    if cap_exp <= 1.2:
+        hh_exp_filters = ["&experience=noExperience", "&experience=between1And3"]
+    elif cap_exp <= 3.0:
+        hh_exp_filters = ["&experience=between1And3"]
+    elif cap_exp <= 6.0:
+        hh_exp_filters = ["&experience=between3And6"]
+    else:
+        hh_exp_filters = [""]
     headhunter_urls = [
-        f"https://headhunter.ge/search/vacancy?text={quote_plus(q)}&area=28&order_by=publication_time"
-        for q in dict.fromkeys(primary_ge[:2] + adjacent_ge[:1])
+        f"https://headhunter.ge/search/vacancy?text={quote_plus(q)}&area=28&order_by=publication_time{exp_f}"
+        for q in list(dict.fromkeys(primary_ge[:2] + adjacent_ge[:1]))[:2]
+        for exp_f in hh_exp_filters
     ]
 
     # Adapt exp_years filter on Djinni to candidate's actual experience band
@@ -277,18 +300,23 @@ def build_search_queries(
             djinni_url = f"https://djinni.co/jobs/?keywords={quote_plus(djinni_kw[3:])}&employment=remote"
         else:
             djinni_url = f"https://djinni.co/jobs/?primary_keyword={quote_plus(djinni_kw)}&employment=remote"
-        if cap_exp <= 1.5:
+        if cap_exp <= 1.2:
             exp_param = "&exp_years=0-1"
         elif cap_exp <= 2.5:
             exp_param = "&exp_years=1"
         elif cap_exp <= 5.5:
             exp_param = "&exp_years=3"
         else:
-            exp_param = ""
+            exp_param = "&exp_years=5"
         djinni_exp_url = f"{djinni_url}{exp_param}"
 
     dou_url = f"https://jobs.dou.ua/vacancies/?category={quote_plus(dou_cat)}&remote" if dou_cat else None
-    justjoin_url = f"https://justjoin.it/job-offers/all-locations/{justjoin_cat}?workplace=remote" if justjoin_cat else None
+    jj_exp = "junior" if cap_exp <= 1.5 else ("junior,mid" if cap_exp <= 3.5 else "mid,senior")
+    justjoin_url = (
+        f"https://justjoin.it/job-offers/all-locations/{justjoin_cat}?workplace=remote&experience-level={jj_exp}"
+        if justjoin_cat
+        else None
+    )
 
     hr_gov_queries = list(dict.fromkeys(
         (primary_ge[:2] + ["IT", "ანალიტიკ"]) if is_it else (primary_ge[:2] + adjacent_ge[:1])

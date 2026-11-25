@@ -142,9 +142,10 @@ def sanitize_company_name(
     cleaned = re.sub(r"\s+", " ", (raw_company or "")).strip(" -|•·,")
     lower = cleaned.lower()
     is_date_only = bool(re.match(r"^\d{1,2}\s+[ა-ჰa-z]+$", lower))
+    is_url_like = lower.startswith(("http://", "https://", "www.")) or "linkedin.com" in lower
     has_blacklisted_sub = any(b in lower for b in _COMPANY_SUBSTRING_BLACKLIST)
 
-    if cleaned and lower not in _COMPANY_LOCATION_BLACKLIST and not has_blacklisted_sub and not is_date_only and len(cleaned) >= 2:
+    if cleaned and lower not in _COMPANY_LOCATION_BLACKLIST and not has_blacklisted_sub and not is_date_only and not is_url_like and len(cleaned) >= 2:
         return cleaned
 
     if target_email and "@" in target_email:

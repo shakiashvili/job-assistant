@@ -1,7 +1,7 @@
 import logging
 import re
 from typing import Dict, Any, List, Optional
-from .base_scraper import BasePortalScraper, parse_contact_method_and_email, sanitize_company_name
+from .base_scraper import BasePortalScraper, matches_domain_keywords, parse_contact_method_and_email, sanitize_company_name
 from ..link_validator import fetch_and_validate_live_vacancy, parse_vacancy_published_date
 
 logger = logging.getLogger(__name__)
@@ -120,6 +120,23 @@ class JobsGeScraper(BasePortalScraper):
             if en_live and len(en_text) > len(clean_text):
                 clean_text = f"{clean_text}\n\n{en_text}"
                 raw_html = en_html or raw_html
+                en_title_m = re.search(r"Ad\s+title:\s*([^\n|]{3,90}?)(?:\s+Provided\s+By:|\s*\||\n)", en_text, re.I)
+                if en_title_m:
+                    item["title"] = en_title_m.group(1).strip()
+
+        # Disambiguate Georgian titles that embed seniority in the opening sentence
+        # e.g. ProCredit Bank: id=770150 "(Junior QA)" vs id=770149 "(Middle / Senior QA)"
+        qual_m = re.search(
+            r"აცხადებს\s+ვაკანსიას[^.\n]{0,120}?\(([^)\n]{2,45})\)",
+            clean_text[:600],
+        )
+        if qual_m:
+            qual = qual_m.group(1).strip()
+            if qual.lower() not in item["title"].lower() and any(
+                k in qual.lower()
+                for k in ("junior", "middle", "mid", "senior", "lead", "intern", "trainee", "qa", "უმცროს", "უფროს", "სტაჟიორ")
+            ):
+                item["title"] = f"{item['title']} ({qual})"
 
         if not item.get("published_at"):
             pub_dt, pub_text = parse_vacancy_published_date(clean_text, standalone=False)
@@ -169,15 +186,25 @@ class JobsGeScraper(BasePortalScraper):
         self,
         allow_network: bool = True,
         search_urls: Optional[List[str]] = None,
+        domain_keywords: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         if not allow_network:
             return []
         urls = search_urls or self.DEFAULT_SEARCH_URLS
+
+        def _parse_prioritized(html: str) -> List[Dict[str, Any]]:
+            rows = self.parse_html_listings(html)
+            if not domain_keywords:
+                return rows
+            # Keep domain-matching & internship titles first so broad category feeds (e.g. cid=6) never starve target roles
+            matched = [r for r in rows if matches_domain_keywords(r.get("title", ""), domain_keywords) or any(k in r.get("title", "").lower() for k in ("სტაჟირ", "სტაჟიორ", "intern", "trainee"))]
+            return matched if matched else rows[:15]
+
         return await self.scrape_and_enrich_urls(
             urls,
-            self.parse_html_listings,
+            _parse_prioritized,
             self._enrich_and_verify_item,
-            limit=18,
+            limit=26,
             page_timeout=10.0,
             sort_newest_first=True,
         )

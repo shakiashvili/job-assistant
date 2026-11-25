@@ -441,7 +441,8 @@ def test_hiring_perspective_experience_domain_language_and_education_matching():
         portal="jobs.ge",
     )
     assert res_edu_intern["status"] != "FILTERED_OUT"
-    assert res_edu_intern["match_tier"] == "PUBLIC_INTERNSHIP"
+    assert res_edu_intern["match_tier"] == "ADJACENT"
+    assert "Public Sector" not in (res_edu_intern["adjacent_role_tag"] or "")
 
 
 def test_legacy_pre_alembic_database_adopted_cleanly_by_migrations(tmp_path):
@@ -632,3 +633,166 @@ def test_top_one_percent_cv_adaptive_skill_buckets_and_ats_pass_multi_industry(t
     assert res["ats_parse_report"]["score"] >= 90
     assert "Financial Reporting &amp; Analysis" in res["rendered_html"]
     assert "@media print" in res["rendered_html"]
+
+
+def test_dynamic_experience_bounds_adapt_to_any_candidate():
+    from app.services.profile_service import compute_dynamic_experience_bounds
+
+    assert compute_dynamic_experience_bounds(None)[1:] == (1.0, "JUNIOR", "Entry-Level / Intern")
+    assert compute_dynamic_experience_bounds(1.0)[1] == 1.5
+    assert compute_dynamic_experience_bounds(1.5)[1] == 2.0
+    assert compute_dynamic_experience_bounds(2.0)[1] == 2.0
+    _, cap_mid, sen_mid, _ = compute_dynamic_experience_bounds(4.0)
+    assert cap_mid == 5.5 and sen_mid == "MID"
+    _, cap_sr, sen_sr, _ = compute_dynamic_experience_bounds(10.0)
+    assert cap_sr >= 10.0 and sen_sr == "LEAD"
+
+
+def test_public_sector_is_only_state_employers_never_private_companies():
+    from app.services.matcher_service import is_public_sector_vacancy
+
+    assert is_public_sector_vacancy("hr.gov.ge", "სსიპ - კოლეჯი") is True
+    assert is_public_sector_vacancy("jobs.ge", "თბილისის მერია") is True
+    assert is_public_sector_vacancy("jobs.ge", "სსიპ - საჯარო რეესტრის ეროვნული სააგენტო") is True
+    assert is_public_sector_vacancy("hr.ge", "საქართველოს ფინანსთა სამინისტრო") is True
+    for private in ("Andersen", "Itransition", "ProCredit Bank", "TBC Bank", "EPAM"):
+        assert is_public_sector_vacancy("headhunter.ge", private) is False
+        assert is_public_sector_vacancy("jobs.ge", private) is False
+
+
+def test_entry_qa_profile_junior_procredit_accepted_middle_senior_rejected_andersen_not_public():
+    from app.services.matcher_service import matcher_service
+
+    qa_entry = {
+        "target_industry": "qa_tech",
+        "primary_role": "QA Engineer",
+        "verified_skills": ["Manual Testing", "Jira", "SQL", "Postman", "REST API", "Playwright"],
+        "years_of_experience": None,
+        "max_allowed_years": 1.0,
+        "seniority_level": "JUNIOR",
+        "spoken_languages": ["English", "Georgian"],
+        "eligible_internships": True,
+    }
+    body_tpl = (
+        "პროკრედიტ ბანკი აცხადებს ვაკანსიას ხარისხის უზრუნველყოფის სპეციალისტის ({lvl}) "
+        "პოზიციაზე — ვებ აპლიკაციებისა და Core სისტემების მიმართულებით. ტესტ-ქეისები, Jira, SQL, API ტესტირება."
+    )
+    junior = matcher_service.evaluate_job_tiered(
+        title="ხარისხის უზრუნველყოფის სპეციალისტი (Junior QA)",
+        description=body_tpl.format(lvl="Junior QA"),
+        parsed_skills=qa_entry, portal="jobs.ge", company="პროკრედიტ ბანკი",
+    )
+    assert junior["status"] != "FILTERED_OUT"
+    assert junior["match_tier"] == "DIRECT"
+
+    senior = matcher_service.evaluate_job_tiered(
+        title="ხარისხის უზრუნველყოფის სპეციალისტი",
+        description=body_tpl.format(lvl="Middle / Senior QA"),
+        parsed_skills=qa_entry, portal="jobs.ge", company="პროკრედიტ ბანკი",
+    )
+    assert senior["status"] == "FILTERED_OUT"
+
+    andersen = matcher_service.evaluate_job_tiered(
+        title="QA Manual Trainee",
+        description="Andersen QA trainee program: manual testing, SQL, Jira, test cases. Remote friendly.",
+        parsed_skills=qa_entry, portal="headhunter.ge", company="Andersen",
+    )
+    assert andersen["status"] != "FILTERED_OUT"
+    assert andersen["match_tier"] == "DIRECT"
+    assert "Public Sector" not in (andersen["match_rationale"] or "")
+
+    off_domain = matcher_service.evaluate_job_tiered(
+        title="Cloud Platform Engineer",
+        description="Kubernetes, Terraform, Python, Git, SQL. Entry level welcome.",
+        parsed_skills=qa_entry, portal="greenhouse.io", company="Gitlab",
+    )
+    assert off_domain["status"] == "FILTERED_OUT"
+
+    two_plus = matcher_service.evaluate_job_tiered(
+        title="QA Engineer",
+        description="Requirements: 2+ years of QA experience, Selenium, SQL.",
+        parsed_skills=qa_entry, portal="jobs.ge", company="Some Co",
+    )
+    assert two_plus["status"] == "FILTERED_OUT"
+
+    # URLs like recruiting.procredit-group.com must never extract 'Recruiting' as a required skill
+    reqs = matcher_service.extract_job_requirements(
+        "ხარისხის უზრუნველყოფის სპეციალისტი (Junior QA)",
+        "ტესტირება SQL Postman API. Apply at https://recruiting.procredit-group.com/jobs/123 or hr@procredit.ge",
+    )
+    assert "Recruiting" not in reqs and "HR" not in reqs
+
+
+def test_ingest_scraped_jobs_sibling_delete_no_foreign_key_error(tmp_path):
+    from sqlmodel import Session, select
+    from app.db.database import engine
+    from app.db.models import CandidateProfile, JobPosting, User
+    from app.services.scrapers.scraper_orchestrator import scraper_orchestrator
+
+    with Session(engine) as session:
+        user = User(email="fk-guard@example.com", hashed_password="x", full_name="FK Guard")
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        uid = user.id
+        prof = CandidateProfile(
+            user_id=uid,
+            headline="Junior QA Engineer",
+            raw_markdown="Junior QA Engineer. Skills: Manual Testing, SQL, Postman, REST API, Jira. Languages: Georgian, English.",
+            parsed_skills={
+                "target_industry": "qa_tech",
+                "primary_role": "Junior QA Engineer",
+                "all_skills": ["Manual Testing", "SQL", "Postman", "REST API", "Jira"],
+                "verified_skills": ["Manual Testing", "SQL", "Postman", "REST API", "Jira"],
+                "years_of_experience": None,
+                "max_allowed_years": 1.0,
+                "seniority_level": "JUNIOR",
+                "spoken_languages": ["English", "Georgian"],
+            },
+        )
+        session.add(prof)
+        # Pre-existing legacy row with un-qualified title that matches both sibling postings by title+company
+        old_row = JobPosting(
+            user_id=uid,
+            portal="jobs.ge",
+            external_id="jobsge-770150",
+            title="ხარისხის უზრუნველყოფის სპეციალისტი",
+            company="პროკრედიტ ბანკი",
+            url="https://jobs.ge/ge/?view=jobs&id=770150",
+            market="GE_DOMESTIC",
+            status="AUDITED",
+            description_raw="Old description",
+        )
+        session.add(old_row)
+        session.commit()
+
+    res = scraper_orchestrator.ingest_scraped_jobs(
+        raw_jobs=[
+            {
+                "portal": "jobs.ge",
+                "external_id": "jobsge-770150",
+                "title": "ხარისხის უზრუნველყოფის სპეციალისტი (Junior QA)",
+                "company": "პროკრედიტ ბანკი",
+                "url": "https://jobs.ge/ge/?view=jobs&id=770150",
+                "market": "GE_DOMESTIC",
+                "description_raw": "პროკრედიტ ბანკი აცხადებს ვაკანსიას Junior QA პოზიციაზე. SQL, Postman, REST API, ტესტ-ქეისები.",
+            },
+            {
+                "portal": "jobs.ge",
+                "external_id": "jobsge-770149",
+                "title": "ხარისხის უზრუნველყოფის სპეციალისტი (Middle / Senior QA)",
+                "company": "პროკრედიტ ბანკი",
+                "url": "https://jobs.ge/ge/?view=jobs&id=770149",
+                "market": "GE_DOMESTIC",
+                "description_raw": "პროკრედიტ ბანკი აცხადებს ვაკანსიას Middle / Senior QA პოზიციაზე. მინიმუმ 3 წლიანი გამოცდილება.",
+            },
+        ],
+        user_id=uid,
+    )
+    assert res["filtered_out_count"] >= 1
+    titles = [j["title"] for j in res["jobs"]]
+    assert any("Junior QA" in t for t in titles)
+    assert not any("Middle / Senior" in t for t in titles)
+    with Session(engine) as session:
+        rows = session.exec(select(JobPosting).where(JobPosting.user_id == uid)).all()
+        assert len(rows) == 1 and "Junior QA" in rows[0].title

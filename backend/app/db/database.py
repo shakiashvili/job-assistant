@@ -2,7 +2,7 @@ import logging
 import os
 from typing import Generator
 from sqlmodel import SQLModel, Session, create_engine
-from sqlalchemy import event
+from sqlalchemy import event, inspect as sa_inspect
 from ..config import DATABASE_URL, _is_prod
 from .models import (
     User,
@@ -170,6 +170,7 @@ def delete_job_posting_cascade(session: Session, job: JobPosting) -> None:
                 )
             )
             session.exec(delete(ApplicationTracker).where(ApplicationTracker.job_posting_id == job.id))
-        session.delete(job)
+        if sa_inspect(job).persistent:
+            session.delete(job)
 
 

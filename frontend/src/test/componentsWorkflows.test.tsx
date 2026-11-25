@@ -5,7 +5,6 @@ import { ProfileVault } from '../components/ProfileVault';
 import { DiscoveryFeed } from '../components/DiscoveryFeed';
 import { CVVariantManager } from '../components/CVVariantManager';
 import { ApplicationTracker } from '../components/ApplicationTracker';
-import { StageModal } from '../components/StageModal';
 import { AuthModal } from '../components/AuthModal';
 import { B2BMarketHub } from '../components/B2BMarketHub';
 import { Navbar } from '../components/Navbar';
@@ -296,44 +295,6 @@ describe('Core Frontend Component Workflows', () => {
     await waitFor(() => expect(delSpy).toHaveBeenCalledWith('app-55'));
   });
 
-  it('StageModal displays authorization/staging errors and resets cleanly on reopen', async () => {
-    const user = userEvent.setup();
-    vi.spyOn(api, 'stageApplication').mockRejectedValueOnce(
-      new Error('Forbidden: requested CV file belongs to another user.')
-    );
-
-    const { rerender } = render(
-      <StageModal
-        isOpen={true}
-        onClose={vi.fn()}
-        jobUrl="https://boards.greenhouse.io/acme/jobs/1"
-        variant="qa_automation"
-      />
-    );
-
-    await user.click(screen.getByRole('button', { name: /launch playwright & apply/i }));
-    expect(await screen.findByText(/belongs to another user/i)).toBeInTheDocument();
-
-    rerender(
-      <StageModal
-        isOpen={false}
-        onClose={vi.fn()}
-        jobUrl="https://boards.greenhouse.io/acme/jobs/1"
-        variant="qa_automation"
-      />
-    );
-    rerender(
-      <StageModal
-        isOpen={true}
-        onClose={vi.fn()}
-        jobUrl="https://boards.greenhouse.io/acme/jobs/2"
-        variant="qa_automation"
-      />
-    );
-
-    expect(screen.queryByText(/belongs to another user/i)).not.toBeInTheDocument();
-  });
-
   it('B2BMarketHub distinguishes current 1% tax from 12-month Article 90 threshold projection', async () => {
     vi.spyOn(api, 'calculateB2BTax').mockResolvedValueOnce({
       currency: 'GEL',
@@ -381,30 +342,6 @@ describe('Core Frontend Component Workflows', () => {
     expect(await screen.findByText(/IE B2B \(1% Tax\)/i)).toBeInTheDocument();
     expect(screen.getByText(/1% applies this month\. At this run-rate, Month #12 crosses 500,000 GEL/i)).toBeInTheDocument();
     expect(screen.getByText(/Actual Cumulative Turnover \(YTD \+ This Month\):/i)).toBeInTheDocument();
-  });
-
-  it('StageModal clearly explains cloud Playwright disablement and points users to Chrome Extension', async () => {
-    const user = userEvent.setup();
-    vi.spyOn(api, 'stageApplication').mockResolvedValueOnce({
-      status: 'playwright_disabled',
-      portal_detected: 'greenhouse',
-      fields_filled: [],
-      captcha_status: 'none_detected',
-      file_uploaded: false,
-      message: 'Server-side headless Chromium staging is disabled (ENABLE_PLAYWRIGHT=false).',
-      manual_review_needed: true,
-    });
-
-    render(
-      <StageModal
-        isOpen
-        onClose={() => {}}
-        jobUrl="https://boards.greenhouse.io/example/jobs/123"
-        variant="qa_automation"
-      />
-    );
-    await user.click(screen.getByRole('button', { name: /Launch Playwright & Apply/i }));
-    expect(await screen.findByText(/TalentFlow Chrome Extension/i)).toBeInTheDocument();
   });
 
   it('AuthModal shows honest unavailable-OTP guidance in production without exposing local SMTP setup', async () => {
