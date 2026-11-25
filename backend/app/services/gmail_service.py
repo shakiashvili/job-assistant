@@ -13,11 +13,9 @@ from typing import Optional, Dict, Any, Tuple, List
 from urllib.parse import urlencode
 
 from ..config import (
-    BACKEND_URL,
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
     GOOGLE_REDIRECT_URI,
-    FRONTEND_URL,
     GENERATED_RESUMES_DIR,
     get_email_delivery_config,
     get_smtp_config,
@@ -411,6 +409,23 @@ class GmailService:
             ),
         }
 
+    @staticmethod
+    def _smtp_execute(host: str, port: int, user: str, password: str, msg=None) -> None:
+        ctx = ssl.create_default_context()
+        if port == 465:
+            with smtplib.SMTP_SSL(host, port, context=ctx, timeout=12) as server:
+                server.login(user, password)
+                if msg is not None:
+                    server.send_message(msg)
+        else:
+            with smtplib.SMTP(host, port, timeout=12) as server:
+                server.ehlo()
+                server.starttls(context=ctx)
+                server.ehlo()
+                server.login(user, password)
+                if msg is not None:
+                    server.send_message(msg)
+
     def verify_smtp_credentials(
         self,
         user: str,
@@ -424,16 +439,7 @@ class GmailService:
         if not clean_user or "@" not in clean_user or len(clean_pass) < 8:
             return False, "Provide a valid Gmail address and 16-character Google App Password."
         try:
-            ctx = ssl.create_default_context()
-            if port == 465:
-                with smtplib.SMTP_SSL(host, port, context=ctx, timeout=12) as server:
-                    server.login(clean_user, clean_pass)
-            else:
-                with smtplib.SMTP(host, port, timeout=12) as server:
-                    server.ehlo()
-                    server.starttls(context=ctx)
-                    server.ehlo()
-                    server.login(clean_user, clean_pass)
+            self._smtp_execute(host, port, clean_user, clean_pass)
             return True, f"Authenticated SMTP sender {mask_email(clean_user)}."
         except smtplib.SMTPAuthenticationError:
             return False, "Gmail rejected the email or App Password. Make sure 2FA is enabled and use a 16-character Google App Password."
@@ -449,11 +455,7 @@ class GmailService:
         pdf_path: Optional[str] = None,
         user_id: Optional[int] = None,
     ) -> tuple[bool, str]:
-        """
-        Sends a real email via Gmail / SMTP (SSL on 465 or STARTTLS on 587).
-        Reloads backend/.env dynamically on each call so updated credentials work immediately.
-        Returns (success: bool, detail_message: str).
-        """
+        """Sends a real email via Gmail / SMTP (SSL on 465 or STARTTLS on 587)."""
         cfg = get_smtp_config()
         if not cfg["configured"]:
             return False, "SMTP not configured (missing GMAIL_USER / GMAIL_APP_PASSWORD in backend/.env)"
@@ -474,27 +476,14 @@ class GmailService:
         else:
             msg.attach(email.mime.text.MIMEText(body_text, "plain", "utf-8"))
 
-        if pdf_path:
-            p = self._resolve_safe_attachment_path(pdf_path, user_id=user_id)
-            if p is not None:
-                with open(p, "rb") as f:
-                    part = email.mime.application.MIMEApplication(f.read(), _subtype="pdf")
-                    part.add_header("Content-Disposition", "attachment", filename=p.name)
-                    msg.attach(part)
+        if pdf_path and (p := self._resolve_safe_attachment_path(pdf_path, user_id=user_id)):
+            with open(p, "rb") as f:
+                part = email.mime.application.MIMEApplication(f.read(), _subtype="pdf")
+                part.add_header("Content-Disposition", "attachment", filename=p.name)
+                msg.attach(part)
 
         try:
-            ctx = ssl.create_default_context()
-            if cfg["port"] == 465:
-                with smtplib.SMTP_SSL(cfg["host"], cfg["port"], context=ctx, timeout=12) as server:
-                    server.login(cfg["user"], cfg["password"])
-                    server.send_message(msg)
-            else:
-                with smtplib.SMTP(cfg["host"], cfg["port"], timeout=12) as server:
-                    server.ehlo()
-                    server.starttls(context=ctx)
-                    server.ehlo()
-                    server.login(cfg["user"], cfg["password"])
-                    server.send_message(msg)
+            self._smtp_execute(cfg["host"], cfg["port"], cfg["user"], cfg["password"], msg=msg)
             logger.info(f"SMTP email successfully sent to {mask_email(to_email)} via {cfg['host']}:{cfg['port']}")
             return True, f"Sent to {mask_email(to_email)} via {cfg['host']}"
         except smtplib.SMTPAuthenticationError as e:
@@ -506,85 +495,47 @@ class GmailService:
             logger.error(err)
             return False, err
 
-    def _send_email_resend(
-        self,
-        *,
-        api_key: str,
-        from_email: str,
-        to_email: str,
-        subject: str,
-        body_text: str,
-        html_body: str,
-    ) -> Tuple[bool, str]:
+    def _send_https_email(self, provider: str, url: str, api_key: str, payload: Dict[str, Any], to_email: str) -> Tuple[bool, str]:
         try:
             import httpx
 
             resp = httpx.post(
-                "https://api.resend.com/emails",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "from": from_email,
-                    "to": [to_email],
-                    "subject": subject,
-                    "text": body_text,
-                    "html": html_body,
-                },
+                url,
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json=payload,
                 timeout=12.0,
             )
             if 200 <= resp.status_code < 300:
-                logger.info("HTTPS Resend OTP email delivered to %s", mask_email(to_email))
-                return True, f"Sent via Resend HTTPS API to {mask_email(to_email)}"
-            err = f"Resend API returned HTTP {resp.status_code}: {resp.text[:200]}"
-            logger.error(err)
-            return False, err
+                logger.info("HTTPS %s OTP email delivered to %s", provider, mask_email(to_email))
+                return True, f"Sent via {provider} HTTPS API to {mask_email(to_email)}"
+            err = f"{provider} API returned HTTP {resp.status_code}: {resp.text[:200]}"
         except Exception as exc:
-            err = f"Resend HTTPS delivery error: {exc}"
-            logger.error(err)
-            return False, err
+            err = f"{provider} HTTPS delivery error: {exc}"
+        logger.error(err)
+        return False, err
 
-    def _send_email_sendgrid(
-        self,
-        *,
-        api_key: str,
-        from_email: str,
-        to_email: str,
-        subject: str,
-        body_text: str,
-        html_body: str,
-    ) -> Tuple[bool, str]:
-        try:
-            import httpx
+    def _send_email_resend(self, *, api_key: str, from_email: str, to_email: str, subject: str, body_text: str, html_body: str) -> Tuple[bool, str]:
+        return self._send_https_email(
+            "Resend",
+            "https://api.resend.com/emails",
+            api_key,
+            {"from": from_email, "to": [to_email], "subject": subject, "text": body_text, "html": html_body},
+            to_email,
+        )
 
-            resp = httpx.post(
-                "https://api.sendgrid.com/v3/mail/send",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "personalizations": [{"to": [{"email": to_email}]}],
-                    "from": {"email": from_email},
-                    "subject": subject,
-                    "content": [
-                        {"type": "text/plain", "value": body_text},
-                        {"type": "text/html", "value": html_body},
-                    ],
-                },
-                timeout=12.0,
-            )
-            if 200 <= resp.status_code < 300:
-                logger.info("HTTPS SendGrid OTP email delivered to %s", mask_email(to_email))
-                return True, f"Sent via SendGrid HTTPS API to {mask_email(to_email)}"
-            err = f"SendGrid API returned HTTP {resp.status_code}: {resp.text[:200]}"
-            logger.error(err)
-            return False, err
-        except Exception as exc:
-            err = f"SendGrid HTTPS delivery error: {exc}"
-            logger.error(err)
-            return False, err
+    def _send_email_sendgrid(self, *, api_key: str, from_email: str, to_email: str, subject: str, body_text: str, html_body: str) -> Tuple[bool, str]:
+        return self._send_https_email(
+            "SendGrid",
+            "https://api.sendgrid.com/v3/mail/send",
+            api_key,
+            {
+                "personalizations": [{"to": [{"email": to_email}]}],
+                "from": {"email": from_email},
+                "subject": subject,
+                "content": [{"type": "text/plain", "value": body_text}, {"type": "text/html", "value": html_body}],
+            },
+            to_email,
+        )
 
     def send_otp_email(self, to_email: str, code: str) -> Dict[str, Any]:
         """

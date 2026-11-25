@@ -499,67 +499,52 @@ export const CVVariantManager: React.FC = () => {
 
       {/* 2. Curated CV Editions (ATS, Recruiter, Job-Specific) */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Card 1: ATS-Optimized */}
-        <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl flex flex-col justify-between space-y-4">
-          <div className="space-y-2">
-            <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase px-2.5 py-1 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-800">
-              <ShieldCheck className="w-3.5 h-3.5" />
-              {isKa ? 'ATS ოპტიმიზებული' : 'ATS-Optimized'}
-            </span>
-            <h3 className="text-base font-bold text-white">
-              {isKa ? 'ATS-სკანერზე მორგებული სუფთა CV' : 'ATS-Parser Clean CV'}
-            </h3>
-            <p className="text-xs text-slate-400 leading-relaxed">
-              {isKa
-                ? 'ერთსვეტიანი სუფთა სტრუქტურა ცხრილების გარეშე, რათა Greenhouse, Lever და ვაკანსიის ATS სისტემებმა 100%-ით ამოიცნონ შენი უნარები.'
-                : 'Strict single-column structure with zero tables or columns so Greenhouse, Lever, and portal ATS scanners extract 100% of your skills.'}
-            </p>
+        {([
+          {
+            key: 'ats' as const,
+            Icon: ShieldCheck,
+            badge: isKa ? 'ATS ოპტიმიზებული' : 'ATS-Optimized',
+            badgeCls: 'bg-cyan-950 text-cyan-300 border-cyan-800',
+            title: isKa ? 'ATS-სკანერზე მორგებული სუფთა CV' : 'ATS-Parser Clean CV',
+            desc: isKa
+              ? 'ერთსვეტიანი სუფთა სტრუქტურა ცხრილების გარეშე, რათა Greenhouse, Lever და ვაკანსიის ATS სისტემებმა 100%-ით ამოიცნონ შენი უნარები.'
+              : 'Strict single-column structure with zero tables or columns so Greenhouse, Lever, and portal ATS scanners extract 100% of your skills.',
+            btnCls: 'bg-cyan-700 hover:bg-cyan-500',
+            btnLabel: isKa ? 'ATS Word (.docx) + PDF შექმნა' : 'Build ATS Word (.docx) + PDF',
+          },
+          {
+            key: 'recruiter' as const,
+            Icon: UserCheck,
+            badge: isKa ? 'რეკრუტერებისთვის' : 'For Recruiters',
+            badgeCls: 'bg-emerald-950 text-emerald-300 border-emerald-800',
+            title: isKa ? 'რეკრუტერის სწრაფი გადახედვის CV' : 'Recruiter Fast-Scan CV',
+            desc: isKa
+              ? 'გამოკვეთს მიღწევებს, ტექნიკურ სტეკს, პროექტებსა და პროფესიულ მიმოხილვას, რომ რეკრუტერმა 10 წამში დაინახოს შენი ძლიერი მხარეები.'
+              : 'Highlights impact bullets, clear stack grouping, relevant projects, and executive summary crafted for 10-second recruiter review.',
+            btnCls: 'bg-emerald-700 hover:bg-emerald-500',
+            btnLabel: isKa ? 'რეკრუტერის Word (.docx) + PDF შექმნა' : 'Build Recruiter Word (.docx) + PDF',
+          },
+        ]).map(({ key, Icon, badge, badgeCls, title, desc, btnCls, btnLabel }) => (
+          <div key={key} className="bg-slate-900 border border-slate-800 p-5 rounded-2xl flex flex-col justify-between space-y-4">
+            <div className="space-y-2">
+              <span className={`inline-flex items-center gap-1.5 text-[10px] font-bold uppercase px-2.5 py-1 rounded-full border ${badgeCls}`}>
+                <Icon className="w-3.5 h-3.5" />
+                {badge}
+              </span>
+              <h3 className="text-base font-bold text-white">{title}</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">{desc}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => handleGenerate(key)}
+              disabled={generatingKey !== null}
+              className={`w-full py-2.5 px-4 rounded-xl text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50 ${btnCls}`}
+            >
+              <Sparkles className="w-4 h-4" />
+              <span>{generatingKey === key ? (isKa ? 'Word და PDF იქმნება...' : 'Generating Word & PDF...') : btnLabel}</span>
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={() => handleGenerate('ats')}
-            disabled={generatingKey !== null}
-            className="w-full py-2.5 px-4 rounded-xl bg-cyan-700 hover:bg-cyan-500 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
-          >
-            <Sparkles className="w-4 h-4" />
-            <span>
-              {generatingKey === 'ats'
-                ? isKa ? 'Word და PDF იქმნება...' : 'Generating Word & PDF...'
-                : isKa ? 'ATS Word (.docx) + PDF შექმნა' : 'Build ATS Word (.docx) + PDF'}
-            </span>
-          </button>
-        </div>
-
-        {/* Card 2: Recruiter-Ready */}
-        <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl flex flex-col justify-between space-y-4">
-          <div className="space-y-2">
-            <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase px-2.5 py-1 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800">
-              <UserCheck className="w-3.5 h-3.5" />
-              {isKa ? 'რეკრუტერებისთვის' : 'For Recruiters'}
-            </span>
-            <h3 className="text-base font-bold text-white">
-              {isKa ? 'რეკრუტერის სწრაფი გადახედვის CV' : 'Recruiter Fast-Scan CV'}
-            </h3>
-            <p className="text-xs text-slate-400 leading-relaxed">
-              {isKa
-                ? 'გამოკვეთს მიღწევებს, ტექნიკურ სტეკს, პროექტებსა და პროფესიულ მიმოხილვას, რომ რეკრუტერმა 10 წამში დაინახოს შენი ძლიერი მხარეები.'
-                : 'Highlights impact bullets, clear stack grouping, relevant projects, and executive summary crafted for 10-second recruiter review.'}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => handleGenerate('recruiter')}
-            disabled={generatingKey !== null}
-            className="w-full py-2.5 px-4 rounded-xl bg-emerald-700 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
-          >
-            <Sparkles className="w-4 h-4" />
-            <span>
-              {generatingKey === 'recruiter'
-                ? isKa ? 'Word და PDF იქმნება...' : 'Generating Word & PDF...'
-                : isKa ? 'რეკრუტერის Word (.docx) + PDF შექმნა' : 'Build Recruiter Word (.docx) + PDF'}
-            </span>
-          </button>
-        </div>
+        ))}
 
         {/* Card 3: Job-Specific Tailored */}
         <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl flex flex-col justify-between space-y-4">

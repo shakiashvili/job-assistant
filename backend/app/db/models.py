@@ -197,6 +197,7 @@ class JobPosting(SQLModel, table=True):
     filter_out_reason: Optional[str] = Field(default=None)
     match_rationale: str = Field(default="", sa_column=Column(Text, nullable=False))
     posting_date: Optional[str] = Field(default=None)
+    published_at: Optional[datetime] = Field(default=None, index=True)
     deadline_text: Optional[str] = Field(default=None)
     is_expired: bool = Field(default=False)
     is_link_live: bool = Field(default=True)

@@ -11,17 +11,11 @@ import {
   Upload,
   Download,
   Star,
-  Globe,
   Edit3,
   Languages,
-  Briefcase,
   Building2,
-  CheckCircle2,
   Eye,
-  Database,
-  ShieldAlert,
   DollarSign,
-  Mail
 } from 'lucide-react';
 import {
   auditJob,
@@ -72,7 +66,8 @@ const DEFAULT_JOB_FILTERS: JobSearchParams = {
   language: 'ALL',
   experience_level: 'ALL',
   employment_type: 'ALL',
-  sort_by: 'relevance',
+  sort_by: 'newest',
+  posted_within_days: undefined,
   only_new: false,
   only_saved: false,
   b2b_only: false,
@@ -110,7 +105,7 @@ export const AuditPanel: React.FC = () => {
   const [jobUrl, setJobUrl] = useState('');
   const [profileUploaded, setProfileUploaded] = useState<boolean>(false);
   const [jobText, setJobText] = useState('');
-  const [selectedVariant, setSelectedVariant] = useState('qa_automation');
+  const [selectedVariant, setSelectedVariant] = useState('tailored');
   const [cvLanguage, setCvLanguage] = useState<'en' | 'ka'>('en');
   const [candidateProfile, setCandidateProfile] = useState<{
     full_name?: string;
@@ -604,26 +599,19 @@ export const AuditPanel: React.FC = () => {
               </span>
             </div>
             <div className="grid grid-cols-2 gap-2">
-              <button
-                onClick={() => setCvLanguage('en')}
-                className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border transition-all ${
-                  cvLanguage === 'en'
-                    ? 'bg-emerald-700 text-white border-emerald-400 shadow-md shadow-emerald-600/25'
-                    : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
-                }`}
-              >
-                <span>🇬🇧 English CV</span>
-              </button>
-              <button
-                onClick={() => setCvLanguage('ka')}
-                className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border transition-all ${
-                  cvLanguage === 'ka'
-                    ? 'bg-emerald-700 text-white border-emerald-400 shadow-md shadow-emerald-600/25'
-                    : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
-                }`}
-              >
-                <span>🇬🇪 ქართული CV</span>
-              </button>
+              {([['en', '🇬🇧 English CV'], ['ka', '🇬🇪 ქართული CV']] as const).map(([lang, label]) => (
+                <button
+                  key={lang}
+                  onClick={() => setCvLanguage(lang)}
+                  className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border transition-all ${
+                    cvLanguage === lang
+                      ? 'bg-emerald-700 text-white border-emerald-400 shadow-md shadow-emerald-600/25'
+                      : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                  }`}
+                >
+                  <span>{label}</span>
+                </button>
+              ))}
             </div>
             <span className="text-[10px] text-slate-400 text-center">
               Accepts English or Georgian skills & outputs in your chosen language
@@ -633,7 +621,7 @@ export const AuditPanel: React.FC = () => {
       </div>
 
       {/* 1. Skills.md Upload & CandidateProfile Relational DB Ingestion */}
-      <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl space-y-4 shadow-sm">
+      <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl space-y-3 shadow-sm">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="flex items-start gap-3">
             <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 flex-shrink-0">
@@ -647,9 +635,14 @@ export const AuditPanel: React.FC = () => {
                 <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800 font-semibold">
                   {extractedSkillsCount} Skills Indexed
                 </span>
+                {candidateProfile?.eligible_internships && (
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-800 font-semibold">
+                    🎓 Internship &amp; Graduate Tracks
+                  </span>
+                )}
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
-                Upload your <code className="text-slate-300">skills.md</code> — Gemini automatically detects your profession, academic background, certifications, and matching internships &amp; live roles.
+                Upload your CV or <code className="text-slate-300">skills.md</code> — detects your profession, academic background, certifications, and matching roles automatically.
               </p>
             </div>
           </div>
@@ -677,36 +670,6 @@ export const AuditPanel: React.FC = () => {
               <span>{showSkillsEditor ? 'Hide .md Editor' : 'View / Edit skills.md'}</span>
             </button>
           </div>
-        </div>
-
-        {/* Dynamic Role & Industry Profile Gate Badges (auto-detected from skills.md) */}
-        <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-slate-800/60">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Active Profile Gate:</span>
-          <span className="text-xs px-2.5 py-1 rounded-lg bg-emerald-950 text-emerald-300 border border-emerald-800 font-semibold flex items-center gap-1">
-            <span>👤 {candidateProfile?.full_name || 'Candidate'}</span>
-          </span>
-          <span className="text-xs px-2.5 py-1 rounded-lg bg-indigo-950 text-indigo-300 border border-indigo-800 font-semibold flex items-center gap-1">
-            <span>Industry: {candidateProfile?.detected_industry || candidateProfile?.target_industry || 'Auto-Detect on Upload'}</span>
-          </span>
-          <span className="text-xs px-2.5 py-1 rounded-lg bg-emerald-950 text-emerald-300 border border-emerald-800 font-semibold flex items-center gap-1">
-            <span>
-              Experience:{' '}
-              {candidateProfile?.experience_years != null
-                ? `${candidateProfile.experience_years} Years`
-                : 'Not specified'}{' '}
-              (Cap {(candidateProfile?.max_allowed_years ?? 2.0).toFixed(1)})
-            </span>
-          </span>
-          {candidateProfile?.eligible_internships && (
-            <span className="text-xs px-2.5 py-1 rounded-lg bg-cyan-950 text-cyan-300 border border-cyan-800 font-semibold">
-              🎓 Internship &amp; Graduate Tracks Active
-            </span>
-          )}
-          {candidateProfile?.headline && (
-            <span className="text-[11px] px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-medium">
-              {candidateProfile.headline}
-            </span>
-          )}
         </div>
 
         {skillsStatusMsg && (
@@ -773,64 +736,25 @@ export const AuditPanel: React.FC = () => {
         onSaveSearchAlert={async () => {
           const f = filtersRef.current;
           const parts = [
-            f.portal && f.portal !== 'ALL' ? f.portal : null,
+            f.portal !== 'ALL' ? f.portal : null,
             f.search?.trim() || null,
             f.country?.trim() || null,
             f.city?.trim() || null,
             f.technology?.trim() || null,
-            f.remote_type && f.remote_type !== 'ALL' ? f.remote_type : null,
+            f.remote_type !== 'ALL' ? f.remote_type : null,
             f.b2b_only ? 'B2B' : null,
             f.geo_eligible_only ? 'GE-Eligible' : null,
           ].filter(Boolean);
-          const name = parts.length > 0 ? parts.join(' • ') : 'All High-Match Roles';
           try {
-            const created = await createSavedSearch(name, {
-              portal: f.portal || 'ALL',
-              status: f.status || 'ALL',
-              tier: f.tier || 'ALL',
-              search: f.search?.trim() || '',
-              country: f.country?.trim() || '',
-              city: f.city?.trim() || '',
-              technology: f.technology?.trim() || '',
-              language: f.language || 'ALL',
-              experience_level: f.experience_level || 'ALL',
-              employment_type: f.employment_type || 'ALL',
-              salary_min: f.salary_min || undefined,
-              sort_by: f.sort_by || 'relevance',
-              remote_type: f.remote_type || 'ALL',
-              only_new: Boolean(f.only_new),
-              only_saved: Boolean(f.only_saved),
-              b2b_only: Boolean(f.b2b_only),
-              geo_eligible_only: Boolean(f.geo_eligible_only),
-            });
+            const created = await createSavedSearch(parts.join(' • ') || 'All High-Match Roles', { ...DEFAULT_JOB_FILTERS, ...f });
             setSavedSearches((prev) => [created, ...prev]);
           } catch (err: any) {
             setError(err?.message || 'Could not save search alert');
           }
         }}
         onApplySavedSearch={(ss) => {
-          const f = ss.filters || {};
-          applyFilters({
-            ...DEFAULT_JOB_FILTERS,
-            portal: f.portal || 'ALL',
-            status: f.status || 'ALL',
-            tier: f.tier || 'ALL',
-            search: f.search || '',
-            country: f.country || '',
-            city: f.city || '',
-            technology: f.technology || '',
-            language: f.language || 'ALL',
-            experience_level: f.experience_level || 'ALL',
-            employment_type: f.employment_type || 'ALL',
-            salary_min: f.salary_min ? Number(f.salary_min) : undefined,
-            sort_by: f.sort_by || 'relevance',
-            remote_type: f.remote_type || 'ALL',
-            only_new: Boolean(f.only_new),
-            only_saved: Boolean(f.only_saved),
-            b2b_only: Boolean(f.b2b_only),
-            geo_eligible_only: Boolean(f.geo_eligible_only),
-            page: 1,
-          });
+          const f = (ss.filters || {}) as Partial<JobSearchParams>;
+          applyFilters({ ...DEFAULT_JOB_FILTERS, ...f, salary_min: f.salary_min ? Number(f.salary_min) : undefined, page: 1 });
         }}
         onDeleteSavedSearch={async (searchId) => {
           await deleteSavedSearch(searchId).catch(() => {});
@@ -911,41 +835,20 @@ export const AuditPanel: React.FC = () => {
 
             {/* Dual Action Buttons for English or Georgian CV Generation */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
-              <button
-                onClick={() => handleRunAudit('en')}
-                disabled={isAuditing}
-                className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-bold text-xs text-white bg-gradient-to-r from-emerald-700 to-teal-700 hover:from-emerald-400 hover:to-teal-500 shadow-lg shadow-emerald-600/20 transition-all disabled:opacity-50"
-              >
-                {isAuditing && cvLanguage === 'en' ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                    <span>Generating English CV...</span>
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="w-4 h-4" />
-                    <span>🇬🇧 Audit & Generate English CV</span>
-                  </>
-                )}
-              </button>
-
-              <button
-                onClick={() => handleRunAudit('ka')}
-                disabled={isAuditing}
-                className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-bold text-xs text-white bg-gradient-to-r from-emerald-700 to-teal-700 hover:from-emerald-700 hover:to-teal-500 shadow-lg shadow-emerald-600/20 transition-all disabled:opacity-50"
-              >
-                {isAuditing && cvLanguage === 'ka' ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                    <span>მიმდინარეობს ქართული CV-ის შექმნა...</span>
-                  </>
-                ) : (
-                  <>
-                    <Languages className="w-4 h-4" />
-                    <span>🇬🇪 Audit & Generate ქართული CV</span>
-                  </>
-                )}
-              </button>
+              {([
+                { lang: 'en' as const, busy: 'Generating English CV...', idle: '🇬🇧 Audit & Generate English CV', Icon: Sparkles },
+                { lang: 'ka' as const, busy: 'მიმდინარეობს ქართული CV-ის შექმნა...', idle: '🇬🇪 Audit & Generate ქართული CV', Icon: Languages },
+              ]).map(({ lang, busy, idle, Icon }) => (
+                <button
+                  key={lang}
+                  onClick={() => handleRunAudit(lang)}
+                  disabled={isAuditing}
+                  className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-bold text-xs text-white bg-gradient-to-r from-emerald-700 to-teal-700 hover:from-emerald-400 hover:to-teal-500 shadow-lg shadow-emerald-600/20 transition-all disabled:opacity-50"
+                >
+                  {isAuditing && cvLanguage === lang ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Icon className="w-4 h-4" />}
+                  <span>{isAuditing && cvLanguage === lang ? busy : idle}</span>
+                </button>
+              ))}
             </div>
 
             <button
@@ -998,18 +901,16 @@ export const AuditPanel: React.FC = () => {
 
               {/* 3 Core Metrics: Skills Match, ATS Match, Recruiter Match */}
               <div className="grid grid-cols-3 gap-3">
-                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 text-center">
-                  <span className="text-[10px] uppercase text-slate-400 font-semibold block">Skills Match</span>
-                  <span className="text-lg font-bold text-emerald-400">{auditResult.score_breakdown.skills_match}%</span>
-                </div>
-                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 text-center">
-                  <span className="text-[10px] uppercase text-slate-400 font-semibold block">ATS Match</span>
-                  <span className="text-lg font-bold text-emerald-400">{auditResult.score_breakdown.ats_match}%</span>
-                </div>
-                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 text-center">
-                  <span className="text-[10px] uppercase text-slate-400 font-semibold block">Recruiter Match</span>
-                  <span className="text-lg font-bold text-indigo-400">{auditResult.score_breakdown.recruiter_match}%</span>
-                </div>
+                {[
+                  ['Skills Match', auditResult.score_breakdown.skills_match, 'text-emerald-400'],
+                  ['ATS Match', auditResult.score_breakdown.ats_match, 'text-emerald-400'],
+                  ['Recruiter Match', auditResult.score_breakdown.recruiter_match, 'text-indigo-400'],
+                ].map(([label, val, color]) => (
+                  <div key={String(label)} className="bg-slate-950 p-3 rounded-xl border border-slate-800 text-center">
+                    <span className="text-[10px] uppercase text-slate-400 font-semibold block">{label}</span>
+                    <span className={`text-lg font-bold ${color}`}>{val}%</span>
+                  </div>
+                ))}
               </div>
 
               {/* Company 3+ Reviews Validation Gate */}

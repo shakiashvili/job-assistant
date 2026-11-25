@@ -24,7 +24,6 @@ from .cv_formatting_utils import (
     clean_foreign_script_text as _clean_foreign_script_text,
     format_pdf_mixed_script as _format_pdf_mixed_script,
     normalize_contact_href,
-    register_unicode_font as _register_unicode_font,
 )
 
 logger = logging.getLogger(__name__)
@@ -618,21 +617,15 @@ class CVGeneratorService:
         else:
             base_name = f"{cand_slug}_{job_role_slug or role_tag}_CV{lang_suffix}"
 
-        out_dir = user_generated_resumes_dir(user_id=user_id, owner_email=owner_email)
-        pdf_filename = f"{base_name}.pdf"
-        docx_filename = f"{base_name}.docx"
-        html_filename = f"{base_name}.html"
-        pdf_path = out_dir / pdf_filename
-        docx_path = out_dir / docx_filename
-        html_path = out_dir / html_filename
+        tailored_highlights = [
+            f"{job.get('role')} @ {job.get('company')}: {h}"
+            for job in work_history
+            for h in clean_bullets(job.get("highlights"))[:2]
+        ]
 
-        tailored_highlights = []
-        for job in work_history:
-            for h in clean_bullets(job.get("highlights"))[:2]:
-                tailored_highlights.append(f"{job.get('role')} @ {job.get('company')}: {h}")
-
-        # 1. Build Single-Column ATS HTML Preview
-        html_content = self._build_cv_html(
+        rendered = self._render_all_formats(
+            out_dir=user_generated_resumes_dir(user_id=user_id, owner_email=owner_email),
+            base_name=base_name,
             candidate=candidate,
             candidate_headline=candidate_headline,
             target_role=job_title,
@@ -646,43 +639,7 @@ class CVGeneratorService:
             cv_language=cv_language,
             cv_style=cv_style,
             languages_line=languages_line,
-        )
-        html_path.write_text(html_content, encoding="utf-8")
-
-        # 2. Build Clean Single-Column PDF via ReportLab
-        self._build_reportlab_single_column_pdf(
-            filepath=pdf_path,
-            candidate=candidate,
-            candidate_headline=candidate_headline,
-            target_role=job_title,
-            target_company=safe_company or company,
-            human_summary=human_summary,
-            display_skills=display_skills,
-            work_history=work_history,
-            education=education,
-            projects=projects,
-            certifications=certifications,
-            cv_language=cv_language,
-            cv_style=cv_style,
-            languages_line=languages_line,
-        )
-
-        # 3. Build Ready Microsoft Word (.docx) CV via python-docx
-        self._build_docx_cv(
-            filepath=docx_path,
-            candidate=candidate,
-            candidate_headline=candidate_headline,
-            target_role=job_title,
-            target_company=safe_company or company,
-            human_summary=human_summary,
-            display_skills=display_skills,
-            work_history=work_history,
-            education=education,
-            projects=projects,
-            certifications=certifications,
-            cv_language=cv_language,
-            cv_style=cv_style,
-            languages_line=languages_line,
+            expected_keywords=matched_skills or display_skills[:8],
         )
 
         comp_cfg = candidate.get("compensation") if isinstance(candidate.get("compensation"), dict) else {}
@@ -691,14 +648,6 @@ class CVGeneratorService:
         exp_usd = comp_cfg.get("expected_salary_usd") or 0
         expected_salary_str = (
             f"€{int(exp_eur):,}/yr" if exp_eur else (f"${int(exp_usd):,}/yr" if exp_usd else "")
-        )
-
-        ats_parse_report = check_pdf_ats_parseability(
-            pdf_path,
-            candidate_name=str(candidate.get("full_name") or ""),
-            expected_email=str(candidate.get("email") or ""),
-            expected_phone=str(candidate.get("phone") or ""),
-            expected_keywords=matched_skills or display_skills[:8],
         )
 
         cv_sections = {
@@ -723,19 +672,11 @@ class CVGeneratorService:
             "cv_language": cv_language,
             "cv_style": cv_style,
             "bullet_diffs": bullet_diffs,
-            "ats_parse_report": ats_parse_report,
+            "ats_parse_report": rendered["ats_parse_report"],
         }
 
         return {
-            "pdf_filename": pdf_filename,
-            "pdf_url": f"/api/resumes/generated/{pdf_filename}",
-            "docx_filename": docx_filename,
-            "docx_url": f"/api/resumes/generated/{docx_filename}",
-            "html_filename": html_filename,
-            "html_preview_url": f"/api/resumes/generated/{html_filename}",
-            "rendered_html": html_content,
-            "pdf_path": str(pdf_path),
-            "docx_path": str(docx_path),
+            **rendered,
             "cv_language": cv_language,
             "candidate_name": candidate.get("full_name", "Candidate"),
             "target_role": candidate_headline,
@@ -748,9 +689,72 @@ class CVGeneratorService:
             "tailored_highlights": tailored_highlights,
             "ats_keywords_covered": matched_skills or display_skills[:8],
             "bullet_diffs": bullet_diffs,
-            "ats_parse_report": ats_parse_report,
             "start_date_default": start_date_str,
             "expected_salary": expected_salary_str,
+        }
+
+    def _render_all_formats(
+        self,
+        *,
+        out_dir: Path,
+        base_name: str,
+        candidate: Dict[str, Any],
+        candidate_headline: str,
+        target_role: str,
+        target_company: str,
+        human_summary: str,
+        display_skills: List[str],
+        work_history: List[Dict[str, Any]],
+        education: List[Dict[str, Any]],
+        projects: List[Dict[str, Any]],
+        certifications: List[str],
+        cv_language: str,
+        cv_style: str,
+        languages_line: str,
+        expected_keywords: List[str],
+    ) -> Dict[str, Any]:
+        """Renders HTML, single-column PDF, and DOCX files and runs deterministic ATS verification."""
+        pdf_filename, docx_filename, html_filename = f"{base_name}.pdf", f"{base_name}.docx", f"{base_name}.html"
+        pdf_path, docx_path, html_path = out_dir / pdf_filename, out_dir / docx_filename, out_dir / html_filename
+        common_kwargs = dict(
+            candidate=candidate,
+            candidate_headline=candidate_headline,
+            target_role=target_role,
+            target_company=target_company,
+            human_summary=human_summary,
+            display_skills=display_skills,
+            work_history=work_history,
+            education=education,
+            projects=projects,
+            certifications=certifications,
+            cv_language=cv_language,
+            cv_style=cv_style,
+            languages_line=languages_line,
+        )
+        html_content = self._build_cv_html(**common_kwargs)
+        html_path.write_text(html_content, encoding="utf-8")
+        self._build_reportlab_single_column_pdf(filepath=pdf_path, **common_kwargs)
+        self._build_docx_cv(filepath=docx_path, **common_kwargs)
+
+        ats_parse_report = check_pdf_ats_parseability(
+            pdf_path,
+            candidate_name=str(candidate.get("full_name") or ""),
+            expected_email=str(candidate.get("email") or ""),
+            expected_phone=str(candidate.get("phone") or ""),
+            expected_keywords=expected_keywords,
+        )
+        return {
+            "pdf_filename": pdf_filename,
+            "docx_filename": docx_filename,
+            "html_filename": html_filename,
+            "pdf_path": str(pdf_path),
+            "docx_path": str(docx_path),
+            "html_path": str(html_path),
+            "pdf_url": f"/api/resumes/generated/{pdf_filename}",
+            "docx_url": f"/api/resumes/generated/{docx_filename}",
+            "html_preview_url": f"/api/resumes/generated/{html_filename}",
+            "rendered_html": html_content,
+            "ats_parse_report": ats_parse_report,
         }
 
     def render_cv_from_sections(
@@ -770,16 +774,12 @@ class CVGeneratorService:
         display_skills = [str(s).strip() for s in (sections.get("skills") or []) if str(s).strip()]
         work_history = []
         for raw_w in (sections.get("work_history") or []):
-            if not isinstance(raw_w, dict):
-                continue
-            w_copy = dict(raw_w)
-            w_bullets = w_copy.get("highlights") or w_copy.get("bullets") or []
-            w_copy["highlights"] = list(w_bullets)
-            w_copy["bullets"] = list(w_bullets)
-            work_history.append(w_copy)
-        education = list(sections.get("education") or [])
-        projects = list(sections.get("projects") or [])
-        certifications = list(sections.get("certifications") or [])
+            if isinstance(raw_w, dict):
+                w_copy = dict(raw_w)
+                w_bullets = list(w_copy.get("highlights") or w_copy.get("bullets") or [])
+                w_copy["highlights"] = w_bullets
+                w_copy["bullets"] = w_bullets
+                work_history.append(w_copy)
         languages_line = str(sections.get("languages_line") or _format_candidate_languages(cand, "", cv_language == "ka"))
 
         if base_name_override:
@@ -787,18 +787,11 @@ class CVGeneratorService:
         else:
             cand_slug = ascii_filename_slug(str(cand.get("full_name") or "Candidate"), default="Candidate", max_len=24)
             role_slug = ascii_filename_slug(target_role, default="CV", max_len=20)
-            short_id = uuid.uuid4().hex[:6]
-            base_name = f"{cand_slug}_{role_slug}_{short_id}_Edited"
+            base_name = f"{cand_slug}_{role_slug}_{uuid.uuid4().hex[:6]}_Edited"
 
-        out_dir = user_generated_resumes_dir(user_id=user_id)
-        pdf_filename = f"{base_name}.pdf"
-        docx_filename = f"{base_name}.docx"
-        html_filename = f"{base_name}.html"
-        pdf_path = out_dir / pdf_filename
-        docx_path = out_dir / docx_filename
-        html_path = out_dir / html_filename
-
-        html_content = self._build_cv_html(
+        return self._render_all_formats(
+            out_dir=user_generated_resumes_dir(user_id=user_id),
+            base_name=base_name,
             candidate=cand,
             candidate_headline=headline,
             target_role=target_role,
@@ -806,70 +799,14 @@ class CVGeneratorService:
             human_summary=human_summary,
             display_skills=display_skills,
             work_history=work_history,
-            education=education,
-            projects=projects,
-            certifications=certifications,
+            education=list(sections.get("education") or []),
+            projects=list(sections.get("projects") or []),
+            certifications=list(sections.get("certifications") or []),
             cv_language=cv_language,
             cv_style=cv_style,
             languages_line=languages_line,
-        )
-        html_path.write_text(html_content, encoding="utf-8")
-
-        self._build_reportlab_single_column_pdf(
-            filepath=pdf_path,
-            candidate=cand,
-            candidate_headline=headline,
-            target_role=target_role,
-            target_company=target_company,
-            human_summary=human_summary,
-            display_skills=display_skills,
-            work_history=work_history,
-            education=education,
-            projects=projects,
-            certifications=certifications,
-            cv_language=cv_language,
-            cv_style=cv_style,
-            languages_line=languages_line,
-        )
-
-        self._build_docx_cv(
-            filepath=docx_path,
-            candidate=cand,
-            candidate_headline=headline,
-            target_role=target_role,
-            target_company=target_company,
-            human_summary=human_summary,
-            display_skills=display_skills,
-            work_history=work_history,
-            education=education,
-            projects=projects,
-            certifications=certifications,
-            cv_language=cv_language,
-            cv_style=cv_style,
-            languages_line=languages_line,
-        )
-
-        ats_parse_report = check_pdf_ats_parseability(
-            pdf_path,
-            candidate_name=str(cand.get("full_name") or ""),
-            expected_email=str(cand.get("email") or ""),
-            expected_phone=str(cand.get("phone") or ""),
             expected_keywords=display_skills[:8],
         )
-
-        return {
-            "pdf_filename": pdf_filename,
-            "docx_filename": docx_filename,
-            "html_filename": html_filename,
-            "pdf_path": str(pdf_path),
-            "docx_path": str(docx_path),
-            "html_path": str(html_path),
-            "pdf_url": f"/api/resumes/generated/{pdf_filename}",
-            "docx_url": f"/api/resumes/generated/{docx_filename}",
-            "html_preview_url": f"/api/resumes/generated/{html_filename}",
-            "rendered_html": html_content,
-            "ats_parse_report": ats_parse_report,
-        }
 
     def sync_user_cv_versions(
         self,
@@ -1008,72 +945,58 @@ class CVGeneratorService:
         linkedin, github, portfolio = ctx["linkedin"], ctx["github"], ctx["portfolio"]
         lbl = ctx["labels"]
 
-        p_name = doc.add_paragraph()
-        p_name.paragraph_format.space_after = Pt(2)
-        r_name = p_name.add_run(full_name)
-        r_name.bold = True
-        r_name.font.size = Pt(18)
-        r_name.font.color.rgb = RGBColor(0x0F, 0x17, 0x2A)
-        _apply_docx_run_font(r_name, font_family)
-
-        p_role = doc.add_paragraph()
-        p_role.paragraph_format.space_after = Pt(3)
-        r_role = p_role.add_run(role_heading)
-        r_role.bold = True
-        r_role.font.size = Pt(11.5)
-        r_role.font.color.rgb = accent
-        _apply_docx_run_font(r_role, font_family)
-
-        p_contact = doc.add_paragraph()
-        p_contact.paragraph_format.space_after = Pt(8)
-        contact_items: List[tuple[str, str]] = []
-        if loc:
-            contact_items.append((loc, ""))
-        if phone:
-            contact_items.append((phone, ""))
-        if email:
-            contact_items.append((email, normalize_contact_href(email, is_email=True)))
-        if linkedin:
-            contact_items.append((linkedin, normalize_contact_href(linkedin)))
-        if github:
-            contact_items.append((github, normalize_contact_href(github)))
-        if portfolio:
-            contact_items.append((portfolio, normalize_contact_href(portfolio)))
-
-        for idx, (label, href) in enumerate(contact_items):
-            if idx > 0:
-                sep = p_contact.add_run("  |  ")
-                sep.font.size = Pt(9.5)
-                sep.font.color.rgb = subtle
-                _apply_docx_run_font(sep, font_family)
-            if href:
-                _add_docx_hyperlink(p_contact, label, href, font_name=font_family)
-            else:
-                rt = p_contact.add_run(label)
-                rt.font.size = Pt(9.5)
-                rt.font.color.rgb = subtle
-                _apply_docx_run_font(rt, font_family)
+        def add_styled_run(p, text: str, *, size: float = 9.5, bold: bool = False, color=None) -> None:
+            r = p.add_run(text)
+            r.bold = bold
+            r.font.size = Pt(size)
+            if color is not None:
+                r.font.color.rgb = color
+            _apply_docx_run_font(r, font_family)
 
         def add_section_heading(title_text: str) -> None:
             p_h = doc.add_paragraph()
             p_h.paragraph_format.space_before = Pt(8)
             p_h.paragraph_format.space_after = Pt(3)
-            run = p_h.add_run(title_text)
-            run.bold = True
-            run.font.size = Pt(10.5)
-            run.font.color.rgb = accent
-            _apply_docx_run_font(run, font_family)
+            add_styled_run(p_h, title_text, size=10.5, bold=True, color=accent)
+
+        p_name = doc.add_paragraph()
+        p_name.paragraph_format.space_after = Pt(2)
+        add_styled_run(p_name, full_name, size=18, bold=True, color=RGBColor(0x0F, 0x17, 0x2A))
+
+        p_role = doc.add_paragraph()
+        p_role.paragraph_format.space_after = Pt(3)
+        add_styled_run(p_role, role_heading, size=11.5, bold=True, color=accent)
+
+        p_contact = doc.add_paragraph()
+        p_contact.paragraph_format.space_after = Pt(8)
+        contact_items = [
+            (val, href)
+            for val, href in (
+                (loc, ""),
+                (phone, ""),
+                (email, normalize_contact_href(email, is_email=True) if email else ""),
+                (linkedin, normalize_contact_href(linkedin) if linkedin else ""),
+                (github, normalize_contact_href(github) if github else ""),
+                (portfolio, normalize_contact_href(portfolio) if portfolio else ""),
+            )
+            if val
+        ]
+        for idx, (label, href) in enumerate(contact_items):
+            if idx > 0:
+                add_styled_run(p_contact, "  |  ", color=subtle)
+            if href:
+                _add_docx_hyperlink(p_contact, label, href, font_name=font_family)
+            else:
+                add_styled_run(p_contact, label, color=subtle)
 
         lbl_summary, lbl_skills, lbl_exp, lbl_proj, lbl_edu, lbl_lang = (
             lbl["summary"], lbl["skills"], lbl["exp"], lbl["proj"], lbl["edu"], lbl["lang"]
         )
 
         add_section_heading(lbl_summary)
-        p_sum = doc.add_paragraph(_clean_foreign_script_text(human_summary, cv_language))
+        p_sum = doc.add_paragraph()
         p_sum.paragraph_format.space_after = Pt(4)
-        for r in p_sum.runs:
-            r.font.size = Pt(10)
-            _apply_docx_run_font(r, font_family)
+        add_styled_run(p_sum, _clean_foreign_script_text(human_summary, cv_language), size=10)
 
         if display_skills:
             add_section_heading(lbl_skills)
@@ -1082,46 +1005,29 @@ class CVGeneratorService:
                 for bucket_title, bucket_items in grouped:
                     p_sk = doc.add_paragraph(style="List Bullet")
                     p_sk.paragraph_format.space_after = Pt(2)
-                    rk = p_sk.add_run(f"{bucket_title}: ")
-                    rk.bold = True
-                    rk.font.size = Pt(9.5)
-                    _apply_docx_run_font(rk, font_family)
-                    rv = p_sk.add_run(", ".join(bucket_items))
-                    rv.font.size = Pt(9.5)
-                    _apply_docx_run_font(rv, font_family)
+                    add_styled_run(p_sk, f"{bucket_title}: ", bold=True)
+                    add_styled_run(p_sk, ", ".join(bucket_items))
             else:
-                p_sk = doc.add_paragraph(", ".join(display_skills[:24]))
+                p_sk = doc.add_paragraph()
                 p_sk.paragraph_format.space_after = Pt(4)
-                for r in p_sk.runs:
-                    r.font.size = Pt(10)
-                    _apply_docx_run_font(r, font_family)
+                add_styled_run(p_sk, ", ".join(display_skills[:24]), size=10)
 
         if work_history:
             add_section_heading(lbl_exp)
             for job in work_history[:5]:
                 dates = f"{job.get('start_date', '')} – {job.get('end_date', '')}".strip(" –")
                 loc_j = _clean_foreign_script_text(job.get("location") or "", cv_language)
-                meta_tail = f"  •  {dates}" if dates else ""
-                if loc_j:
-                    meta_tail += f" ({loc_j})"
+                meta_tail = (f"  •  {dates}" if dates else "") + (f" ({loc_j})" if loc_j else "")
                 p_j = doc.add_paragraph()
                 p_j.paragraph_format.space_before = Pt(4)
                 p_j.paragraph_format.space_after = Pt(2)
-                rj = p_j.add_run(f"{job.get('role', '')} | {job.get('company', '')}")
-                rj.bold = True
-                rj.font.size = Pt(10.5)
-                _apply_docx_run_font(rj, font_family)
+                add_styled_run(p_j, f"{job.get('role', '')} | {job.get('company', '')}", size=10.5, bold=True)
                 if meta_tail:
-                    rd = p_j.add_run(meta_tail)
-                    rd.font.size = Pt(9.5)
-                    rd.font.color.rgb = subtle
-                    _apply_docx_run_font(rd, font_family)
+                    add_styled_run(p_j, meta_tail, color=subtle)
                 for b in clean_bullets(job.get("highlights"))[:5]:
                     p_b = doc.add_paragraph(style="List Bullet")
                     p_b.paragraph_format.space_after = Pt(2)
-                    rb = p_b.add_run(str(b))
-                    rb.font.size = Pt(9.5)
-                    _apply_docx_run_font(rb, font_family)
+                    add_styled_run(p_b, str(b))
 
         if projects:
             add_section_heading(lbl_proj)
@@ -1134,22 +1040,13 @@ class CVGeneratorService:
                 p_hdr = doc.add_paragraph()
                 p_hdr.paragraph_format.space_before = Pt(3)
                 p_hdr.paragraph_format.space_after = Pt(1.5)
-                hdr_txt = f"{p_t} | {p_org}" if p_org else p_t
-                rp = p_hdr.add_run(hdr_txt)
-                rp.bold = True
-                rp.font.size = Pt(10)
-                _apply_docx_run_font(rp, font_family)
+                add_styled_run(p_hdr, f"{p_t} | {p_org}" if p_org else p_t, size=10, bold=True)
                 if p_dt:
-                    rp_dt = p_hdr.add_run(f"  •  {p_dt}")
-                    rp_dt.font.size = Pt(9)
-                    rp_dt.font.color.rgb = subtle
-                    _apply_docx_run_font(rp_dt, font_family)
+                    add_styled_run(p_hdr, f"  •  {p_dt}", size=9, color=subtle)
                 for b in clean_bullets(proj.get("highlights"))[:3]:
                     p_pb = doc.add_paragraph(style="List Bullet")
                     p_pb.paragraph_format.space_after = Pt(1.5)
-                    rpb = p_pb.add_run(_clean_foreign_script_text(b, cv_language))
-                    rpb.font.size = Pt(9.5)
-                    _apply_docx_run_font(rpb, font_family)
+                    add_styled_run(p_pb, _clean_foreign_script_text(b, cv_language))
 
         if education or certifications:
             add_section_heading(lbl_edu)
@@ -1158,31 +1055,20 @@ class CVGeneratorService:
                 if row["title"]:
                     p_e = doc.add_paragraph(style="List Bullet")
                     p_e.paragraph_format.space_after = Pt(2)
-                    re_t = p_e.add_run(row["title"])
-                    re_t.bold = True
-                    re_t.font.size = Pt(9.5)
-                    _apply_docx_run_font(re_t, font_family)
+                    add_styled_run(p_e, row["title"], bold=True)
                     if row["detail"]:
-                        re_d = p_e.add_run(f" — {row['detail']}")
-                        re_d.font.size = Pt(9.5)
-                        _apply_docx_run_font(re_d, font_family)
+                        add_styled_run(p_e, f" — {row['detail']}")
             for cert in (certifications or [])[:4]:
-                cert_c = _clean_foreign_script_text(cert, cv_language)
-                if cert_c:
+                if (cert_c := _clean_foreign_script_text(cert, cv_language)):
                     p_c = doc.add_paragraph(style="List Bullet")
                     p_c.paragraph_format.space_after = Pt(2)
-                    rc = p_c.add_run(cert_c)
-                    rc.font.size = Pt(9.5)
-                    _apply_docx_run_font(rc, font_family)
+                    add_styled_run(p_c, cert_c)
 
-        langs_line = languages_line or _format_candidate_languages(candidate, "", is_ka)
-        if langs_line:
+        if (langs_line := languages_line or _format_candidate_languages(candidate, "", is_ka)):
             add_section_heading(lbl_lang)
-            p_lang = doc.add_paragraph(langs_line)
+            p_lang = doc.add_paragraph()
             p_lang.paragraph_format.space_after = Pt(2)
-            for r in p_lang.runs:
-                r.font.size = Pt(9.5)
-                _apply_docx_run_font(r, font_family)
+            add_styled_run(p_lang, langs_line)
 
         doc.save(str(filepath))
 
@@ -1672,158 +1558,83 @@ class CVGeneratorService:
             cover_lang,
         )
 
-        # Dynamic target domain identification: never leak QA terms into Support/Receptionist/Healthcare/Finance
+        # Dynamic target domain identification: never leak QA terms into non-tech roles
         target_role_lower = f"{job_title} {description[:500]}".lower()
-        if any(w in target_role_lower for w in ["მხარდაჭერ", "მონიტორინგ", "support", "monitoring", "helpdesk", "service desk", "it support"]):
-            effective_domain = "technical_support"
-        elif any(w in target_role_lower for w in ["რეცეფციონ", "რეგისტრატორ", "მიმღებ", "reception", "front desk", "hospitality", "hotel", "სასტუმრო"]):
-            effective_domain = "receptionist_hospitality"
-        elif any(w in target_role_lower for w in ["პაციენტ", "კლინიკ", "საავადმყოფ", "სამედიცინო", "patient", "clinic", "hospital", "medical"]):
-            effective_domain = "healthcare_hospital"
-        elif any(w in target_role_lower for w in ["მომხმარებელ", "ქოლ-ცენტრ", "operator", "customer", "call center", "client service"]):
-            effective_domain = "customer_service"
-        elif any(w in target_role_lower for w in ["ლოჯისტიკ", "საწყობ", "მარაგ", "ტვირთ", "logistics", "supply chain", "procurement", "warehouse"]):
-            effective_domain = "logistics_supply_chain"
-        elif any(w in target_role_lower for w in ["ბუღალტერ", "ფინანს", "აუდიტ", "accountant", "finance", "accounting", "auditor"]):
-            effective_domain = "finance_accounting"
-        elif any(w in target_role_lower for w in ["მარკეტინგ", "marketing", "smm", "content"]):
-            effective_domain = "marketing_growth"
-        elif any(w in target_role_lower for w in ["გაყიდვ", "sales", "account executive", "business development"]):
-            effective_domain = "sales_bd"
-        elif any(w in target_role_lower for w in ["ადამიანური რესურს", "რეკრუტ", "human resources", "recruiter", "talent acquisition", "hr generalist", "hrbp", "people operations"]):
-            effective_domain = "hr_recruiting"
-        elif any(w in target_role_lower for w in ["იურისტ", "საჯარო", "lawyer", "legal counsel", "compliance", "public administration"]):
-            effective_domain = "public_admin_legal"
-        elif any(w in target_role_lower for w in ["qa", "quality assurance", "tester", "ტესტ", "ავტომატიზ", "test engineer"]):
-            effective_domain = "qa_tech"
-        else:
-            effective_domain = target_industry if target_industry != "hospitality_reception" else "receptionist_hospitality"
+        domain_rules = (
+            ("technical_support", ("მხარდაჭერ", "მონიტორინგ", "support", "monitoring", "helpdesk", "service desk", "it support")),
+            ("receptionist_hospitality", ("რეცეფციონ", "რეგისტრატორ", "მიმღებ", "reception", "front desk", "hospitality", "hotel", "სასტუმრო")),
+            ("healthcare_hospital", ("პაციენტ", "კლინიკ", "საავადმყოფ", "სამედიცინო", "patient", "clinic", "hospital", "medical")),
+            ("customer_service", ("მომხმარებელ", "ქოლ-ცენტრ", "operator", "customer", "call center", "client service")),
+            ("logistics_supply_chain", ("ლოჯისტიკ", "საწყობ", "მარაგ", "ტვირთ", "logistics", "supply chain", "procurement", "warehouse")),
+            ("finance_accounting", ("ბუღალტერ", "ფინანს", "აუდიტ", "accountant", "finance", "accounting", "auditor")),
+            ("marketing_growth", ("მარკეტინგ", "marketing", "smm", "content")),
+            ("sales_bd", ("გაყიდვ", "sales", "account executive", "business development")),
+            ("hr_recruiting", ("ადამიანური რესურს", "რეკრუტ", "human resources", "recruiter", "talent acquisition", "hr generalist", "hrbp", "people operations")),
+            ("public_admin_legal", ("იურისტ", "საჯარო", "lawyer", "legal counsel", "compliance", "public administration")),
+            ("qa_tech", ("qa", "quality assurance", "tester", "ტესტ", "ავტომატიზ", "test engineer")),
+        )
+        effective_domain = next(
+            (dom for dom, kws in domain_rules if any(w in target_role_lower for w in kws)),
+            "receptionist_hospitality" if target_industry == "hospitality_reception" else target_industry,
+        )
 
         clean_subject = ""
         if email_subject_template:
             clean_subject = re.sub(r"\[(?:your\s+)?(?:name|სახელი(?:\s*გვარი)?|full\s*name)\]", cand_name, email_subject_template, flags=re.I).strip()
             clean_subject = clean_subject.replace("[Name]", cand_name).replace("[name]", cand_name)
-            if effective_domain != "qa_tech" and "qa" in clean_subject.lower() and "qa" not in job_title.lower():
-                clean_subject = f"{job_title} — {cand_name}"
-            if "qa automation engineer" in clean_subject.lower() and "automation" not in job_title.lower():
+            if (effective_domain != "qa_tech" and "qa" in clean_subject.lower() and "qa" not in job_title.lower()) or (
+                "qa automation engineer" in clean_subject.lower() and "automation" not in job_title.lower()
+            ):
                 clean_subject = f"{job_title} — {cand_name}"
         if not clean_subject:
             clean_subject = f"{job_title} — {cand_name}" if cover_lang == "ka" else f"Application for {job_title} — {cand_name}"
 
-        # Clean sign-off: excludes email & excludes placeholder phones/dashes
         contact_footer = "\n".join(x for x in [cand_name, cand_phone, cand_linkedin] if x and x != "-")
-
-        # Domain-aware skills highlight: never inject QA/test runners into non-tech cover letters
-        is_non_tech_domain = effective_domain in (
-            "receptionist_hospitality",
-            "healthcare_hospital",
-            "customer_service",
-            "logistics_supply_chain",
-            "finance_accounting",
-            "marketing_growth",
-            "sales_bd",
-            "hr_recruiting",
-            "public_admin_legal",
-            "general_professional",
-        )
+        is_non_tech_domain = effective_domain not in ("qa_tech", "technical_support", "software_engineering", "data_analytics")
         if is_non_tech_domain:
             tech_noise = {"playwright", "selenium", "cypress", "appium", "pytest", "junit", "postman", "jmeter", "webdriver", "qa", "automation", "regression", "api testing", "test cases"}
-            clean_cand_skills = [s for s in cand_skills if not any(t in s.lower() for t in tech_noise)]
             clean_matched = [r for r in matched if not any(t in r.lower() for t in tech_noise)]
-            if clean_matched:
-                skills_highlight = ", ".join(clean_matched[:5])
-            elif clean_cand_skills:
-                skills_highlight = ", ".join(clean_cand_skills[:5])
-            else:
-                skills_highlight = (
-                    "ანალიტიკური აზროვნება, ორგანიზებულობა, პროფესიული კომუნიკაცია"
-                    if cover_lang == "ka"
-                    else "cross-functional coordination, analytical execution, stakeholder communication"
-                )
+            clean_cand_skills = [s for s in cand_skills if not any(t in s.lower() for t in tech_noise)]
+            skills_highlight = ", ".join((clean_matched or clean_cand_skills)[:5]) or (
+                "ანალიტიკური აზროვნება, ორგანიზებულობა, პროფესიული კომუნიკაცია"
+                if cover_lang == "ka"
+                else "cross-functional coordination, analytical execution, stakeholder communication"
+            )
         else:
-            skills_highlight = ", ".join(matched[:6]) if matched else ", ".join(cand_skills[:6])
+            skills_highlight = ", ".join((matched or cand_skills)[:6])
 
-        # Extract authentic prior companies & experience years from ground truth (never invent employers)
-        work_companies = []
-        for w in (gt.get("work_history") or []):
-            comp_raw = sanitize_company_name(w.get("company"), fallback="")
-            if comp_raw and comp_raw not in work_companies:
-                work_companies.append(comp_raw)
+        work_companies = list(dict.fromkeys(c for w in (gt.get("work_history") or []) if (c := sanitize_company_name(w.get("company"), fallback=""))))
         companies_phrase = ", ".join(work_companies[:3])
-        raw_exp_years = ps.get("years_of_experience")
-        if raw_exp_years is None:
-            raw_exp_years = candidate.get("experience_years")
+        raw_exp_years = ps.get("years_of_experience") if ps.get("years_of_experience") is not None else candidate.get("experience_years")
         exp_years: Optional[float] = float(raw_exp_years) if raw_exp_years is not None else None
 
-        # Domain-specific focus descriptions (NEVER leak QA terms into Hospitality/Logistics/Finance/Healthcare emails!)
-        domain_focus_ka = {
-            "technical_support": (
-                "ტექნიკური მხარდაჭერის, მონიტორინგისა და სისტემური ინციდენტების მართვის მიმართულებით",
-                "ინციდენტების ოპერატიულ დიაგნოსტიკას (SQL, Jira, API), სისტემური ლოგების მონიტორინგსა და მომხმარებელთა მოთხოვნების სწრაფ მოგვარებას",
-                "სისტემების სტაბილურ მუშაობასა და მაღალი ხარისხის ტექნიკური მხარდაჭერის უზრუნველყოფაში",
-            ),
-            "receptionist_hospitality": ("სტუმარმასპინძლობის, Front Desk ოპერაციებისა და სტუმრების მომსახურების სფეროში", "სტუმრების მაღალი სტანდარტით მიღებას, ჯავშნების გამართულ კოორდინაციას და მშვიდ, პროფესიონალურ კომუნიკაციას", "სერვისის ხარისხისა და სტუმრების კმაყოფილების ზრდაში"),
-            "healthcare_hospital": ("პაციენტთა კოორდინაციის, სამედიცინო რეგისტრაციისა და კლინიკის ადმინისტრირების მიმართულებით", "პაციენტების სწრაფ და ყურადღებიან მიღებას, სადაზღვევო პროცესებისა და ექიმების განრიგის ზუსტ მართვას", "კლინიკის ადმინისტრაციული პროცესების გამართულობაში"),
-            "customer_service": ("მომხმარებელთა მომსახურების, მხარდაჭერისა და კლიენტებთან კომუნიკაციის მიმართულებით", "მომხმარებელთა მომართვების სწრაფ გადაჭრას, CRM სისტემების ეფექტურ მართვასა და მაღალი CSAT სტანდარტის შენარჩუნებას", "მომხმარებელთა გამოცდილების გაუმჯობესებაში"),
-            "logistics_supply_chain": ("ლოჯისტიკის, მიწოდების ჯაჭვისა და შესყიდვების კოორდინაციის მიმართულებით", "ტვირთების გადაზიდვის კოორდინაციას, მარაგებისა და დოკუმენტაციის კონტროლს და მომწოდებლებთან ოპერატიულ მუშაობას", "ლოჯისტიკური ოპერაციების სისწრაფესა და სიზუსტეში"),
-            "finance_accounting": ("ფინანსების, ბუღალტრული აღრიცხვისა და ანალიტიკის მიმართულებით", "ფინანსური ოპერაციების აღრიცხვას, რეპორტინგის მომზადებასა და მონაცემების ზუსტ კონტროლს", "ფინანსური პროცესების სიზუსტესა და გამართულობაში"),
-            "marketing_growth": ("მარკეტინგის, ციფრული კამპანიებისა და ბრენდის კომუნიკაციის მიმართულებით", "ციფრული კამპანიების დაგეგმვას, კონტენტის მართვასა და შედეგების ანალიტიკას", "მარკეტინგული მიზნებისა და ზრდის მიღწევაში"),
-            "sales_bd": ("გაყიდვების, კლიენტების მოზიდვისა და ბიზნესის განვითარების მიმართულებით", "პარტნიორებთან ურთიერთობების მართვას, მოლაპარაკებების წარმოებასა და გაყიდვების გეგმების შესრულებას", "გაყიდვებისა და კლიენტთა ბაზის გაფართოებაში"),
-            "hr_recruiting": ("ადამიანური რესურსების მართვის, რეკრუტინგისა და თანამშრომელთა განვითარების მიმართულებით", "შერჩევის პროცესების გამართულ წარმართვას, ონბორდინგის კოორდინაციასა და HR პროცესების მართვას", "ძლიერი გუნდის ჩამოყალიბებასა და თანამშრომელთა გამოცდილების გაუმჯობესებაში"),
-            "public_admin_legal": ("სამართლებრივი მხარდაჭერის, შესაბამისობისა და საჯარო ადმინისტრირების მიმართულებით", "ხელშეკრულებების ანალიზს, რეგულაციებთან შესაბამისობის კონტროლსა და დოკუმენტაციის ზუსტ წარმოებას", "სამართლებრივ სიზუსტესა და ორგანიზაციულ სტაბილურობაში"),
-            "qa_tech": ("QA ავტომატიზაციასა და API/Manual ტესტირებაში", "ავტომატიზებული რეგრესიული ტესტების შექმნას, REST API კონტრაქტების შემოწმებასა და ხარვეზების ადრეულ აღმოჩენას", "ტესტირებისა და პროდუქტის ხარისხის სტაბილურობაში"),
+        domain_focus = {
+            "technical_support": (("ტექნიკური მხარდაჭერისა და მონიტორინგის მიმართულებით", "ინციდენტების დიაგნოსტიკას (SQL, Jira, API) და მოთხოვნების სწრაფ მოგვარებას", "სისტემების სტაბილურ მუშაობასა და ტექნიკურ მხარდაჭერაში"), ("technical support, systems monitoring, and incident triage", "diagnosing system logs, validating API/SQL flows, and resolving escalations within SLA", "support responsiveness and system reliability")),
+            "receptionist_hospitality": (("სტუმარმასპინძლობის და Front Desk ოპერაციების სფეროში", "სტუმრების მიღებას, ჯავშნების კოორდინაციას და პროფესიონალურ კომუნიკაციას", "სერვისის ხარისხისა და სტუმრების კმაყოფილების ზრდაში"), ("front office operations and guest relations", "delivering seamless check-ins, reservation coordination, and multilingual hospitality", "guest satisfaction and smooth front-desk operations")),
+            "healthcare_hospital": (("პაციენტთა კოორდინაციისა და სამედიცინო ადმინისტრირების მიმართულებით", "პაციენტების მიღებას, სადაზღვევო პროცესებისა და განრიგის ზუსტ მართვას", "კლინიკის ადმინისტრაციული პროცესების გამართულობაში"), ("patient coordination and clinical administration", "managing patient intake, scheduling, and insurance authorizations accurately", "patient service quality and smooth clinic workflows")),
+            "customer_service": (("მომხმარებელთა მომსახურებისა და კომუნიკაციის მიმართულებით", "მომართვების სწრაფ გადაჭრას და CRM სისტემების ეფექტურ მართვას", "მომხმარებელთა გამოცდილების გაუმჯობესებაში"), ("customer support and client operations", "resolving escalations cleanly across chat, phone, and CRM channels", "support responsiveness and client retention")),
+            "logistics_supply_chain": (("ლოჯისტიკისა და მიწოდების ჯაჭვის კოორდინაციის მიმართულებით", "ტვირთების კოორდინაციას, მარაგებისა და დოკუმენტაციის კონტროლს", "ლოჯისტიკური ოპერაციების სისწრაფესა და სიზუსტეში"), ("logistics, procurement, and supply chain operations", "coordinating shipments, supplier schedules, inventory tracking, and customs docs", "supply chain efficiency and on-time delivery")),
+            "finance_accounting": (("ფინანსების, ბუღალტერიისა და ანალიტიკის მიმართულებით", "ფინანსურ აღრიცხვას, რეპორტინგის მომზადებასა და მონაცემების კონტროლს", "ფინანსური პროცესების სიზუსტეში"), ("finance, accounting, and analytical reporting", "maintaining accurate financial reconciliations, reporting, and compliance controls", "financial accuracy and operational clarity")),
+            "marketing_growth": (("მარკეტინგისა და ციფრული კამპანიების მიმართულებით", "კამპანიების დაგეგმვას, კონტენტის მართვასა და შედეგების ანალიტიკას", "მარკეტინგული მიზნების მიღწევაში"), ("digital marketing and campaign growth", "planning acquisition campaigns, content workflows, and conversion analytics", "brand reach and measurable growth")),
+            "sales_bd": (("გაყიდვებისა და ბიზნესის განვითარების მიმართულებით", "პარტნიორებთან ურთიერთობების მართვასა და მოლაპარაკებების წარმოებას", "გაყიდვებისა და კლიენტთა ბაზის ზრდაში"), ("B2B sales and account management", "building client pipelines, managing onboarding, and hitting revenue targets", "client acquisition and revenue execution")),
+            "hr_recruiting": (("ადამიანური რესურსებისა და რეკრუტინგის მიმართულებით", "შერჩევის პროცესების წარმართვასა და ონბორდინგის კოორდინაციას", "ძლიერი გუნდის ჩამოყალიბებაში"), ("human resources, talent acquisition, and people operations", "managing hiring pipelines, onboarding, and structured HR policies", "hiring quality and team retention")),
+            "public_admin_legal": (("სამართლებრივი მხარდაჭერისა და საჯარო ადმინისტრირების მიმართულებით", "ხელშეკრულებების ანალიზს, შესაბამისობის კონტროლსა და დოკუმენტაციის წარმოებას", "სამართლებრივ სიზუსტეში"), ("legal analysis, compliance, and public administration", "reviewing contracts, ensuring regulatory alignment, and maintaining legal documentation", "compliance accuracy and institutional governance")),
+            "qa_tech": (("QA ავტომატიზაციასა და API/Manual ტესტირებაში", "რეგრესიული ტესტების შექმნას, REST API შემოწმებასა და ხარვეზების ადრეულ აღმოჩენას", "პროდუქტის ხარისხის სტაბილურობაში"), ("QA automation and manual/API test engineering", "automating regression coverage, validating REST APIs, and catching defects before release", "release confidence and test stability")),
         }
-        domain_focus_en = {
-            "technical_support": (
-                "technical support, systems monitoring, and incident triage",
-                "diagnosing system logs, validating API/SQL data flows, and resolving client escalations within SLA",
-                "support responsiveness, system reliability, and customer satisfaction",
-            ),
-            "receptionist_hospitality": ("front office operations and guest relations", "delivering seamless check-ins, accurate reservation coordination, and warm multilingual hospitality", "guest satisfaction and smooth front-desk operations"),
-            "healthcare_hospital": ("patient coordination and clinical administration", "managing patient intake, appointment scheduling, and insurance authorizations with accuracy and care", "patient service quality and smooth clinic workflows"),
-            "customer_service": ("customer support and client operations", "resolving escalations cleanly across chat, phone, and CRM channels while sustaining high CSAT", "support responsiveness and client retention"),
-            "logistics_supply_chain": ("logistics, procurement, and supply chain operations", "coordinating shipments, supplier schedules, inventory tracking, and customs documentation cleanly", "supply chain efficiency and on-time delivery"),
-            "finance_accounting": ("finance, accounting, and analytical reporting", "maintaining accurate financial reconciliations, reporting workflows, and compliance controls", "financial accuracy and operational clarity"),
-            "marketing_growth": ("digital marketing and campaign growth", "planning acquisition campaigns, managing content workflows, and tracking conversion analytics", "brand reach and measurable growth"),
-            "sales_bd": ("B2B sales and account management", "building client pipelines, managing onboarding, and hitting revenue targets through consultative outreach", "client acquisition and revenue execution"),
-            "hr_recruiting": ("human resources, talent acquisition, and people operations", "managing end-to-end hiring pipelines, employee onboarding, and structured HR policies", "hiring quality and team retention"),
-            "public_admin_legal": ("legal analysis, compliance, and public administration", "reviewing contracts, ensuring regulatory alignment, and maintaining structured legal documentation", "compliance accuracy and institutional governance"),
-            "qa_tech": ("QA automation and manual/API test engineering", "automating regression coverage, validating REST API contracts, and catching critical defects before release", "release confidence and test stability"),
-        }
-
-        # Map domain focus safely (fallback for any custom domain without mentioning QA!)
-        ind_key = effective_domain
-
-        ka_tuple = domain_focus_ka.get(
-            ind_key,
+        ka_tuple, en_tuple = domain_focus.get(
+            effective_domain,
             (
-                f"{detected_industry}-ის მიმართულებით",
-                f"ყოველდღიური სამუშაო პროცესების გამართულ შესრულებასა და მაღალი ხარისხის შედეგების მიღწევას ({skills_highlight})",
-                "თქვენი გუნდის ოპერაციულ ეფექტიანობასა და წარმატებაში",
-            ),
-        )
-        en_tuple = domain_focus_en.get(
-            ind_key,
-            (
-                f"{detected_industry}",
-                f"executing day-to-day workflows reliably and delivering measurable outcomes using {skills_highlight}",
-                "your team's operational quality and goals",
+                (f"{detected_industry}-ის მიმართულებით", f"სამუშაო პროცესების გამართულ შესრულებას ({skills_highlight})", "გუნდის ოპერაციულ ეფექტიანობაში"),
+                (detected_industry, f"executing day-to-day workflows reliably using {skills_highlight}", "your team's operational quality and goals"),
             ),
         )
 
         def _finalize_ai_letter(raw_text: str) -> str:
-            """Preserves AI-crafted narrative while enforcing clean sign-off without email leakage."""
             cleaned = (raw_text or "").strip()
             cand_email = str(candidate.get("email") or "").strip()
             if cand_email:
                 cleaned = cleaned.replace(cand_email, "").strip()
-            # Strip generic signature block if Gemini already added one, then attach clean footer
-            cleaned = re.sub(
-                r"\n+(?:Best regards|Sincerely|Kind regards|Warm regards|პატივისცემით),?\s*\n+[\s\S]*$",
-                "",
-                cleaned,
-                flags=re.I,
-            ).strip()
+            cleaned = re.sub(r"\n+(?:Best regards|Sincerely|Kind regards|Warm regards|პატივისცემით),?\s*\n+[\s\S]*$", "", cleaned, flags=re.I).strip()
             if cover_lang == "ka" and real_company and f"მოგესალმებით, {real_company}-ის გუნდს" not in cleaned:
                 cleaned = f"მოგესალმებით, {real_company}-ის გუნდს,\n\n{cleaned}"
             closing = f"პატივისცემით,\n{contact_footer}" if cover_lang == "ka" else f"Best regards,\n{contact_footer}"
@@ -1831,7 +1642,6 @@ class CVGeneratorService:
 
         ai_cover = (narratives.get("cover_letter") or "").strip()
         ai_motiv = (narratives.get("dou_motivational_letter") or "").strip()
-
         if gemini_service.is_available and (ai_cover or ai_motiv):
             cover_letter = _finalize_ai_letter(ai_cover or ai_motiv)
             motivational_letter = _finalize_ai_letter(ai_motiv or ai_cover)
@@ -1840,77 +1650,31 @@ class CVGeneratorService:
             salutation = f"მოგესალმებით, {real_company}-ის გუნდს," if real_company else "მოგესალმებით, გუნდს,"
             hook_company = f"{real_company}-ში" if real_company else "თქვენს კომპანიაში"
             req_snippet = ", ".join(req_skills[:4]) if req_skills else skills_highlight
-            exp_phrase_ka = (
-                f"ჩემი {exp_years:g} წლიანი გამოცდილება"
-                if exp_years is not None
-                else "ჩემი პრაქტიკული გამოცდილება"
-            )
+            exp_phrase = f"ჩემი {exp_years:g} წლიანი გამოცდილება" if exp_years is not None else "ჩემი პრაქტიკული გამოცდილება"
             proof_para = (
-                f"{companies_phrase}-ში მუშაობისას პრაქტიკულად გამოვიყენე {skills_highlight} — ვუზრუნველყოფდი {ka_action}, რაც პირდაპირ პასუხობს ვაკანსიის მოთხოვნებს ({req_snippet})."
+                f"{companies_phrase}-ში მუშაობისას პრაქტიკულად გამოვიყენე {skills_highlight} — ვუზრუნველყოფდი {ka_action}, რაც პასუხობს ვაკანსიის მოთხოვნებს ({req_snippet})."
                 if companies_phrase
-                else f"ჩემს ყოველდღიურ პრაქტიკაში ({skills_highlight}) ფოკუსირებული ვარ {ka_action}-ზე, რაც შეესაბამება პოზიციის მოთხოვნებს ({req_snippet})."
+                else f"ჩემს პრაქტიკაში ({skills_highlight}) ფოკუსირებული ვარ {ka_action}-ზე, რაც შეესაბამება პოზიციის მოთხოვნებს ({req_snippet})."
             )
+            gap_ka = f" დამატებითი მიმართულებების ({', '.join(missing[:2])}) სწრაფ ათვისებას ჩემი პრაქტიკული საფუძველი უზრუნველყოფს." if missing and not is_non_tech_domain else ""
             cta_company = f"{real_company}-ის" if real_company else "თქვენი გუნდის"
-            cover_letter = (
-                f"{salutation}\n\n"
-                f"გიგზავნით განაცხადს „{job_title}“ პოზიციაზე {hook_company}. "
-                f"{exp_phrase_ka} ({skills_highlight}) პირდაპირ შეესაბამება პოზიციის ძირითად მოთხოვნებს ({req_snippet}).\n\n"
-                f"თანდართულია განახლებული რეზიუმე (CV) და მოხარული ვიქნები გასაუბრებაზე შეხვედრით.\n\n"
-                f"პატივისცემით,\n{contact_footer}"
-            )
-            gap_ka = (
-                f" იმ მიმართულებებში, სადაც დამატებითი ადაპტაციაა საჭირო ({', '.join(missing[:2])}), ჩემი პრაქტიკული საფუძველი სწრაფი ათვისების შესაძლებლობას მაძლევს."
-                if missing and not is_non_tech_domain
-                else ""
-            )
-            motivational_letter = (
-                f"{salutation}\n\n"
-                f"დიდი ინტერესით გიგზავნით სამოტივაციო წერილს „{job_title}“ პოზიციაზე {hook_company}. "
-                f"თქვენი გუნდის პრიორიტეტები ({req_snippet}) სრულ თანხვედრაშია ჩემს პროფესიულ გამოცდილებასთან {ka_area} ({skills_highlight}).\n\n"
-                f"{proof_para}{gap_ka}\n\n"
-                f"მოხარული ვიქნები შევუერთდე {cta_company} გუნდს და წვლილი შევიტანო {ka_goal}. თანდართულია ამ პოზიციისთვის მორგებული ჩემი რეზიუმე (CV).\n\n"
-                f"პატივისცემით,\n{contact_footer}"
-            )
+            cover_letter = f"{salutation}\n\nგიგზავნით განაცხადს „{job_title}“ პოზიციაზე {hook_company}. {exp_phrase} ({skills_highlight}) პირდაპირ შეესაბამება მოთხოვნებს ({req_snippet}).\n\nთანდართულია განახლებული რეზიუმე (CV) და მოხარული ვიქნები გასაუბრებაზე შეხვედრით.\n\nპატივისცემით,\n{contact_footer}"
+            motivational_letter = f"{salutation}\n\nდიდი ინტერესით გიგზავნით სამოტივაციო წერილს „{job_title}“ პოზიციაზე {hook_company}. თქვენი პრიორიტეტები ({req_snippet}) თანხვედრაშია ჩემს გამოცდილებასთან {ka_area} ({skills_highlight}).\n\n{proof_para}{gap_ka}\n\nმოხარული ვიქნები შევუერთდე {cta_company} გუნდს და წვლილი შევიტანო {ka_goal}. თანდართულია პოზიციისთვის მორგებული ჩემი CV.\n\nპატივისცემით,\n{contact_footer}"
         else:
             en_area, en_action, en_goal = en_tuple
             salutation = f"Dear {real_company} Hiring Team," if real_company else "Dear Hiring Team,"
             target_phrase = f"at {real_company}" if real_company else "with your team"
             req_snippet = ", ".join(req_skills[:5]) if req_skills else skills_highlight
-            exp_phrase_en = (
-                f"With {exp_years:g} years of verified experience in {skills_highlight}"
-                if exp_years is not None
-                else f"With verified hands-on experience in {skills_highlight}"
-            )
-            exp_mot_en = (
-                f"With {exp_years:g} years of hands-on experience in {en_area} ({skills_highlight}), I want to bring measurable impact directly to your stated goals around {req_snippet}."
-                if exp_years is not None
-                else f"With hands-on experience in {en_area} ({skills_highlight}), I want to contribute dependable execution toward your goals around {req_snippet}."
-            )
-            gap_bridge = (
-                f" Where additional ramp-up is helpful ({', '.join(missing[:2])}), my core engineering foundation supports fast onboarding."
-                if missing and not is_non_tech_domain
-                else ""
-            )
+            exp_txt = f"{exp_years:g} years of verified experience" if exp_years is not None else "verified hands-on experience"
+            gap_bridge = f" Where ramp-up is helpful ({', '.join(missing[:2])}), my core foundation supports fast onboarding." if missing and not is_non_tech_domain else ""
             cta_team = f"{real_company}'s" if real_company else "your team's"
-            cover_letter = (
-                f"{salutation}\n\n"
-                f"Please find attached my tailored CV for the {job_title} position {target_phrase}. "
-                f"{exp_phrase_en}, my background aligns directly with {req_snippet}.\n\n"
-                f"I look forward to discussing how I can contribute to {cta_team} {en_goal}.\n\n"
-                f"Best regards,\n{contact_footer}"
-            )
             proof_para = (
                 f"Across my roles at {companies_phrase}, I applied {skills_highlight}—focusing on {en_action} to meet core requirements ({req_snippet}).{gap_bridge}"
                 if companies_phrase
                 else f"In my hands-on work spanning {skills_highlight}, I focus on {en_action} aligned with your priorities ({req_snippet}).{gap_bridge}"
             )
-            motivational_letter = (
-                f"{salutation}\n\n"
-                f"I am excited to apply for the {job_title} role {target_phrase}. {exp_mot_en}\n\n"
-                f"{proof_para}\n\n"
-                f"I would welcome the chance to connect with {cta_team} team and share how my tailored experience supports {en_goal}.\n\n"
-                f"Best regards,\n{contact_footer}"
-            )
+            cover_letter = f"{salutation}\n\nPlease find attached my tailored CV for the {job_title} position {target_phrase}. With {exp_txt} in {skills_highlight}, my background aligns directly with {req_snippet}.\n\nI look forward to discussing how I can contribute to {cta_team} {en_goal}.\n\nBest regards,\n{contact_footer}"
+            motivational_letter = f"{salutation}\n\nI am excited to apply for the {job_title} role {target_phrase}. With {exp_txt} in {en_area} ({skills_highlight}), I want to contribute dependable execution toward {req_snippet}.\n\n{proof_para}\n\nI would welcome the chance to connect with {cta_team} team and share how my experience supports {en_goal}.\n\nBest regards,\n{contact_footer}"
 
         # Deterministic ground-truth safety sanitization across outputs
         def _sanitize_letter_output(txt: str) -> str:

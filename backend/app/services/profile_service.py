@@ -4,7 +4,7 @@ import re
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
-from ..config import SKILLS_MD_FILE, GROUND_TRUTH_FILE
+from ..config import GROUND_TRUTH_FILE
 from ..db.database import engine, init_db
 from ..db.models import CandidateProfile, utc_now
 from .gemini_service import gemini_service, sanitize_untrusted_input
@@ -314,8 +314,8 @@ class ProfileService:
             or ("confirmed" if exp_years is not None else "unknown")
         )
         eff_years = exp_years if exp_years is not None else 0.0
-        if exp_years is None or exp_years == 0.0:
-            max_allowed_years = 2.0
+        if exp_years is None or exp_years < 1.0:
+            max_allowed_years = 1.0
         elif exp_years <= 2.0:
             max_allowed_years = min(exp_years + 0.5, 2.0)
         elif exp_years <= 5.0:

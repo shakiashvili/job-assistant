@@ -508,5 +508,52 @@ describe('Core Frontend Component Workflows', () => {
 
     await user.click(screen.getByRole('button', { name: /filters/i }));
     expect(screen.getByLabelText(/filter by experience level/i)).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText(/filter by posted date/i), '3');
+    expect(onFilters).toHaveBeenCalledWith(expect.objectContaining({ posted_within_days: 3 }));
+  });
+
+  it('DiscoveryFeed renders Posted date badge on vacancy cards and Navbar mobile More drawer closes cleanly', async () => {
+    const user = userEvent.setup();
+    render(
+      <>
+        <Navbar
+          activeTab="audit"
+          setActiveTab={vi.fn()}
+          backendHealth={{ connected: true, model: 'gemini-2.5-flash', mode: 'live', provider: 'Gemini' }}
+          currentUser={{ id: 1, email: 'nino@example.ge', full_name: 'Nino Beridze', is_admin: false, is_active: true, has_gmail_oauth: false }}
+          onOpenAuth={vi.fn()}
+          onLogout={vi.fn()}
+        />
+        <DiscoveryFeed
+          candidateProfile={{ full_name: 'Nino Beridze', headline: 'QA Engineer' }}
+          visibleJobs={[{ ...mockJobs[0], published_at: new Date().toISOString() }]}
+          profileUploaded={true}
+          isScraping={false}
+          selectedPortalFilter="ALL"
+          onSelectPortalFilter={vi.fn()}
+          dbStatusFilter="ALL"
+          onSelectStatusFilter={vi.fn()}
+          tierTab="ALL"
+          onSelectTierTab={vi.fn()}
+          scrapeStats={null}
+          preparedEmailPkg={null}
+          onDismissEmailPkg={vi.fn()}
+          draftingJobId={null}
+          onRunScrapers={vi.fn()}
+          onUploadClick={vi.fn()}
+          onSelectJob={vi.fn()}
+          onDraftInGmail={vi.fn()}
+        />
+      </>
+    );
+
+    expect(screen.getByText(/Posted:\s*Today/i)).toBeInTheDocument();
+
+    const mobileMore = screen.getByRole('button', { name: /more sections/i });
+    await user.click(mobileMore);
+    expect(screen.getByRole('menu', { name: /all navigation sections/i })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /close navigation menu/i }));
+    expect(screen.queryByRole('menu', { name: /all navigation sections/i })).not.toBeInTheDocument();
   });
 });

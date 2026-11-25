@@ -141,6 +141,22 @@ function formatSalaryDisplay(job: DbJobPosting): string | null {
   return `Up to ${job.salary_max!.toLocaleString()} ${sym} (${labelCur})`;
 }
 
+function formatPostedBadge(job: DbJobPosting): { label: string; isFresh: boolean } | null {
+  const rawDate = job.published_at || job.posting_date || job.scraped_at;
+  if (!rawDate) return null;
+  const parsed = new Date(rawDate);
+  const valid = !Number.isNaN(parsed.getTime());
+  const ageDays = valid ? Math.floor((Date.now() - parsed.getTime()) / 86400000) : 99;
+  const label = valid
+    ? ageDays <= 0
+      ? 'Today'
+      : ageDays === 1
+      ? 'Yesterday'
+      : parsed.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+    : String(rawDate);
+  return { label, isFresh: ageDays <= 2 };
+}
+
 export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
   candidateProfile,
   visibleJobs,
@@ -363,49 +379,23 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
 
       {/* Multi-Tier Tabs (Direct Matches / Adjacent Roles / Public Sector & Internships) */}
       <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-800/60">
-        <button
-          onClick={() => handleTierClick('ALL')}
-          className={`text-xs px-3 py-1.5 rounded-xl font-bold transition-all ${
-            tierTab === 'ALL'
-              ? 'bg-slate-800 text-white border border-slate-600'
-              : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
-          }`}
-        >
-          All Tiers ({tierCounts?.ALL ?? totalJobs ?? visibleJobs.length})
-        </button>
-        <button
-          onClick={() => handleTierClick('DIRECT')}
-          className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl font-bold transition-all ${
-            tierTab === 'DIRECT'
-              ? 'bg-emerald-700 text-white shadow-sm shadow-emerald-600/20'
-              : 'bg-slate-950 text-slate-300 hover:text-white border border-slate-800'
-          }`}
-        >
-          <Target className="w-3.5 h-3.5" />
-          <span>🎯 Direct Matches ({tierCounts?.DIRECT ?? directJobs.length})</span>
-        </button>
-        <button
-          onClick={() => handleTierClick('ADJACENT')}
-          className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl font-bold transition-all ${
-            tierTab === 'ADJACENT'
-              ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/20'
-              : 'bg-slate-950 text-slate-300 hover:text-white border border-slate-800'
-          }`}
-        >
-          <Sparkles className="w-3.5 h-3.5" />
-          <span>🚀 Optimal Adjacent Roles ({tierCounts?.ADJACENT ?? adjacentJobs.length})</span>
-        </button>
-        <button
-          onClick={() => handleTierClick('PUBLIC_INTERNSHIP')}
-          className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl font-bold transition-all ${
-            tierTab === 'PUBLIC_INTERNSHIP'
-              ? 'bg-cyan-700 text-white shadow-sm shadow-cyan-600/20'
-              : 'bg-slate-950 text-slate-300 hover:text-white border border-slate-800'
-          }`}
-        >
-          <Landmark className="w-3.5 h-3.5" />
-          <span>🏛️ Public Sector &amp; Internships ({tierCounts?.PUBLIC_INTERNSHIP ?? publicJobs.length})</span>
-        </button>
+        {([
+          { id: 'ALL' as const, label: `All Tiers (${tierCounts?.ALL ?? totalJobs ?? visibleJobs.length})`, active: 'bg-slate-800 text-white border border-slate-600' },
+          { id: 'DIRECT' as const, label: `🎯 Direct Matches (${tierCounts?.DIRECT ?? directJobs.length})`, active: 'bg-emerald-700 text-white shadow-sm shadow-emerald-600/20', Icon: Target },
+          { id: 'ADJACENT' as const, label: `🚀 Optimal Adjacent Roles (${tierCounts?.ADJACENT ?? adjacentJobs.length})`, active: 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/20', Icon: Sparkles },
+          { id: 'PUBLIC_INTERNSHIP' as const, label: `🏛️ Public Sector & Internships (${tierCounts?.PUBLIC_INTERNSHIP ?? publicJobs.length})`, active: 'bg-cyan-700 text-white shadow-sm shadow-cyan-600/20', Icon: Landmark },
+        ]).map(({ id, label, active, Icon }) => (
+          <button
+            key={id}
+            onClick={() => handleTierClick(id)}
+            className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl font-bold transition-all ${
+              tierTab === id ? active : 'bg-slate-950 text-slate-300 hover:text-white border border-slate-800'
+            }`}
+          >
+            {Icon && <Icon className="w-3.5 h-3.5" />}
+            <span>{label}</span>
+          </button>
+        ))}
       </div>
 
       {/* Portal Filter Chips + Search & Work Mode Bar */}
@@ -528,13 +518,29 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
             {onAdvancedFiltersChange && (
               <>
                 <select
+                  aria-label="Filter by posted date"
+                  value={advancedFilters?.posted_within_days ? String(advancedFilters.posted_within_days) : ''}
+                  onChange={(e) =>
+                    onAdvancedFiltersChange({
+                      posted_within_days: e.target.value ? Number(e.target.value) : undefined,
+                    })
+                  }
+                  className="text-[11px] px-2.5 py-1 rounded-lg bg-slate-950 text-slate-200 border border-slate-700 focus:border-emerald-400 focus:outline-none"
+                >
+                  <option value="">Date: Any</option>
+                  <option value="1">Last 24h</option>
+                  <option value="3">Last 3 Days</option>
+                  <option value="7">Last 7 Days</option>
+                  <option value="30">Last 30 Days</option>
+                </select>
+                <select
                   aria-label="Sort vacancies"
-                  value={advancedFilters?.sort_by || 'relevance'}
+                  value={advancedFilters?.sort_by || 'newest'}
                   onChange={(e) => onAdvancedFiltersChange({ sort_by: e.target.value })}
                   className="text-[11px] px-2.5 py-1 rounded-lg bg-slate-950 text-slate-200 border border-slate-700 focus:border-emerald-400 focus:outline-none"
                 >
-                  <option value="relevance">Sort: Relevance</option>
-                  <option value="newest">Sort: Newest</option>
+                  <option value="newest">Sort: Newest Posted</option>
+                  <option value="relevance">Sort: Best Match</option>
                   <option value="salary_desc">Sort: Highest Salary</option>
                   <option value="company_asc">Sort: Company A–Z</option>
                 </select>
@@ -558,30 +564,21 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
 
         {onAdvancedFiltersChange && showAdvancedFilters && (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 p-3 rounded-xl bg-slate-950/85 border border-slate-800 text-xs">
-            <input
-              type="text"
-              aria-label="Filter by country"
-              value={advancedFilters?.country || ''}
-              onChange={(e) => onAdvancedFiltersChange({ country: e.target.value })}
-              placeholder="Country (e.g. Georgia, Germany)"
-              className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 placeholder-slate-400 focus:outline-none focus:border-emerald-400"
-            />
-            <input
-              type="text"
-              aria-label="Filter by city"
-              value={advancedFilters?.city || ''}
-              onChange={(e) => onAdvancedFiltersChange({ city: e.target.value })}
-              placeholder="City (e.g. Tbilisi, Berlin)"
-              className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 placeholder-slate-400 focus:outline-none focus:border-emerald-400"
-            />
-            <input
-              type="text"
-              aria-label="Filter by skill or technology"
-              value={advancedFilters?.technology || ''}
-              onChange={(e) => onAdvancedFiltersChange({ technology: e.target.value })}
-              placeholder="Skills / Tools (e.g. SQL, Excel, Python)"
-              className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 placeholder-slate-400 focus:outline-none focus:border-emerald-400"
-            />
+            {([
+              { key: 'country' as const, label: 'Filter by country', placeholder: 'Country (e.g. Georgia, Germany)' },
+              { key: 'city' as const, label: 'Filter by city', placeholder: 'City (e.g. Tbilisi, Berlin)' },
+              { key: 'technology' as const, label: 'Filter by skill or technology', placeholder: 'Skills / Tools (e.g. SQL, Excel, Python)' },
+            ]).map((f) => (
+              <input
+                key={f.key}
+                type="text"
+                aria-label={f.label}
+                value={advancedFilters?.[f.key] || ''}
+                onChange={(e) => onAdvancedFiltersChange({ [f.key]: e.target.value })}
+                placeholder={f.placeholder}
+                className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 placeholder-slate-400 focus:outline-none focus:border-emerald-400"
+              />
+            ))}
             <input
               type="number"
               min={0}
@@ -592,41 +589,21 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
               placeholder="Min Salary (e.g. 2000)"
               className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 placeholder-slate-400 focus:outline-none focus:border-emerald-400"
             />
-            <select
-              aria-label="Filter by language"
-              value={advancedFilters?.language || 'ALL'}
-              onChange={(e) => onAdvancedFiltersChange({ language: e.target.value === 'ALL' ? undefined : e.target.value })}
-              className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 focus:outline-none focus:border-emerald-400"
-            >
-              <option value="ALL">Any Language</option>
-              <option value="English">English</option>
-              <option value="Georgian">Georgian / ქართული</option>
-              <option value="German">German</option>
-            </select>
-            <select
-              aria-label="Filter by experience level"
-              value={advancedFilters?.experience_level || 'ALL'}
-              onChange={(e) => onAdvancedFiltersChange({ experience_level: e.target.value === 'ALL' ? undefined : e.target.value })}
-              className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 focus:outline-none focus:border-emerald-400"
-            >
-              <option value="ALL">Any Experience Level</option>
-              <option value="intern">Intern / Trainee</option>
-              <option value="junior">Junior / Entry</option>
-              <option value="mid">Mid-Level</option>
-              <option value="senior">Senior / Lead</option>
-            </select>
-            <select
-              aria-label="Filter by employment type"
-              value={advancedFilters?.employment_type || 'ALL'}
-              onChange={(e) => onAdvancedFiltersChange({ employment_type: e.target.value === 'ALL' ? undefined : e.target.value })}
-              className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 focus:outline-none focus:border-emerald-400"
-            >
-              <option value="ALL">Any Employment Type</option>
-              <option value="full_time">Full-Time</option>
-              <option value="part_time">Part-Time</option>
-              <option value="contract">Contract / B2B</option>
-              <option value="internship">Internship</option>
-            </select>
+            {([
+              { key: 'language' as const, label: 'Filter by language', options: [['ALL', 'Any Language'], ['English', 'English'], ['Georgian', 'Georgian / ქართული'], ['German', 'German']] },
+              { key: 'experience_level' as const, label: 'Filter by experience level', options: [['ALL', 'Any Experience Level'], ['intern', 'Intern / Trainee'], ['junior', 'Junior / Entry'], ['mid', 'Mid-Level'], ['senior', 'Senior / Lead']] },
+              { key: 'employment_type' as const, label: 'Filter by employment type', options: [['ALL', 'Any Employment Type'], ['full_time', 'Full-Time'], ['part_time', 'Part-Time'], ['contract', 'Contract / B2B'], ['internship', 'Internship']] },
+            ]).map((s) => (
+              <select
+                key={s.key}
+                aria-label={s.label}
+                value={advancedFilters?.[s.key] || 'ALL'}
+                onChange={(e) => onAdvancedFiltersChange({ [s.key]: e.target.value === 'ALL' ? undefined : e.target.value })}
+                className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 focus:outline-none focus:border-emerald-400"
+              >
+                {s.options.map(([v, txt]) => <option key={v} value={v}>{txt}</option>)}
+              </select>
+            ))}
             <div className="flex items-center justify-between gap-2">
               <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-200 cursor-pointer">
                 <input
@@ -638,11 +615,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 <span>Only Unapplied</span>
               </label>
               {onResetFilters && (
-                <button
-                  type="button"
-                  onClick={onResetFilters}
-                  className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-semibold"
-                >
+                <button type="button" onClick={onResetFilters} className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-semibold">
                   Clear All
                 </button>
               )}
@@ -730,20 +703,10 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
 
       {/* Prepared Gmail Package Banner */}
       {preparedEmailPkg && (
-        <div
-          className={`p-4 rounded-xl border text-xs space-y-2.5 ${
-            preparedEmailPkg.gmail_draft_saved
-              ? 'bg-emerald-950/35 border-emerald-700/60'
-              : 'bg-emerald-950/35 border-emerald-700/60'
-          }`}
-        >
+        <div className="p-4 rounded-xl border text-xs space-y-2.5 bg-emerald-950/35 border-emerald-700/60">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div>
-              <span
-                className={`text-[10px] font-bold uppercase block ${
-                  preparedEmailPkg.gmail_draft_saved ? 'text-emerald-400' : 'text-emerald-400'
-                }`}
-              >
+              <span className="text-[10px] font-bold uppercase block text-emerald-400">
                 {preparedEmailPkg.gmail_draft_saved
                   ? `Gmail Draft created with ${preparedEmailPkg.docx_filename} ALREADY attached — open Gmail Drafts and click Send!`
                   : `CV downloaded (${preparedEmailPkg.docx_filename}) — attach it in Gmail Compose (or configure Gmail App Password for auto-attachment)`}
@@ -1018,7 +981,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 {tier === 'PUBLIC_INTERNSHIP' && (
                   <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-cyan-950/90 text-cyan-200 border border-cyan-700/60">
                     <Landmark className="w-2.5 h-2.5" aria-hidden="true" />
-                    <span>Public Sector / Internship</span>
+                    <span>{job.adjacent_role_tag || 'Public Sector / Internship'}</span>
                   </div>
                 )}
 
@@ -1074,11 +1037,21 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 )}
 
                 <div className="flex items-center gap-2 flex-wrap">
-                  {(job.posting_date || job.scraped_at) && (
-                    <span className="text-[10px] text-slate-300">
-                      Posted: {job.posting_date || new Date(job.scraped_at).toLocaleDateString()}
-                    </span>
-                  )}
+                  {(() => {
+                    const posted = formatPostedBadge(job);
+                    if (!posted) return null;
+                    return (
+                      <span
+                        className={`text-[10px] px-2 py-0.5 rounded-md border ${
+                          posted.isFresh
+                            ? 'bg-emerald-950/60 border-emerald-700/60 text-emerald-300 font-semibold'
+                            : 'bg-slate-900 border-slate-800 text-slate-300'
+                        }`}
+                      >
+                        Posted: {posted.label}
+                      </span>
+                    );
+                  })()}
                   {job.deadline_text && (
                     <span className="text-[10px] text-amber-200 bg-amber-950/50 border border-amber-800/60 px-2 py-0.5 rounded-md">
                       Deadline: {job.deadline_text}

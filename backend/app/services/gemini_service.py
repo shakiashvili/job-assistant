@@ -26,6 +26,7 @@ from ..config import (
 )
 from ..db.database import engine
 from ..db.models import AIOperationLog, AICacheEntry, utc_now
+from .cv_formatting_utils import clean_foreign_script_text
 from .gemini_utils import (
     GEORGIAN_SKILL_TRANSLATIONS,
     MULTI_INDUSTRY_SKILLS,
@@ -560,6 +561,66 @@ class GeminiService:
                 continue
         return None, self._resolve_model(model_tier, provider=chain[0] if chain else "gemini")
 
+    def _resolve_cache_and_provider(
+        self,
+        *,
+        task_type: str,
+        model_tier: str,
+        prompt: str,
+        mime: str,
+        user_id: Optional[int],
+        system_instruction: Optional[str],
+        temperature: float,
+        max_output_tokens: Optional[int],
+        response_schema,
+        tools: Optional[List[Dict[str, Any]]],
+        use_cache: bool,
+        ttl_seconds: int,
+        t0: float,
+    ) -> Tuple[bool, str, str]:
+        chain = self._resolve_provider_chain()
+        primary = chain[0] if chain else "gemini"
+        target_model = self._resolve_model(model_tier, provider=primary) if chain else self._resolve_model(model_tier)
+        if not chain:
+            self._log_operation(
+                task_type=task_type,
+                model_name=target_model,
+                status="UNCONFIGURED",
+                latency_ms=int((time.perf_counter() - t0) * 1000),
+                user_id=user_id,
+            )
+            return False, target_model, ""
+        cache_key = (
+            self._build_cache_key(
+                task_type,
+                target_model,
+                prompt,
+                mime,
+                user_id=user_id,
+                system_instruction=system_instruction,
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+                schema_tag=getattr(response_schema, "__name__", None),
+            )
+            if (use_cache and ttl_seconds > 0 and not tools)
+            else ""
+        )
+        return True, target_model, cache_key
+
+    def _log_cache_hit(self, task_type: str, model_name: str, t0: float, user_id: Optional[int]) -> None:
+        self._log_operation(
+            task_type=task_type,
+            model_name=model_name,
+            status="SUCCESS",
+            latency_ms=int((time.perf_counter() - t0) * 1000),
+            cache_hit=True,
+            user_id=user_id,
+            prompt_tokens=0,
+            output_tokens=0,
+            total_tokens=0,
+            estimated_cost_usd=0.0,
+        )
+
     def generate_text(
         self,
         prompt: str,
@@ -577,73 +638,25 @@ class GeminiService:
         user_id: Optional[int] = None,
     ) -> Optional[str]:
         t0 = time.perf_counter()
-        chain = self._resolve_provider_chain()
-        primary_provider = chain[0] if chain else "gemini"
-        target_model = self._resolve_model(model_tier, provider=primary_provider) if chain else self._resolve_model(model_tier)
-        if not chain:
-            self._log_operation(
-                task_type=task_type,
-                model_name=target_model,
-                status="UNCONFIGURED",
-                latency_ms=int((time.perf_counter() - t0) * 1000),
-                user_id=user_id,
-            )
-            return None
-
-        can_cache = use_cache and ttl_seconds > 0 and not tools
-        cache_key = (
-            self._build_cache_key(
-                task_type,
-                target_model,
-                prompt,
-                response_mime_type,
-                user_id=user_id,
-                system_instruction=system_instruction,
-                temperature=temperature,
-                max_output_tokens=max_output_tokens,
-                schema_tag=getattr(response_schema, "__name__", None),
-            )
-            if can_cache
-            else ""
+        ready, target_model, cache_key = self._resolve_cache_and_provider(
+            task_type=task_type, model_tier=model_tier, prompt=prompt, mime=response_mime_type,
+            user_id=user_id, system_instruction=system_instruction, temperature=temperature,
+            max_output_tokens=max_output_tokens, response_schema=response_schema,
+            tools=tools, use_cache=use_cache, ttl_seconds=ttl_seconds, t0=t0,
         )
-        if can_cache:
-            cached = self._read_cache(cache_key)
-            if cached is not None:
-                self._log_operation(
-                    task_type=task_type,
-                    model_name=target_model,
-                    status="SUCCESS",
-                    latency_ms=int((time.perf_counter() - t0) * 1000),
-                    cache_hit=True,
-                    user_id=user_id,
-                    prompt_tokens=0,
-                    output_tokens=0,
-                    total_tokens=0,
-                    estimated_cost_usd=0.0,
-                )
-                return cached
+        if not ready:
+            return None
+        if cache_key and (cached := self._read_cache(cache_key)) is not None:
+            self._log_cache_hit(task_type, target_model, t0, user_id)
+            return cached
 
         text_out, used_model = self._invoke_provider_chain(
-            prompt,
-            task_type=task_type,
-            model_tier=model_tier,
-            temperature=temperature,
-            response_mime_type=response_mime_type,
-            response_schema=response_schema,
-            tools=tools,
-            max_output_tokens=max_output_tokens,
-            system_instruction=system_instruction,
-            user_id=user_id,
+            prompt, task_type=task_type, model_tier=model_tier, temperature=temperature,
+            response_mime_type=response_mime_type, response_schema=response_schema,
+            tools=tools, max_output_tokens=max_output_tokens, system_instruction=system_instruction, user_id=user_id,
         )
-        if text_out and can_cache:
-            self._write_cache(
-                cache_key=cache_key,
-                task_type=task_type,
-                model_name=used_model,
-                response_text=text_out,
-                response_json=None,
-                ttl_seconds=ttl_seconds,
-            )
+        if text_out and cache_key:
+            self._write_cache(cache_key=cache_key, task_type=task_type, model_name=used_model, response_text=text_out, response_json=None, ttl_seconds=ttl_seconds)
         return text_out
 
     def generate_json(
@@ -662,106 +675,48 @@ class GeminiService:
         user_id: Optional[int] = None,
     ) -> Optional[Any]:
         t0 = time.perf_counter()
-        chain = self._resolve_provider_chain()
-        primary_provider = chain[0] if chain else "gemini"
-        target_model = self._resolve_model(model_tier, provider=primary_provider) if chain else self._resolve_model(model_tier)
-        if not chain:
-            self._log_operation(
-                task_type=task_type,
-                model_name=target_model,
-                status="UNCONFIGURED",
-                latency_ms=int((time.perf_counter() - t0) * 1000),
-                user_id=user_id,
-            )
-            return None
-
         mime = "" if tools else "application/json"
-        cache_key = (
-            self._build_cache_key(
-                task_type,
-                target_model,
-                prompt,
-                mime,
-                user_id=user_id,
-                system_instruction=system_instruction,
-                temperature=temperature,
-                max_output_tokens=max_output_tokens,
-                schema_tag=getattr(response_schema, "__name__", None),
-            )
-            if (use_cache and ttl_seconds > 0 and not tools)
-            else ""
+        ready, target_model, cache_key = self._resolve_cache_and_provider(
+            task_type=task_type, model_tier=model_tier, prompt=prompt, mime=mime,
+            user_id=user_id, system_instruction=system_instruction, temperature=temperature,
+            max_output_tokens=max_output_tokens, response_schema=response_schema,
+            tools=tools, use_cache=use_cache, ttl_seconds=ttl_seconds, t0=t0,
         )
-        if cache_key:
-            cached = self._read_cache(cache_key)
-            if cached is not None:
+        if not ready:
+            return None
+        if cache_key and (cached := self._read_cache(cache_key)) is not None:
+            try:
+                parsed_cached = response_schema.model_validate_json(cached) if response_schema is not None else safe_parse_json(cached)
+            except Exception:
                 parsed_cached = None
-                if response_schema is not None:
-                    try:
-                        parsed_cached = response_schema.model_validate_json(cached)
-                    except Exception:
-                        parsed_cached = None
-                else:
-                    parsed_cached = safe_parse_json(cached)
-                if parsed_cached is not None:
-                    self._log_operation(
-                        task_type=task_type,
-                        model_name=target_model,
-                        status="SUCCESS",
-                        latency_ms=int((time.perf_counter() - t0) * 1000),
-                        cache_hit=True,
-                        user_id=user_id,
-                        prompt_tokens=0,
-                        output_tokens=0,
-                        total_tokens=0,
-                        estimated_cost_usd=0.0,
-                    )
-                    return parsed_cached
+            if parsed_cached is not None:
+                self._log_cache_hit(task_type, target_model, t0, user_id)
+                return parsed_cached
 
         raw_text, used_model = self._invoke_provider_chain(
-            prompt,
-            task_type=task_type,
-            model_tier=model_tier,
-            temperature=temperature,
-            response_mime_type=mime,
-            response_schema=response_schema,
-            tools=tools,
-            max_output_tokens=max_output_tokens,
-            system_instruction=system_instruction,
-            user_id=user_id,
+            prompt, task_type=task_type, model_tier=model_tier, temperature=temperature,
+            response_mime_type=mime, response_schema=response_schema,
+            tools=tools, max_output_tokens=max_output_tokens, system_instruction=system_instruction, user_id=user_id,
         )
         if not raw_text:
             return None
 
         try:
-            if response_schema is not None:
-                parsed_val = response_schema.model_validate_json(raw_text)
-            else:
-                parsed_val = safe_parse_json(raw_text)
-                if parsed_val is None:
-                    raise ValueError("Response text was not valid JSON")
+            parsed_val = response_schema.model_validate_json(raw_text) if response_schema is not None else safe_parse_json(raw_text)
+            if parsed_val is None:
+                raise ValueError("Response text was not valid JSON")
         except Exception as exc:
             self._log_operation(
-                task_type=task_type,
-                model_name=used_model,
-                status="VALIDATION_ERROR",
-                latency_ms=int((time.perf_counter() - t0) * 1000),
-                user_id=user_id,
-                error_type=type(exc).__name__,
-                error_message=str(exc)[:250],
+                task_type=task_type, model_name=used_model, status="VALIDATION_ERROR",
+                latency_ms=int((time.perf_counter() - t0) * 1000), user_id=user_id,
+                error_type=type(exc).__name__, error_message=str(exc)[:250],
             )
             logger.warning("AI JSON validation failed for %s: %s", task_type, str(exc)[:180])
             return None
 
         if cache_key:
             store_json = parsed_val.model_dump(mode="json") if response_schema is not None else parsed_val
-            self._write_cache(
-                cache_key=cache_key,
-                task_type=task_type,
-                model_name=used_model,
-                response_text=raw_text,
-                response_json=store_json,
-                ttl_seconds=ttl_seconds,
-            )
+            self._write_cache(cache_key=cache_key, task_type=task_type, model_name=used_model, response_text=raw_text, response_json=store_json, ttl_seconds=ttl_seconds)
         return parsed_val
 
     def detect_industry(self, text: str) -> str:
@@ -909,15 +864,8 @@ class GeminiService:
 
     @staticmethod
     def _clean_foreign_script(text: str, target_lang: str = "en") -> str:
-        """Removes leaked foreign-script noise (e.g. Russian/Cyrillic words like 'Разработка') from EN/KA outputs."""
-        if not text:
-            return ""
-        cleaned = re.sub(r"[\u0400-\u04FF]+", "", str(text))
-        if target_lang == "en":
-            cleaned = re.sub(r"[\u10A0-\u10FF]+", "", cleaned)
-        cleaned = re.sub(r"\s{2,}", " ", cleaned)
-        cleaned = re.sub(r"\s+([,.;:!?])", r"\1", cleaned)
-        return cleaned.strip(" -–—•|")
+        """Removes leaked foreign-script noise from EN/KA outputs via shared formatter."""
+        return clean_foreign_script_text(text, target_lang)
 
     def craft_human_tone_narratives(
         self,
@@ -1011,112 +959,57 @@ STRICT PURITY RULE: Zero Cyrillic/Russian words in English/Georgian outputs. Use
 
         # Zero-fabrication deterministic fallbacks strictly anchored to candidate-verified skills & experience
         t_low = f"{title} {ltr_title}".lower()
-        is_rec = industry in ("hospitality_reception", "receptionist_hospitality") or any(w in t_low for w in ["reception", "front desk", "ადმინისტრატორ", "რეცეფციონ", "მიმღებ", "სასტუმრო"])
-        is_sup = industry in ("technical_support", "it_support") or any(w in t_low for w in ["support", "monitoring", "მხარდაჭერ", "მონიტორინგ", "helpdesk", "service desk"])
-        is_health = industry == "healthcare_hospital" or any(w in t_low for w in ["პაციენტ", "კლინიკ", "საავადმყოფ", "medical", "clinic", "hospital"])
-        is_cust = industry == "customer_service" or any(w in t_low for w in ["ქოლ-ცენტრ", "call center", "მომხმარებელ", "customer"])
-        is_qa = not is_rec and not is_sup and not is_health and not is_cust and (industry == "qa_tech" or any(w in t_low for w in ["qa", "quality assurance", "tester", "ტესტ", "ავტომატიზ"]))
-
+        domain_detectors = (
+            ("rec", industry in ("hospitality_reception", "receptionist_hospitality") or any(w in t_low for w in ("reception", "front desk", "ადმინისტრატორ", "რეცეფციონ", "მიმღებ", "სასტუმრო"))),
+            ("sup", industry in ("technical_support", "it_support") or any(w in t_low for w in ("support", "monitoring", "მხარდაჭერ", "მონიტორინგ", "helpdesk", "service desk"))),
+            ("health", industry == "healthcare_hospital" or any(w in t_low for w in ("პაციენტ", "კლინიკ", "საავადმყოფ", "medical", "clinic", "hospital"))),
+            ("cust", industry == "customer_service" or any(w in t_low for w in ("ქოლ-ცენტრ", "call center", "მომხმარებელ", "customer"))),
+            ("qa", industry == "qa_tech" or any(w in t_low for w in ("qa", "quality assurance", "tester", "ტესტ", "ავტომატიზ"))),
+        )
+        dom_key = next((k for k, hit in domain_detectors if hit), "other")
         work_phrase = ", ".join(ev["work_items"])
         req_focus = ev["req_focus"] or top_skills
         sign_off_name = candidate_name if candidate_name and candidate_name != "Candidate" else ""
 
-        def _build_ka(cur_company: str, cur_title: str) -> Dict[str, str]:
-            ka_skills = [GEORGIAN_SKILL_TRANSLATIONS.get(s, s) for s in matched_skills[:6]]
-            ka_skills_str = ", ".join(ka_skills) if ka_skills else top_skills
-            ka_req_str = ", ".join(GEORGIAN_SKILL_TRANSLATIONS.get(s, s) for s in (job_details.get("required_skills") or [])[:5]) or ka_skills_str
-            exp_ctx_ka = f" ({work_phrase})" if work_phrase else ""
-            edu_ctx_ka = f" ამასთანავე, ჩემი აკადემიური განათლება ({ev['edu_snippet']}) აძლიერებს ანალიტიკურ და ორგანიზაციულ სიზუსტეს." if ev["edu_snippet"] else ""
-            sig_ka = f"\n\nპატივისცემით,\n{sign_off_name}" if sign_off_name else "\n\nპატივისცემით"
-            evidence_ka = f" წინა გამოცდილებისას ვახორციელებდი: {ev['bullets'][0]}." if ev["bullets"] else ""
+        def _build_pack(lang: str, cur_company: str, cur_title: str) -> Dict[str, str]:
+            if lang == "ka":
+                skills_s = ", ".join(GEORGIAN_SKILL_TRANSLATIONS.get(s, s) for s in matched_skills[:6]) or top_skills
+                req_s = ", ".join(GEORGIAN_SKILL_TRANSLATIONS.get(s, s) for s in (job_details.get("required_skills") or [])[:5]) or skills_s
+                exp_ctx = f" ({work_phrase})" if work_phrase else ""
+                edu_ctx = f" ამასთანავე, ჩემი აკადემიური განათლება ({ev['edu_snippet']}) აძლიერებს ანალიტიკურ სიზუსტეს." if ev["edu_snippet"] else ""
+                ev_line = f" წინა გამოცდილებისას ვახორციელებდი: {ev['bullets'][0]}." if ev["bullets"] else ""
+                sig = f"\n\nპატივისცემით,\n{sign_off_name}" if sign_off_name else "\n\nპატივისცემით"
+                ka_copy = {
+                    "rec": (f"სასტუმროს მიმღების (Front Desk) და სტუმართმოყვარეობის სპეციალისტი ({skills_s}){exp_ctx}.", f"{cur_company}-ის გუნდში გამოვიყენებ გამოცდილებას ({skills_s}) სტუმრების სწრაფ მომსახურებაში."),
+                    "sup": (f"ტექნიკური მხარდაჭერისა და მონიტორინგის სპეციალისტი ({skills_s}){exp_ctx}.", f"{cur_company}-ის გუნდში გამოვიყენებ უნარებს ({skills_s}) ინციდენტების ოპერატიულ გადაჭრაში."),
+                    "health": (f"პაციენტთა კოორდინატორი და სამედიცინო ადმინისტრატორი ({skills_s}){exp_ctx}.", f"{cur_company}-ში ჩემი უნარები ({skills_s}) უზრუნველყოფს პაციენტთა გამართულ კოორდინაციას."),
+                    "cust": (f"მომხმარებელთა მხარდაჭერის სპეციალისტი ({skills_s}){exp_ctx}.", f"ჩემი გამოცდილება ({skills_s}) დაეხმარება {cur_company}-ის მომხმარებლებს ოპერატიულად."),
+                    "qa": (f"QA და პროგრამული უზრუნველყოფის ტესტირების სპეციალისტი ({skills_s}){exp_ctx}.", f"{cur_company}-ში ჩემი უნარებით ({skills_s}) გავაძლიერებ პროდუქტის ხარისხს."),
+                }
+                summary, motiv = ka_copy.get(dom_key, (f"{cur_title}-ის სპეციალისტი პრაქტიკული გამოცდილებით ({skills_s}){exp_ctx}.", f"მინდა ჩემი უნარები ({skills_s}) მივმართო {cur_company}-ის მიზნების მისაღწევად."))
+                dou_l = f"მოგესალმებით, {cur_company}-ის გუნდს,\n\nდიდი ინტერესით გიგზავნით განაცხადს „{cur_title}“ პოზიციაზე. ჩემი პრაქტიკული გამოცდილება ({skills_s}) შეესაბამება მოთხოვნებს ({req_s}).\n\nსამუშაო გამოცდილების{exp_ctx} განმავლობაში პრაქტიკულად ვიყენებდი ({skills_s}) სტაბილური შედეგების მისაღწევად.{ev_line}{edu_ctx}\n\nთანდართულია პოზიციაზე მორგებული ჩემი CV და მოხარული ვიქნები გასაუბრებაზე დეტალების განხილვით.{sig}"
+                cov_l = f"მოგესალმებით, {cur_company}-ის გუნდს,\n\nგწერთ „{cur_title}“ პოზიციაზე ჩემი კანდიდატურის განსახილველად. ჩემი პრაქტიკული გამოცდილება ({skills_s}) ფარავს ძირითად მოთხოვნებს ({req_s}){exp_ctx}.\n\nთანდართულია ჩემი რეზიუმე და მოხარული ვიქნები გასაუბრებაზე შეხვედრით.{sig}"
+                return {"human_tone_summary": summary, "motivation_statement": motiv, "cover_letter": cov_l, "dou_motivational_letter": dou_l}
 
-            if is_rec:
-                summary = f"სასტუმროს მიმღების (Front Desk) და სტუმართმოყვარეობის სფეროს სპეციალისტი ({ka_skills_str}){exp_ctx_ka}."
-                motiv = f"{cur_company}-ის გუნდში გამოვიყენებ ჩემს გამოცდილებას ({ka_skills_str}) სტუმრების სწრაფ და კეთილგანწყობილ მომსახურებაში."
-            elif is_sup:
-                summary = f"ტექნიკური მხარდაჭერისა და სისტემური მონიტორინგის სპეციალისტი პრაქტიკული გამოცდილებით ({ka_skills_str}){exp_ctx_ka}."
-                motiv = f"{cur_company}-ის ტექნიკური მხარდაჭერის გუნდში გამოვიყენებ ჩემს უნარებს ({ka_skills_str}) ინციდენტების ოპერატიულ გადაჭრაში."
-            elif is_health:
-                summary = f"პაციენტთა კოორდინატორი და სამედიცინო ადმინისტრატორი ({ka_skills_str}){exp_ctx_ka}."
-                motiv = f"{cur_company}-ში ჩემი პრაქტიკული უნარები ({ka_skills_str}) გამართულად უზრუნველყოფს პაციენტთა რეგისტრაციასა და კოორდინაციას."
-            elif is_cust:
-                summary = f"მომხმარებელთა მხარდაჭერის (Customer Care) სპეციალისტი ({ka_skills_str}){exp_ctx_ka}."
-                motiv = f"ჩემი გამოცდილება ({ka_skills_str}) საშუალებას მომცემს {cur_company}-ის მომხმარებლებს ოპერატიულად დავეხმარო."
-            elif is_qa:
-                summary = f"QA და პროგრამული უზრუნველყოფის ტესტირების სპეციალისტი პრაქტიკული გამოცდილებით ({ka_skills_str}){exp_ctx_ka}."
-                motiv = f"{cur_company}-ში ჩემი უნარებით ({ka_skills_str}) გავაძლიერებ პროდუქტის ტესტირებასა და გამოშვების ხარისხს."
-            else:
-                summary = f"{cur_title}-ის სპეციალისტი პრაქტიკული გამოცდილებით ({ka_skills_str}){exp_ctx_ka}."
-                motiv = f"მინდა ჩემი პრაქტიკული უნარები ({ka_skills_str}) მივმართო {cur_company}-ის გუნდის მიზნების მისაღწევად."
-
-            dou_l = (
-                f"მოგესალმებით, {cur_company}-ის გუნდს,\n\n"
-                f"დიდი ინტერესით გიგზავნით განაცხადს „{cur_title}“ პოზიციაზე. ჩემი პრაქტიკული გამოცდილება ({ka_skills_str}) შეესაბამება ვაკანსიის მოთხოვნებს ({ka_req_str}).\n\n"
-                f"ჩემი სამუშაო გამოცდილების{exp_ctx_ka} განმავლობაში პრაქტიკულად ვიყენებდი ({ka_skills_str}) ზუსტი და სტაბილური შედეგების მისაღწევად.{evidence_ka}{edu_ctx_ka}\n\n"
-                f"თანდართულია პოზიციაზე მორგებული ჩემი რეზიუმე (CV) და მოხარული ვიქნები გასაუბრებაზე დეტალების განხილვით.{sig_ka}"
-            )
-            cov_l = (
-                f"მოგესალმებით, {cur_company}-ის გუნდს,\n\n"
-                f"გწერთ „{cur_title}“ პოზიციაზე ჩემი კანდიდატურის განსახილველად. ჩემი პრაქტიკული გამოცდილება ({ka_skills_str}) ფარავს ვაკანსიის ძირითად მოთხოვნებს ({ka_req_str}){exp_ctx_ka}.\n\n"
-                f"თანდართულია ჩემი რეზიუმე და მოხარული ვიქნები გასაუბრებაზე შეხვედრით.{sig_ka}"
-            )
-            return {
-                "human_tone_summary": summary,
-                "motivation_statement": motiv,
-                "cover_letter": cov_l,
-                "dou_motivational_letter": dou_l,
+            exp_ctx = f" across {work_phrase}" if work_phrase else ""
+            edu_ctx = f" My academic foundation ({ev['edu_snippet']}) reinforces analytical rigor." if ev["edu_snippet"] else ""
+            gap_ctx = f" Where your stack extends into {ev['gap_focus']}, my foundation in {top_skills} supports fast ramp-up." if ev["gap_focus"] else ""
+            ev_line = f" Notably, I delivered: {ev['bullets'][0]}." if ev["bullets"] else ""
+            sig = f"\n\nBest regards,\n{sign_off_name}" if sign_off_name else "\n\nBest regards"
+            en_copy = {
+                "rec": (f"Front Desk Receptionist and Hospitality Specialist experienced with {top_skills}{exp_ctx}, maintaining accurate guest check-in and reservation coordination for {cur_company}.", f"My verified background in {top_skills} directly supports {cur_company}'s front-desk operations."),
+                "sup": (f"Technical Support Specialist experienced with {top_skills}{exp_ctx}, investigating issues and resolving escalations cleanly for {cur_company}.", f"Applying my diagnostic experience with {top_skills}, I can help {cur_company} maintain reliable support operations."),
+                "health": (f"Patient Coordinator and Medical Administrator experienced with {top_skills}{exp_ctx}, managing clinical intake and scheduling accurately for {cur_company}.", f"My administrative experience across {top_skills} equips me to support {cur_company}'s patient intake team."),
+                "cust": (f"Customer Service and Client Care Specialist experienced with {top_skills}{exp_ctx}, delivering responsive troubleshooting for {cur_company}.", f"Working daily with {top_skills}, I can help {cur_company}'s support team resolve client requests efficiently."),
+                "qa": (f"QA and Software Testing Specialist experienced across {top_skills}{exp_ctx}, delivering structured test execution and quality verification tailored to {cur_company}.", f"I want to apply my hands-on QA background in {top_skills} directly to {cur_company}'s release workflow."),
             }
+            summary, motiv = en_copy.get(dom_key, (f"Focused {cur_title} specialist with verified experience in {top_skills}{exp_ctx}, delivering structured execution aligned with {cur_company}'s priorities.", f"I want to apply my verified skills in {top_skills} directly to {cur_company}'s goals."))
+            dou_l = f"Dear {cur_company} Hiring Team,\n\nI am applying for the {cur_title} role at {cur_company}. Your requirements around {req_focus} align with my verified experience in {top_skills}.\n\nAcross my work{exp_ctx}, I applied {top_skills} to deliver accurate, dependable outcomes.{ev_line}{gap_ctx}{edu_ctx}\n\nPlease find my tailored CV attached, and I look forward to discussing how I can contribute to {cur_company}'s team.{sig}"
+            cov_l = f"Dear {cur_company} Hiring Team,\n\nI am applying for the {cur_title} opening at {cur_company}. My verified skills in {top_skills} align directly with your core focus ({req_focus}){exp_ctx}.\n\nThank you for reviewing my attached CV; I welcome a brief conversation about supporting your team.{sig}"
+            return {"human_tone_summary": summary, "motivation_statement": motiv, "cover_letter": cov_l, "dou_motivational_letter": dou_l}
 
-        def _build_en(cur_company: str, cur_title: str) -> Dict[str, str]:
-            exp_ctx_en = f" across {work_phrase}" if work_phrase else ""
-            edu_ctx_en = f" My academic foundation ({ev['edu_snippet']}) reinforces analytical rigor." if ev["edu_snippet"] else ""
-            sig_en = f"\n\nBest regards,\n{sign_off_name}" if sign_off_name else "\n\nBest regards"
-            gap_ctx_en = (
-                f" Where your stack extends into {ev['gap_focus']}, my foundation in {top_skills} supports fast ramp-up."
-                if ev["gap_focus"]
-                else ""
-            )
-            evidence_line = f" Notably, I delivered: {ev['bullets'][0]}." if ev["bullets"] else ""
-
-            if is_rec:
-                summary = f"Front Desk Receptionist and Hospitality Specialist experienced with {top_skills}{exp_ctx_en}, maintaining accurate guest check-in and reservation coordination for {cur_company}."
-                motiv = f"My verified background in {top_skills} directly supports {cur_company}'s front-desk operations and guest coordination."
-            elif is_sup:
-                summary = f"Technical Support Specialist experienced with {top_skills}{exp_ctx_en}, investigating reported issues and resolving client escalations cleanly for {cur_company}."
-                motiv = f"Applying my diagnostic experience with {top_skills}, I can help {cur_company} maintain reliable support operations."
-            elif is_health:
-                summary = f"Patient Coordinator and Medical Administrator experienced with {top_skills}{exp_ctx_en}, managing clinical intake and scheduling accurately for {cur_company}."
-                motiv = f"My administrative experience across {top_skills} equips me to support {cur_company}'s patient intake team reliably."
-            elif is_cust:
-                summary = f"Customer Service and Client Care Specialist experienced with {top_skills}{exp_ctx_en}, delivering responsive troubleshooting and consistent service quality for {cur_company}."
-                motiv = f"Working daily with {top_skills}, I can help {cur_company}'s support team resolve client requests efficiently."
-            elif is_qa:
-                summary = f"QA and Software Testing Specialist experienced across {top_skills}{exp_ctx_en}, delivering structured test execution and quality verification tailored to {cur_company}."
-                motiv = f"I want to apply my hands-on QA background in {top_skills} directly to {cur_company}'s engineering and release workflow."
-            else:
-                summary = f"Focused {cur_title} specialist with verified experience in {top_skills}{exp_ctx_en}, delivering structured execution aligned with {cur_company}'s priorities."
-                motiv = f"I want to apply my verified skills in {top_skills} directly to {cur_company}'s goals and deliver dependable outcomes."
-
-            dou_l = (
-                f"Dear {cur_company} Hiring Team,\n\n"
-                f"I am applying for the {cur_title} role at {cur_company}. Your requirements around {req_focus} align with my verified experience in {top_skills}.\n\n"
-                f"Across my work{exp_ctx_en}, I applied {top_skills} to deliver accurate, dependable outcomes.{evidence_line}{gap_ctx_en}{edu_ctx_en}\n\n"
-                f"Please find my tailored CV attached, and I look forward to discussing how I can contribute to {cur_company}'s team.{sig_en}"
-            )
-            cov_l = (
-                f"Dear {cur_company} Hiring Team,\n\n"
-                f"I am applying for the {cur_title} opening at {cur_company}. My verified skills in {top_skills} align directly with your core focus ({req_focus}){exp_ctx_en}.\n\n"
-                f"Thank you for reviewing my attached CV; I welcome a brief conversation about supporting your team.{sig_en}"
-            )
-            return {
-                "human_tone_summary": summary,
-                "motivation_statement": motiv,
-                "cover_letter": cov_l,
-                "dou_motivational_letter": dou_l,
-            }
-
-        cv_pack = _build_ka(company, title) if cv_language == "ka" else _build_en(company, title)
-        ltr_pack = _build_ka(ltr_company, ltr_title) if target_letter_lang == "ka" else _build_en(ltr_company, ltr_title)
+        cv_pack = _build_pack(cv_language, company, title)
+        ltr_pack = _build_pack(target_letter_lang, ltr_company, ltr_title)
         return {
             "human_tone_summary": cv_pack["human_tone_summary"],
             "motivation_statement": ltr_pack["motivation_statement"],
@@ -1278,86 +1171,58 @@ Return STRICT JSON: {{"answers": [{{"index": 0, "answer": "..."}}]}}"""
     def _fallback_extract_job_details(self, text: str, portal: str = "generic", industry: str = "general_professional") -> Dict[str, Any]:
         extraction_failed = False
         lower = text.lower()
-
-        # Title heuristic across all industries (avoid mistaking prose sentences for titles)
         first_line = text.strip().split("\n")[0].strip()
-        first_low = first_line.lower()
-        looks_like_prose = any(
-            p in first_low
-            for p in ("role description", "without headers", "we are looking", "we are seeking", "some generic", "applying for")
-        )
-        if 3 < len(first_line) < 75 and len(first_line.split()) <= 8 and not looks_like_prose:
+        prose_hits = ("role description", "without headers", "we are looking", "we are seeking", "some generic", "applying for")
+        fallback_titles = {
+            "hospitality_reception": "Front Desk Receptionist & Guest Relations Specialist",
+            "healthcare_hospital": "Hospital Patient Coordinator / Medical Receptionist",
+            "customer_service": "Customer Service & Support Specialist",
+        }
+        if 3 < len(first_line) < 75 and len(first_line.split()) <= 8 and not any(p in first_line.lower() for p in prose_hits):
             title = first_line.split(" at ")[0].split(" — ")[0].strip()
-        elif industry == "hospitality_reception":
-            title = "Front Desk Receptionist & Guest Relations Specialist"
-        elif industry == "healthcare_hospital":
-            title = "Hospital Patient Coordinator / Medical Receptionist"
-        elif industry == "customer_service":
-            title = "Customer Service & Support Specialist"
+        elif industry in fallback_titles:
+            title = fallback_titles[industry]
         else:
-            title = "Unknown Title"
+            title, extraction_failed = "Unknown Title", True
+
+        company = "Unknown Company"
+        if " at " in text[:250] and (m := re.search(r"at\s+([A-Z][A-Za-z0-9\s.&-]+)", text[:250])):
+            company = m.group(1).split(" - ")[0].split(" — ")[0].split(" • ")[0].split("\n")[0].strip()
+        elif "company:" in lower and (m := re.search(r"company:\s*([^\n]+)", text, re.I)):
+            company = m.group(1).strip()
+        else:
             extraction_failed = True
 
-        # Company heuristic
-        company = "Organization"
-        if " at " in text[:250]:
-            match = re.search(r"at\s+([A-Z][A-Za-z0-9\s.&-]+)", text[:250])
-            if match:
-                company = match.group(1).split(" - ")[0].split(" — ")[0].split(" • ")[0].split("\n")[0].strip()
-        elif "company:" in lower:
-            match = re.search(r"company:\s*([^\n]+)", text, re.I)
-            if match:
-                company = match.group(1).strip()
-        else:
-            company = "Unknown Company"
-            extraction_failed = True
-
-        # Experience (extract strictly if present; never fabricate)
-        years: Optional[int] = None
         exp_match = re.search(r"(\d+)\+?\s*years?(?:\s+of)?\s+(?:experience|professional|commercial)", lower)
-        if exp_match:
-            years = int(exp_match.group(1))
+        years: Optional[int] = int(exp_match.group(1)) if exp_match else None
 
-        # Multi-industry skills detection
-        all_known = (
-            MULTI_INDUSTRY_SKILLS["qa_tech"]
-            + MULTI_INDUSTRY_SKILLS["software_data"]
-            + MULTI_INDUSTRY_SKILLS["logistics_supply_chain"]
-            + MULTI_INDUSTRY_SKILLS["finance_accounting"]
-            + MULTI_INDUSTRY_SKILLS["marketing_sales"]
-            + MULTI_INDUSTRY_SKILLS["hr_legal_public"]
-            + MULTI_INDUSTRY_SKILLS["hospitality_reception"]
-            + MULTI_INDUSTRY_SKILLS["customer_service"]
-            + MULTI_INDUSTRY_SKILLS["healthcare_hospital"]
-        )
-        found_req = []
-        for s in all_known:
-            if s in lower:
-                formatted = s.upper() if s in ["ci/cd", "sql", "aws", "k6", "bdd", "rest api", "graphql", "crm", "emr", "ehr", "pos", "sla", "csat", "kyc", "erp", "sap", "wms", "ifrs", "seo", "sem", "ga4", "smm"] else s.title()
-                if formatted not in found_req:
-                    found_req.append(formatted)
-
+        upper_tokens = {"ci/cd", "sql", "aws", "k6", "bdd", "rest api", "graphql", "crm", "emr", "ehr", "pos", "sla", "csat", "kyc", "erp", "sap", "wms", "ifrs", "seo", "sem", "ga4", "smm"}
+        found_req = list(dict.fromkeys(
+            (s.upper() if s in upper_tokens else s.title())
+            for vals in MULTI_INDUSTRY_SKILLS.values()
+            for s in vals
+            if s in lower
+        ))
         if not found_req:
-            if industry == "hospitality_reception":
-                found_req = ["Front Desk", "Opera PMS", "Guest Relations", "Check-In", "Reservations", "Hospitality"]
-            elif industry == "healthcare_hospital":
-                found_req = ["Patient Registration", "EMR", "Appointment Scheduling", "Health Insurance", "Patient Care"]
-            elif industry == "customer_service":
-                found_req = ["Customer Support", "Zendesk", "CRM", "Live Chat", "Conflict Resolution"]
-            elif industry == "qa_tech":
-                found_req = ["Playwright", "Python", "TypeScript", "CI/CD", "REST API", "Docker"]
+            found_req = {
+                "hospitality_reception": ["Front Desk", "Opera PMS", "Guest Relations", "Check-In", "Reservations", "Hospitality"],
+                "healthcare_hospital": ["Patient Registration", "EMR", "Appointment Scheduling", "Health Insurance", "Patient Care"],
+                "customer_service": ["Customer Support", "Zendesk", "CRM", "Live Chat", "Conflict Resolution"],
+                "qa_tech": ["Playwright", "Python", "TypeScript", "CI/CD", "REST API", "Docker"],
+            }.get(industry, [])
 
-        visa = ""
-        if "security clearance" in lower or "clearance required" in lower or "top secret" in lower:
-            visa = "US Citizenship required. Active Security Clearance mandatory."
-        elif "us citizen" in lower or "citizenship mandatory" in lower:
-            visa = "US Citizenship required. No sponsorship available."
-
-        langs = []
-        if any(w in lower for w in ["english", "ინგლისური"]):
-            langs.append("English")
-        if any(w in lower for w in ["georgian", "ქართული", "tbilisi", "jobs.ge", "hr.ge"]):
-            langs.append("Georgian")
+        visa = (
+            "US Citizenship required. Active Security Clearance mandatory."
+            if any(w in lower for w in ("security clearance", "clearance required", "top secret"))
+            else "US Citizenship required. No sponsorship available."
+            if any(w in lower for w in ("us citizen", "citizenship mandatory"))
+            else ""
+        )
+        langs = [
+            name
+            for name, kws in (("English", ("english", "ინგლისური")), ("Georgian", ("georgian", "ქართული", "tbilisi", "jobs.ge", "hr.ge")))
+            if any(w in lower for w in kws)
+        ]
 
         return {
             "title": title,
@@ -1370,10 +1235,10 @@ Return STRICT JSON: {{"answers": [{{"index": 0, "answer": "..."}}]}}"""
             "visa_requirements": visa,
             "language_requirements": langs,
             "location": "Tbilisi, Georgia / Remote",
-            "remote_policy": "On-site / Hybrid" if industry in ["hospitality_reception", "healthcare_hospital"] else "Remote / Hybrid",
+            "remote_policy": "On-site / Hybrid" if industry in ("hospitality_reception", "healthcare_hospital") else "Remote / Hybrid",
             "salary_range": "Salary not specified",
             "extraction_failed": extraction_failed,
-            "summary": f"{title} position at {company} ({portal})."
+            "summary": f"{title} position at {company} ({portal}).",
         }
 
     def _fallback_generate_answers(
@@ -1392,11 +1257,7 @@ Return STRICT JSON: {{"answers": [{{"index": 0, "answer": "..."}}]}}"""
         faq_bank = candidate_data.get("faq_bank", []) or []
         prof = candidate_profile or {}
         verified_skills = prof.get("verified_skills") or prof.get("all_skills") or candidate_data.get("skills", {}).get("core", []) or []
-        raw_exp = prof.get("years_of_experience")
-        if raw_exp is None:
-            raw_exp = cand.get("experience_years")
-        if raw_exp is None:
-            raw_exp = candidate_data.get("experience_years")
+        raw_exp = next((v for v in (prof.get("years_of_experience"), cand.get("experience_years"), candidate_data.get("experience_years")) if v is not None), None)
         exp_years: Optional[float] = float(raw_exp) if raw_exp is not None else None
         full_name = str(cand.get("full_name") or "").strip()
         name_parts = [p for p in full_name.split() if not p.startswith("(")]
@@ -1404,162 +1265,103 @@ Return STRICT JSON: {{"answers": [{{"index": 0, "answer": "..."}}]}}"""
         last_name = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
         company = job_details.get("company", "your team")
         is_ka = cv_language == "ka"
-        results = []
-
         loc_raw = cand.get("location")
-        if isinstance(loc_raw, dict):
-            loc_str = ", ".join(str(x).strip() for x in (loc_raw.get("city"), loc_raw.get("country")) if str(x or "").strip())
-        else:
-            loc_str = str(loc_raw or "").strip()
-
+        loc_str = ", ".join(str(x).strip() for x in (loc_raw.get("city"), loc_raw.get("country")) if str(x or "").strip()) if isinstance(loc_raw, dict) else str(loc_raw or "").strip()
         verified_notice = str(comp.get("notice_period") or "").strip()
-        verified_eur = comp.get("expected_salary_eur") or 0
-        verified_usd = comp.get("expected_salary_usd") or 0
+        verified_eur, verified_usd = comp.get("expected_salary_eur") or 0, comp.get("expected_salary_usd") or 0
+        skills_txt = ", ".join(str(s) for s in verified_skills[:5])
 
+        direct_fields = (
+            (lambda q: any(k in q for k in ("first name", "given name", "fname")) and "last" not in q, first_name, "candidate.first_name"),
+            (lambda q: any(k in q for k in ("last name", "family name", "surname", "lname")), last_name or first_name, "candidate.last_name"),
+            (lambda q: q.strip() in ("name", "full name", "your name", "candidate name"), " ".join(name_parts) or full_name, "candidate.full_name"),
+            (lambda q: "email" in q, str(cand.get("email") or ""), "candidate.email"),
+            (lambda q: any(k in q for k in ("phone", "mobile", "telephone")), str(cand.get("phone") or ""), "candidate.phone"),
+            (lambda q: "linkedin" in q, str(links.get("linkedin") or ""), "candidate.links.linkedin"),
+            (lambda q: "github" in q, str(links.get("github") or ""), "candidate.links.github"),
+            (lambda q: "location" in q or "city" in q, loc_str, "candidate.location"),
+        )
+
+        results = []
         for q_obj in questions:
             q_text = q_obj.get("question", "") if isinstance(q_obj, dict) else str(q_obj)
             q_lower = q_text.lower()
             field_type = q_obj.get("field_type", "text") if isinstance(q_obj, dict) else "text"
-            ans = ""
-            matched_faq = False
-            source_field = "candidate_skills.md"
-            verification_status = "VERIFIED"
+            ans, matched_faq, source_field, verification_status = "", False, "candidate_skills.md", "VERIFIED"
 
-            if any(k in q_lower for k in ["first name", "given name", "fname"]) and "last" not in q_lower and first_name:
-                ans = first_name
-                matched_faq = True
-                source_field = "candidate.first_name"
-            elif any(k in q_lower for k in ["last name", "family name", "surname", "lname"]) and (last_name or first_name):
-                ans = last_name or first_name
-                matched_faq = True
-                source_field = "candidate.last_name"
-            elif q_lower.strip() in ("name", "full name", "your name", "candidate name") and full_name:
-                ans = " ".join(name_parts) or full_name
-                matched_faq = True
-                source_field = "candidate.full_name"
-            elif "email" in q_lower and cand.get("email"):
-                ans = str(cand["email"])
-                matched_faq = True
-                source_field = "candidate.email"
-            elif any(k in q_lower for k in ["phone", "mobile", "telephone"]) and cand.get("phone"):
-                ans = str(cand["phone"])
-                matched_faq = True
-                source_field = "candidate.phone"
-            elif "linkedin" in q_lower and links.get("linkedin"):
-                ans = str(links["linkedin"])
-                matched_faq = True
-                source_field = "candidate.links.linkedin"
-            elif "github" in q_lower and links.get("github"):
-                ans = str(links["github"])
-                matched_faq = True
-                source_field = "candidate.links.github"
-            elif any(k in q_lower for k in ["years of experience", "how many years", "years experience"]) or field_type == "number":
+            for pred, val, src in direct_fields:
+                if val and pred(q_lower):
+                    ans, matched_faq, source_field = val, True, src
+                    break
+
+            if not ans and (any(k in q_lower for k in ("years of experience", "how many years", "years experience")) or field_type == "number"):
                 if exp_years is not None:
                     yrs_int = str(int(exp_years)) if exp_years == int(exp_years) else f"{exp_years:g}"
-                    ans = yrs_int if field_type == "number" else f"{yrs_int} years"
-                    matched_faq = True
-                    source_field = "candidate.experience_years"
+                    ans, matched_faq, source_field = (yrs_int if field_type == "number" else f"{yrs_int} years"), True, "candidate.experience_years"
                 else:
-                    ans = ""
-                    verification_status = "REQUIRES_CONFIRMATION"
-                    source_field = "unverified"
-            elif ("location" in q_lower or "city" in q_lower) and loc_str:
-                ans = loc_str
-                matched_faq = True
-                source_field = "candidate.location"
+                    verification_status, source_field = "REQUIRES_CONFIRMATION", "unverified"
 
             if not ans and verification_status != "REQUIRES_CONFIRMATION":
-                if any(k in q_lower for k in ["notice", "start date", "availability", "when can you start", "earliest start", "დაწყებ", "ხელმისაწვდომ"]):
+                if any(k in q_lower for k in ("notice", "start date", "availability", "when can you start", "earliest start", "დაწყებ", "ხელმისაწვდომ")):
                     if verified_notice:
-                        ans = verified_notice
-                        matched_faq = True
-                        source_field = "candidate.compensation.notice_period"
+                        ans, matched_faq, source_field = verified_notice, True, "candidate.compensation.notice_period"
                     else:
-                        verification_status = "REQUIRES_CONFIRMATION"
-                        source_field = "unverified"
-                elif any(k in q_lower for k in ["salary", "compensation", "rate", "remuneration", "ანაზღაურება", "ხელფასი"]):
+                        verification_status, source_field = "REQUIRES_CONFIRMATION", "unverified"
+                elif any(k in q_lower for k in ("salary", "compensation", "rate", "remuneration", "ანაზღაურება", "ხელფასი")):
                     if verified_eur and int(verified_eur) > 0:
-                        ans = f"€{int(verified_eur):,} gross/year"
-                        matched_faq = True
-                        source_field = "candidate.compensation.expected_salary_eur"
+                        ans, matched_faq, source_field = f"€{int(verified_eur):,} gross/year", True, "candidate.compensation.expected_salary_eur"
                     elif verified_usd and int(verified_usd) > 0:
-                        ans = f"${int(verified_usd):,} gross/year"
-                        matched_faq = True
-                        source_field = "candidate.compensation.expected_salary_usd"
+                        ans, matched_faq, source_field = f"${int(verified_usd):,} gross/year", True, "candidate.compensation.expected_salary_usd"
                     else:
-                        verification_status = "REQUIRES_CONFIRMATION"
-                        source_field = "unverified"
-                elif any(k in q_lower for k in ["authorized", "sponsorship", "visa"]):
-                    has_eu = bool(wa.get("eu_work_permit"))
-                    has_us = bool(str(wa.get("us_work_authorization") or "").strip())
-                    has_uk = bool(str(wa.get("uk_work_authorization") or "").strip())
-                    req_sponsorship = wa.get("requires_eu_visa") or wa.get("requires_us_visa_sponsorship")
-                    if "eu" in q_lower or "germany" in q_lower or "europe" in q_lower:
-                        if has_eu:
-                            ans = "Yes" if field_type in ["select", "radio", "boolean"] else "Yes — authorized to work in the EU without sponsorship."
-                            matched_faq = True
-                            source_field = "candidate.work_authorization.eu_work_permit"
-                        elif req_sponsorship:
-                            ans = "No" if field_type in ["select", "radio", "boolean"] else "Requires work visa sponsorship."
-                            matched_faq = True
-                            source_field = "candidate.work_authorization.requires_eu_visa"
+                        verification_status, source_field = "REQUIRES_CONFIRMATION", "unverified"
+                elif any(k in q_lower for k in ("authorized", "sponsorship", "visa")):
+                    is_bool_f = field_type in ("select", "radio", "boolean")
+                    if any(w in q_lower for w in ("eu", "germany", "europe")):
+                        if wa.get("eu_work_permit"):
+                            ans, matched_faq, source_field = ("Yes" if is_bool_f else "Yes — authorized to work in the EU without sponsorship."), True, "candidate.work_authorization.eu_work_permit"
+                        elif wa.get("requires_eu_visa") or wa.get("requires_us_visa_sponsorship"):
+                            ans, matched_faq, source_field = ("No" if is_bool_f else "Requires work visa sponsorship."), True, "candidate.work_authorization.requires_eu_visa"
                         else:
-                            verification_status = "REQUIRES_CONFIRMATION"
-                            source_field = "unverified"
-                    elif ("us" in q_lower or "united states" in q_lower) and has_us:
-                        ans = str(wa.get("us_work_authorization"))
-                        matched_faq = True
-                        source_field = "candidate.work_authorization.us_work_authorization"
-                    elif "uk" in q_lower and has_uk:
-                        ans = str(wa.get("uk_work_authorization"))
-                        matched_faq = True
-                        source_field = "candidate.work_authorization.uk_work_authorization"
+                            verification_status, source_field = "REQUIRES_CONFIRMATION", "unverified"
+                    elif ("us" in q_lower or "united states" in q_lower) and str(wa.get("us_work_authorization") or "").strip():
+                        ans, matched_faq, source_field = str(wa["us_work_authorization"]), True, "candidate.work_authorization.us_work_authorization"
+                    elif "uk" in q_lower and str(wa.get("uk_work_authorization") or "").strip():
+                        ans, matched_faq, source_field = str(wa["uk_work_authorization"]), True, "candidate.work_authorization.uk_work_authorization"
                     else:
-                        verification_status = "REQUIRES_CONFIRMATION"
-                        source_field = "unverified"
-                elif any(k in q_lower for k in ["summary", "introduce", "about yourself", "applicant summary", "bio"]):
+                        verification_status, source_field = "REQUIRES_CONFIRMATION", "unverified"
+                elif any(k in q_lower for k in ("summary", "introduce", "about yourself", "applicant summary", "bio")):
                     headline_txt = str(cand.get("headline") or "").strip()
-                    skills_txt = ", ".join(str(s) for s in verified_skills[:5])
                     if headline_txt or skills_txt:
-                        if is_ka:
-                            ans = f"სპეციალისტი ({headline_txt or ', '.join(verified_skills[:3])}), პრაქტიკული გამოცდილებით ({skills_txt or 'ძირითადი მიმართულება'}), მზად ვარ {company}-ის გუნდში ჩასართავად."
-                        else:
-                            ans = f"{headline_txt or 'Specialist'} with verified hands-on experience in {skills_txt or 'core workflows'}, aligned with {company}'s role requirements."
-                        matched_faq = True
-                        source_field = "candidate.headline"
+                        ans = (
+                            f"სპეციალისტი ({headline_txt or ', '.join(verified_skills[:3])}), პრაქტიკული გამოცდილებით ({skills_txt or 'ძირითადი მიმართულება'}), მზად ვარ {company}-ის გუნდში ჩასართავად."
+                            if is_ka
+                            else f"{headline_txt or 'Specialist'} with verified hands-on experience in {skills_txt or 'core workflows'}, aligned with {company}'s role requirements."
+                        )
+                        matched_faq, source_field = True, "candidate.headline"
                     else:
-                        verification_status = "REQUIRES_CONFIRMATION"
-                        source_field = "unverified"
-                elif any(k in q_lower for k in ["motivational letter", "cover letter", "dou", "message to recruiter", "why", "interest", "motivat"]):
-                    skills_txt = ", ".join(str(s) for s in verified_skills[:5])
+                        verification_status, source_field = "REQUIRES_CONFIRMATION", "unverified"
+                elif any(k in q_lower for k in ("motivational letter", "cover letter", "dou", "message to recruiter", "why", "interest", "motivat")):
                     if skills_txt or cand.get("headline"):
-                        if is_ka:
-                            ans = f"მოგესალმებით {company}-ის გუნდს! დაინტერესებული ვარ პოზიციით და ჩემი პრაქტიკული გამოცდილება ({skills_txt or cand.get('headline')}) პირდაპირ შეესაბამება გუნდის ამოცანებს."
-                        else:
-                            ans = f"Hi {company} team, I am applying for this role based on my verified background in {skills_txt or cand.get('headline')}."
-                        matched_faq = True
-                        source_field = "candidate_skills.md"
+                        ans = (
+                            f"მოგესალმებით {company}-ის გუნდს! დაინტერესებული ვარ პოზიციით და ჩემი პრაქტიკული გამოცდილება ({skills_txt or cand.get('headline')}) პირდაპირ შეესაბამება გუნდის ამოცანებს."
+                            if is_ka
+                            else f"Hi {company} team, I am applying for this role based on my verified background in {skills_txt or cand.get('headline')}."
+                        )
+                        matched_faq, source_field = True, "candidate_skills.md"
                     else:
-                        verification_status = "REQUIRES_CONFIRMATION"
-                        source_field = "unverified"
+                        verification_status, source_field = "REQUIRES_CONFIRMATION", "unverified"
 
             if not ans and verification_status != "REQUIRES_CONFIRMATION":
                 for faq in faq_bank:
-                    if not isinstance(faq, dict):
-                        continue
-                    trigger = str(faq.get("question_trigger") or "").lower()
-                    tags = faq.get("tags", []) or []
-                    if (trigger and trigger in q_lower) or any(str(t).lower() in q_lower for t in tags):
-                        ans = str(faq.get("answer") or "").strip()
-                        if ans:
-                            matched_faq = True
-                            source_field = "faq_bank"
-                        break
+                    if isinstance(faq, dict):
+                        trigger = str(faq.get("question_trigger") or "").lower()
+                        if (trigger and trigger in q_lower) or any(str(t).lower() in q_lower for t in (faq.get("tags") or [])):
+                            if (faq_ans := str(faq.get("answer") or "").strip()):
+                                ans, matched_faq, source_field = faq_ans, True, "faq_bank"
+                            break
 
             if not ans:
-                verification_status = "REQUIRES_CONFIRMATION"
-                source_field = "unverified"
-                conf = 0.0
+                verification_status, source_field, conf = "REQUIRES_CONFIRMATION", "unverified", 0.0
             else:
                 conf = 0.96 if matched_faq else 0.85
 
@@ -1571,7 +1373,6 @@ Return STRICT JSON: {{"answers": [{{"index": 0, "answer": "..."}}]}}"""
                 "source_ground_truth_field": source_field,
                 "verification_status": verification_status,
             })
-
         return results
 
     def research_company_intel(

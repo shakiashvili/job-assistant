@@ -30,15 +30,15 @@ class SearchQueryPackage(BaseModel):
 
 _DOMAIN_QUERY_TEMPLATES: Dict[str, Dict[str, Any]] = {
     "qa_tech": {
-        "primary_ge": ["QA", "Tester"],
-        "adjacent_ge": ["Support", "SQL"],
+        "primary_ge": ["QA", "Tester", "ხარისხის უზრუნველყოფა"],
+        "adjacent_ge": ["SQL", "Python"],
         "remote_int": ["QA", "Tester", "Automation"],
         "is_it_category": True,
         "djinni_kw": "QA",
         "dou_cat": "QA",
         "justjoin_cat": "testing",
-        "domain_kw": ["qa", "quality assurance", "tester", "test engineer", "sdet", "automation", "playwright", "cypress", "selenium", "ტესტ"],
-        "adjacent_kw": ["technical support", "application support", "data quality", "sql", "python", "integration engineer", "it operations", "helpdesk", "მხარდაჭერ", "ანალიტიკ"],
+        "domain_kw": ["qa", "quality assurance", "tester", "test engineer", "sdet", "automation", "playwright", "cypress", "selenium", "ტესტ", "ხარისხის უზრუნველყოფ"],
+        "adjacent_kw": ["data quality", "sql", "python", "integration engineer", "application support", "automation developer", "devops", "ანალიტიკ"],
     },
     "software_engineering": {
         "primary_ge": ["Developer", "პროგრამისტი"],
@@ -230,15 +230,21 @@ def build_search_queries(
     if eligible_internships and primary_ge:
         internship_queries.append(f"{primary_ge[0]} სტაჟიორი")
 
-    # Jobs.ge: loop through primary_queries_ge + adjacent_queries_ge (only add cid=6 for IT/Software roles)
+    # Jobs.ge: always include newest IT category feed for tech profiles + localized primary & internship queries
     cid_suffix = "&cid=6" if is_it else ""
     jobs_ge_urls: List[str] = []
-    for idx, q in enumerate((primary_ge[:2] + adjacent_ge[:1])):
+    if is_it:
+        jobs_ge_urls.append("https://jobs.ge/ge/?page=1&cid=6")
+    for idx, q in enumerate((primary_ge[:3] + adjacent_ge[:1])):
         enc = quote_plus(q)
-        cat_part = cid_suffix if idx < len(primary_ge[:2]) else ""
+        cat_part = cid_suffix if idx < len(primary_ge[:3]) else ""
         u = f"https://jobs.ge/ge/?page=1&q={enc}{cat_part}"
         if u not in jobs_ge_urls:
             jobs_ge_urls.append(u)
+    if eligible_internships:
+        intern_url = f"https://jobs.ge/ge/?page=1&q={quote_plus('სტაჟირება')}"
+        if intern_url not in jobs_ge_urls:
+            jobs_ge_urls.append(intern_url)
 
     hr_ge_urls = [
         f"https://www.hr.ge/search-posting?q={quote_plus(q)}"

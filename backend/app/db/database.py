@@ -1,7 +1,7 @@
 import logging
 import os
 from typing import Generator
-from sqlmodel import SQLModel, Session, create_engine, select
+from sqlmodel import SQLModel, Session, create_engine
 from sqlalchemy import event
 from ..config import DATABASE_URL, _is_prod
 from .models import (
@@ -93,6 +93,7 @@ def init_db(force: bool = False) -> None:
 
     if alembic_ini.exists() and not is_in_memory:
         try:
+            from sqlalchemy import inspect as sa_inspect
             from alembic import command
             from alembic.config import Config
 
@@ -101,6 +102,19 @@ def init_db(force: bool = False) -> None:
                 "sqlalchemy.url",
                 engine.url.render_as_string(hide_password=False).replace("%", "%%"),
             )
+            # Safely adopt pre-Alembic legacy databases created via create_all() without crashing on initial_schema
+            with engine.connect() as conn:
+                inspector = sa_inspect(conn)
+                existing_tables = set(inspector.get_table_names())
+                has_alembic = "alembic_version" in existing_tables
+                has_legacy_core = "users" in existing_tables and "job_postings" in existing_tables
+                alembic_empty = False
+                if has_alembic:
+                    from sqlalchemy import text as sa_text
+                    alembic_empty = conn.execute(sa_text("SELECT COUNT(*) FROM alembic_version")).scalar() == 0
+            if has_legacy_core and (not has_alembic or alembic_empty):
+                logger.info("Adopting pre-Alembic database schema at baseline revision 75cd228268f5 before upgrading.")
+                command.stamp(cfg, "75cd228268f5")
             command.upgrade(cfg, "head")
         except Exception as e:
             logger.critical(f"Alembic migration failed — refusing to mask schema error: {e}")

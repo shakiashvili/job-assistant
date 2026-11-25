@@ -13,11 +13,8 @@ import {
   X,
   Clock,
   DollarSign,
-  FileText,
-  Edit3,
   Sparkles,
   Mail,
-  Send,
   GripVertical,
   CheckCircle2,
 } from 'lucide-react';
@@ -54,7 +51,6 @@ export type KanbanStage = typeof KANBAN_STAGES[number];
 
 export const ApplicationTracker: React.FC = () => {
   const [applications, setApplications] = useState<ApplicationItem[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
 
   // Modal states for Copilot, Email & Inline Delete Confirm
@@ -96,13 +92,9 @@ export const ApplicationTracker: React.FC = () => {
 
   const loadApps = async () => {
     try {
-      setIsLoading(true);
-      const apps = await fetchApplications();
-      setApplications(apps);
+      setApplications(await fetchApplications());
     } catch (err) {
       console.error(err);
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -753,119 +745,53 @@ export const ApplicationTracker: React.FC = () => {
             </div>
 
             <form onSubmit={handleCreate} className="space-y-3.5 text-xs">
-              <div>
-                <label className="block text-slate-400 uppercase font-semibold mb-1">Company Name</label>
-                <input
-                  type="text"
-                  required
-                  value={newCompany}
-                  onChange={(e) => setNewCompany(e.target.value)}
-                  placeholder="e.g. MacPaw, Rooms Hotel, TBC"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-emerald-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-slate-400 uppercase font-semibold mb-1">Role Title</label>
-                <input
-                  type="text"
-                  required
-                  value={newRole}
-                  onChange={(e) => setNewRole(e.target.value)}
-                  placeholder="e.g. Senior QA Automation Engineer (Playwright)"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-emerald-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-slate-400 uppercase font-semibold mb-1">Job URL</label>
-                <input
-                  type="text"
-                  value={newUrl}
-                  onChange={(e) => setNewUrl(e.target.value)}
-                  placeholder="https://..."
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-emerald-500 font-mono text-[11px]"
-                />
-              </div>
+              {([
+                { label: 'Company Name', value: newCompany, set: setNewCompany, placeholder: 'e.g. MacPaw, Rooms Hotel, TBC', req: true },
+                { label: 'Role Title', value: newRole, set: setNewRole, placeholder: 'e.g. Senior QA Automation Engineer (Playwright)', req: true },
+                { label: 'Job URL', value: newUrl, set: setNewUrl, placeholder: 'https://...', mono: true },
+              ]).map((f) => (
+                <div key={f.label}>
+                  <label className="block text-slate-400 uppercase font-semibold mb-1">{f.label}</label>
+                  <input
+                    type="text"
+                    required={f.req}
+                    value={f.value}
+                    onChange={(e) => f.set(e.target.value)}
+                    placeholder={f.placeholder}
+                    className={`w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-emerald-500 ${f.mono ? 'font-mono text-[11px]' : ''}`}
+                  />
+                </div>
+              ))}
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-400 uppercase font-semibold mb-1">Pipeline Stage</label>
-                  <select
-                    value={newStatus}
-                    onChange={(e) => setNewStatus(e.target.value as KanbanStage)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none"
-                  >
-                    {KANBAN_STAGES.map((st) => (
-                      <option key={st} value={st}>
-                        {st}
-                      </option>
-                    ))}
+                  <select value={newStatus} onChange={(e) => setNewStatus(e.target.value as KanbanStage)} className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none">
+                    {KANBAN_STAGES.map((st) => <option key={st} value={st}>{st}</option>)}
                   </select>
                 </div>
-
                 <div>
                   <label className="block text-slate-400 uppercase font-semibold mb-1">Portal Source</label>
-                  <input
-                    type="text"
-                    value={newPortal}
-                    onChange={(e) => setNewPortal(e.target.value)}
-                    placeholder="Jobs.ge, Djinni, etc."
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none"
-                  />
+                  <input type="text" value={newPortal} onChange={(e) => setNewPortal(e.target.value)} placeholder="Jobs.ge, Djinni, etc." className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none" />
                 </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-400 uppercase font-semibold mb-1">Match Score %</label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    value={newScore}
-                    onChange={(e) => setNewScore(parseInt(e.target.value) || 0)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none"
-                  />
+                  <input type="number" min="0" max="100" value={newScore} onChange={(e) => setNewScore(parseInt(e.target.value) || 0)} className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none" />
                 </div>
-
                 <div>
                   <label className="block text-slate-400 uppercase font-semibold mb-1">Estimated Salary</label>
-                  <input
-                    type="text"
-                    value={newSalary}
-                    onChange={(e) => setNewSalary(e.target.value)}
-                    placeholder="e.g. 5,000-7,000 GEL"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none"
-                  />
+                  <input type="text" value={newSalary} onChange={(e) => setNewSalary(e.target.value)} placeholder="e.g. 5,000-7,000 GEL" className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none" />
                 </div>
               </div>
 
               <div>
                 <label className="block text-slate-400 uppercase font-semibold mb-1">Initial Notes</label>
-                <textarea
-                  rows={2}
-                  value={newNotes}
-                  onChange={(e) => setNewNotes(e.target.value)}
-                  placeholder="Notes, hiring manager name, or referral..."
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none"
-                />
+                <textarea rows={2} value={newNotes} onChange={(e) => setNewNotes(e.target.value)} placeholder="Notes, hiring manager name, or referral..." className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none" />
               </div>
 
               <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setIsAddModalOpen(false)}
-                  className="px-4 py-2 rounded-lg text-slate-400 hover:text-white"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-500 text-white font-semibold"
-                >
-                  Save to Pipeline
-                </button>
+                <button type="button" onClick={() => setIsAddModalOpen(false)} className="px-4 py-2 rounded-lg text-slate-400 hover:text-white">Cancel</button>
+                <button type="submit" className="px-5 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-500 text-white font-semibold">Save to Pipeline</button>
               </div>
             </form>
           </div>

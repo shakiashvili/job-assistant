@@ -645,9 +645,11 @@ class BasePortalScraper:
         dedupe_key: str = "external_id",
         dedupe_title_company: bool = False,
         keep_filtered_stubs: bool = False,
+        page_timeout: float = 8.0,
+        sort_newest_first: bool = False,
     ) -> List[Dict[str, Any]]:
         """Shared fetch -> parse -> dedupe -> concurrent enrichment pipeline for HTML portal scrapers."""
-        pages = await asyncio.gather(*(self.fetch_html(u) for u in urls), return_exceptions=True)
+        pages = await asyncio.gather(*(self.fetch_html(u, timeout=page_timeout) for u in urls), return_exceptions=True)
         candidates: List[Dict[str, Any]] = []
         seen_keys: set[str] = set()
         seen_tc: set[Tuple[str, str]] = set()
@@ -667,6 +669,11 @@ class BasePortalScraper:
                     candidates.append(item)
         if not candidates:
             return []
+        if sort_newest_first:
+            candidates.sort(
+                key=lambda c: c["published_at"].timestamp() if c.get("published_at") else 0.0,
+                reverse=True,
+            )
         if keep_filtered_stubs:
             to_enrich = [c for c in candidates if c.get("status") != "FILTERED_OUT"][:limit]
             filtered_stubs = [c for c in candidates if c.get("status") == "FILTERED_OUT"]

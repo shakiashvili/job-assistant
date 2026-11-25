@@ -514,10 +514,14 @@ Markdown:
             except Exception:
                 pass
 
-        # 3. Direct years of experience (e.g. "3+ years of experience", "3 წლიანი გამოცდილება")
-        for ym in re.finditer(r"(\d+(?:\.\d+)?)\s*\+?\s*(?:years?|yrs?|წ(?:ელი|ლიანი)?|роკ(?:ів)?|лет|года)(?:\s+of)?\s*(?:experience|გამოცდილება|досвід|опыт)?", combined):
+        # 3. Direct years of experience (e.g. "3+ years of experience", "2+ years", "3 წლიანი გამოცდილება")
+        for ym in re.finditer(r"(\d+(?:\.\d+)?)\s*(\+)?\s*(?:years?|yrs?|წ(?:ელი|ლიანი)?|рок(?:ів)?|лет|года)(?:\s+of)?\s*(?:experience|გამოცდილება|досвід|опыт)?", combined):
             try:
-                found_years.append(float(ym.group(1)))
+                val = float(ym.group(1))
+                # Explicit "2+ years" means AT LEAST 2 years (exceeds entry/junior <=2.0 cap)
+                if ym.group(2) == "+" and val >= 2.0:
+                    val = round(val + 0.1, 1)
+                found_years.append(val)
             except Exception:
                 pass
 
@@ -532,17 +536,26 @@ Markdown:
         valid_exp = [y for y in found_years if 0.5 <= y <= 15.0]
         job_req_years = max(valid_exp) if valid_exp else None
 
-        # Direct regex guard for 3+ years (with negative lookbehind to avoid matching decimals like 1.5 yrs as 5 yrs)
+        # Direct regex guard for 3+ years (and 2+ years for entry-level candidates)
         has_3_plus_guard = bool(
             re.search(r"(?<![\d.])(?:[3-9]|\d{2,})(?:\.\d+)?\+?\s*(?:years?|yrs?|წ(?:ელი|ლიანი)?|років|лет)\b", combined)
             or re.search(r"(?:მინიმუმ|სულ\s+მცირე|არანაკლებ|at least|minimum of|від|от)\s*[:\-–]?\s*(?<![\d.])(?:[3-9]|\d{2,})(?:\.\d+)?", combined)
         )
-
-        cap = max_allowed_years if max_allowed_years is not None else (
-            min(candidate_years + 0.5, 2.0) if candidate_years <= 2.0 else round(candidate_years + 1.0, 1)
+        has_2_plus_guard = bool(
+            re.search(r"(?<![\d.])2\+\s*(?:years?|yrs?|წ(?:ელი|ლიანი)?|років|лет)\b", combined)
+            or re.search(r"(?:მინიმუმ|სულ\s+მცირე|არანაკლებ|at least|minimum of|minimum|від|от)\s*[:\-–]?\s*2(?:\.0)?\+?\s*(?:years?|yrs?|წ(?:ელი|ლიანი)?|рок(?:ів)?|лет)", combined)
         )
 
-        # Gate 1: Strict <= 2.0-2.5 yrs Junior/Junior-Mid Guard
+        if max_allowed_years is not None:
+            cap = float(max_allowed_years)
+        elif candidate_years < 1.0:
+            cap = 1.0
+        elif candidate_years <= 2.0:
+            cap = min(candidate_years + 0.5, 2.0)
+        else:
+            cap = round(candidate_years + 1.0, 1)
+
+        # Gate 1: Strict Entry / Junior Experience Guard
         if candidate_years <= 2.5:
             for s in exec_titles + senior_titles + tech_manager_titles:
                 if s in ("middle+", "mid+", "sr."):
@@ -558,6 +571,11 @@ Markdown:
                 return (
                     False,
                     f"Disqualified by Experience Gate: Role requires 3+ years experience (strictly capped at {cap:.1f} yrs).",
+                )
+            if (candidate_years < 1.5 or cap < 2.0) and has_2_plus_guard:
+                return (
+                    False,
+                    f"Disqualified by Experience Gate: Role requires 2+ years experience, exceeding entry/junior cap ({cap:.1f} yrs max).",
                 )
             if job_req_years is not None and job_req_years > cap:
                 return (
@@ -620,9 +638,48 @@ Markdown:
         primary_role = str(parsed_skills.get("primary_role") or parsed_skills.get("headline") or "").lower()
         adjacent_roles = [str(r) for r in (parsed_skills.get("adjacent_roles") or []) if r]
 
+        # Foreign-language-gated title check (e.g. "იტალიურენოვანი მომხმარებელთა მრჩეველი" / "German-speaking")
+        cand_spoken = " ".join(str(x).lower() for x in (parsed_skills.get("spoken_languages") or []))
+        foreign_title_langs = [
+            ("italian", ("italian-speaking", "italian speaking", "იტალიურენოვანი", "იტალიური ენ")),
+            ("german", ("german-speaking", "german speaking", "გერმანულენოვანი")),
+            ("french", ("french-speaking", "french speaking", "ფრანგულენოვანი")),
+            ("spanish", ("spanish-speaking", "spanish speaking", "ესპანურენოვანი")),
+            ("turkish", ("turkish-speaking", "turkish speaking", "თურქულენოვანი")),
+            ("arabic", ("arabic-speaking", "arabic speaking", "არაბულენოვანი")),
+            ("polish", ("polish-speaking", "polish speaking", "პოლონურენოვანი")),
+        ]
+        for lang_key, markers in foreign_title_langs:
+            if any(m in title_lower for m in markers) and lang_key not in cand_spoken:
+                return ("NONE", f"Language Gate: '{job_title}' requires {lang_key.title()}, which is not in candidate's CV.")
+
+        # Recruiter Off-Domain Exclusion: Tech/QA profiles must NEVER receive Customer Service, Call Center, Retail, or Hospitality roles
+        is_tech_profile = target_industry in ("qa_tech", "software_engineering", "data_analytics")
+        if is_tech_profile:
+            off_domain_title_signals = (
+                "customer service", "customer advisor", "customer care", "call center", "call-center",
+                "sales consultant", "sales representative", "receptionist", "front desk", "cashier",
+                "waiter", "bartender", "courier", "driver", "warehouse", "storekeeper", "housekeeper",
+                "მომხმარებელთა მრჩეველი", "მომხმარებელთა მომსახურებ", "ქოლ-ცენტრ", "ქოლ ცენტრ",
+                "გაყიდვების კონსულტანტ", "კონსულტანტი", "მიმღები", "რეცეფციონისტ", "მოლარე",
+                "მძღოლი", "კურიერი", "საწყობის",
+            )
+            tech_override_signals = (
+                "qa", "quality assurance", "tester", "sdet", "playwright", "selenium", "cypress",
+                "postman", "rest api", "sql", "python", "linux", "devops", "developer", "engineer",
+                "ტესტერ", "ტესტირებ", "ხარისხის უზრუნველყოფ", "პროგრამისტ", "დეველოპერ",
+            )
+            if any(sig in title_lower for sig in off_domain_title_signals) and not any(
+                t in combined for t in tech_override_signals
+            ):
+                return (
+                    "NONE",
+                    f"Domain Gate: '{job_title}' is a non-technical customer/service role outside {target_industry}.",
+                )
+
         # Build direct domain signals from search_queries + primary_role tokens + domain catalog
         default_domain_signals = {
-            "qa_tech": ["qa", "quality assurance", "quality engineer", "test", "tester", "sdet", "automation", "ტესტ", "ხარისხ"],
+            "qa_tech": ["qa", "quality assurance", "quality engineer", "test", "tester", "sdet", "automation", "ტესტ", "ხარისხის უზრუნველყოფ", "ხარისხ"],
             "software_engineering": ["developer", "software engineer", "backend", "frontend", "full stack", "პროგრამისტი", "დეველოპერი"],
             "data_analytics": ["data analyst", "business intelligence", "bi analyst", "analytics", "sql", "power bi", "tableau", "ანალიტიკოს"],
             "finance_accounting": ["accountant", "accounting", "finance", "financial", "audit", "tax", "payroll", "ifrs", "treasury", "controller", "ბუღალტ", "ფინანს", "აუდიტ"],
@@ -658,18 +715,45 @@ Markdown:
             or raw_exp_val is None
             or float(raw_exp_val) <= 2.5
         )
-        edu_tokens = [
-            tok.lower()
-            for e in edu_entries
-            if isinstance(e, dict)
-            for tok in re.split(r"[\s/,&()-]+", f"{e.get('degree', '')} {e.get('field_of_study', '')}")
-            if len(tok) >= 4 and tok.lower() not in ("bachelor", "master", "degree", "university", "science", "arts", "present", "student")
-        ]
-        is_intern_role = any(w in title_lower for w in ("intern", "trainee", "graduate", "apprentice", "სტაჟიორ", "დამწყებ", "სასწავლო"))
+        edu_tokens: List[str] = []
+        _edu_bilingual_map = {
+            "computer": ["it", "software", "ინფორმაციულ", "კომპიუტერულ", "ტექნოლოგ", "პროგრამ"],
+            "informatics": ["it", "software", "ინფორმაციულ", "ტექნოლოგ", "მონაცემ"],
+            "information": ["it", "ინფორმაციულ", "სისტემ", "ტექნოლოგ"],
+            "software": ["developer", "qa", "ტესტ", "პროგრამ", "დეველოპერ"],
+            "engineering": ["engineer", "technical", "ტექნიკურ", "ინჟინერ"],
+            "business": ["business", "analyst", "operations", "ბიზნეს", "ანალიტ", "ოპერაცი"],
+            "economics": ["economic", "finance", "analyst", "ეკონომიკ", "ფინანს", "ანალიტ"],
+            "finance": ["finance", "accounting", "audit", "ფინანს", "ბუღალტ", "აუდიტ"],
+            "management": ["project", "coordinator", "operations", "მენეჯმენტ", "პროექტ"],
+            "law": ["legal", "compliance", "იურისტ", "სამართალ"],
+            "international": ["international", "relations", "policy", "საერთაშორისო", "პოლიტიკ"],
+            "mathematics": ["data", "analyst", "analytics", "მონაცემ", "ანალიტ"],
+        }
+        for e in edu_entries:
+            if not isinstance(e, dict):
+                continue
+            edu_blob = " ".join(
+                [
+                    str(e.get("degree") or ""),
+                    str(e.get("field_of_study") or ""),
+                    str(e.get("focus") or ""),
+                    " ".join(str(m) for m in (e.get("modules") or [])[:8]),
+                ]
+            ).lower()
+            for tok in re.split(r"[\s/,&()-]+", edu_blob):
+                if len(tok) >= 4 and tok not in ("bachelor", "master", "degree", "university", "science", "arts", "present", "student"):
+                    if tok not in edu_tokens:
+                        edu_tokens.append(tok)
+                    for mapped in _edu_bilingual_map.get(tok, []):
+                        if mapped not in edu_tokens:
+                            edu_tokens.append(mapped)
+
+        is_intern_role = any(w in title_lower for w in ("intern", "trainee", "graduate", "apprentice", "სტაჟიორ", "სტაჟირებ", "დამწყებ", "სასწავლო"))
 
         # 1. Public Sector & Internship Portal (hr.gov.ge) — match by domain, tech, or academic/internship track
         if portal == "hr.gov.ge":
-            it_gov_signals = ["it", "ინფორმაციულ ტექნოლოგ", "ტექნოლოგ", "პროგრამ", "მონაცემ", "ანალიტ", "სისტემ", "კიბერ", "ქსელ", "ტესტ", "მხარდაჭერ", "sql", "developer"]
+            it_gov_signals = ["it", "ინფორმაციულ ტექნოლოგ", "ტექნოლოგ", "პროგრამ", "მონაცემ", "ანალიტ", "სისტემ", "კიბერ", "ქსელ", "ტესტ", "sql", "developer"]
             is_tech_cand = target_industry in ("qa_tech", "software_engineering", "data_analytics")
             has_domain_hit = any(sig in combined for sig in (direct_signals + adj_signals + edu_tokens))
             has_tech_hit = is_tech_cand and any(
@@ -680,11 +764,13 @@ Markdown:
                 return ("PUBLIC_INTERNSHIP", "Public Sector & Graduate Internship (HR.gov.ge)")
             return ("NONE", f"Domain Gate: '{job_title}' on HR.gov.ge does not match candidate's {target_industry} / education profile.")
 
-        # Graduate / Corporate Internship matching via Education + Coursework
+        # Graduate / Entry-Level Internship matching compiled from Education + CV skills
         if is_intern_role and eligible_internships and (
             any(sig in combined for sig in (direct_signals + adj_signals + edu_tokens)) or overlap_count >= 1
         ):
-            return ("ADJACENT", f"Internship / Graduate Track ({parsed_skills.get('primary_role') or target_industry})")
+            edu_hit = any(tok in combined for tok in edu_tokens)
+            label = "Education-Aligned Entry / Internship" if edu_hit else f"Internship / Graduate Track ({parsed_skills.get('primary_role') or target_industry})"
+            return ("PUBLIC_INTERNSHIP" if edu_hit else "ADJACENT", label)
 
         if any(sig in title_lower for sig in direct_signals) or (
             target_industry in ("receptionist_hospitality", "healthcare_hospital", "customer_service", "logistics_supply_chain", "finance_accounting")
@@ -692,25 +778,32 @@ Markdown:
         ):
             return ("DIRECT", parsed_skills.get("primary_role") or "Direct Role Match")
 
-        # 2. Adjacent Role / Transferable Skill Alignment
+        # 2. Adjacent Role / Transferable Skill Alignment (require real technical alignment for tech profiles)
         matched_adj_role = adjacent_roles[0] if adjacent_roles else "Transferable Adjacent Role"
 
-        # Match explicit adjacent role titles first
+        # Match explicit adjacent role titles only when not a generic non-technical support word
+        generic_noise_words = {"junior", "associate", "specialist", "engineer", "l2/l3", "l1/l2", "support", "assistant", "manager", "operations"}
         for adj_r in adjacent_roles:
-            role_words = [w.lower() for w in re.split(r"[\s/&(),.-]+", adj_r) if len(w) >= 4 and w.lower() not in ("junior", "associate", "specialist", "engineer", "l2/l3", "l1/l2")]
-            if any(w in title_lower for w in role_words):
+            role_words = [w.lower() for w in re.split(r"[\s/&(),.-]+", adj_r) if len(w) >= 4 and w.lower() not in generic_noise_words]
+            if role_words and any(w in title_lower for w in role_words):
                 return ("ADJACENT", adj_r)
+            if "technical support" in title_lower or "application support" in title_lower or "ტექნიკური მხარდაჭერ" in title_lower:
+                if overlap_count >= 1 or any(t in combined for t in ("sql", "api", "linux", "jira", "postman", "ლოგ", "მონიტორინგ")):
+                    return ("ADJACENT", "Technical Support Engineer L2/L3")
 
-        # Match transferable candidate skills against job requirements (>= 2 core skills or >= 50% overlap)
+        # Match transferable candidate skills against job requirements (>= 2 core skills, or adjacent signal + >= 1 verified skill)
         has_adj_sig = any(sig in title_lower or sig in combined[:300] for sig in adj_signals)
-
-        # Require either explicit adjacent-role keywords or strong >= 2 transferable skills overlap
         if overlap_count >= 2 or (has_adj_sig and overlap_count >= 1) or (
             has_adj_sig and target_industry in ("logistics_supply_chain", "finance_accounting", "marketing_growth", "sales_bd", "hr_recruiting", "public_admin_legal", "general_professional")
         ):
             return ("ADJACENT", matched_adj_role)
 
-        return ("NONE", f"Domain Gate: '{job_title}' does not align with candidate's primary profile or transferable skills.")
+        # Entry-level non-internship roles matching candidate's academic field of study (for early-career candidates)
+        is_entry_title = any(w in title_lower for w in ("junior", "entry", "trainee", "assistant", "უმცროს", "დამწყებ", "ასისტენტ"))
+        if is_entry_title and eligible_internships and edu_tokens and any(tok in title_lower for tok in edu_tokens):
+            return ("ADJACENT", "Education-Aligned Entry-Level Role")
+
+        return ("NONE", f"Domain Gate: '{job_title}' does not align with candidate's CV skills or education.")
 
     def evaluate_job_tiered(
         self,

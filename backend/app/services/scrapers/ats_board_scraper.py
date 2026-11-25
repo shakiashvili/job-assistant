@@ -2,6 +2,7 @@ import asyncio
 import logging
 from typing import Dict, Any, List, Optional
 from .base_scraper import BasePortalScraper, evaluate_remote_and_language_gate
+from ..link_validator import parse_vacancy_published_date
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,7 @@ class GreenhouseScraper(BasePortalScraper):
             )
             if gate_status == "FILTERED_OUT":
                 continue
+            pub_dt, pub_str = parse_vacancy_published_date(str(job.get("updated_at") or job.get("first_published") or ""), standalone=True)
             items.append({
                 "portal": self.portal_name,
                 "external_id": f"gh-{board}-{job.get('id', '')}",
@@ -53,6 +55,8 @@ class GreenhouseScraper(BasePortalScraper):
                 "location": loc_name,
                 "description_raw": content[:4000],
                 "detected_languages": langs,
+                "posting_date": pub_str,
+                "published_at": pub_dt,
                 "status": "DISCOVERED",
             })
         return items
@@ -112,6 +116,7 @@ class LeverScraper(BasePortalScraper):
             )
             if gate_status == "FILTERED_OUT":
                 continue
+            pub_dt, pub_str = parse_vacancy_published_date(str(post.get("createdAt") or ""), standalone=True)
             items.append({
                 "portal": self.portal_name,
                 "external_id": f"lever-{comp}-{post.get('id', '')}",
@@ -123,6 +128,8 @@ class LeverScraper(BasePortalScraper):
                 "location": loc_name,
                 "description_raw": desc[:4000],
                 "detected_languages": langs,
+                "posting_date": pub_str,
+                "published_at": pub_dt,
                 "status": "DISCOVERED",
             })
         return items

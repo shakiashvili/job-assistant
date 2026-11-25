@@ -5,6 +5,7 @@ from typing import Dict, Any, List, Optional
 from bs4 import BeautifulSoup
 
 from .base_scraper import BasePortalScraper, evaluate_remote_and_language_gate, sanitize_company_name
+from ..link_validator import parse_vacancy_published_date
 
 logger = logging.getLogger(__name__)
 _FEED_HEADERS = {"User-Agent": "TalentFlowAI/2.0 (Remote Job Discovery)"}
@@ -64,6 +65,7 @@ class RemotiveScraper(BasePortalScraper):
             if gate_status == "FILTERED_OUT":
                 continue
 
+            pub_dt, pub_str = parse_vacancy_published_date(str(job.get("publication_date") or ""), standalone=True)
             results.append({
                 "portal": self.portal_name,
                 "external_id": f"remotive-{job.get('id', '')}",
@@ -77,6 +79,8 @@ class RemotiveScraper(BasePortalScraper):
                 "detected_languages": langs,
                 "language_requirements": langs,
                 "description_raw": combined_desc[:4500],
+                "posting_date": pub_str,
+                "published_at": pub_dt,
                 "status": "DISCOVERED",
             })
         return results
@@ -129,6 +133,7 @@ class HimalayasScraper(BasePortalScraper):
 
             # Deterministic external_id independent of volatile list position
             url_digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:12]
+            pub_dt, pub_str = parse_vacancy_published_date(str(job.get("pubDate") or job.get("createdAt") or ""), standalone=True)
             results.append({
                 "portal": self.portal_name,
                 "external_id": f"himalayas-{job.get('companySlug') or 'co'}-{url_digest}",
@@ -142,6 +147,8 @@ class HimalayasScraper(BasePortalScraper):
                 "detected_languages": langs,
                 "language_requirements": langs,
                 "description_raw": combined_desc[:4500],
+                "posting_date": pub_str,
+                "published_at": pub_dt,
                 "status": "DISCOVERED",
             })
         return results
@@ -196,6 +203,7 @@ class RemoteOkScraper(BasePortalScraper):
             if not url:
                 continue
 
+            pub_dt, pub_str = parse_vacancy_published_date(str(job.get("date") or job.get("epoch") or ""), standalone=True)
             results.append({
                 "portal": self.portal_name,
                 "external_id": f"remoteok-{job.get('id', '')}",
@@ -209,6 +217,8 @@ class RemoteOkScraper(BasePortalScraper):
                 "detected_languages": langs,
                 "language_requirements": langs,
                 "description_raw": combined_desc[:4500],
+                "posting_date": pub_str,
+                "published_at": pub_dt,
                 "status": "DISCOVERED",
             })
         return results

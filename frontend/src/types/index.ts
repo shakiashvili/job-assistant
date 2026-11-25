@@ -166,6 +166,7 @@ export interface DbJobPosting {
   salary_estimated_by_ai: boolean;
   salary_source?: 'verified' | 'ai_estimated' | 'missing' | string;
   posting_date?: string | null;
+  published_at?: string | null;
   suitability_score: number;
   match_rationale: string;
   match_tier?: 'DIRECT' | 'ADJACENT' | 'PUBLIC_INTERNSHIP' | string;
@@ -683,6 +684,7 @@ export interface JobSearchParams {
   experience_level?: string;
   employment_type?: string;
   sort_by?: 'relevance' | 'newest' | 'salary_desc' | 'company_asc' | string;
+  posted_within_days?: number;
   only_new?: boolean;
   only_saved?: boolean;
   b2b_only?: boolean;

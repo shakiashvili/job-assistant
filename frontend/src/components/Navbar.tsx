@@ -192,7 +192,7 @@ git push -u origin my-feature-branch`;
                 <div
                   role="menu"
                   aria-label="Additional workspace sections"
-                  className="absolute right-0 mt-2 w-56 rounded-xl bg-slate-900 border border-slate-700 shadow-2xl p-1.5 space-y-1 z-50"
+                  className="absolute right-0 top-full mt-2.5 w-60 rounded-2xl bg-slate-900 border border-slate-700/90 shadow-2xl ring-1 ring-black/50 p-2 space-y-1 z-50"
                 >
                   {desktopSecondary.map((item) => {
                     const Icon = item.icon;
@@ -204,18 +204,18 @@ git push -u origin my-feature-branch`;
                         role="menuitem"
                         onClick={() => selectTab(item.id)}
                         aria-current={isActive ? 'page' : undefined}
-                        className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${
+                        className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-colors ${
                           isActive
-                            ? 'bg-emerald-700/90 text-white'
+                            ? 'bg-emerald-700 text-white shadow-sm'
                             : 'text-slate-200 hover:bg-slate-800 hover:text-white'
                         }`}
                       >
-                        <Icon className="w-3.5 h-3.5 flex-shrink-0" aria-hidden="true" />
+                        <Icon className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
                         <span>{item.label}</span>
                       </button>
                     );
                   })}
-                  <div className="border-t border-slate-800 my-1" />
+                  <div className="border-t border-slate-800 my-1.5" />
                   <button
                     type="button"
                     role="menuitem"
@@ -223,13 +223,13 @@ git push -u origin my-feature-branch`;
                       setIsShareOpen(true);
                       setIsMoreOpen(false);
                     }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold text-indigo-300 hover:bg-slate-800 hover:text-indigo-200"
+                    className="w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold text-indigo-300 hover:bg-slate-800 hover:text-indigo-200"
                   >
-                    <Share2 className="w-3.5 h-3.5 flex-shrink-0" aria-hidden="true" />
+                    <Share2 className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
                     <span>Share Repository</span>
                   </button>
                   {backendHealth && (
-                    <div className="px-3 py-1.5 text-[11px] text-slate-400 flex items-center justify-between border-t border-slate-800 mt-1 pt-2">
+                    <div className="px-3.5 py-2 text-[11px] text-slate-400 flex items-center justify-between border-t border-slate-800 mt-1">
                       <span>AI Engine</span>
                       <span className={backendHealth.connected ? 'text-emerald-400 font-semibold' : 'text-amber-400 font-semibold'}>
                         {backendHealth.connected ? (backendHealth.provider || 'Active') : 'Deterministic'}
@@ -291,44 +291,62 @@ git push -u origin my-feature-branch`;
             </button>
           </div>
         </div>
+      </header>
 
-        {/* Mobile Dropdown Menu (all sections always accessible) */}
-        {isMobileMenuOpen && (
+      {/* Mobile & Tablet Bottom-Sheet Menu Drawer (zero header/content overlap) */}
+      {isMobileMenuOpen && (
+        <div
+          className="lg:hidden fixed inset-0 z-50 bg-black/65 backdrop-blur-sm flex items-end"
+          onClick={() => setIsMobileMenuOpen(false)}
+        >
           <div
             role="menu"
             aria-label="All navigation sections"
-            className="lg:hidden border-t border-slate-800/80 bg-slate-950/95 backdrop-blur-xl px-4 py-3 space-y-1.5"
+            onClick={(e) => e.stopPropagation()}
+            className="w-full rounded-t-2xl bg-slate-900 border-t border-slate-700 shadow-2xl p-4 pb-6 space-y-3 max-h-[82vh] overflow-y-auto"
           >
-            {visibleNavItems.map((item) => {
-              const Icon = item.icon;
-              const isActive = activeTab === item.id;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  role="menuitem"
-                  onClick={() => selectTab(item.id)}
-                  aria-current={isActive ? 'page' : undefined}
-                  className={`w-full min-h-[44px] flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
-                    isActive
-                      ? 'bg-gradient-to-r from-emerald-700 to-teal-700 text-white shadow-md shadow-emerald-500/20'
-                      : 'text-slate-200 hover:text-white hover:bg-slate-900'
-                  }`}
-                >
-                  <Icon className="w-4 h-4" aria-hidden="true" />
-                  <span>{item.label}</span>
-                </button>
-              );
-            })}
-
-            <div className="pt-2 border-t border-slate-900 flex items-center justify-between text-xs text-slate-400">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-300">Workspace Menu</span>
+              <button
+                type="button"
+                aria-label="Close navigation menu"
+                onClick={() => setIsMobileMenuOpen(false)}
+                className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl bg-slate-800 text-slate-200 hover:text-white"
+              >
+                <X className="w-4 h-4" aria-hidden="true" />
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {visibleNavItems.map((item) => {
+                const Icon = item.icon;
+                const isActive = activeTab === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    role="menuitem"
+                    onClick={() => selectTab(item.id)}
+                    aria-current={isActive ? 'page' : undefined}
+                    className={`min-h-[48px] flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all border ${
+                      isActive
+                        ? 'bg-gradient-to-r from-emerald-700 to-teal-700 text-white border-emerald-500/60 shadow-md shadow-emerald-500/20'
+                        : 'bg-slate-950/80 text-slate-200 border-slate-800 hover:text-white hover:bg-slate-800'
+                    }`}
+                  >
+                    <Icon className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
+                    <span className="truncate">{item.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="pt-2 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
               <button
                 type="button"
                 onClick={() => {
                   setIsShareOpen(true);
                   setIsMobileMenuOpen(false);
                 }}
-                className="min-h-[44px] flex items-center gap-1.5 text-indigo-400 py-1 px-2"
+                className="min-h-[44px] flex items-center gap-1.5 text-indigo-300 hover:text-indigo-200 py-1 px-2"
               >
                 <Share2 className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>Share Repository</span>
@@ -340,8 +358,8 @@ git push -u origin my-feature-branch`;
               )}
             </div>
           </div>
-        )}
-      </header>
+        </div>
+      )}
 
       {/* Mobile Bottom Navigation Bar: 4 Primary Tabs + More (reveals Profile, B2B, Action Plans, Admin) */}
       <nav

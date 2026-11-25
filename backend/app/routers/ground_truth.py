@@ -1,4 +1,3 @@
-import hashlib
 import logging
 import re
 from pathlib import Path
@@ -20,8 +19,6 @@ from ..db.models import (
     JobPosting,
     UserJobMatch,
     SavedJob,
-    ApplicationRecord,
-    ApplicationTracker,
     CandidateDocument,
     CVVersion,
     utc_now,
@@ -615,6 +612,52 @@ def get_user_cv_file(
     return FileResponse(path=target, filename=safe_name, media_type=media)
 
 
+def _record_generated_cv_files(
+    user_id: int,
+    filenames: List[Optional[str]],
+    *,
+    doc_type: str,
+    target_company: str,
+    target_role: str,
+) -> None:
+    user_gen_dir = user_generated_resumes_dir(user_id)
+    for fname in dict.fromkeys(f for f in filenames if f):
+        record_candidate_document(
+            user_id=user_id,
+            filename=fname,
+            file_path=user_gen_dir / fname,
+            doc_type=doc_type,
+            target_company=target_company,
+            target_role=target_role,
+        )
+
+
+def _serve_resume_file(file_path: Path, safe_name: str) -> FileResponse:
+    lower = safe_name.lower()
+    if lower.endswith(".html"):
+        return FileResponse(
+            path=file_path,
+            media_type="text/html; charset=utf-8",
+            headers={"Content-Security-Policy": _HTML_PREVIEW_CSP, "X-Content-Type-Options": "nosniff"},
+        )
+    media = (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        if lower.endswith(".docx")
+        else "message/rfc822"
+        if lower.endswith(".eml")
+        else "application/pdf"
+    )
+    return FileResponse(
+        path=file_path,
+        filename=safe_name,
+        media_type=media,
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_name}"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 @router.post("/resumes/generate-edition")
 def generate_cv_edition(
     req: GenerateEditionRequest,
@@ -624,10 +667,7 @@ def generate_cv_edition(
     from ..services.cv_generator_service import cv_generator_service
 
     live = load_live_candidate_profile(current_user.email)
-    gt = ground_truth_store.get_data(
-        owner_email=current_user.email,
-        user_id=current_user.id,
-    )
+    gt = ground_truth_store.get_data(owner_email=current_user.email, user_id=current_user.id)
     cand = gt.get("candidate", {})
     default_role = live.get("primary_role") or live.get("headline") or cand.get("headline") or "Specialist"
     role = (req.target_role or "").strip() or default_role
@@ -649,21 +689,13 @@ def generate_cv_edition(
         cv_language=req.cv_language or "en",
         cv_style=req.edition or "ats",
     )
-    user_gen_dir = user_generated_resumes_dir(current_user.id)
-    recorded_names: set[str] = set()
-    for fname_key in ("pdf_filename", "docx_filename", "cv_filename"):
-        fname_val = pkg.get(fname_key)
-        if fname_val and fname_val not in recorded_names:
-            recorded_names.add(fname_val)
-            file_p = user_gen_dir / fname_val
-            record_candidate_document(
-                user_id=current_user.id,
-                filename=fname_val,
-                file_path=file_p,
-                doc_type=f"generated_{req.edition}_cv",
-                target_company=company,
-                target_role=role,
-            )
+    _record_generated_cv_files(
+        current_user.id,
+        [pkg.get("pdf_filename"), pkg.get("docx_filename"), pkg.get("cv_filename")],
+        doc_type=f"generated_{req.edition}_cv",
+        target_company=company,
+        target_role=role,
+    )
 
     cv_version_id: Optional[int] = None
     try:
@@ -808,17 +840,13 @@ def create_cv_version(
     rendered = cv_generator_service.render_cv_from_sections(sections, user_id=current_user.id)
     if rendered.get("ats_parse_report"):
         sections["ats_parse_report"] = rendered["ats_parse_report"]
-    user_gen_dir = user_generated_resumes_dir(current_user.id)
-    for fname in (rendered.get("pdf_filename"), rendered.get("docx_filename")):
-        if fname:
-            record_candidate_document(
-                user_id=current_user.id,
-                filename=fname,
-                file_path=user_gen_dir / fname,
-                doc_type=f"cv_studio_{req.edition}",
-                target_company=req.target_company,
-                target_role=req.target_role,
-            )
+    _record_generated_cv_files(
+        current_user.id,
+        [rendered.get("pdf_filename"), rendered.get("docx_filename")],
+        doc_type=f"cv_studio_{req.edition}",
+        target_company=req.target_company,
+        target_role=req.target_role,
+    )
 
     with Session(engine) as session:
         ver = CVVersion(
@@ -878,17 +906,13 @@ def update_cv_version(
         )
         if rendered.get("ats_parse_report"):
             sections["ats_parse_report"] = rendered["ats_parse_report"]
-        user_gen_dir = user_generated_resumes_dir(current_user.id)
-        for fname in (rendered.get("pdf_filename"), rendered.get("docx_filename")):
-            if fname:
-                record_candidate_document(
-                    user_id=current_user.id,
-                    filename=fname,
-                    file_path=user_gen_dir / fname,
-                    doc_type=f"cv_studio_{ver.edition}",
-                    target_company=ver.target_company,
-                    target_role=ver.target_role,
-                )
+        _record_generated_cv_files(
+            current_user.id,
+            [rendered.get("pdf_filename"), rendered.get("docx_filename")],
+            doc_type=f"cv_studio_{ver.edition}",
+            target_company=ver.target_company,
+            target_role=ver.target_role,
+        )
 
         ver.structured_content = sections
         ver.rendered_html = rendered.get("rendered_html") or ""
@@ -1017,41 +1041,7 @@ def get_generated_resume_file(
 ):
     """Downloads or previews a generated PDF, Word (.docx), EML, or sandboxed HTML resume after fail-closed ownership verification."""
     safe_name = _sanitize_safe_filename(filename)
-    file_path = _resolve_generated_resume_for_user(safe_name, current_user)
-    lower = safe_name.lower()
-    if lower.endswith(".html"):
-        return FileResponse(
-            path=file_path,
-            media_type="text/html; charset=utf-8",
-            headers={
-                "Content-Security-Policy": _HTML_PREVIEW_CSP,
-                "X-Content-Type-Options": "nosniff",
-            },
-        )
-    dl_headers = {
-        "Content-Disposition": f'attachment; filename="{safe_name}"',
-        "X-Content-Type-Options": "nosniff",
-    }
-    if lower.endswith(".docx"):
-        return FileResponse(
-            path=file_path,
-            filename=safe_name,
-            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            headers=dl_headers,
-        )
-    if lower.endswith(".eml"):
-        return FileResponse(
-            path=file_path,
-            filename=safe_name,
-            media_type="message/rfc822",
-            headers=dl_headers,
-        )
-    return FileResponse(
-        path=file_path,
-        filename=safe_name,
-        media_type="application/pdf",
-        headers=dl_headers,
-    )
+    return _serve_resume_file(_resolve_generated_resume_for_user(safe_name, current_user), safe_name)
 
 
 @router.get("/resumes/{filename}")
@@ -1069,30 +1059,4 @@ def get_resume_pdf(
             raise
     if file_path is None:
         file_path = _resolve_generated_resume_for_user(safe_name, current_user)
-    lower = safe_name.lower()
-    if lower.endswith(".html"):
-        return FileResponse(
-            path=file_path,
-            media_type="text/html; charset=utf-8",
-            headers={
-                "Content-Security-Policy": _HTML_PREVIEW_CSP,
-                "X-Content-Type-Options": "nosniff",
-            },
-        )
-    dl_headers = {
-        "Content-Disposition": f'attachment; filename="{safe_name}"',
-        "X-Content-Type-Options": "nosniff",
-    }
-    if lower.endswith(".docx"):
-        return FileResponse(
-            path=file_path,
-            filename=safe_name,
-            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            headers=dl_headers,
-        )
-    return FileResponse(
-        path=file_path,
-        filename=safe_name,
-        media_type="application/pdf",
-        headers=dl_headers,
-    )
+    return _serve_resume_file(file_path, safe_name)

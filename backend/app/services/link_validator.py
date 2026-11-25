@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 import httpx
 from bs4 import BeautifulSoup
@@ -122,6 +122,138 @@ def parse_vacancy_deadline(text: str) -> Tuple[Optional[datetime], Optional[str]
                 return res
 
     return None, None, False
+
+
+_PUBLISHED_KW_PATTERN = r"(?:გამოქვეყნდა|თარიღი|published(?:\s+on)?|posted(?:\s+on)?|date\s+posted)"
+
+
+def _infer_year_for_day_month(day: int, month: int, today: date) -> Optional[datetime]:
+    year = today.year
+    try:
+        dt = datetime(year, month, day, 12, 0, 0, tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    if dt.date() > today + timedelta(days=7):
+        try:
+            dt = datetime(year - 1, month, day, 12, 0, 0, tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    return dt
+
+
+def parse_vacancy_published_date(
+    text: str,
+    *,
+    standalone: bool = False,
+) -> Tuple[Optional[datetime], Optional[str]]:
+    """
+    Parses a vacancy's publication date from either a dedicated date cell/value (standalone=True)
+    or a full vacancy description containing labels like 'გამოქვეყნდა: 24 ნოემბერი' or 'Published: 2026-11-24'.
+    Returns (published_datetime_utc, display_string).
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return None, None
+
+    today = datetime.now(timezone.utc).date()
+
+    # 1. Epoch timestamp (int/float seconds or ms)
+    if standalone and re.fullmatch(r"\d{10,13}", raw):
+        ts = int(raw)
+        if ts > 10_000_000_000:
+            ts = ts // 1000
+        try:
+            dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+            return dt, dt.strftime("%Y-%m-%d")
+        except Exception:
+            return None, None
+
+    # 2. ISO date/datetime (e.g. 2026-11-24 or 2026-11-24T09:15:00Z)
+    iso_pat = r"(20\d{2})-(\d{2})-(\d{2})" if standalone else rf"{_PUBLISHED_KW_PATTERN}\s*[:—–-]?\s*(20\d{{2}})-(\d{{2}})-(\d{{2}})"
+    m_iso = re.search(iso_pat, raw, re.I)
+    if m_iso:
+        try:
+            dt = datetime(int(m_iso.group(1)), int(m_iso.group(2)), int(m_iso.group(3)), 12, 0, 0, tzinfo=timezone.utc)
+            return dt, dt.strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+
+    # 3. Relative words (standalone or labeled)
+    low = raw.lower()
+    if standalone:
+        if low in ("today", "დღეს", "just now", "new"):
+            dt = datetime(today.year, today.month, today.day, 12, 0, 0, tzinfo=timezone.utc)
+            return dt, dt.strftime("%Y-%m-%d")
+        if low in ("yesterday", "გუშინ"):
+            yd = today - timedelta(days=1)
+            dt = datetime(yd.year, yd.month, yd.day, 12, 0, 0, tzinfo=timezone.utc)
+            return dt, dt.strftime("%Y-%m-%d")
+        rel_m = re.search(r"(\d{1,2})\s*(?:days?|d|დღის)\s*(?:ago|წინ)?", low)
+        if rel_m:
+            d = today - timedelta(days=int(rel_m.group(1)))
+            dt = datetime(d.year, d.month, d.day, 12, 0, 0, tzinfo=timezone.utc)
+            return dt, dt.strftime("%Y-%m-%d")
+
+    # 4. Numeric DD.MM.YYYY / DD/MM/YYYY
+    num_pat = r"\b(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})\b" if standalone else rf"{_PUBLISHED_KW_PATTERN}\s*[:—–-]?\s*(\d{{1,2}})[./-](\d{{1,2}})[./-](\d{{2,4}})"
+    m_num = re.search(num_pat, raw, re.I)
+    if m_num:
+        day, month, year = int(m_num.group(1)), int(m_num.group(2)), int(m_num.group(3))
+        if year < 100:
+            year += 2000
+        try:
+            dt = datetime(year, month, day, 12, 0, 0, tzinfo=timezone.utc)
+            return dt, dt.strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+
+    # 5. Day + Georgian/English month (+ optional year), e.g. "24 ნოემბერი" or "გამოქვეყნდა: 24 ნოემბერი 2026"
+    dm_pat = (
+        rf"\b(\d{{1,2}})[\s,.-]+({_MONTH_WORD_PATTERN})(?:[\s,.-]+(20\d{{2}}))?\b"
+        if standalone
+        else rf"{_PUBLISHED_KW_PATTERN}\s*[:—–-]?\s*(\d{{1,2}})[\s,.-]+({_MONTH_WORD_PATTERN})(?:[\s,.-]+(20\d{{2}}))?"
+    )
+    m_dm = re.search(dm_pat, raw, re.I)
+    if m_dm:
+        day = int(m_dm.group(1))
+        month = _resolve_month_number(m_dm.group(2))
+        yr_raw = m_dm.group(3)
+        if month:
+            if yr_raw:
+                try:
+                    dt = datetime(int(yr_raw), month, day, 12, 0, 0, tzinfo=timezone.utc)
+                    return dt, dt.strftime("%Y-%m-%d")
+                except ValueError:
+                    pass
+            else:
+                dt = _infer_year_for_day_month(day, month, today)
+                if dt:
+                    return dt, dt.strftime("%Y-%m-%d")
+
+    # 6. Month + Day (+ optional year), e.g. "Nov 24, 2026"
+    md_pat = (
+        rf"\b({_MONTH_WORD_PATTERN})\.?\s+(\d{{1,2}})(?:st|nd|rd|th)?(?:[\s,]+(20\d{{2}}))?\b"
+        if standalone
+        else rf"{_PUBLISHED_KW_PATTERN}\s*[:—–-]?\s*({_MONTH_WORD_PATTERN})\.?\s+(\d{{1,2}})(?:st|nd|rd|th)?(?:[\s,]+(20\d{{2}}))?"
+    )
+    m_md = re.search(md_pat, raw, re.I)
+    if m_md:
+        month = _resolve_month_number(m_md.group(1))
+        day = int(m_md.group(2))
+        yr_raw = m_md.group(3)
+        if month:
+            if yr_raw:
+                try:
+                    dt = datetime(int(yr_raw), month, day, 12, 0, 0, tzinfo=timezone.utc)
+                    return dt, dt.strftime("%Y-%m-%d")
+                except ValueError:
+                    pass
+            else:
+                dt = _infer_year_for_day_month(day, month, today)
+                if dt:
+                    return dt, dt.strftime("%Y-%m-%d")
+
+    return None, None
 
 
 def validate_live_html_content(url: str, html: str) -> Tuple[bool, str]:

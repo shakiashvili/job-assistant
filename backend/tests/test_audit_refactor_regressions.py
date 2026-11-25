@@ -263,3 +263,215 @@ def test_cross_source_deduplication_and_job_search_sorting_and_health():
     items = r_sort.json()["items"]
     assert len(items) >= 2
     assert items[0]["company"] == "Beta Global"
+
+
+def test_jobs_ge_published_date_parsing_and_newest_sort_and_recency_filter():
+    from datetime import datetime, timedelta, timezone
+    from app.services.link_validator import parse_vacancy_published_date
+    from app.services.scrapers.jobs_ge_scraper import JobsGeScraper
+
+    dt_ka, norm_ka = parse_vacancy_published_date("24 ნოემბერი", standalone=True)
+    assert dt_ka is not None and dt_ka.month == 11 and dt_ka.day == 24
+    assert norm_ka is not None and norm_ka.endswith("-11-24")
+
+    dt_iso, norm_iso = parse_vacancy_published_date("2026-11-24T09:30:00Z", standalone=True)
+    assert dt_iso is not None and norm_iso == "2026-11-24"
+
+    dt_yest, _ = parse_vacancy_published_date("Yesterday", standalone=True)
+    assert dt_yest is not None
+
+    sample_html = """
+    <table id="job_list_table">
+      <tr><th></th><th>Title</th><th></th><th>Company</th><th>Published</th><th>Deadline</th></tr>
+      <tr>
+        <td></td>
+        <td><a class="vip" href="/ge/?view=jobs&id=777123">ხარისხის უზრუნველყოფის სპეციალისტი NEW</a></td>
+        <td></td>
+        <td><a href="/ge/?view=client&client=procredit">პროკრედიტ ბანკი</a></td>
+        <td>24 ნოემბერი</td>
+        <td>24 დეკემბერი</td>
+      </tr>
+    </table>
+    """
+    listings = JobsGeScraper().parse_html_listings(sample_html)
+    assert len(listings) == 1
+    assert listings[0]["title"] == "ხარისხის უზრუნველყოფის სპეციალისტი"
+    assert listings[0]["published_at"] is not None
+    assert listings[0]["posting_date"].endswith("-11-24")
+    assert listings[0]["deadline_text"] == "24 დეკემბერი"
+
+    init_db()
+    client = TestClient(app)
+    headers = _register_and_auth(client, "recency_sort_test@example.ge")
+    up = client.post(
+        "/api/skills-md",
+        headers=headers,
+        json={"content": "# Giorgi QA — Junior QA Engineer\n## Skills\n- Playwright, Python, SQL, Manual Testing, REST API\n"},
+    )
+    assert up.status_code == 200
+    uid = client.get("/api/auth/me", headers=headers).json()["id"]
+    now = datetime.now(timezone.utc)
+    old_dt = now - timedelta(days=11)
+    fresh_dt = now - timedelta(hours=6)
+
+    with Session(engine) as session:
+        j_old = JobPosting(
+            user_id=uid,
+            portal="jobs.ge",
+            external_id="recency-old-1",
+            title="Legacy QA Automation Role",
+            company="OldCorp",
+            url="https://jobs.ge/ge/?view=jobs&id=991001",
+            market="GE_DOMESTIC",
+            is_remote=False,
+            description_raw="Playwright Python QA testing role.",
+            suitability_score=95.0,
+            match_tier="DIRECT",
+            status="STAGED",
+            published_at=old_dt,
+            posting_date=old_dt.strftime("%Y-%m-%d"),
+        )
+        j_new = JobPosting(
+            user_id=uid,
+            portal="jobs.ge",
+            external_id="recency-new-1",
+            title="Fresh QA Testing Specialist",
+            company="NewBank",
+            url="https://jobs.ge/ge/?view=jobs&id=991002",
+            market="GE_DOMESTIC",
+            is_remote=False,
+            description_raw="Manual QA testing SQL REST API role.",
+            suitability_score=80.0,
+            match_tier="DIRECT",
+            status="STAGED",
+            published_at=fresh_dt,
+            posting_date=fresh_dt.strftime("%Y-%m-%d"),
+        )
+        session.add(j_old)
+        session.add(j_new)
+        session.flush()
+        session.add(UserJobMatch(user_id=uid, job_posting_id=j_old.id, suitability_score=95.0, match_score=95.0, status="STAGED"))
+        session.add(UserJobMatch(user_id=uid, job_posting_id=j_new.id, suitability_score=80.0, match_score=80.0, status="STAGED"))
+        session.commit()
+
+    # Default sort is newest posted (fresh job before higher-scoring 11-day-old job)
+    r_newest = client.get("/api/jobs?search=QA", headers=headers)
+    assert r_newest.status_code == 200
+    newest_titles = [it["title"] for it in r_newest.json()["items"]]
+    assert newest_titles.index("Fresh QA Testing Specialist") < newest_titles.index("Legacy QA Automation Role")
+
+    # posted_within_days=3 excludes the 11-day-old posting
+    r_3d = client.get("/api/jobs?search=QA&posted_within_days=3", headers=headers)
+    assert r_3d.status_code == 200
+    recent_titles = [it["title"] for it in r_3d.json()["items"]]
+    assert "Fresh QA Testing Specialist" in recent_titles
+    assert "Legacy QA Automation Role" not in recent_titles
+
+
+def test_hiring_perspective_experience_domain_language_and_education_matching():
+    from app.services.matcher_service import matcher_service
+
+    parsed_entry_qa = {
+        "target_industry": "qa_tech",
+        "detected_industry": "QA & Software Testing",
+        "primary_role": "Junior QA Engineer",
+        "years_of_experience": 0.5,
+        "max_allowed_years": 1.0,
+        "eligible_internships": True,
+        "all_skills": ["Manual Testing", "Playwright", "Python", "SQL", "REST API", "Jira", "Postman"],
+        "spoken_languages": ["Georgian (Native)", "English (C1)"],
+        "education": [
+            {
+                "degree": "Bachelor of Business Analytics and Computer Science",
+                "field_of_study": "Data Analytics, Economics, Statistics, Software Engineering",
+                "institution": "TSU",
+            }
+        ],
+    }
+
+    # 1. Must reject 2+ years requirement (EN & KA) for entry-level candidate
+    res_2yr_en = matcher_service.evaluate_job_tiered(
+        title="QA Engineer",
+        description="Requirements: minimum 2+ years of commercial QA experience with Playwright and SQL.",
+        parsed_skills=parsed_entry_qa,
+        portal="jobs.ge",
+    )
+    assert res_2yr_en["status"] == "FILTERED_OUT"
+
+    res_2yr_ka = matcher_service.evaluate_job_tiered(
+        title="ხარისხის უზრუნველყოფის სპეციალისტი",
+        description="მოთხოვნები: მინიმუმ 2 წელი სამუშაო გამოცდილება QA ტესტირებაში და SQL-ში.",
+        parsed_skills=parsed_entry_qa,
+        portal="jobs.ge",
+    )
+    assert res_2yr_ka["status"] == "FILTERED_OUT"
+
+    # 2. Must reject Customer Service & foreign-language-gated non-QA roles
+    res_cs = matcher_service.evaluate_job_tiered(
+        title="Customer Service Representative",
+        description="Handle inbound calls, live chat inquiries, and customer complaints in our call center.",
+        parsed_skills=parsed_entry_qa,
+        portal="jobs.ge",
+    )
+    assert res_cs["status"] == "FILTERED_OUT"
+
+    res_it_lang = matcher_service.evaluate_job_tiered(
+        title="იტალიურენოვანი მომხმარებელთა მრჩეველი",
+        description="მომხმარებელთა კონსულტაცია იტალიურ ენაზე.",
+        parsed_skills=parsed_entry_qa,
+        portal="jobs.ge",
+    )
+    assert res_it_lang["status"] == "FILTERED_OUT"
+
+    # 3. Must accept Georgian entry-level QA Specialist (e.g. ProCredit Bank)
+    res_procredit = matcher_service.evaluate_job_tiered(
+        title="ხარისხის უზრუნველყოფის სპეციალისტი",
+        description="პროგრამული უზრუნველყოფის ტესტირება, ტესტ-ქეისების შედგენა, REST API და SQL შემოწმება, Jira.",
+        parsed_skills=parsed_entry_qa,
+        portal="jobs.ge",
+    )
+    assert res_procredit["status"] != "FILTERED_OUT"
+    assert res_procredit["suitability_score"] >= 60.0
+
+    # 4. Must accept education-aligned internship / graduate role
+    res_edu_intern = matcher_service.evaluate_job_tiered(
+        title="ბიზნეს ანალიტიკის სტაჟიორი (Graduate Internship)",
+        description="სტაჟირება ეკონომიკის, სტატისტიკის და მონაცემთა ანალიტიკის სტუდენტებისთვის და კურსდამთავრებულებისთვის.",
+        parsed_skills=parsed_entry_qa,
+        portal="jobs.ge",
+    )
+    assert res_edu_intern["status"] != "FILTERED_OUT"
+    assert res_edu_intern["match_tier"] == "PUBLIC_INTERNSHIP"
+
+
+def test_legacy_pre_alembic_database_adopted_cleanly_by_migrations(tmp_path):
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import create_engine, inspect, text
+    from sqlmodel import SQLModel
+    from app.config import BASE_DIR
+
+    legacy_db = tmp_path / "legacy_pre_alembic.db"
+    db_url = f"sqlite:///{legacy_db}"
+    eng = create_engine(db_url)
+    SQLModel.metadata.create_all(eng)
+    # Simulate a pre-Alembic DB that has users + job_postings tables without alembic_version or published_at
+    with eng.begin() as conn:
+        conn.execute(text("DROP INDEX IF EXISTS ix_job_postings_published_at"))
+        conn.execute(text("ALTER TABLE job_postings DROP COLUMN published_at"))
+    eng.dispose()
+
+    cfg = Config(str(BASE_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BASE_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", db_url)
+
+    # Stamp base revision just like init_db() does for legacy pre-Alembic DBs, then upgrade to head
+    command.stamp(cfg, "75cd228268f5")
+    command.upgrade(cfg, "head")
+
+    eng_after = create_engine(db_url)
+    insp = inspect(eng_after)
+    cols = {c["name"] for c in insp.get_columns("job_postings")}
+    assert "published_at" in cols
+    assert "alembic_version" in set(insp.get_table_names())
+    eng_after.dispose()
