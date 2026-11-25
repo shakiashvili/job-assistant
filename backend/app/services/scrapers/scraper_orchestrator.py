@@ -215,6 +215,25 @@ class ScraperOrchestrator:
 
         profile = ground_truth_store.get_profile_record(owner_email=owner_email, user_id=user_id)
         parsed_skills = dict(profile.parsed_skills) if (profile and isinstance(profile.parsed_skills, dict)) else {}
+        has_uploaded_profile = bool(
+            profile
+            and (
+                bool(parsed_skills.get("user_uploaded", False))
+                or bool((profile.raw_markdown or "").strip())
+                or bool(parsed_skills.get("all_skills"))
+            )
+        )
+        if not has_uploaded_profile:
+            return {
+                "profile_required": True,
+                "total_processed": 0,
+                "staged_ready_count": 0,
+                "filtered_out_count": 0,
+                "cache_hits": 0,
+                "rejection_reasons": [],
+                "jobs": [],
+                "message": "Upload your CV or skills file first so TalentFlow targets vacancies matching your actual skills and experience.",
+            }
         raw_exp = parsed_skills.get("years_of_experience")
         _, dyn_max_years, _, dyn_label = compute_dynamic_experience_bounds(
             float(raw_exp) if raw_exp is not None else None,

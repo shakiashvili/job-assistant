@@ -630,11 +630,9 @@ CRITICAL INSTRUCTIONS:
                     for cand_prof in all_profiles:
                         ps_row = cand_prof.parsed_skills or {}
                         row_owner = str(ps_row.get("owner_email") or "").strip().lower()
-                        if (not row_owner and cand_prof.user_id is None) or cand_prof.email == "candidate@example.com":
+                        if not row_owner and cand_prof.user_id is None:
                             profile = cand_prof
                             break
-                    if profile is None and all_profiles and mark_uploaded:
-                        profile = all_profiles[0]
 
             existing_vault: Dict[str, Any] = {}
             same_owner = bool(

@@ -468,9 +468,46 @@ export const deleteApplication = (id: string): Promise<void> =>
 export const fetchGoogleCalendarStatus = (): Promise<{
   connected: boolean;
   google_oauth_configured: boolean;
+  instant_link_ready?: boolean;
+  ics_export_ready?: boolean;
   email: string;
   auth_url: string;
 }> => apiJson('/applications/calendar/status', { errorMessage: 'Failed to fetch Google Calendar status' });
+
+export const fetchIntegrationsStatus = (): Promise<{
+  profile: { uploaded: boolean; full_name: string; primary_role: string; skills_count: number; education_count: number };
+  google_calendar: {
+    oauth_connected: boolean;
+    oauth_configured: boolean;
+    instant_link_ready: boolean;
+    ics_export_ready: boolean;
+    email: string;
+    test_event_url: string;
+  };
+  email: { oauth_connected: boolean; smtp_configured: boolean; eml_fallback_ready: boolean; mode: string };
+  ai: { connected: boolean; active_provider: string; active_model: string; mode: string };
+  database: { alembic_version: string; integrity_ok: boolean; foreign_key_errors: number };
+}> => apiJson('/applications/integrations/status', { errorMessage: 'Failed to fetch integrations status' });
+
+export async function downloadApplicationCalendarIcs(
+  appId: string,
+  kind: 'interview' | 'followup' = 'interview',
+  durationMinutes = 45
+): Promise<void> {
+  const res = await apiFetch(
+    `${API_BASE}/applications/${encodeURIComponent(appId)}/calendar.ics?kind=${encodeURIComponent(kind)}&duration_minutes=${durationMinutes}`
+  );
+  if (!res.ok) throw new Error('Failed to download .ics calendar invite');
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${kind}_${appId}.ics`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
 
 export const fetchGoogleOAuthConsentUrl = (): Promise<{ authorization_url: string }> =>
   apiJson('/auth/google/login', { errorMessage: 'Failed to obtain Google OAuth consent URL' });

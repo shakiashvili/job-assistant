@@ -13,8 +13,12 @@ import {
   RefreshCw,
   ArrowRight,
   Cpu,
+  Database,
+  Mail,
+  ExternalLink,
+  CalendarPlus,
 } from 'lucide-react';
-import { fetchCandidateAnalytics } from '../services/api';
+import { fetchCandidateAnalytics, fetchIntegrationsStatus } from '../services/api';
 import { CandidateAnalyticsResponse, UserProfile } from '../types';
 import { NavTab } from './Navbar';
 
@@ -25,6 +29,7 @@ interface DashboardHomeProps {
 
 export const DashboardHome: React.FC<DashboardHomeProps> = ({ user, onNavigate }) => {
   const [analytics, setAnalytics] = useState<CandidateAnalyticsResponse | null>(null);
+  const [integrations, setIntegrations] = useState<Awaited<ReturnType<typeof fetchIntegrationsStatus>> | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -32,8 +37,12 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({ user, onNavigate }
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchCandidateAnalytics();
+      const [data, integ] = await Promise.all([
+        fetchCandidateAnalytics(),
+        fetchIntegrationsStatus().catch(() => null),
+      ]);
       setAnalytics(data);
+      if (integ) setIntegrations(integ);
     } catch (err: any) {
       setError(err?.message || 'Unable to load dashboard analytics');
     } finally {
@@ -343,6 +352,104 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({ user, onNavigate }
           )}
         </div>
       </div>
+
+      {/* Live Integrations & System Health */}
+      {integrations && (
+        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-bold text-white flex items-center gap-2">
+              <Database className="w-4 h-4 text-cyan-400" />
+              <span>Integrations &amp; System Health</span>
+            </h2>
+            <span className="text-[11px] font-mono text-slate-400">
+              DB: {integrations.database.integrity_ok ? 'OK' : 'Check'} • Migration {integrations.database.alembic_version} • FK Errors: {integrations.database.foreign_key_errors}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+            <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-white flex items-center gap-1.5">
+                  <CalendarPlus className="w-3.5 h-3.5 text-emerald-400" />
+                  Google Calendar
+                </span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800">
+                  {integrations.google_calendar.oauth_connected ? 'OAuth Live' : '1-Click + .ics'}
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400">
+                Schedule interviews &amp; +5d follow-ups directly from Tracker cards.
+              </p>
+              <a
+                href={integrations.google_calendar.test_event_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 hover:text-emerald-300"
+              >
+                <span>Test Google Calendar</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-white flex items-center gap-1.5">
+                  <Mail className="w-3.5 h-3.5 text-cyan-400" />
+                  Email &amp; Gmail
+                </span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-800">
+                  {integrations.email.oauth_connected
+                    ? 'Gmail OAuth'
+                    : integrations.email.smtp_configured
+                    ? 'SMTP Active'
+                    : '.eml Ready'}
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400">
+                {integrations.email.oauth_connected || integrations.email.smtp_configured
+                  ? 'Direct Gmail dispatch with attached tailored PDF/DOCX CV.'
+                  : 'Prepares tailored cover letter + .eml draft with CV attached.'}
+              </p>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-white flex items-center gap-1.5">
+                  <Cpu className="w-3.5 h-3.5 text-violet-400" />
+                  AI Engine
+                </span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-950 text-violet-300 border border-violet-800">
+                  {integrations.ai.connected ? integrations.ai.active_provider : 'Deterministic'}
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 truncate" title={integrations.ai.active_model}>
+                Model: {integrations.ai.active_model}
+              </p>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-white flex items-center gap-1.5">
+                  <User className="w-3.5 h-3.5 text-amber-400" />
+                  Uploaded Profile
+                </span>
+                <span className={`text-[10px] px-2 py-0.5 rounded-full border ${
+                  integrations.profile.uploaded
+                    ? 'bg-emerald-950 text-emerald-300 border-emerald-800'
+                    : 'bg-amber-950 text-amber-300 border-amber-800'
+                }`}>
+                  {integrations.profile.uploaded ? 'Active' : 'Upload Needed'}
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 truncate">
+                {integrations.profile.uploaded
+                  ? `${integrations.profile.skills_count} skills • ${integrations.profile.education_count} degrees synced`
+                  : 'Upload CV/skills file before scanning portals.'}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -666,7 +666,7 @@ def generate_cv_edition(
     """Generates an ATS-Optimized, Recruiter-Ready, or Job-Tailored CV (Word .docx + PDF) + Cover Letter."""
     from ..services.cv_generator_service import cv_generator_service
 
-    live = load_live_candidate_profile(current_user.email)
+    live = load_live_candidate_profile(current_user.email, user_id=current_user.id)
     gt = ground_truth_store.get_data(owner_email=current_user.email, user_id=current_user.id)
     cand = gt.get("candidate", {})
     default_role = live.get("primary_role") or live.get("headline") or cand.get("headline") or "Specialist"

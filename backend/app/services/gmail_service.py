@@ -695,6 +695,67 @@ class GmailService:
             params["location"] = location
         return f"https://calendar.google.com/calendar/render?{urlencode(params)}"
 
+    def build_ics_calendar_file(
+        self,
+        *,
+        summary: str,
+        description: str = "",
+        location: str = "",
+        start_iso: Optional[str] = None,
+        duration_minutes: int = 45,
+        uid_seed: str = "talentflow",
+    ) -> str:
+        """Generates a standards-compliant RFC 5545 .ics calendar invite with 60m and 15m reminders."""
+        from datetime import datetime, timezone
+
+        def _ics_escape(val: str) -> str:
+            return (
+                str(val or "")
+                .replace("\\", "\\\\")
+                .replace(";", "\\;")
+                .replace(",", "\\,")
+                .replace("\r\n", "\\n")
+                .replace("\n", "\\n")
+            )
+
+        start_dt, end_dt = self._parse_interview_window(start_iso, duration_minutes)
+        dtstamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        dtstart = start_dt.strftime("%Y%m%dT%H%M%S")
+        dtend = end_dt.strftime("%Y%m%dT%H%M%S")
+        event_uid = f"{re.sub(r'[^A-Za-z0-9_-]+', '-', uid_seed)}-{dtstart}@talentflow.local"
+        lines = [
+            "BEGIN:VCALENDAR",
+            "VERSION:2.0",
+            "PRODID:-//TalentFlow AI//Career Pipeline//EN",
+            "CALSCALE:GREGORIAN",
+            "METHOD:PUBLISH",
+            "BEGIN:VEVENT",
+            f"UID:{event_uid}",
+            f"DTSTAMP:{dtstamp}",
+            f"DTSTART:{dtstart}",
+            f"DTEND:{dtend}",
+            f"SUMMARY:{_ics_escape(summary)}",
+            f"DESCRIPTION:{_ics_escape(description or 'Scheduled via TalentFlow AI')}",
+        ]
+        if location:
+            lines.append(f"LOCATION:{_ics_escape(location)}")
+        lines.extend([
+            "BEGIN:VALARM",
+            "TRIGGER:-PT60M",
+            "ACTION:DISPLAY",
+            "DESCRIPTION:Reminder: 1 hour until interview/follow-up",
+            "END:VALARM",
+            "BEGIN:VALARM",
+            "TRIGGER:-PT15M",
+            "ACTION:DISPLAY",
+            "DESCRIPTION:Reminder: 15 minutes until interview/follow-up",
+            "END:VALARM",
+            "END:VEVENT",
+            "END:VCALENDAR",
+            "",
+        ])
+        return "\r\n".join(lines)
+
     def create_calendar_event(
         self,
         *,

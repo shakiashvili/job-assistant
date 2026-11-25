@@ -209,10 +209,17 @@ async def trigger_multi_portal_scrape(
     request: Optional[ScrapeRequest] = None,
     current_user: User = Depends(get_current_user),
 ):
-    """Runs the live multi-portal scraper engine for the current user's profile."""
+    """Runs the live multi-portal scraper engine strictly after the user has uploaded their CV/skills profile."""
     portals = request.portals if request else None
     allow_net = request.allow_network if request else True
     owner = current_user.email if current_user.email != "guest@talentflow.local" else None
+    if allow_net:
+        prof = ground_truth_store.get_profile_record(owner_email=owner, user_id=current_user.id)
+        if not _is_profile_uploaded_for_user(prof, current_user.email) and not (prof and (prof.raw_markdown or "").strip()):
+            raise HTTPException(
+                status_code=400,
+                detail="Please upload your CV or skills file in Profile Vault first so TalentFlow targets roles matching your real skills and experience.",
+            )
     return await scraper_orchestrator.run_scrapers(
         portals=portals,
         allow_network=allow_net,
@@ -229,11 +236,18 @@ async def trigger_async_scrape(
     """
     Enqueues a durable DB-backed background scrape task with stale-task recovery,
     heartbeats, execution timeouts, and per-user duplicate run deduplication.
-    Returns a task_id that can be polled via GET /api/jobs/scrape/status/{task_id}.
+    Requires an uploaded CV/skills profile when allow_network=True.
     """
     portals = request.portals if request else None
     allow_net = request.allow_network if request else True
     owner = current_user.email if current_user.email != "guest@talentflow.local" else None
+    if allow_net:
+        prof = ground_truth_store.get_profile_record(owner_email=owner, user_id=current_user.id)
+        if not _is_profile_uploaded_for_user(prof, current_user.email) and not (prof and (prof.raw_markdown or "").strip()):
+            raise HTTPException(
+                status_code=400,
+                detail="Please upload your CV or skills file in Profile Vault first so TalentFlow targets roles matching your real skills and experience.",
+            )
 
     enqueued = scrape_queue.enqueue_task(
         user_id=current_user.id,

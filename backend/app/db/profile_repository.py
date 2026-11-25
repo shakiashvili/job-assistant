@@ -258,40 +258,26 @@ class ProfileRepository:
                 owner = str(ps.get("owner_email") or "").strip().lower()
                 if not owner and prof.user_id is None and (prof.full_name or prof.raw_markdown) and bool(ps.get("user_uploaded", False)):
                     return prof
-            for prof in profiles:
-                ps = prof.parsed_skills or {}
-                owner = str(ps.get("owner_email") or "").strip().lower()
-                if not owner and prof.user_id is None and (prof.full_name or prof.raw_markdown):
-                    return prof
 
-        from ..services.profile_service import profile_service
-        if self.skills_md_path.exists():
-            raw_md = self.skills_md_path.read_text(encoding="utf-8")
-            return profile_service.upsert_candidate_profile(raw_md, mark_uploaded=False)
-
-        with Session(engine, expire_on_commit=False) as session:
-            blank = CandidateProfile(
-                user_id=None,
-                full_name="",
-                email="",
-                raw_markdown="",
-                parsed_skills={
-                    "user_uploaded": False,
-                    "experience_status": "unknown",
-                    "all_skills": [],
-                    "ground_truth_vault": {
-                        "candidate": {"full_name": "", "email": ""},
-                        "skills": {"core": [], "secondary": []},
-                        "work_history": [],
-                        "education": [],
-                    },
+        # Never auto-seed a QA Engineer draft or local candidate_skills.md before the user uploads their own CV/skills file
+        return CandidateProfile(
+            user_id=None,
+            full_name="",
+            email="",
+            raw_markdown="",
+            parsed_skills={
+                "user_uploaded": False,
+                "experience_status": "unknown",
+                "all_skills": [],
+                "ground_truth_vault": {
+                    "candidate": {"full_name": "", "email": ""},
+                    "skills": {"core": [], "secondary": []},
+                    "work_history": [],
+                    "education": [],
                 },
-                experience_years=None,
-            )
-            session.add(blank)
-            session.commit()
-            session.refresh(blank)
-            return blank
+            },
+            experience_years=None,
+        )
 
     def get_profile_record(
         self,

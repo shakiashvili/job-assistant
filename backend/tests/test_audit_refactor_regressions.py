@@ -889,3 +889,81 @@ Georgian: Native | English: Professional Working Proficiency
     assert "ProCredit Bank" in cl
     assert "Tbilisi State University" in cl
     assert "**Tbilisi" not in pkg["rendered_html"]
+
+
+def test_upload_first_gate_blocks_scraping_before_skills_upload_and_google_calendar_ics_and_integrations():
+    client = TestClient(app)
+    email = "no_upload_gate@example.com"
+    headers = _register_and_auth(client, email)
+
+    # 1. User who has NOT uploaded CV/skills file must NOT auto-target QA or any jobs
+    r_scrape = client.post("/api/jobs/scrape", json={"allow_network": True}, headers=headers)
+    assert r_scrape.status_code == 400
+    assert "upload" in r_scrape.json()["detail"].lower()
+
+    # 2. Integrations status reports DB integrity, Alembic head, profile=not uploaded, and Google Calendar ready
+    r_int = client.get("/api/applications/integrations/status", headers=headers)
+    assert r_int.status_code == 200
+    integ = r_int.json()
+    assert integ["profile"]["uploaded"] is False
+    assert integ["google_calendar"]["instant_link_ready"] is True
+    assert integ["google_calendar"]["ics_export_ready"] is True
+    assert "calendar.google.com/calendar/render" in integ["google_calendar"]["test_event_url"]
+    assert integ["database"]["integrity_ok"] is True
+    assert integ["database"]["foreign_key_errors"] == 0
+
+    # 3. Google Calendar event creation & universal .ics export (interview + followup)
+    r_app = client.post(
+        "/api/applications",
+        json={
+            "company": "ProCredit Bank",
+            "role": "Junior QA Specialist",
+            "portal": "jobs.ge",
+            "url": "https://jobs.ge/ge/?view=jobs&id=770150",
+            "status": "HR Screening",
+        },
+        headers=headers,
+    )
+    assert r_app.status_code in (200, 201)
+    app_id = r_app.json()["id"]
+
+    r_cal = client.post(
+        f"/api/applications/{app_id}/calendar-event",
+        json={"interview_date": "2026-11-28T11:00", "duration_minutes": 45},
+        headers=headers,
+    )
+    assert r_cal.status_code == 200
+    cal_data = r_cal.json()
+    assert "calendar.google.com/calendar/render" in cal_data["google_calendar_template_url"]
+    assert "ProCredit+Bank" in cal_data["google_calendar_template_url"]
+
+    r_ics = client.get(f"/api/applications/{app_id}/calendar.ics?kind=interview", headers=headers)
+    assert r_ics.status_code == 200
+    assert "text/calendar" in r_ics.headers.get("content-type", "")
+    assert "BEGIN:VCALENDAR" in r_ics.text and "BEGIN:VALARM" in r_ics.text and "ProCredit Bank" in r_ics.text
+
+    r_fu = client.get(f"/api/applications/{app_id}/calendar.ics?kind=followup", headers=headers)
+    assert r_fu.status_code == 200
+    assert "Follow up: Junior QA Specialist at ProCredit Bank" in r_fu.text
+
+
+def test_fresh_database_alembic_upgrade_head_clean(tmp_path):
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import create_engine, text
+    from app.config import BASE_DIR
+
+    fresh_db = tmp_path / "fresh_alembic.db"
+    db_url = f"sqlite:///{fresh_db}"
+    cfg = Config(str(BASE_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BASE_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", db_url)
+    command.upgrade(cfg, "head")
+
+    eng = create_engine(db_url)
+    with eng.connect() as conn:
+        assert conn.execute(text("PRAGMA integrity_check")).fetchall() == [("ok",)]
+        assert conn.execute(text("PRAGMA foreign_key_check")).fetchall() == []
+        rev = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
+        assert rev == "a3c9d14e7b52"
+    eng.dispose()

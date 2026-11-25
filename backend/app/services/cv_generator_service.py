@@ -1600,9 +1600,22 @@ class CVGeneratorService:
         )
         if has_explicit_override and skills_md:
             override_ps, override_skills, override_name = _extract_override_profile_taxonomy(skills_md)
+            override_parsed = ground_truth_store.parse_profile_from_md(skills_md)
             ps = override_ps
             if override_name:
                 candidate["full_name"] = override_name
+            elif override_parsed.get("full_name"):
+                candidate["full_name"] = override_parsed["full_name"]
+            if override_parsed.get("phone"):
+                candidate["phone"] = override_parsed["phone"]
+            if override_parsed.get("email"):
+                candidate["email"] = override_parsed["email"]
+            if override_parsed.get("work_history"):
+                gt = dict(gt)
+                gt["work_history"] = list(override_parsed["work_history"])
+            if override_parsed.get("education"):
+                gt = dict(gt)
+                gt["education"] = list(override_parsed["education"])
             cand_skills = override_skills
         else:
             cand_skills = dedupe_skills_case_insensitive([str(s) for s in (gt.get("skills", {}).get("core") or [])])

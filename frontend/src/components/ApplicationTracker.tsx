@@ -27,6 +27,7 @@ import {
   fetchGoogleCalendarStatus,
   fetchGoogleOAuthConsentUrl,
   createApplicationCalendarEvent,
+  downloadApplicationCalendarIcs,
   BACKEND_ORIGIN,
 } from '../services/api';
 import { ApplicationItem, GoogleCalendarEventResponse, GoogleCalendarStatus } from '../types';
@@ -657,20 +658,20 @@ export const ApplicationTracker: React.FC = () => {
               <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2 text-[11px]">
-                    <span className={`w-2 h-2 rounded-full ${calendarStatus?.connected ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+                    <span className={`w-2 h-2 rounded-full ${calendarStatus?.connected ? 'bg-emerald-400' : 'bg-cyan-400'}`} />
                     <span className="text-slate-300 font-medium">
                       {calendarStatus?.connected
-                        ? `Google Calendar connected (${calendarStatus.email})`
-                        : 'Google Calendar: Ready via one-click link or connect OAuth'}
+                        ? `Google Calendar OAuth connected (${calendarStatus.email})`
+                        : 'Google Calendar: Instant 1-click link & .ics invite ready (no setup needed)'}
                     </span>
                   </div>
-                  {!calendarStatus?.connected && (
+                  {!calendarStatus?.connected && calendarStatus?.google_oauth_configured && (
                     <button
                       type="button"
                       onClick={handleConnectGoogleAccount}
                       className="text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 underline"
                     >
-                      Connect Google Account
+                      Connect Google OAuth
                     </button>
                   )}
                 </div>
@@ -697,16 +698,36 @@ export const ApplicationTracker: React.FC = () => {
               </div>
 
               <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800">
-                <button
-                  type="button"
-                  onClick={handleSyncToGoogleCalendar}
-                  disabled={calendarBusy}
-                  data-testid="btn-add-google-calendar"
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-700/20 hover:bg-emerald-700/30 border border-emerald-500/40 text-emerald-300 font-semibold transition-all disabled:opacity-50"
-                >
-                  <CalendarPlus className="w-4 h-4" />
-                  <span>{calendarBusy ? 'Syncing...' : 'Add to Google Calendar'}</span>
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleSyncToGoogleCalendar}
+                    disabled={calendarBusy}
+                    data-testid="btn-add-google-calendar"
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-700/20 hover:bg-emerald-700/30 border border-emerald-500/40 text-emerald-300 font-semibold transition-all disabled:opacity-50"
+                  >
+                    <CalendarPlus className="w-4 h-4" />
+                    <span>{calendarBusy ? 'Syncing...' : 'Add to Google Calendar'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => editingApp && downloadApplicationCalendarIcs(editingApp.id, 'interview', modalDurationMins).catch(() => {})}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold transition-all"
+                    title="Download universal .ics file (works with Google Calendar, Apple Calendar & Outlook)"
+                  >
+                    <Download className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>.ics Invite</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => editingApp && downloadApplicationCalendarIcs(editingApp.id, 'followup', 20).catch(() => {})}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold transition-all"
+                    title="Download a +5-day follow-up reminder invite (.ics)"
+                  >
+                    <Clock className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Follow-up (+5d)</span>
+                  </button>
+                </div>
 
                 <div className="flex items-center gap-2">
                   <button
