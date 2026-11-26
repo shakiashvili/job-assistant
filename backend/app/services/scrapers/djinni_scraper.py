@@ -1,7 +1,7 @@
 import logging
 import re
 from typing import Dict, Any, List, Optional
-from .base_scraper import BasePortalScraper, evaluate_remote_and_language_gate
+from .base_scraper import BasePortalScraper, evaluate_remote_and_language_gate, parse_portal_published_at
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,9 @@ class DjinniScraper(BasePortalScraper):
             if "/jobs/" not in href or "primary_keyword=" in href:
                 continue
 
-            comp_el = item.select_one("a[href*='/jobs/company-'], span.font-weight-500, a.mr-2")
+            comp_el = item.select_one(
+                "a[href*='/jobs/company-'], a[href*='company='], a.text-body[href*='/jobs/'], span.font-weight-500, a.mr-2"
+            )
             company = comp_el.get_text(" ", strip=True) if comp_el else "Djinni Global Employer"
 
             # Extract ONLY clean role title without concatenated company, fire emojis, "Responds Quickly", or "to $700"
@@ -108,6 +110,13 @@ class DjinniScraper(BasePortalScraper):
                 candidate_languages=candidate_languages,
             )
 
+            pub_dt, pub_str = None, None
+            for dt_el in item.select("span[title], time[datetime], span.text-nowrap"):
+                cand_dt = dt_el.get("datetime") or dt_el.get("title") or dt_el.get_text(" ", strip=True)
+                pub_dt, pub_str = parse_portal_published_at(cand_dt)
+                if pub_dt:
+                    break
+
             results.append({
                 "portal": self.portal_name,
                 "external_id": ext_id,
@@ -120,6 +129,8 @@ class DjinniScraper(BasePortalScraper):
                 "channel": "WEB_FORM",
                 "detected_languages": langs,
                 "language_requirements": langs,
+                "published_at": pub_dt,
+                "posting_date": pub_str,
                 "description_raw": description[:4000],
                 "status": status,
                 "filter_out_reason": filter_reason or None,
@@ -134,11 +145,18 @@ class DjinniScraper(BasePortalScraper):
         candidate_languages: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Fetches the live Djinni detail page for deep skill/language/salary/location inspection."""
-        html = await self.fetch_html(item["url"], timeout=8.0)
+        html = await self.fetch_html(item["url"], timeout=7.0)
         if not html:
-            return None
+            return item
 
         soup = self.make_soup(html)
+        if not item.get("published_at"):
+            dp_m = re.search(r'"datePosted"\s*:\s*"([^"]+)"', html)
+            if dp_m:
+                pub_dt, pub_str = parse_portal_published_at(dp_m.group(1))
+                if pub_dt:
+                    item["published_at"] = pub_dt
+                    item["posting_date"] = pub_str
         desc_el = soup.select_one("div.job-post__description, main, article")
         full_body = desc_el.get_text(" ", strip=True) if desc_el else ""
         if len(full_body) < 80:
@@ -178,15 +196,22 @@ class DjinniScraper(BasePortalScraper):
         if not allow_network:
             return []
         base_url = search_url or self.SEARCH_URL
-        urls = [base_url, f"{base_url}&page=2"]
+        urls = [base_url]
+        unfiltered = re.sub(r"&exp_years=[^&]+", "", base_url)
+        if unfiltered != base_url:
+            urls.append(unfiltered)
+        else:
+            urls.append(f"{base_url}&page=2")
         if "primary_keyword=QA&" in base_url:
             urls.append(base_url.replace("primary_keyword=QA", "primary_keyword=QA+Automation"))
         return await self.scrape_and_enrich_urls(
             urls,
             lambda html: self.parse_html_listings(html, candidate_languages=candidate_languages),
             lambda c: self._enrich_and_verify_item(c, candidate_languages=candidate_languages),
-            limit=22,
+            limit=20,
             keep_filtered_stubs=True,
+            page_timeout=10.0,
+            sort_newest_first=True,
         )
 
 

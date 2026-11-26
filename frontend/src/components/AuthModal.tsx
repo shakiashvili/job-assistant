@@ -197,36 +197,23 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
 
         {/* 3-Way Mode Switcher */}
         <div className="grid grid-cols-3 gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 mb-5">
-          <button
-            type="button"
-            onClick={() => { setMode('register'); setError(null); setInfoMsg(null); }}
-            className={`py-2 text-[11px] font-semibold rounded-lg transition-all flex items-center justify-center gap-1 ${
-              mode === 'register' ? 'bg-emerald-700 text-white shadow' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <User className="w-3 h-3" />
-            <span>Register</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => { setMode('login'); setError(null); setInfoMsg(null); }}
-            className={`py-2 text-[11px] font-semibold rounded-lg transition-all flex items-center justify-center gap-1 ${
-              mode === 'login' ? 'bg-emerald-700 text-white shadow' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <Lock className="w-3 h-3" />
-            <span>Sign In</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => { setMode('otp'); setOtpStep('request'); setError(null); setInfoMsg(null); }}
-            className={`py-2 text-[11px] font-semibold rounded-lg transition-all flex items-center justify-center gap-1 ${
-              mode === 'otp' ? 'bg-emerald-700 text-white shadow' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <Sparkles className="w-3 h-3" />
-            <span>Email OTP</span>
-          </button>
+          {([
+            { id: 'register' as const, label: 'Register', Icon: User },
+            { id: 'login' as const, label: 'Sign In', Icon: Lock },
+            { id: 'otp' as const, label: 'Email OTP', Icon: Sparkles },
+          ]).map(({ id, label, Icon }) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => { setMode(id); if (id === 'otp') setOtpStep('request'); setError(null); setInfoMsg(null); }}
+              className={`py-2 text-[11px] font-semibold rounded-lg transition-all flex items-center justify-center gap-1 ${
+                mode === id ? 'bg-emerald-700 text-white shadow' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Icon className="w-3 h-3" />
+              <span>{label}</span>
+            </button>
+          ))}
         </div>
 
         {error && (

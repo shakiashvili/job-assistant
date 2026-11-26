@@ -1,4 +1,3 @@
-import json
 import logging
 import re
 from typing import Dict, Any, Optional, Tuple
@@ -298,11 +297,24 @@ Return JSON with keys:
                 high = round(high * 0.82, -2)
 
         is_qa_title = any(k in lower_desc for k in ["qa", "quality assurance", "tester", "ტესტ"])
-        stack_label = (
-            "QA Automation / SDET (Playwright/Python)"
-            if is_automation_sdet
-            else ("QA Specialist" if is_qa_title else "Domain Specialist")
-        )
+        is_swe_title = any(k in lower_desc for k in ["software engineer", "developer", "backend", "frontend", "devops", "პროგრამისტ"])
+        is_fin_title = any(k in lower_desc for k in ["finance", "accountant", "audit", "ფინანს", "ბუღალტ", "აუდიტ"])
+        is_mkt_title = any(k in lower_desc for k in ["marketing", "seo", "smm", "growth", "მარკეტინგ"])
+        is_ops_title = any(k in lower_desc for k in ["logistics", "supply chain", "procurement", "ლოჯისტიკ", "შესყიდვ"])
+        if is_automation_sdet:
+            stack_label = "QA Automation / SDET"
+        elif is_qa_title:
+            stack_label = "QA Specialist"
+        elif is_swe_title:
+            stack_label = "Software Engineer"
+        elif is_fin_title:
+            stack_label = "Finance & Accounting Specialist"
+        elif is_mkt_title:
+            stack_label = "Marketing & Growth Specialist"
+        elif is_ops_title:
+            stack_label = "Logistics & Operations Specialist"
+        else:
+            stack_label = "Domain Specialist"
         return {
             "min_salary": float(low),
             "max_salary": float(high),

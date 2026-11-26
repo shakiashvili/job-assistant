@@ -440,9 +440,26 @@ def decode_oauth_state_token(token: str) -> Optional[dict]:
 
 
 def get_user_by_email(session: Session, email: str) -> Optional[User]:
-    """Looks up a user via active and previous blind-index HMAC digests."""
-    candidates = blind_index_candidates(email)
-    return session.exec(select(User).where(User.email_hash.in_(candidates))).first()
+    """Looks up a user via active/previous blind-index HMAC digests, self-healing rotated hashes."""
+    clean = (email or "").strip().lower()
+    if not clean:
+        return None
+    candidates = blind_index_candidates(clean)
+    found = session.exec(select(User).where(User.email_hash.in_(candidates))).first()
+    if found:
+        return found
+    # Fallback scan for legacy rows whose email_hash predates a local key rotation; self-heal hash on match
+    for u in session.exec(select(User).order_by(User.id.desc())).all():
+        if (u.email or "").strip().lower() == clean:
+            u.email_hash = candidates[0]
+            session.add(u)
+            try:
+                session.commit()
+                session.refresh(u)
+            except Exception:
+                session.rollback()
+            return u
+    return None
 
 
 def get_current_user(

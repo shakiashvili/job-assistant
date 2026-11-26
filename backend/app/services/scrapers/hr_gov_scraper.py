@@ -3,8 +3,14 @@ import logging
 import re
 from typing import Dict, Any, List, Optional
 import httpx
-from bs4 import BeautifulSoup
-from .base_scraper import BasePortalScraper, parse_contact_method_and_email, sanitize_company_name
+from .base_scraper import (
+    BasePortalScraper,
+    get_shared_ssl_context,
+    matches_domain_keywords,
+    parse_contact_method_and_email,
+    parse_portal_published_at,
+    sanitize_company_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +34,7 @@ class HrGovScraper(BasePortalScraper):
                 headers=self.DEFAULT_HEADERS,
                 follow_redirects=True,
                 timeout=timeout,
+                verify=get_shared_ssl_context(),
             ) as client:
                 resp = await client.post(
                     self.BASE_URL,
@@ -79,13 +86,7 @@ class HrGovScraper(BasePortalScraper):
 
             lower_row = f"{title} {company}".lower()
             is_intern_entry = any(w in lower_row for w in ["სტაჟიორ", "დამწყებ", "უმცროს", "intern", "trainee", "junior"])
-            if kw_lower:
-                matches_kw = any(
-                    (re.search(r"\b" + re.escape(k) + r"\b", lower_row) if len(k) <= 3 else (k in lower_row))
-                    for k in kw_lower
-                )
-            else:
-                matches_kw = is_intern_entry
+            matches_kw = matches_domain_keywords(lower_row, keywords) if keywords else is_intern_entry
             if not matches_kw:
                 continue
 
@@ -134,6 +135,13 @@ class HrGovScraper(BasePortalScraper):
             org_clean = sanitize_company_name(org_m.group(1).strip(), fallback="")
             if org_clean:
                 item["company"] = org_clean
+
+        pub_m = re.search(r"(?:გამოქვეყნების\s+თარიღი|განცხადების\s+თარიღი|დაწყების\s+თარიღი)\s*[:\-]?\s*(\d{2}\.\d{2}\.\d{4})", clean_desc)
+        if pub_m:
+            pub_dt, pub_str = parse_portal_published_at(pub_m.group(1))
+            if pub_dt:
+                item["published_at"] = pub_dt
+                item["posting_date"] = pub_str
 
         dl_m = re.search(r"(?:განცხადების\s+)?ბოლო\s+ვადა\s+(\d{2}\.\d{2}\.\d{4})", clean_desc)
         if dl_m:

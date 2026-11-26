@@ -4,7 +4,7 @@ import re
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
-from ..config import SKILLS_MD_FILE, GROUND_TRUTH_FILE
+from ..config import GROUND_TRUTH_FILE
 from ..db.database import engine, init_db
 from ..db.models import CandidateProfile, utc_now
 from .gemini_service import gemini_service, sanitize_untrusted_input
@@ -45,10 +45,72 @@ class ParsedCandidateProfileSchema(BaseModel):
     linkedin_url: str = ""
     experience_years: Optional[float] = None
     experience_status: str = "unknown"  # confirmed, internship_or_project, unknown
-    max_allowed_years: Optional[float] = 2.0
+    max_allowed_years: Optional[float] = None
+    target_seniority_label: str = "Entry-Level / Junior"
     seniority_level: str = "JUNIOR"
     target_industry: str = "general_professional"
     parsed_skills: ExtractedSkillsTaxonomy = Field(default_factory=ExtractedSkillsTaxonomy)
+
+
+def compute_dynamic_experience_bounds(
+    explicit_years: Optional[float],
+    work_history: Optional[List[Dict[str, Any]]] = None,
+    raw_markdown: str = "",
+) -> tuple[Optional[float], float, str, str]:
+    """
+    Universal person-adaptive experience analyzer (works for 0-yr students up to 15+ yr executives):
+    Returns (resolved_years, max_allowed_years, seniority_code, human_seniority_label).
+    - Never hardcodes 2.0 years for entry-level/student profiles (0-0.5 yr -> max 1.0 yr, blocking 2+ yr roles).
+    - Dynamically scales ceiling for Junior (1.5 yr), Junior-Mid (2.5 yr), Mid (yrs+1.5), and Senior/Lead (yrs+3+).
+    """
+    from datetime import datetime, timezone
+
+    resolved: Optional[float] = explicit_years
+    if resolved is None and work_history:
+        now_yr = datetime.now(timezone.utc).year
+        total_yrs = 0.0
+        for item in work_history:
+            if not isinstance(item, dict):
+                continue
+            role_low = str(item.get("role") or "").lower()
+            if any(w in role_low for w in ("project", "portfolio", "capstone", "student", "coursework")):
+                continue
+            s_raw = str(item.get("start_date") or "")
+            e_raw = str(item.get("end_date") or "")
+            s_m = re.search(r"\b(20\d{2}|19\d{2})\b", s_raw)
+            if not s_m:
+                continue
+            s_yr = int(s_m.group(1))
+            if re.search(r"\b(present|current|now|დღემდე|მიმდინარე)\b", e_raw.lower()):
+                e_yr = now_yr
+            else:
+                e_m = re.search(r"\b(20\d{2}|19\d{2})\b", e_raw)
+                e_yr = int(e_m.group(1)) if e_m else s_yr
+            span = max(0.4, float(max(0, e_yr - s_yr)) or 0.5)
+            weight = 0.5 if any(w in role_low for w in ("intern", "trainee", "სტაჟიორ")) else 1.0
+            total_yrs += span * weight
+        if total_yrs > 0:
+            resolved = round(min(25.0, total_yrs), 1)
+
+    eff = float(resolved) if resolved is not None else 0.0
+    low_md = (raw_markdown or "").lower()
+    if resolved is None and any(w in low_md for w in ("senior ", "lead ", "principal ", "director ", "head of ")):
+        # Headline-indicated senior with unparsed dates
+        if re.search(r"^#\s*.*\b(?:senior|lead|principal)\b", low_md, re.M):
+            resolved = 5.0
+            eff = 5.0
+
+    if eff <= 0.5:
+        return (resolved, 1.0, "JUNIOR", "Entry-Level / Intern")
+    if eff <= 2.0:
+        return (resolved, min(round(eff + 0.5, 1), 2.0), "JUNIOR", f"Junior ({eff:g} yrs)")
+    if eff <= 2.5:
+        return (resolved, round(eff + 0.5, 1), "JUNIOR", f"Junior–Mid ({eff:g} yrs)")
+    if eff <= 5.0:
+        return (resolved, round(eff + 1.5, 1), "MID", f"Mid-Level ({eff:g} yrs)")
+    if eff <= 8.0:
+        return (resolved, round(eff + 2.5, 1), "SENIOR", f"Senior ({eff:g} yrs)")
+    return (resolved, 20.0, "LEAD", f"Lead / Principal ({eff:g} yrs)")
 
 
 _DOMAIN_PROFILE_CATALOG: List[Dict[str, Any]] = [
@@ -171,18 +233,21 @@ class ProfileService:
         github_url = ""
         linkedin_url = ""
 
-        from ..db.profile_repository import profile_repository, filter_spoken_language_entries
+        from ..db.profile_repository import (
+            profile_repository,
+            filter_spoken_language_entries,
+            sanitize_person_name,
+            strip_yaml_frontmatter,
+            is_corrupted_education_entry,
+        )
 
+        text = strip_yaml_frontmatter(text)
+        lower_text = text.lower()
         md_parsed = profile_repository.parse_profile_from_md(text)
-        cand_name_raw = str(md_parsed.get("full_name") or "").strip()
-        if cand_name_raw and not any(
-            w in cand_name_raw.lower()
-            for w in ("http", "api", "case study", "project", "sticker", "portfolio", "guide", "docs", "documentation", "readme")
-        ):
-            full_name = cand_name_raw
+        full_name = sanitize_person_name(str(md_parsed.get("full_name") or ""))
         email = str(md_parsed.get("email") or "")
         phone = str(md_parsed.get("phone") or "")
-        location = str(md_parsed.get("location") or "")
+        location = re.sub(r"[*_`]+", "", str(md_parsed.get("location") or "")).strip()
         github_url = str(md_parsed.get("github_url") or "")
         linkedin_url = str(md_parsed.get("linkedin_url") or "")
 
@@ -303,28 +368,23 @@ class ProfileService:
                 target_industry="general_professional",
                 experience_years=None,
                 experience_status="unknown",
-                max_allowed_years=2.0,
+                max_allowed_years=1.0,
+                target_seniority_label="Entry-Level / Intern",
                 seniority_level="JUNIOR",
             )
 
         raw_exp = taxonomy_dict.get("years_of_experience")
-        exp_years: Optional[float] = float(raw_exp) if raw_exp is not None else None
+        explicit_exp: Optional[float] = float(raw_exp) if raw_exp is not None else None
+        exp_years, max_allowed_years, auto_seniority, target_seniority_label = compute_dynamic_experience_bounds(
+            explicit_exp,
+            work_history=md_parsed.get("work_history"),
+            raw_markdown=text,
+        )
         exp_status = str(
             taxonomy_dict.get("experience_status")
             or ("confirmed" if exp_years is not None else "unknown")
         )
-        eff_years = exp_years if exp_years is not None else 0.0
-        if exp_years is None or exp_years == 0.0:
-            max_allowed_years = 2.0
-        elif exp_years <= 2.0:
-            max_allowed_years = min(exp_years + 0.5, 2.0)
-        elif exp_years <= 5.0:
-            max_allowed_years = round(exp_years + 1.5, 1)
-        else:
-            max_allowed_years = round(exp_years + 3.0, 1)
-        seniority_level = taxonomy_dict.get("seniority_level") or (
-            "JUNIOR" if eff_years <= 2.5 else ("MID" if eff_years <= 5.0 else ("SENIOR" if eff_years <= 8.0 else "LEAD"))
-        )
+        seniority_level = taxonomy_dict.get("seniority_level") or auto_seniority
         verified_skills = list(taxonomy_dict.get("all_skills") or [])
         eligible_internships = bool(
             exp_years is None
@@ -358,9 +418,10 @@ CRITICAL INSTRUCTIONS:
 - `parsed_skills.courses_and_certifications`: List of completed bootcamps, courses, and certificates.
 - `eligible_internships`: True if candidate is a student, recent grad, completed courses/bootcamps, or has <= 2.5 yrs experience.
 - `internship_tracks`: Specific internship / graduate trainee tracks suited to their degree + courses + skills.
-- `experience_years`: Exact numeric years explicitly stated in profile, or `null` if unstated/only academic projects. NEVER invent a number such as 1.5.
+- `experience_years`: Exact numeric commercial years (sum of real jobs, or explicit statement), or `null` if student/career-starter with only academic/portfolio projects. NEVER invent a number such as 1.5.
 - `experience_status`: "confirmed" if explicit work tenure is stated, "internship_or_project" if only internships/academic projects are present, or "unknown" if unstated.
-- `max_allowed_years`: Strictly min((experience_years or 0) + 0.5, 2.0) when (experience_years or 0) <= 2.0.
+- `max_allowed_years`: Dynamic ceiling matching candidate's real level (1.0 for 0-0.5 yr entry/student, 1.5 for 1 yr junior, experience_years + 1.5 for mid, experience_years + 2.5 for senior).
+- `target_seniority_label`: Concise label like "Entry-Level / Intern", "Junior", "Mid-Level", "Senior", or "Lead / Principal".
 - `seniority_level`: Must be "JUNIOR", "MID", "SENIOR", or "LEAD".
 
 <candidate_skills_untrusted_input>
@@ -376,14 +437,12 @@ CRITICAL INSTRUCTIONS:
                 ttl_seconds=3600,
             )
             if isinstance(gem_parsed, ParsedCandidateProfileSchema):
-                if not (gem_parsed.full_name or "").strip() and full_name:
-                    gem_parsed.full_name = full_name
+                gem_parsed.full_name = sanitize_person_name(gem_parsed.full_name) or full_name
+                gem_parsed.location = re.sub(r"[*_`]+", "", str(gem_parsed.location or "")).strip() or location
                 if not (gem_parsed.email or "").strip() and email:
                     gem_parsed.email = email
                 if not (gem_parsed.phone or "").strip() and phone:
                     gem_parsed.phone = phone
-                if not (gem_parsed.location or "").strip() and location:
-                    gem_parsed.location = location
                 if not (gem_parsed.github_url or "").strip() and github_url:
                     gem_parsed.github_url = github_url
                 if not (gem_parsed.linkedin_url or "").strip() and linkedin_url:
@@ -392,27 +451,30 @@ CRITICAL INSTRUCTIONS:
                     gem_parsed.headline = headline
                 if gem_parsed.experience_years is None and exp_years is not None:
                     gem_parsed.experience_years = exp_years
-                gem_eff_yrs = float(gem_parsed.experience_years) if gem_parsed.experience_years is not None else None
+                gem_res_yrs, gem_max_yrs, gem_sen, gem_label = compute_dynamic_experience_bounds(
+                    float(gem_parsed.experience_years) if gem_parsed.experience_years is not None else None,
+                    work_history=md_parsed.get("work_history"),
+                    raw_markdown=text,
+                )
+                gem_parsed.experience_years = gem_res_yrs
+                gem_parsed.max_allowed_years = gem_max_yrs
+                gem_parsed.seniority_level = gem_parsed.seniority_level or gem_sen
+                gem_parsed.target_seniority_label = gem_label
                 if gem_parsed.experience_years is not None:
                     gem_parsed.experience_status = "confirmed"
                 elif exp_status != "unknown":
                     gem_parsed.experience_status = exp_status
-                if gem_eff_yrs is None or gem_eff_yrs == 0.0:
-                    gem_parsed.max_allowed_years = 2.0
-                elif gem_eff_yrs <= 2.0:
-                    gem_parsed.max_allowed_years = min(gem_eff_yrs + 0.5, 2.0)
-                else:
-                    gem_parsed.max_allowed_years = round(gem_eff_yrs + 0.5, 1)
                 for k in ["qa_automation", "manual_qa", "languages", "api_and_performance", "cicd_and_devops", "all_skills"]:
                     existing_list = getattr(gem_parsed.parsed_skills, k)
                     merged = list(dict.fromkeys(existing_list + taxonomy_dict.get(k, [])))
                     setattr(gem_parsed.parsed_skills, k, merged)
-                # Keep deterministically grouped education when Gemini splits university/dates/modules across separate entries
-                if education_entries and (
-                    not gem_parsed.parsed_skills.education
-                    or len(gem_parsed.parsed_skills.education) > len(education_entries)
-                ):
-                    gem_parsed.parsed_skills.education = education_entries
+                # Keep deterministically grouped education and purge any corrupted AI-meta entries
+                clean_gem_edu = [e for e in (gem_parsed.parsed_skills.education or []) if not is_corrupted_education_entry(e)]
+                clean_det_edu = [e for e in education_entries if not is_corrupted_education_entry(e)]
+                if clean_det_edu and (not clean_gem_edu or len(clean_gem_edu) > len(clean_det_edu)):
+                    gem_parsed.parsed_skills.education = clean_det_edu
+                else:
+                    gem_parsed.parsed_skills.education = clean_gem_edu
                 if projects_entries and not gem_parsed.parsed_skills.projects:
                     gem_parsed.parsed_skills.projects = projects_entries
                 gem_spoken = [
@@ -448,6 +510,7 @@ CRITICAL INSTRUCTIONS:
             experience_years=exp_years,
             experience_status=exp_status,
             max_allowed_years=max_allowed_years,
+            target_seniority_label=target_seniority_label,
             seniority_level=seniority_level,
             target_industry=target_industry,
             parsed_skills=ExtractedSkillsTaxonomy(
@@ -504,6 +567,7 @@ CRITICAL INSTRUCTIONS:
         skills_payload["years_of_experience"] = extracted.experience_years
         skills_payload["experience_status"] = extracted.experience_status
         skills_payload["max_allowed_years"] = extracted.max_allowed_years
+        skills_payload["target_seniority_label"] = extracted.target_seniority_label
         skills_payload["seniority_level"] = extracted.seniority_level
         skills_payload["target_industry"] = extracted.target_industry
         skills_payload["detected_industry"] = extracted.detected_industry
@@ -566,11 +630,9 @@ CRITICAL INSTRUCTIONS:
                     for cand_prof in all_profiles:
                         ps_row = cand_prof.parsed_skills or {}
                         row_owner = str(ps_row.get("owner_email") or "").strip().lower()
-                        if (not row_owner and cand_prof.user_id is None) or cand_prof.email == "candidate@example.com":
+                        if not row_owner and cand_prof.user_id is None:
                             profile = cand_prof
                             break
-                    if profile is None and all_profiles and mark_uploaded:
-                        profile = all_profiles[0]
 
             existing_vault: Dict[str, Any] = {}
             same_owner = bool(
@@ -595,19 +657,27 @@ CRITICAL INSTRUCTIONS:
                 except Exception:
                     existing_vault = {}
 
-            from ..db.profile_repository import profile_repository
+            from ..db.profile_repository import profile_repository, sanitize_person_name, is_corrupted_education_entry
 
             parsed_md = profile_repository.parse_profile_from_md(raw_markdown)
+            resolved_full_name = sanitize_person_name(extracted.full_name)
+            if not resolved_full_name and resolved_user_id is not None:
+                u_owner = session.get(User, resolved_user_id)
+                if u_owner and u_owner.full_name:
+                    resolved_full_name = sanitize_person_name(u_owner.full_name)
+            extracted.full_name = resolved_full_name
             cand = existing_vault.setdefault("candidate", {})
-            cand["full_name"] = extracted.full_name
-            parts = extracted.full_name.split()
+            cand["full_name"] = resolved_full_name
+            parts = resolved_full_name.split()
             cand["first_name"] = parts[0] if parts else "Candidate"
             cand["last_name"] = " ".join(parts[1:]) if len(parts) > 1 else ""
             cand["headline"] = extracted.headline
             cand["email"] = extracted.email
             cand["phone"] = extracted.phone
             if extracted.location:
-                loc_parts = [p.strip() for p in extracted.location.split(",", 1)]
+                clean_loc = re.sub(r"[*_`]+", "", extracted.location).strip()
+                extracted.location = clean_loc
+                loc_parts = [p.strip() for p in clean_loc.split(",", 1)]
                 loc_dict = dict(cand.get("location") or {}) if isinstance(cand.get("location"), dict) else {}
                 loc_dict["city"] = loc_parts[0]
                 loc_dict["country"] = loc_parts[1] if len(loc_parts) > 1 else loc_dict.get("country", "")
@@ -624,15 +694,27 @@ CRITICAL INSTRUCTIONS:
                     for l in parsed_md["spoken_languages"]
                 ]
             existing_vault.setdefault("skills", {})["core"] = skills_payload.get("all_skills", [])
-            if parsed_md.get("work_history") or mark_uploaded:
-                existing_vault["work_history"] = list(parsed_md.get("work_history") or existing_vault.get("work_history") or [])
-            if parsed_md.get("projects"):
-                existing_vault["projects"] = list(parsed_md["projects"])
-                skills_payload["projects"] = list(parsed_md["projects"])
-            if parsed_md.get("certifications"):
-                existing_vault["certifications"] = list(parsed_md["certifications"])
-                skills_payload["courses_and_certifications"] = list(parsed_md["certifications"])
-            grouped_edu = list(parsed_md.get("education") or skills_payload.get("education") or existing_vault.get("education") or [])
+            if mark_uploaded:
+                # Fresh upload replaces stale vault sections instead of merging old corrupted rows
+                existing_vault["work_history"] = list(parsed_md.get("work_history") or [])
+                existing_vault["projects"] = list(parsed_md.get("projects") or skills_payload.get("projects") or [])
+                skills_payload["projects"] = existing_vault["projects"]
+                existing_vault["certifications"] = list(
+                    parsed_md.get("certifications") or skills_payload.get("courses_and_certifications") or []
+                )
+                skills_payload["courses_and_certifications"] = existing_vault["certifications"]
+                raw_edu = list(parsed_md.get("education") or skills_payload.get("education") or [])
+            else:
+                if parsed_md.get("work_history"):
+                    existing_vault["work_history"] = list(parsed_md["work_history"])
+                if parsed_md.get("projects"):
+                    existing_vault["projects"] = list(parsed_md["projects"])
+                    skills_payload["projects"] = list(parsed_md["projects"])
+                if parsed_md.get("certifications"):
+                    existing_vault["certifications"] = list(parsed_md["certifications"])
+                    skills_payload["courses_and_certifications"] = list(parsed_md["certifications"])
+                raw_edu = list(parsed_md.get("education") or skills_payload.get("education") or existing_vault.get("education") or [])
+            grouped_edu = [e for e in raw_edu if not is_corrupted_education_entry(e)]
             existing_vault["education"] = grouped_edu
             skills_payload["education"] = grouped_edu
 

@@ -1,8 +1,8 @@
 import logging
 import re
 from typing import Dict, Any, List, Optional
-from .base_scraper import BasePortalScraper, parse_contact_method_and_email, sanitize_company_name
-from ..link_validator import fetch_and_validate_live_vacancy
+from .base_scraper import BasePortalScraper, matches_domain_keywords, parse_contact_method_and_email, sanitize_company_name
+from ..link_validator import fetch_and_validate_live_vacancy, parse_vacancy_published_date
 
 logger = logging.getLogger(__name__)
 
@@ -10,16 +10,14 @@ logger = logging.getLogger(__name__)
 class JobsGeScraper(BasePortalScraper):
     """
     Live Georgian Market Scraper for Jobs.ge.
-    Searches dynamically based on candidate's target role from skills.md:
-      - e.g., https://jobs.ge/ge/?page=1&q=QA&cid=6 and ?q=Tester&cid=6
-    Parses strictly from #job_list_table <tr> rows, constructs canonical URLs
-    https://jobs.ge/ge/?view=jobs&id={job_id}, and validates every vacancy detail page
-    with a live HTTP GET health check (preventing blank/expired 200 OK pages).
+    Parses #job_list_table rows (including Published Date 'გამოქვეყნდა' and Deadline 'ბოლო ვადა'),
+    prioritizes newest postings first, and validates live detail pages.
     """
 
     portal_name = "jobs.ge"
     market = "GE_DOMESTIC"
     DEFAULT_SEARCH_URLS = [
+        "https://jobs.ge/ge/?page=1&cid=6",
         "https://jobs.ge/ge/?page=1&q=QA&cid=6",
         "https://jobs.ge/ge/?page=1&q=Tester&cid=6",
     ]
@@ -29,13 +27,8 @@ class JobsGeScraper(BasePortalScraper):
         results: List[Dict[str, Any]] = []
         seen_ids: set[str] = set()
 
-        # Parse ONLY inside #job_list_table (ignore VIP banners, logos, and sidebars)
         table = soup.select_one("#job_list_table")
-        if table:
-            rows = table.find_all("tr")
-        else:
-            # Support direct unit-test HTML fixtures if #job_list_table isn't wrapped
-            rows = soup.select("table.regularEntries tr, tr")
+        rows = table.find_all("tr") if table else soup.select("table.regularEntries tr, tr")
 
         for row in rows:
             links = row.find_all("a", href=True)
@@ -45,7 +38,6 @@ class JobsGeScraper(BasePortalScraper):
 
             for a in links:
                 href = a["href"]
-                # Extract company strictly from Jobs.ge client profile links (NEVER location columns)
                 if "view=client" in href or "client=" in href:
                     txt = a.get_text(" ", strip=True)
                     if txt and not company_text:
@@ -70,17 +62,26 @@ class JobsGeScraper(BasePortalScraper):
             if not job_link or not job_id or job_id in seen_ids:
                 continue
 
-            title = job_link.get_text(strip=True)
+            title = re.sub(r"\s+NEW\s*$", "", job_link.get_text(" ", strip=True), flags=re.I).strip()
             if len(title) < 3:
                 continue
 
             seen_ids.add(job_id)
 
-            # Enforce strict canonical Jobs.ge URL format
+            # Extract Published Date (col -2) & Deadline (col -1) from Jobs.ge table cells
+            tds = row.find_all("td")
+            pub_dt = None
+            pub_text = None
+            dl_text = None
+            if len(tds) >= 5:
+                raw_pub = tds[-2].get_text(" ", strip=True)
+                raw_dl = tds[-1].get_text(" ", strip=True)
+                pub_dt, pub_text = parse_vacancy_published_date(raw_pub, standalone=True)
+                if raw_dl and len(raw_dl) >= 4:
+                    dl_text = raw_dl
+
             canonical_url = f"https://jobs.ge/ge/?view=jobs&id={job_id}"
             ext_id = f"jobsge-{job_id}"
-
-            # Preliminary placeholder description; live detail page overwrites both text & company
             prelim_desc = f"{title} at {company_text or 'Employer'} (Jobs.ge)"
             channel, target_email, email_subj = parse_contact_method_and_email(prelim_desc, str(row))
             company = sanitize_company_name(company_text, target_email=target_email, fallback="კომპანია (Jobs.ge)")
@@ -99,24 +100,49 @@ class JobsGeScraper(BasePortalScraper):
                 "detected_languages": ["English", "Georgian"],
                 "language_requirements": ["English", "Georgian"],
                 "description_raw": prelim_desc,
+                "posting_date": pub_text,
+                "published_at": pub_dt,
+                "deadline_text": dl_text,
                 "status": "DISCOVERED",
             })
 
         return results
 
     async def _enrich_and_verify_item(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Fetches the live Jobs.ge detail page, rejects blank/expired pages, and extracts real body."""
-        is_live, clean_text, raw_html = await fetch_and_validate_live_vacancy(item["url"], timeout=8.0)
+        """Fetches the live Jobs.ge detail page, rejects blank/expired pages, and extracts body + published date."""
+        is_live, clean_text, raw_html = await fetch_and_validate_live_vacancy(item["url"], timeout=9.0)
         if not is_live or not clean_text:
             return None
 
-        # If Georgian listing redirects/defers full description to English version, fetch English text
         if "ინგლისურ ენაზე" in clean_text and "/ge/" in item["url"]:
             en_url = item["url"].replace("/ge/", "/en/")
             en_live, en_text, en_html = await fetch_and_validate_live_vacancy(en_url, timeout=8.0)
             if en_live and len(en_text) > len(clean_text):
                 clean_text = f"{clean_text}\n\n{en_text}"
                 raw_html = en_html or raw_html
+                en_title_m = re.search(r"Ad\s+title:\s*([^\n|]{3,90}?)(?:\s+Provided\s+By:|\s*\||\n)", en_text, re.I)
+                if en_title_m:
+                    item["title"] = en_title_m.group(1).strip()
+
+        # Disambiguate Georgian titles that embed seniority in the opening sentence
+        # e.g. ProCredit Bank: id=770150 "(Junior QA)" vs id=770149 "(Middle / Senior QA)"
+        qual_m = re.search(
+            r"აცხადებს\s+ვაკანსიას[^.\n]{0,120}?\(([^)\n]{2,45})\)",
+            clean_text[:600],
+        )
+        if qual_m:
+            qual = qual_m.group(1).strip()
+            if qual.lower() not in item["title"].lower() and any(
+                k in qual.lower()
+                for k in ("junior", "middle", "mid", "senior", "lead", "intern", "trainee", "qa", "უმცროს", "უფროს", "სტაჟიორ")
+            ):
+                item["title"] = f"{item['title']} ({qual})"
+
+        if not item.get("published_at"):
+            pub_dt, pub_text = parse_vacancy_published_date(clean_text, standalone=False)
+            if pub_dt:
+                item["published_at"] = pub_dt
+                item["posting_date"] = pub_text
 
         item["description_raw"] = clean_text
         item["is_link_live"] = True
@@ -126,7 +152,6 @@ class JobsGeScraper(BasePortalScraper):
         )
 
         channel, target_email, email_subj = parse_contact_method_and_email(clean_text, raw_html)
-        # Extract authentic company name: prefer 'მომწოდებელი:' label FIRST, then non-navigation client links, then list-row company
         det_company = ""
         comp_m = re.search(
             r"მომწოდებელი:\s*([^\n<]{2,70}?)(?:\s+(?:გამოქვეყნდა|ბოლო\s+ვადა)|[\r\n]|$)",
@@ -150,9 +175,7 @@ class JobsGeScraper(BasePortalScraper):
                     client_slug_comp = c_s.upper() if len(c_s) <= 4 else c_s.title()
 
         table_company = sanitize_company_name(item.get("company"), target_email=target_email, fallback="")
-        resolved_comp = det_company or table_company or client_slug_comp or sanitize_company_name(None, target_email=target_email, fallback="კომპანია (Jobs.ge)")
-        item["company"] = resolved_comp
-
+        item["company"] = det_company or table_company or client_slug_comp or sanitize_company_name(None, target_email=target_email, fallback="კომპანია (Jobs.ge)")
         item["channel"] = channel
         item["delivery_channel"] = channel
         item["target_email"] = target_email
@@ -163,15 +186,27 @@ class JobsGeScraper(BasePortalScraper):
         self,
         allow_network: bool = True,
         search_urls: Optional[List[str]] = None,
+        domain_keywords: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         if not allow_network:
             return []
         urls = search_urls or self.DEFAULT_SEARCH_URLS
+
+        def _parse_prioritized(html: str) -> List[Dict[str, Any]]:
+            rows = self.parse_html_listings(html)
+            if not domain_keywords:
+                return rows
+            # Keep domain-matching & internship titles first so broad category feeds (e.g. cid=6) never starve target roles
+            matched = [r for r in rows if matches_domain_keywords(r.get("title", ""), domain_keywords) or any(k in r.get("title", "").lower() for k in ("სტაჟირ", "სტაჟიორ", "intern", "trainee"))]
+            return matched if matched else rows[:15]
+
         return await self.scrape_and_enrich_urls(
             urls,
-            self.parse_html_listings,
+            _parse_prioritized,
             self._enrich_and_verify_item,
-            limit=20,
+            limit=26,
+            page_timeout=10.0,
+            sort_newest_first=True,
         )
 
 

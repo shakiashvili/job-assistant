@@ -14,8 +14,11 @@ from ..services.gemini_service import gemini_service
 logger = logging.getLogger(__name__)
 
 
-def load_live_candidate_profile(user_email: Optional[str] = None) -> Dict[str, Any]:
-    """Loads the active SQLModel CandidateProfile payload strictly honoring user ownership."""
+def load_live_candidate_profile(
+    user_email: Optional[str] = None,
+    user_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Loads the active SQLModel CandidateProfile strictly honoring user_id first, then owner_email."""
     try:
         init_db()
         with Session(engine) as session:
@@ -24,19 +27,24 @@ def load_live_candidate_profile(user_email: Optional[str] = None) -> Dict[str, A
             ).all()
             chosen: Optional[CandidateProfile] = None
             target_low = (user_email or "").strip().lower()
-            is_named_user = bool(target_low and target_low != "guest@talentflow.local")
-            if is_named_user:
+            is_named_user = bool((target_low and target_low != "guest@talentflow.local") or user_id is not None)
+            if user_id is not None and target_low != "guest@talentflow.local":
                 for p in profiles:
-                    ps = p.parsed_skills or {}
-                    owner = str(ps.get("owner_email") or "").strip().lower()
-                    if owner == target_low:
+                    if p.user_id == user_id and (p.raw_markdown or p.full_name):
                         chosen = p
                         break
-            else:
+            if chosen is None and is_named_user and target_low and target_low != "guest@talentflow.local":
                 for p in profiles:
                     ps = p.parsed_skills or {}
                     owner = str(ps.get("owner_email") or "").strip().lower()
-                    if not owner and p.user_id is None:
+                    if owner == target_low and (p.raw_markdown or p.full_name):
+                        chosen = p
+                        break
+            elif chosen is None and not is_named_user:
+                for p in profiles:
+                    ps = p.parsed_skills or {}
+                    owner = str(ps.get("owner_email") or "").strip().lower()
+                    if not owner and p.user_id is None and bool(ps.get("user_uploaded", False)):
                         chosen = p
                         break
             if chosen:
@@ -68,7 +76,7 @@ class AnswerService:
         owner_email = getattr(user, "email", None)
         user_id = getattr(user, "id", None)
         data = dict(ground_truth_store.get_data(owner_email=owner_email, user_id=user_id))
-        live_profile = load_live_candidate_profile(owner_email)
+        live_profile = load_live_candidate_profile(owner_email, user_id=user_id)
 
         candidate = dict(data.get("candidate", {}))
         skills_md = (

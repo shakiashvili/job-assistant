@@ -1,11 +1,89 @@
 import asyncio
+from datetime import datetime, timezone
 import logging
 import re
+import ssl
 from typing import Dict, Any, List, Optional, Tuple
 import httpx
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
+
+_SHARED_SSL_CONTEXT: Optional[ssl.SSLContext] = None
+
+
+def get_shared_ssl_context() -> ssl.SSLContext:
+    """Caches one default TLS context per process so concurrent httpx calls never stall reloading OS certs."""
+    global _SHARED_SSL_CONTEXT
+    if _SHARED_SSL_CONTEXT is None:
+        _SHARED_SSL_CONTEXT = ssl.create_default_context()
+    return _SHARED_SSL_CONTEXT
+
+_UA_RU_MONTHS = {
+    "січня": 1, "января": 1, "лютого": 2, "февраля": 2, "березня": 3, "марта": 3,
+    "квітня": 4, "апреля": 4, "травня": 5, "мая": 5, "червня": 6, "июня": 6,
+    "липня": 7, "июля": 7, "серпня": 8, "августа": 8, "вересня": 9, "сентября": 9,
+    "жовтня": 10, "октября": 10, "листопада": 11, "ноября": 11, "грудня": 12, "декабря": 12,
+}
+
+
+def matches_domain_keywords(text: str, keywords: Optional[List[str]]) -> bool:
+    """Word-boundary-safe multi-script keyword matcher (prevents 'qa' matching 'equal' or 'hr' matching 'three')."""
+    if not keywords:
+        return True
+    low = (text or "").lower()
+    if not low:
+        return False
+    for raw_kw in keywords:
+        kw = str(raw_kw or "").strip().lower()
+        if len(kw) < 2:
+            continue
+        if kw.isascii() and len(kw) <= 5 and kw.isalnum():
+            if re.search(rf"\b{re.escape(kw)}\b", low):
+                return True
+        elif kw in low:
+            return True
+    return False
+
+
+def parse_portal_published_at(raw_val: Any) -> Tuple[Optional[datetime], Optional[str]]:
+    """Parses ISO strings, Unix sec/ms epochs, or Slavic/English/Georgian dates into (utc_datetime, YYYY-MM-DD)."""
+    if raw_val is None or raw_val == "":
+        return None, None
+    try:
+        if isinstance(raw_val, (int, float)):
+            ts = float(raw_val)
+            if ts > 1e12:
+                ts /= 1000.0
+            if ts > 1e8:
+                dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+                return dt, dt.date().isoformat()
+        s = str(raw_val).strip()
+        if not s:
+            return None, None
+        # ISO-8601 fast path (handles Z, fractional seconds, +00:00)
+        iso_m = re.match(r"^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2}:\d{2}))?", s)
+        if iso_m:
+            base = f"{iso_m.group(1)}T{iso_m.group(2) or '00:00:00'}+00:00"
+            dt = datetime.fromisoformat(base)
+            return dt, dt.date().isoformat()
+        # Ukrainian / Russian day + month (e.g. "18 листопада", "5 ноября")
+        sl_m = re.search(r"\b(\d{1,2})\s+([а-яіїєґё]+)(?:\s+(\d{4}))?", s.lower())
+        if sl_m and sl_m.group(2) in _UA_RU_MONTHS:
+            now = datetime.now(timezone.utc)
+            day, month = int(sl_m.group(1)), _UA_RU_MONTHS[sl_m.group(2)]
+            year = int(sl_m.group(3)) if sl_m.group(3) else now.year
+            dt = datetime(year, month, day, tzinfo=timezone.utc)
+            if not sl_m.group(3) and (dt - now).days > 45:
+                dt = datetime(year - 1, month, day, tzinfo=timezone.utc)
+            return dt, dt.date().isoformat()
+        from ..link_validator import parse_vacancy_published_date
+        dt = parse_vacancy_published_date(s)
+        if dt is not None:
+            return dt, dt.date().isoformat()
+    except Exception:
+        pass
+    return None, None
 
 _COMPANY_LOCATION_BLACKLIST = {
     "საქართველოს მასშტაბით",
@@ -64,9 +142,10 @@ def sanitize_company_name(
     cleaned = re.sub(r"\s+", " ", (raw_company or "")).strip(" -|•·,")
     lower = cleaned.lower()
     is_date_only = bool(re.match(r"^\d{1,2}\s+[ა-ჰa-z]+$", lower))
+    is_url_like = lower.startswith(("http://", "https://", "www.")) or "linkedin.com" in lower
     has_blacklisted_sub = any(b in lower for b in _COMPANY_SUBSTRING_BLACKLIST)
 
-    if cleaned and lower not in _COMPANY_LOCATION_BLACKLIST and not has_blacklisted_sub and not is_date_only and len(cleaned) >= 2:
+    if cleaned and lower not in _COMPANY_LOCATION_BLACKLIST and not has_blacklisted_sub and not is_date_only and not is_url_like and len(cleaned) >= 2:
         return cleaned
 
     if target_email and "@" in target_email:
@@ -589,6 +668,7 @@ class BasePortalScraper:
                         headers=merged_headers,
                         follow_redirects=True,
                         timeout=timeout,
+                        verify=get_shared_ssl_context(),
                     ) as client:
                         response = await client.get(url)
                 if response.status_code == 200:
@@ -645,9 +725,11 @@ class BasePortalScraper:
         dedupe_key: str = "external_id",
         dedupe_title_company: bool = False,
         keep_filtered_stubs: bool = False,
+        page_timeout: float = 8.0,
+        sort_newest_first: bool = False,
     ) -> List[Dict[str, Any]]:
         """Shared fetch -> parse -> dedupe -> concurrent enrichment pipeline for HTML portal scrapers."""
-        pages = await asyncio.gather(*(self.fetch_html(u) for u in urls), return_exceptions=True)
+        pages = await asyncio.gather(*(self.fetch_html(u, timeout=page_timeout) for u in urls), return_exceptions=True)
         candidates: List[Dict[str, Any]] = []
         seen_keys: set[str] = set()
         seen_tc: set[Tuple[str, str]] = set()
@@ -667,6 +749,11 @@ class BasePortalScraper:
                     candidates.append(item)
         if not candidates:
             return []
+        if sort_newest_first:
+            candidates.sort(
+                key=lambda c: c["published_at"].timestamp() if c.get("published_at") else 0.0,
+                reverse=True,
+            )
         if keep_filtered_stubs:
             to_enrich = [c for c in candidates if c.get("status") != "FILTERED_OUT"][:limit]
             filtered_stubs = [c for c in candidates if c.get("status") == "FILTERED_OUT"]

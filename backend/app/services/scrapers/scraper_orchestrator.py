@@ -5,6 +5,7 @@ import re
 import time
 from urllib.parse import parse_qsl, urlencode, urlparse
 from typing import Dict, Any, List, Optional, Tuple
+from sqlalchemy import inspect as sa_inspect
 from sqlmodel import Session, select
 from ...db.database import engine, init_db, delete_job_posting_cascade
 from ...db.models import (
@@ -17,8 +18,8 @@ from ...db.models import (
 from ...db.profile_repository import ground_truth_store
 from ..salary_service import salary_service
 from ..matcher_service import matcher_service
-from ..profile_service import profile_service
-from ..link_validator import parse_vacancy_deadline
+from ..profile_service import profile_service, compute_dynamic_experience_bounds
+from ..link_validator import parse_vacancy_deadline, parse_vacancy_published_date
 from .base_scraper import sanitize_company_name
 from .jobs_ge_scraper import jobs_ge_scraper
 from .hr_ge_scraper import hr_ge_scraper
@@ -171,7 +172,7 @@ class ScraperOrchestrator:
             return None, canonical
 
         if canonical == "jobs.ge":
-            return scraper.scrape(allow_network=True, search_urls=search_cfg.get("jobs_ge_urls")), canonical
+            return scraper.scrape(allow_network=True, search_urls=search_cfg.get("jobs_ge_urls"), domain_keywords=combined_kw), canonical
         if canonical == "hr.ge":
             return scraper.scrape(allow_network=True, search_urls=search_cfg.get("hr_ge_urls"), domain_keywords=combined_kw), canonical
         if canonical == "hr.gov.ge":
@@ -213,14 +214,38 @@ class ScraperOrchestrator:
             return self.ingest_scraped_jobs([], owner_email=owner_email, user_id=user_id)
 
         profile = ground_truth_store.get_profile_record(owner_email=owner_email, user_id=user_id)
-        parsed_skills = profile.parsed_skills if profile else {}
-        headline = parsed_skills.get("headline", "") if isinstance(parsed_skills, dict) else ""
-        cand_langs = (
-            parsed_skills.get("spoken_languages") or []
-            if isinstance(parsed_skills, dict)
-            else []
+        parsed_skills = dict(profile.parsed_skills) if (profile and isinstance(profile.parsed_skills, dict)) else {}
+        has_uploaded_profile = bool(
+            profile
+            and (
+                bool(parsed_skills.get("user_uploaded", False))
+                or bool((profile.raw_markdown or "").strip())
+                or bool(parsed_skills.get("all_skills"))
+            )
         )
-        max_allowed_years = float(parsed_skills.get("max_allowed_years") or 2.0) if isinstance(parsed_skills, dict) else 2.0
+        if not has_uploaded_profile:
+            return {
+                "profile_required": True,
+                "total_processed": 0,
+                "staged_ready_count": 0,
+                "filtered_out_count": 0,
+                "cache_hits": 0,
+                "rejection_reasons": [],
+                "jobs": [],
+                "message": "Upload your CV or skills file first so TalentFlow targets vacancies matching your actual skills and experience.",
+            }
+        raw_exp = parsed_skills.get("years_of_experience")
+        _, dyn_max_years, _, dyn_label = compute_dynamic_experience_bounds(
+            float(raw_exp) if raw_exp is not None else None,
+            raw_markdown=profile.raw_markdown if profile else "",
+        )
+        stored_max = parsed_skills.get("max_allowed_years")
+        if stored_max is None or (raw_exp is None and float(stored_max) == 2.0):
+            parsed_skills["max_allowed_years"] = dyn_max_years
+            parsed_skills["target_seniority_label"] = dyn_label
+        max_allowed_years = float(parsed_skills.get("max_allowed_years") or dyn_max_years)
+        headline = parsed_skills.get("headline", "")
+        cand_langs = parsed_skills.get("spoken_languages") or []
         search_cfg = profile_service.get_search_queries_for_profile(parsed_skills, headline=headline)
 
         combined_kw = list(dict.fromkeys(
@@ -241,14 +266,14 @@ class ScraperOrchestrator:
                 started = time.perf_counter()
                 try:
                     async with sem:
-                        data = await asyncio.wait_for(coro, timeout=18.0)
+                        data = await asyncio.wait_for(coro, timeout=32.0)
                     latency_ms = int((time.perf_counter() - started) * 1000)
                     items = data if isinstance(data, list) else []
                     self._record_source_health(portal_name, "ok", len(items), latency_ms)
                     return items
                 except asyncio.TimeoutError:
                     latency_ms = int((time.perf_counter() - started) * 1000)
-                    self._record_source_health(portal_name, "timeout", 0, latency_ms, "Timed out after 18s")
+                    self._record_source_health(portal_name, "timeout", 0, latency_ms, "Timed out after 32s")
                     logger.debug("Portal scraper %s timed out", portal_name)
                     return []
                 except Exception as exc:
@@ -269,6 +294,52 @@ class ScraperOrchestrator:
                 return rescored
         return result
 
+    @staticmethod
+    def _upsert_user_match(
+        session: Session,
+        existing_matches: Dict[int, UserJobMatch],
+        *,
+        user_id: int,
+        job_id: int,
+        score: float,
+        match_tier: str,
+        adj_tag: Optional[str],
+        overlap_pct: Optional[int],
+        status: str,
+        rationale: str,
+        filter_reason: Optional[str],
+        now_utc,
+    ) -> UserJobMatch:
+        um = existing_matches.get(job_id)
+        if um:
+            um.suitability_score = score
+            um.match_score = score
+            um.match_tier = match_tier
+            um.adjacent_role_tag = adj_tag
+            um.skill_overlap_pct = overlap_pct
+            um.match_rationale = rationale
+            um.filter_out_reason = filter_reason
+            if um.status not in ("APPLIED", "REJECTED"):
+                um.status = status
+            um.evaluated_at = now_utc
+        else:
+            um = UserJobMatch(
+                user_id=user_id,
+                job_posting_id=job_id,
+                suitability_score=score,
+                match_score=score,
+                match_tier=match_tier,
+                adjacent_role_tag=adj_tag,
+                skill_overlap_pct=overlap_pct,
+                status=status,
+                match_rationale=rationale,
+                filter_out_reason=filter_reason,
+                evaluated_at=now_utc,
+            )
+            existing_matches[job_id] = um
+        session.add(um)
+        return um
+
     def rescore_existing_jobs(
         self,
         owner_email: Optional[str] = None,
@@ -277,16 +348,17 @@ class ScraperOrchestrator:
         """Re-evaluates existing JobPosting rows in the DB against the current user's profile in <50ms."""
         init_db()
         profile = ground_truth_store.get_profile_record(owner_email=owner_email, user_id=user_id)
-        parsed_skills = profile.parsed_skills if profile and profile.parsed_skills else {}
+        parsed_skills = dict(profile.parsed_skills) if profile and profile.parsed_skills else {}
         if not parsed_skills.get("all_skills") and not (profile and profile.raw_markdown):
-            return {
-                "total_processed": 0,
-                "staged_ready_count": 0,
-                "filtered_out_count": 0,
-                "cache_hits": 0,
-                "rejection_reasons": [],
-                "jobs": [],
-            }
+            return {"total_processed": 0, "staged_ready_count": 0, "filtered_out_count": 0, "cache_hits": 0, "rejection_reasons": [], "jobs": []}
+        raw_exp = parsed_skills.get("years_of_experience")
+        if parsed_skills.get("max_allowed_years") is None or (raw_exp is None and float(parsed_skills.get("max_allowed_years") or 2.0) == 2.0):
+            _, dyn_max, _, dyn_lbl = compute_dynamic_experience_bounds(
+                float(raw_exp) if raw_exp is not None else None,
+                raw_markdown=profile.raw_markdown if profile else "",
+            )
+            parsed_skills["max_allowed_years"] = dyn_max
+            parsed_skills["target_seniority_label"] = dyn_lbl
 
         serialized_jobs: List[Dict[str, Any]] = []
         staged_count = 0
@@ -296,12 +368,7 @@ class ScraperOrchestrator:
         with Session(engine, expire_on_commit=False) as session:
             rows = session.exec(select(JobPosting)).all()
             existing_matches = (
-                {
-                    m.job_posting_id: m
-                    for m in session.exec(
-                        select(UserJobMatch).where(UserJobMatch.user_id == resolved_uid)
-                    ).all()
-                }
+                {m.job_posting_id: m for m in session.exec(select(UserJobMatch).where(UserJobMatch.user_id == resolved_uid)).all()}
                 if resolved_uid is not None
                 else {}
             )
@@ -312,6 +379,7 @@ class ScraperOrchestrator:
                     parsed_skills=parsed_skills,
                     current_status="DISCOVERED",
                     portal=j.portal or "generic",
+                    company=j.company or "",
                 )
                 score = float(tier_res["suitability_score"])
                 final_status = str(tier_res["status"])
@@ -322,46 +390,24 @@ class ScraperOrchestrator:
                 filter_reason = str(tier_res.get("filter_out_reason") or "")
 
                 if resolved_uid is not None and j.id is not None:
-                    um = existing_matches.get(j.id)
-                    if um:
-                        um.suitability_score = score
-                        um.match_score = score
-                        um.match_tier = match_tier
-                        um.adjacent_role_tag = adj_tag
-                        um.skill_overlap_pct = overlap_pct
-                        um.match_rationale = rationale
-                        um.filter_out_reason = filter_reason
-                        if um.status not in ("APPLIED", "REJECTED"):
-                            um.status = final_status
-                        um.evaluated_at = now_utc
-                        session.add(um)
-                    else:
-                        session.add(
-                            UserJobMatch(
-                                user_id=resolved_uid,
-                                job_posting_id=j.id,
-                                suitability_score=score,
-                                match_score=score,
-                                match_tier=match_tier,
-                                adjacent_role_tag=adj_tag,
-                                skill_overlap_pct=overlap_pct,
-                                status=final_status,
-                                match_rationale=rationale,
-                                filter_out_reason=filter_reason,
-                                evaluated_at=now_utc,
-                            )
-                        )
+                    um = self._upsert_user_match(
+                        session, existing_matches, user_id=resolved_uid, job_id=j.id,
+                        score=score, match_tier=match_tier, adj_tag=adj_tag, overlap_pct=overlap_pct,
+                        status=final_status, rationale=rationale, filter_reason=filter_reason, now_utc=now_utc,
+                    )
                     if final_status == "FILTERED_OUT":
                         filtered_count += 1
                         continue
-                    item_dict = j.model_dump(mode="json")
-                    item_dict["suitability_score"] = score
-                    item_dict["match_score"] = score
-                    item_dict["match_tier"] = match_tier
-                    item_dict["adjacent_role_tag"] = adj_tag
-                    item_dict["skill_overlap_pct"] = overlap_pct
-                    item_dict["match_rationale"] = rationale
-                    item_dict["status"] = final_status if (um is None or um.status not in ("APPLIED", "REJECTED")) else um.status
+                    item_dict = {
+                        **j.model_dump(mode="json"),
+                        "suitability_score": score,
+                        "match_score": score,
+                        "match_tier": match_tier,
+                        "adjacent_role_tag": adj_tag,
+                        "skill_overlap_pct": overlap_pct,
+                        "match_rationale": rationale,
+                        "status": um.status,
+                    }
                     if final_status == "STAGED":
                         staged_count += 1
                     serialized_jobs.append(item_dict)
@@ -424,10 +470,18 @@ class ScraperOrchestrator:
         with Session(engine, expire_on_commit=False) as session:
             resolved_uid = user_id or (profile.user_id if profile and profile.user_id is not None else None)
             parsed_skills = (
-                profile.parsed_skills
+                dict(profile.parsed_skills)
                 if profile and profile.parsed_skills and profile.parsed_skills.get("all_skills")
                 else matcher_service.parse_skills_markdown(profile.raw_markdown if profile else "")
             )
+            raw_exp = parsed_skills.get("years_of_experience")
+            if parsed_skills.get("max_allowed_years") is None or (raw_exp is None and float(parsed_skills.get("max_allowed_years") or 2.0) == 2.0):
+                _, dyn_max, _, dyn_lbl = compute_dynamic_experience_bounds(
+                    float(raw_exp) if raw_exp is not None else None,
+                    raw_markdown=profile.raw_markdown if profile else "",
+                )
+                parsed_skills["max_allowed_years"] = dyn_max
+                parsed_skills["target_seniority_label"] = dyn_lbl
             now_utc = utc_now()
 
             # Pre-fetch all existing JobPostings in ONE query to eliminate N+1 SELECTs inside the loop
@@ -467,15 +521,23 @@ class ScraperOrchestrator:
                 existing = by_url.get(norm_url) if norm_url else None
                 if not existing and ext_id:
                     existing = by_portal_ext.get((portal, ext_id))
+                # Only cross-portal deduplicate by (title, company); never collapse two distinct external_ids on the same portal
                 if not existing and tc_key:
-                    existing = by_title_company.get(tc_key)
+                    cand_tc = by_title_company.get(tc_key)
+                    if cand_tc and (cand_tc.portal != portal or not ext_id):
+                        existing = cand_tc
 
-                # Skip duplicate postings within the same scrape batch unless richer description
-                if tc_key and tc_key in seen_in_batch and existing and len(desc) <= len(existing.description_raw or "") + 40:
+                batch_dedupe_key = (f"{portal}:{ext_id}", "") if ext_id else tc_key
+                if tc_key and tc_key in seen_in_batch and existing and existing.portal != portal and len(desc) <= len(existing.description_raw or "") + 40:
+                    cache_hits += 1
+                    continue
+                if batch_dedupe_key and batch_dedupe_key in seen_in_batch:
                     cache_hits += 1
                     continue
                 if tc_key:
                     seen_in_batch.add(tc_key)
+                if batch_dedupe_key:
+                    seen_in_batch.add(batch_dedupe_key)
 
                 # 24h DB evaluation cache: skip re-auditing identical posting if profile hasn't changed
                 if existing and existing.scraped_at and existing.status != "FILTERED_OUT":
@@ -487,7 +549,9 @@ class ScraperOrchestrator:
                     )
                     age_ok = (now_utc - scr_ts) < timedelta(hours=24)
                     profile_unchanged = prof_ts <= scr_ts
-                    if age_ok and profile_unchanged and initial_status != "FILTERED_OUT" and len(desc) <= len(existing.description_raw or "") + 40:
+                    needs_date_backfill = existing.published_at is None and bool(item.get("published_at") or item.get("posting_date"))
+                    title_changed = bool(title and existing.title and title.strip() != existing.title.strip())
+                    if age_ok and profile_unchanged and not needs_date_backfill and not title_changed and initial_status != "FILTERED_OUT" and len(desc) <= len(existing.description_raw or "") + 40:
                         cache_hits += 1
                         if existing.status == "STAGED":
                             staged_count += 1
@@ -500,11 +564,21 @@ class ScraperOrchestrator:
                     description=desc,
                 )
 
-                # 2. Check application deadline & expiration
+                # 2. Check application deadline, expiration & publication date
                 dl_date, dl_str, is_expired = parse_vacancy_deadline(desc)
                 if is_expired:
                     initial_status = "FILTERED_OUT"
                     initial_rationale = f"Vacancy expired on {dl_str}"
+                pub_dt = item.get("published_at")
+                pub_str = item.get("posting_date")
+                if pub_dt is None:
+                    if pub_str:
+                        pub_dt, pub_str_norm = parse_vacancy_published_date(str(pub_str), standalone=True)
+                        pub_str = pub_str_norm or pub_str
+                    else:
+                        pub_dt, pub_str = parse_vacancy_published_date(desc, standalone=False)
+                if pub_dt is not None and not pub_str:
+                    pub_str = pub_dt.strftime("%Y-%m-%d")
 
                 # 3. Multi-Tier Optimal Match Evaluation
                 tier_res = matcher_service.evaluate_job_tiered(
@@ -514,6 +588,7 @@ class ScraperOrchestrator:
                     current_status=initial_status,
                     existing_rationale=initial_rationale,
                     portal=portal,
+                    company=company,
                 )
                 score = float(tier_res["suitability_score"])
                 final_status = str(tier_res["status"])
@@ -543,14 +618,19 @@ class ScraperOrchestrator:
                             and resolved_uid is not None
                             and existing.user_id == resolved_uid
                             and existing.status not in ("APPLIED", "REJECTED")
+                            and not any(
+                                jr is existing or (existing.id is not None and jr.id == existing.id)
+                                for jr, _ in active_records_to_serialize
+                            )
                         ):
                             delete_job_posting_cascade(session, existing)
-                            if norm_url and norm_url in by_url:
-                                by_url.pop(norm_url, None)
-                            if ext_id and (portal, ext_id) in by_portal_ext:
-                                by_portal_ext.pop((portal, ext_id), None)
-                            if tc_key and tc_key in by_title_company:
-                                by_title_company.pop(tc_key, None)
+                            for lookup in (by_url, by_portal_ext, by_title_company):
+                                stale_keys = [
+                                    k for k, v in lookup.items()
+                                    if v is existing or (existing.id is not None and v.id == existing.id)
+                                ]
+                                for k in stale_keys:
+                                    lookup.pop(k, None)
                     continue
                 elif final_status == "STAGED":
                     staged_count += 1
@@ -558,38 +638,45 @@ class ScraperOrchestrator:
                 langs = item.get("detected_languages") or item.get("language_requirements") or ["English"]
                 is_est = bool(sal_info["salary_estimated_by_ai"])
                 is_rem = bool(item.get("is_remote", True))
-
+                job_fields = {
+                    "title": title,
+                    "company": company,
+                    "url": url or (existing.url if existing else ""),
+                    "market": market,
+                    "is_remote": is_rem,
+                    "remote_type": "REMOTE" if is_rem else "ONSITE",
+                    "channel": item.get("channel", "WEB_FORM"),
+                    "delivery_channel": item.get("delivery_channel") or item.get("channel", "WEB_FORM"),
+                    "target_email": item.get("target_email"),
+                    "email_subject": item.get("email_subject"),
+                    "email_subject_template": item.get("email_subject_template") or item.get("email_subject"),
+                    "detected_languages": langs,
+                    "language_requirements": langs,
+                    "description_raw": desc,
+                    "salary_min": sal_info["min_salary"],
+                    "salary_max": sal_info["max_salary"],
+                    "salary_currency": sal_info["currency"],
+                    "salary_is_estimated": is_est,
+                    "salary_estimated_by_ai": is_est,
+                    "suitability_score": score,
+                    "match_score": score,
+                    "match_tier": match_tier,
+                    "adjacent_role_tag": adj_tag,
+                    "skill_overlap_pct": overlap_pct,
+                    "filter_out_reason": filter_reason,
+                    "match_rationale": match_rationale,
+                    "deadline_text": dl_str or item.get("deadline_text"),
+                    "scraped_at": now_utc,
+                }
                 if existing:
-                    existing.title = title
-                    existing.company = company
-                    existing.url = url or existing.url
-                    existing.market = market
-                    existing.is_remote = is_rem
-                    existing.remote_type = "REMOTE" if is_rem else "ONSITE"
-                    existing.channel = item.get("channel", "WEB_FORM")
-                    existing.delivery_channel = item.get("delivery_channel") or item.get("channel", "WEB_FORM")
-                    existing.target_email = item.get("target_email")
-                    existing.email_subject = item.get("email_subject")
-                    existing.email_subject_template = item.get("email_subject_template") or item.get("email_subject")
-                    existing.detected_languages = langs
-                    existing.language_requirements = langs
-                    existing.description_raw = desc
-                    existing.salary_min = sal_info["min_salary"]
-                    existing.salary_max = sal_info["max_salary"]
-                    existing.salary_currency = sal_info["currency"]
-                    existing.salary_is_estimated = is_est
-                    existing.salary_estimated_by_ai = is_est
-                    existing.suitability_score = score
-                    existing.match_score = score
-                    existing.match_tier = match_tier
-                    existing.adjacent_role_tag = adj_tag
-                    existing.skill_overlap_pct = overlap_pct
-                    existing.filter_out_reason = filter_reason
-                    existing.match_rationale = match_rationale
-                    existing.deadline_text = dl_str or item.get("deadline_text")
+                    for k, v in job_fields.items():
+                        setattr(existing, k, v)
+                    if pub_dt is not None:
+                        existing.published_at = pub_dt
+                    if pub_str:
+                        existing.posting_date = pub_str
                     if existing.status not in ("APPLIED", "REJECTED"):
                         existing.status = final_status
-                    existing.scraped_at = now_utc
                     session.add(existing)
                     job_record = existing
                 else:
@@ -597,35 +684,10 @@ class ScraperOrchestrator:
                         user_id=resolved_uid,
                         portal=portal,
                         external_id=ext_id,
-                        title=title,
-                        company=company,
-                        url=url,
-                        market=market,
-                        is_remote=is_rem,
-                        remote_type="REMOTE" if is_rem else "ONSITE",
-                        channel=item.get("channel", "WEB_FORM"),
-                        delivery_channel=item.get("delivery_channel") or item.get("channel", "WEB_FORM"),
-                        target_email=item.get("target_email"),
-                        email_subject=item.get("email_subject"),
-                        email_subject_template=item.get("email_subject_template") or item.get("email_subject"),
-                        detected_languages=langs,
-                        language_requirements=langs,
-                        description_raw=desc,
-                        salary_min=sal_info["min_salary"],
-                        salary_max=sal_info["max_salary"],
-                        salary_currency=sal_info["currency"],
-                        salary_is_estimated=is_est,
-                        salary_estimated_by_ai=is_est,
-                        suitability_score=score,
-                        match_score=score,
-                        match_tier=match_tier,
-                        adjacent_role_tag=adj_tag,
-                        skill_overlap_pct=overlap_pct,
                         status=final_status,
-                        filter_out_reason=filter_reason,
-                        match_rationale=match_rationale,
-                        deadline_text=dl_str or item.get("deadline_text"),
-                        scraped_at=now_utc,
+                        posting_date=pub_str,
+                        published_at=pub_dt,
+                        **job_fields,
                     )
                     session.add(job_record)
                     if norm_url:
@@ -637,69 +699,35 @@ class ScraperOrchestrator:
 
                 active_records_to_serialize.append((
                     job_record,
-                    {
-                        "score": score,
-                        "status": final_status,
-                        "match_tier": match_tier,
-                        "adj_tag": adj_tag,
-                        "overlap_pct": overlap_pct,
-                        "rationale": match_rationale,
-                        "filter_reason": filter_reason,
-                    },
+                    {"score": score, "status": final_status, "match_tier": match_tier, "adj_tag": adj_tag, "overlap_pct": overlap_pct, "rationale": match_rationale, "filter_reason": filter_reason},
                 ))
 
-            # Single flush assigns primary key IDs to all newly created JobPostings at once
             session.flush()
 
-            # ApplicationRecord rows must ONLY be created when a user explicitly saves,
-            # dispatches, or applies to a role — never auto-fabricated during scraping.
-            # Batch-upsert UserJobMatch for the current user and check SavedSearch notifications
+            active_records_to_serialize = [
+                (jr, meta)
+                for jr, meta in active_records_to_serialize
+                if jr.id is not None and jr not in session.deleted and sa_inspect(jr).persistent
+            ]
+
             if resolved_uid is not None and active_records_to_serialize:
                 existing_matches = {
                     m.job_posting_id: m
-                    for m in session.exec(
-                        select(UserJobMatch).where(UserJobMatch.user_id == resolved_uid)
-                    ).all()
+                    for m in session.exec(select(UserJobMatch).where(UserJobMatch.user_id == resolved_uid)).all()
                 }
                 saved_searches = session.exec(
-                    select(SavedSearch).where(
-                        SavedSearch.user_id == resolved_uid,
-                        SavedSearch.notify_on_new == True,  # noqa: E712
-                    )
+                    select(SavedSearch).where(SavedSearch.user_id == resolved_uid, SavedSearch.notify_on_new == True)  # noqa: E712
                 ).all()
 
                 for jr, meta in active_records_to_serialize:
                     if jr.id is None:
                         continue
-                    um = existing_matches.get(jr.id)
-                    if um:
-                        um.suitability_score = meta["score"]
-                        um.match_score = meta["score"]
-                        um.match_tier = meta["match_tier"]
-                        um.adjacent_role_tag = meta["adj_tag"]
-                        um.skill_overlap_pct = meta["overlap_pct"]
-                        um.match_rationale = meta["rationale"]
-                        um.filter_out_reason = meta["filter_reason"]
-                        if um.status not in ("APPLIED", "REJECTED"):
-                            um.status = meta["status"]
-                        um.evaluated_at = now_utc
-                        session.add(um)
-                    else:
-                        new_um = UserJobMatch(
-                            user_id=resolved_uid,
-                            job_posting_id=jr.id,
-                            suitability_score=meta["score"],
-                            match_score=meta["score"],
-                            match_tier=meta["match_tier"],
-                            adjacent_role_tag=meta["adj_tag"],
-                            skill_overlap_pct=meta["overlap_pct"],
-                            status=meta["status"],
-                            match_rationale=meta["rationale"],
-                            filter_out_reason=meta["filter_reason"],
-                            evaluated_at=now_utc,
-                        )
-                        session.add(new_um)
-                        existing_matches[jr.id] = new_um
+                    self._upsert_user_match(
+                        session, existing_matches, user_id=resolved_uid, job_id=jr.id,
+                        score=meta["score"], match_tier=meta["match_tier"], adj_tag=meta["adj_tag"],
+                        overlap_pct=meta["overlap_pct"], status=meta["status"],
+                        rationale=meta["rationale"], filter_reason=meta["filter_reason"], now_utc=now_utc,
+                    )
 
                     for ss in saved_searches:
                         f_dict = ss.filters or {}

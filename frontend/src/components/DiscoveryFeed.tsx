@@ -5,7 +5,6 @@ import {
   Mail,
   Download,
   ExternalLink,
-  Play,
   Upload,
   Compass,
   Sparkles,
@@ -33,7 +32,7 @@ export interface CandidateRoleHeaderInfo {
   education?: Array<{ degree?: string; field_of_study?: string; institution?: string }>;
   courses_and_certifications?: string[];
   experience_years?: number;
-  max_allowed_years?: number;
+  target_seniority_label?: string;
   target_industry?: string;
 }
 
@@ -88,7 +87,6 @@ interface DiscoveryFeedProps {
   onRunScrapers: () => void;
   onUploadClick: () => void;
   onSelectJob: (job: DbJobPosting) => void;
-  onOpenFillForm?: (job: DbJobPosting) => void;
   onDraftInGmail: (job: DbJobPosting) => void;
   searchQuery?: string;
   onSearchQueryChange?: (q: string) => void;
@@ -141,6 +139,22 @@ function formatSalaryDisplay(job: DbJobPosting): string | null {
   return `Up to ${job.salary_max!.toLocaleString()} ${sym} (${labelCur})`;
 }
 
+function formatPostedBadge(job: DbJobPosting): { label: string; isFresh: boolean } | null {
+  const rawDate = job.published_at || job.posting_date || job.scraped_at;
+  if (!rawDate) return null;
+  const parsed = new Date(rawDate);
+  const valid = !Number.isNaN(parsed.getTime());
+  const ageDays = valid ? Math.floor((Date.now() - parsed.getTime()) / 86400000) : 99;
+  const label = valid
+    ? ageDays <= 0
+      ? 'Today'
+      : ageDays === 1
+      ? 'Yesterday'
+      : parsed.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+    : String(rawDate);
+  return { label, isFresh: ageDays <= 2 };
+}
+
 export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
   candidateProfile,
   visibleJobs,
@@ -166,7 +180,6 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
   onRunScrapers,
   onUploadClick,
   onSelectJob,
-  onOpenFillForm,
   onDraftInGmail,
   searchQuery = '',
   onSearchQueryChange,
@@ -226,9 +239,15 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
   });
 
   const expVal = candidateProfile?.experience_years ?? null;
-  const capVal =
-    candidateProfile?.max_allowed_years ??
-    (expVal != null ? Math.min(expVal + 0.5, 2.0) : 2.0);
+  const levelLabel =
+    candidateProfile?.target_seniority_label ||
+    (expVal == null || expVal <= 0.5
+      ? 'Entry-Level / Intern'
+      : expVal <= 2.5
+      ? `Junior (${expVal} yrs)`
+      : expVal <= 5
+      ? `Mid-Level (${expVal} yrs)`
+      : `Senior (${expVal} yrs)`);
   const primaryRole = candidateProfile?.primary_role || candidateProfile?.headline || 'Upload skills.md';
   const detectedIndustry = candidateProfile?.detected_industry || candidateProfile?.target_industry || 'Domain-Agnostic';
   const adjacentRoles = candidateProfile?.adjacent_roles || [];
@@ -269,10 +288,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
               </span>
               <span className="text-slate-600">|</span>
               <span className="text-slate-400">
-                Experience:{' '}
-                <strong className="text-amber-300">
-                  {expVal != null ? `${expVal} Yrs` : 'Not specified'} (Cap: {capVal.toFixed(1)} Yrs)
-                </strong>
+                Target level: <strong className="text-amber-300">{levelLabel}</strong>
               </span>
             </div>
             {adjacentRoles.length > 0 && (
@@ -302,9 +318,6 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
               </div>
             )}
           </div>
-          <span className="text-[10px] px-2.5 py-1 rounded-full bg-emerald-950/60 border border-emerald-700/50 text-emerald-300 font-semibold self-start lg:self-center">
-            Strict &le; {capVal.toFixed(1)} Yr Experience Guard Active
-          </span>
         </div>
       )}
 
@@ -363,49 +376,23 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
 
       {/* Multi-Tier Tabs (Direct Matches / Adjacent Roles / Public Sector & Internships) */}
       <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-800/60">
-        <button
-          onClick={() => handleTierClick('ALL')}
-          className={`text-xs px-3 py-1.5 rounded-xl font-bold transition-all ${
-            tierTab === 'ALL'
-              ? 'bg-slate-800 text-white border border-slate-600'
-              : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
-          }`}
-        >
-          All Tiers ({tierCounts?.ALL ?? totalJobs ?? visibleJobs.length})
-        </button>
-        <button
-          onClick={() => handleTierClick('DIRECT')}
-          className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl font-bold transition-all ${
-            tierTab === 'DIRECT'
-              ? 'bg-emerald-700 text-white shadow-sm shadow-emerald-600/20'
-              : 'bg-slate-950 text-slate-300 hover:text-white border border-slate-800'
-          }`}
-        >
-          <Target className="w-3.5 h-3.5" />
-          <span>🎯 Direct Matches ({tierCounts?.DIRECT ?? directJobs.length})</span>
-        </button>
-        <button
-          onClick={() => handleTierClick('ADJACENT')}
-          className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl font-bold transition-all ${
-            tierTab === 'ADJACENT'
-              ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/20'
-              : 'bg-slate-950 text-slate-300 hover:text-white border border-slate-800'
-          }`}
-        >
-          <Sparkles className="w-3.5 h-3.5" />
-          <span>🚀 Optimal Adjacent Roles ({tierCounts?.ADJACENT ?? adjacentJobs.length})</span>
-        </button>
-        <button
-          onClick={() => handleTierClick('PUBLIC_INTERNSHIP')}
-          className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl font-bold transition-all ${
-            tierTab === 'PUBLIC_INTERNSHIP'
-              ? 'bg-cyan-700 text-white shadow-sm shadow-cyan-600/20'
-              : 'bg-slate-950 text-slate-300 hover:text-white border border-slate-800'
-          }`}
-        >
-          <Landmark className="w-3.5 h-3.5" />
-          <span>🏛️ Public Sector &amp; Internships ({tierCounts?.PUBLIC_INTERNSHIP ?? publicJobs.length})</span>
-        </button>
+        {([
+          { id: 'ALL' as const, label: `All Tiers (${tierCounts?.ALL ?? totalJobs ?? visibleJobs.length})`, active: 'bg-slate-800 text-white border border-slate-600' },
+          { id: 'DIRECT' as const, label: `🎯 Direct Matches (${tierCounts?.DIRECT ?? directJobs.length})`, active: 'bg-emerald-700 text-white shadow-sm shadow-emerald-600/20', Icon: Target },
+          { id: 'ADJACENT' as const, label: `🚀 Optimal Adjacent Roles (${tierCounts?.ADJACENT ?? adjacentJobs.length})`, active: 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/20', Icon: Sparkles },
+          { id: 'PUBLIC_INTERNSHIP' as const, label: `🏛️ Public Sector (${tierCounts?.PUBLIC_INTERNSHIP ?? publicJobs.length})`, active: 'bg-cyan-700 text-white shadow-sm shadow-cyan-600/20', Icon: Landmark },
+        ]).map(({ id, label, active, Icon }) => (
+          <button
+            key={id}
+            onClick={() => handleTierClick(id)}
+            className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl font-bold transition-all ${
+              tierTab === id ? active : 'bg-slate-950 text-slate-300 hover:text-white border border-slate-800'
+            }`}
+          >
+            {Icon && <Icon className="w-3.5 h-3.5" />}
+            <span>{label}</span>
+          </button>
+        ))}
       </div>
 
       {/* Portal Filter Chips + Search & Work Mode Bar */}
@@ -528,13 +515,29 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
             {onAdvancedFiltersChange && (
               <>
                 <select
+                  aria-label="Filter by posted date"
+                  value={advancedFilters?.posted_within_days ? String(advancedFilters.posted_within_days) : ''}
+                  onChange={(e) =>
+                    onAdvancedFiltersChange({
+                      posted_within_days: e.target.value ? Number(e.target.value) : undefined,
+                    })
+                  }
+                  className="text-[11px] px-2.5 py-1 rounded-lg bg-slate-950 text-slate-200 border border-slate-700 focus:border-emerald-400 focus:outline-none"
+                >
+                  <option value="">Date: Any</option>
+                  <option value="1">Last 24h</option>
+                  <option value="3">Last 3 Days</option>
+                  <option value="7">Last 7 Days</option>
+                  <option value="30">Last 30 Days</option>
+                </select>
+                <select
                   aria-label="Sort vacancies"
-                  value={advancedFilters?.sort_by || 'relevance'}
+                  value={advancedFilters?.sort_by || 'newest'}
                   onChange={(e) => onAdvancedFiltersChange({ sort_by: e.target.value })}
                   className="text-[11px] px-2.5 py-1 rounded-lg bg-slate-950 text-slate-200 border border-slate-700 focus:border-emerald-400 focus:outline-none"
                 >
-                  <option value="relevance">Sort: Relevance</option>
-                  <option value="newest">Sort: Newest</option>
+                  <option value="newest">Sort: Newest Posted</option>
+                  <option value="relevance">Sort: Best Match</option>
                   <option value="salary_desc">Sort: Highest Salary</option>
                   <option value="company_asc">Sort: Company A–Z</option>
                 </select>
@@ -558,30 +561,21 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
 
         {onAdvancedFiltersChange && showAdvancedFilters && (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 p-3 rounded-xl bg-slate-950/85 border border-slate-800 text-xs">
-            <input
-              type="text"
-              aria-label="Filter by country"
-              value={advancedFilters?.country || ''}
-              onChange={(e) => onAdvancedFiltersChange({ country: e.target.value })}
-              placeholder="Country (e.g. Georgia, Germany)"
-              className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 placeholder-slate-400 focus:outline-none focus:border-emerald-400"
-            />
-            <input
-              type="text"
-              aria-label="Filter by city"
-              value={advancedFilters?.city || ''}
-              onChange={(e) => onAdvancedFiltersChange({ city: e.target.value })}
-              placeholder="City (e.g. Tbilisi, Berlin)"
-              className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 placeholder-slate-400 focus:outline-none focus:border-emerald-400"
-            />
-            <input
-              type="text"
-              aria-label="Filter by skill or technology"
-              value={advancedFilters?.technology || ''}
-              onChange={(e) => onAdvancedFiltersChange({ technology: e.target.value })}
-              placeholder="Skills / Tools (e.g. SQL, Excel, Python)"
-              className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 placeholder-slate-400 focus:outline-none focus:border-emerald-400"
-            />
+            {([
+              { key: 'country' as const, label: 'Filter by country', placeholder: 'Country (e.g. Georgia, Germany)' },
+              { key: 'city' as const, label: 'Filter by city', placeholder: 'City (e.g. Tbilisi, Berlin)' },
+              { key: 'technology' as const, label: 'Filter by skill or technology', placeholder: 'Skills / Tools (e.g. SQL, Excel, Python)' },
+            ]).map((f) => (
+              <input
+                key={f.key}
+                type="text"
+                aria-label={f.label}
+                value={advancedFilters?.[f.key] || ''}
+                onChange={(e) => onAdvancedFiltersChange({ [f.key]: e.target.value })}
+                placeholder={f.placeholder}
+                className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 placeholder-slate-400 focus:outline-none focus:border-emerald-400"
+              />
+            ))}
             <input
               type="number"
               min={0}
@@ -592,41 +586,21 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
               placeholder="Min Salary (e.g. 2000)"
               className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 placeholder-slate-400 focus:outline-none focus:border-emerald-400"
             />
-            <select
-              aria-label="Filter by language"
-              value={advancedFilters?.language || 'ALL'}
-              onChange={(e) => onAdvancedFiltersChange({ language: e.target.value === 'ALL' ? undefined : e.target.value })}
-              className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 focus:outline-none focus:border-emerald-400"
-            >
-              <option value="ALL">Any Language</option>
-              <option value="English">English</option>
-              <option value="Georgian">Georgian / ქართული</option>
-              <option value="German">German</option>
-            </select>
-            <select
-              aria-label="Filter by experience level"
-              value={advancedFilters?.experience_level || 'ALL'}
-              onChange={(e) => onAdvancedFiltersChange({ experience_level: e.target.value === 'ALL' ? undefined : e.target.value })}
-              className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 focus:outline-none focus:border-emerald-400"
-            >
-              <option value="ALL">Any Experience Level</option>
-              <option value="intern">Intern / Trainee</option>
-              <option value="junior">Junior / Entry</option>
-              <option value="mid">Mid-Level</option>
-              <option value="senior">Senior / Lead</option>
-            </select>
-            <select
-              aria-label="Filter by employment type"
-              value={advancedFilters?.employment_type || 'ALL'}
-              onChange={(e) => onAdvancedFiltersChange({ employment_type: e.target.value === 'ALL' ? undefined : e.target.value })}
-              className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 focus:outline-none focus:border-emerald-400"
-            >
-              <option value="ALL">Any Employment Type</option>
-              <option value="full_time">Full-Time</option>
-              <option value="part_time">Part-Time</option>
-              <option value="contract">Contract / B2B</option>
-              <option value="internship">Internship</option>
-            </select>
+            {([
+              { key: 'language' as const, label: 'Filter by language', options: [['ALL', 'Any Language'], ['English', 'English'], ['Georgian', 'Georgian / ქართული'], ['German', 'German']] },
+              { key: 'experience_level' as const, label: 'Filter by experience level', options: [['ALL', 'Any Experience Level'], ['intern', 'Intern / Trainee'], ['junior', 'Junior / Entry'], ['mid', 'Mid-Level'], ['senior', 'Senior / Lead']] },
+              { key: 'employment_type' as const, label: 'Filter by employment type', options: [['ALL', 'Any Employment Type'], ['full_time', 'Full-Time'], ['part_time', 'Part-Time'], ['contract', 'Contract / B2B'], ['internship', 'Internship']] },
+            ]).map((s) => (
+              <select
+                key={s.key}
+                aria-label={s.label}
+                value={advancedFilters?.[s.key] || 'ALL'}
+                onChange={(e) => onAdvancedFiltersChange({ [s.key]: e.target.value === 'ALL' ? undefined : e.target.value })}
+                className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 focus:outline-none focus:border-emerald-400"
+              >
+                {s.options.map(([v, txt]) => <option key={v} value={v}>{txt}</option>)}
+              </select>
+            ))}
             <div className="flex items-center justify-between gap-2">
               <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-200 cursor-pointer">
                 <input
@@ -638,11 +612,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 <span>Only Unapplied</span>
               </label>
               {onResetFilters && (
-                <button
-                  type="button"
-                  onClick={onResetFilters}
-                  className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-semibold"
-                >
+                <button type="button" onClick={onResetFilters} className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-semibold">
                   Clear All
                 </button>
               )}
@@ -730,20 +700,10 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
 
       {/* Prepared Gmail Package Banner */}
       {preparedEmailPkg && (
-        <div
-          className={`p-4 rounded-xl border text-xs space-y-2.5 ${
-            preparedEmailPkg.gmail_draft_saved
-              ? 'bg-emerald-950/35 border-emerald-700/60'
-              : 'bg-emerald-950/35 border-emerald-700/60'
-          }`}
-        >
+        <div className="p-4 rounded-xl border text-xs space-y-2.5 bg-emerald-950/35 border-emerald-700/60">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div>
-              <span
-                className={`text-[10px] font-bold uppercase block ${
-                  preparedEmailPkg.gmail_draft_saved ? 'text-emerald-400' : 'text-emerald-400'
-                }`}
-              >
+              <span className="text-[10px] font-bold uppercase block text-emerald-400">
                 {preparedEmailPkg.gmail_draft_saved
                   ? `Gmail Draft created with ${preparedEmailPkg.docx_filename} ALREADY attached — open Gmail Drafts and click Send!`
                   : `CV downloaded (${preparedEmailPkg.docx_filename}) — attach it in Gmail Compose (or configure Gmail App Password for auto-attachment)`}
@@ -830,7 +790,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
       {(Boolean(totalJobs) || visibleJobs.length > 0 || Boolean(scrapeStats)) && (
         <div className="text-xs bg-emerald-950/30 border border-emerald-800/60 text-emerald-300 px-3.5 py-2 rounded-xl flex items-center justify-between flex-wrap gap-2">
           <span>
-            ✅ Found <strong>{totalJobs ?? visibleJobs.length}</strong> suitable opportunities ({tierCounts?.DIRECT ?? directJobs.length} Direct • {tierCounts?.ADJACENT ?? adjacentJobs.length} Adjacent • {tierCounts?.PUBLIC_INTERNSHIP ?? publicJobs.length} Public/Intern)
+            ✅ Found <strong>{totalJobs ?? visibleJobs.length}</strong> suitable opportunities ({tierCounts?.DIRECT ?? directJobs.length} Direct • {tierCounts?.ADJACENT ?? adjacentJobs.length} Adjacent • {tierCounts?.PUBLIC_INTERNSHIP ?? publicJobs.length} Public Sector)
             <span className="text-emerald-300 ml-1.5">(showing {visibleJobs.length} on page {page} of {totalPages})</span>
             {scrapeStats && scrapeStats.filteredOut > 0 && (
               <span className="text-slate-400 ml-1.5">
@@ -886,7 +846,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 Upload your skills.md file to scan tailored live vacancies
               </h4>
               <p className="text-xs text-slate-400 max-w-md mx-auto">
-                Your discovery feed adapts automatically to any domain. Upload <code className="text-emerald-300">skills.md</code> to discover Direct Matches, Adjacent Transferable Roles, and Public Sector Internships.
+                Your discovery feed adapts automatically to any domain. Upload <code className="text-emerald-300">skills.md</code> to discover Direct Matches, Adjacent Transferable Roles, and Public Sector vacancies.
               </p>
               <button
                 onClick={onUploadClick}
@@ -906,7 +866,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                   ? 'Many postings on DOU.ua require local Ukrainian or Russian language fluency. If you speak Ukrainian or Russian, add it to your skills.md to unlock Ukrainian remote roles; otherwise, explore English remote roles or switch to other portals.'
                   : selectedPortalFilter === 'headhunter.ge'
                   ? 'HeadHunter.ge postings often require Russian language. Add Russian to your skills.md to unlock them, or switch to Jobs.ge / HR.ge.'
-                  : `Currently no active listings on ${selectedPortalFilter} match your strict experience cap (<= ${capVal.toFixed(1)} yrs) and location criteria.`}
+                  : `Currently no active listings on ${selectedPortalFilter} match your experience level and location criteria.`}
               </p>
               <div className="flex items-center justify-center gap-2 pt-2">
                 <button
@@ -1018,7 +978,13 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 {tier === 'PUBLIC_INTERNSHIP' && (
                   <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-cyan-950/90 text-cyan-200 border border-cyan-700/60">
                     <Landmark className="w-2.5 h-2.5" aria-hidden="true" />
-                    <span>Public Sector / Internship</span>
+                    <span>Public Sector</span>
+                  </div>
+                )}
+
+                {tier === 'DIRECT' && job.adjacent_role_tag === 'Entry-Level / Internship' && (
+                  <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-950/90 text-emerald-200 border border-emerald-700/60">
+                    <span>Entry-Level / Internship</span>
                   </div>
                 )}
 
@@ -1060,25 +1026,30 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                     )}
                   </div>
                 ) : (
-                  <div className="text-[10px] text-slate-300 pt-0.5 flex items-center gap-1.5">
-                    <span>
-                      {(job.description_raw || '').includes('არ ითვალისწინებს ანაზღაურებას') ||
-                      (job.description_raw || '').toLowerCase().includes('unpaid')
-                        ? 'Salary: Unpaid Internship'
-                        : 'Salary: Not Listed'}
-                    </span>
-                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-900 text-slate-300 border border-slate-700">
-                      Not Listed
-                    </span>
+                  <div className="text-[10px] text-slate-400 pt-0.5">
+                    {(job.description_raw || '').includes('არ ითვალისწინებს ანაზღაურებას') ||
+                    (job.description_raw || '').toLowerCase().includes('unpaid')
+                      ? 'Salary: Unpaid Internship'
+                      : 'Salary: Not Listed'}
                   </div>
                 )}
 
                 <div className="flex items-center gap-2 flex-wrap">
-                  {(job.posting_date || job.scraped_at) && (
-                    <span className="text-[10px] text-slate-300">
-                      Posted: {job.posting_date || new Date(job.scraped_at).toLocaleDateString()}
-                    </span>
-                  )}
+                  {(() => {
+                    const posted = formatPostedBadge(job);
+                    if (!posted) return null;
+                    return (
+                      <span
+                        className={`text-[10px] px-2 py-0.5 rounded-md border ${
+                          posted.isFresh
+                            ? 'bg-emerald-950/60 border-emerald-700/60 text-emerald-300 font-semibold'
+                            : 'bg-slate-900 border-slate-800 text-slate-300'
+                        }`}
+                      >
+                        Posted: {posted.label}
+                      </span>
+                    );
+                  })()}
                   {job.deadline_text && (
                     <span className="text-[10px] text-amber-200 bg-amber-950/50 border border-amber-800/60 px-2 py-0.5 rounded-md">
                       Deadline: {job.deadline_text}
@@ -1099,48 +1070,45 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
 
                 <div className="flex items-center gap-1.5 pt-1">
                   {job.delivery_channel === 'EMAIL' || Boolean(job.target_email) ? (
-                    <button
-                      type="button"
-                      disabled={draftingJobId === job.id}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDraftInGmail(job);
-                      }}
-                      className="flex-1 flex items-center justify-center gap-1 py-1 px-2 rounded-lg bg-rose-700 hover:bg-rose-500 text-white font-semibold transition-colors disabled:opacity-50"
-                      title="Generate Tailored Word CV (.docx) + Cover Letter and save Gmail Draft"
-                    >
-                      <Mail className="w-3 h-3" />
-                      <span>{draftingJobId === job.id ? 'Preparing...' : 'Draft in Gmail'}</span>
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        disabled={draftingJobId === job.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDraftInGmail(job);
+                        }}
+                        className="flex-1 flex items-center justify-center gap-1 py-1 px-2 rounded-lg bg-rose-700 hover:bg-rose-500 text-white font-semibold transition-colors disabled:opacity-50"
+                        title="Generate Tailored Word CV (.docx) + Cover Letter and save Gmail Draft"
+                      >
+                        <Mail className="w-3 h-3" />
+                        <span>{draftingJobId === job.id ? 'Preparing...' : 'Draft in Gmail'}</span>
+                      </button>
+                      <a
+                        href={job.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700"
+                        aria-label={`Open original posting for ${job.title}`}
+                        title="Open live job page in new tab"
+                      >
+                        <ExternalLink className="w-3 h-3" aria-hidden="true" />
+                      </a>
+                    </>
                   ) : (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (onOpenFillForm) {
-                          onOpenFillForm(job);
-                        } else {
-                          onSelectJob(job);
-                        }
-                      }}
-                      className="flex-1 flex items-center justify-center gap-1 py-1 px-2 rounded-lg bg-emerald-700 hover:bg-emerald-500 text-white font-semibold transition-colors"
+                    <a
+                      href={job.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      className="flex-1 flex items-center justify-center gap-1 py-1 px-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-100 border border-slate-700 font-semibold transition-colors"
+                      aria-label={`Open original posting for ${job.title}`}
                     >
-                      <Play className="w-3 h-3" />
-                      <span>Open &amp; Fill Form</span>
-                    </button>
+                      <ExternalLink className="w-3 h-3" aria-hidden="true" />
+                      <span>Open on {job.portal}</span>
+                    </a>
                   )}
-
-                  <a
-                    href={job.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={(e) => e.stopPropagation()}
-                    className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700"
-                    aria-label={`Open original posting for ${job.title}`}
-                    title="Open live job page in new tab"
-                  >
-                    <ExternalLink className="w-3 h-3" aria-hidden="true" />
-                  </a>
                 </div>
               </div>
             </div>

@@ -1,16 +1,36 @@
+import json
 import logging
 import re
 from typing import Dict, Any, List, Optional
-from .base_scraper import BasePortalScraper, parse_contact_method_and_email, sanitize_company_name
+from .base_scraper import (
+    BasePortalScraper,
+    matches_domain_keywords,
+    parse_contact_method_and_email,
+    parse_portal_published_at,
+    sanitize_company_name,
+)
 from ..link_validator import fetch_and_validate_live_vacancy
 
 logger = logging.getLogger(__name__)
 
 
+def _find_ng_state_announcements(obj: Any) -> Optional[List[Dict[str, Any]]]:
+    """Recursively locates HR.ge's embedded Angular ng-state announcements list."""
+    if isinstance(obj, list) and obj and isinstance(obj[0], dict) and "publishDate" in obj[0] and "title" in obj[0]:
+        return obj
+    if isinstance(obj, dict):
+        for val in obj.values():
+            found = _find_ng_state_announcements(val)
+            if found:
+                return found
+    return None
+
+
 class HrGeScraper(BasePortalScraper):
     """
     Live Georgian Market Scraper for HR.ge.
-    Extracts matching announcements by target role keywords and verifies every detail URL live.
+    Parses embedded Angular ng-state JSON (with exact publishDate, deadlineDate, company, locations)
+    with HTML fallback, filters by word-boundary domain keywords, and sorts newest-first.
     """
 
     portal_name = "hr.ge"
@@ -25,9 +45,58 @@ class HrGeScraper(BasePortalScraper):
         soup = self.make_soup(html)
         results: List[Dict[str, Any]] = []
         seen_ids: set[str] = set()
+        kw_list = domain_keywords if domain_keywords is not None else None
 
-        kw_list = [k.lower() for k in (domain_keywords or ["qa", "quality assurance", "tester", "test", "sdet", "ტესტ"])]
+        # Fast structured path: HR.ge Angular SSR <script id="ng-state"> JSON payload
+        ng_script = soup.find("script", id="ng-state")
+        if ng_script and ng_script.string:
+            try:
+                ng_data = json.loads(ng_script.string)
+                anns = _find_ng_state_announcements(ng_data) or []
+                for idx, ann in enumerate(anns):
+                    title = re.sub(r"\s+", " ", str(ann.get("title") or "")).strip()
+                    if not title or len(title) < 3:
+                        continue
+                    if kw_list and not matches_domain_keywords(title, kw_list):
+                        continue
+                    ann_id = ann.get("announcementId") or ann.get("id")
+                    ext_id = f"hrge-{ann_id}" if ann_id else f"hrge-ng-{idx}"
+                    if ext_id in seen_ids:
+                        continue
+                    seen_ids.add(ext_id)
+                    company = sanitize_company_name(ann.get("customerName"), fallback="კომპანია (HR.ge)")
+                    locs = ann.get("locations") or []
+                    loc_str = ", ".join(str(x) for x in locs if x) or "Tbilisi, Georgia"
+                    pub_dt, pub_str = parse_portal_published_at(ann.get("publishDate"))
+                    _, dl_str = parse_portal_published_at(ann.get("deadlineDate"))
+                    full_url = f"https://www.hr.ge/announcement/{ann_id}" if ann_id else "https://www.hr.ge/"
+                    prelim_desc = f"{title} | {company} | {loc_str} (HR.ge)"
+                    results.append({
+                        "portal": self.portal_name,
+                        "external_id": ext_id,
+                        "title": title,
+                        "company": company,
+                        "url": full_url,
+                        "market": self.market,
+                        "is_remote": any(w in f"{title} {loc_str}".lower() for w in ("remote", "დისტანციურ")),
+                        "location_meta": loc_str,
+                        "channel": "WEB_FORM",
+                        "target_email": None,
+                        "email_subject": None,
+                        "detected_languages": ["English", "Georgian"],
+                        "language_requirements": ["English", "Georgian"],
+                        "published_at": pub_dt,
+                        "posting_date": pub_str,
+                        "deadline_text": dl_str,
+                        "description_raw": prelim_desc,
+                        "status": "DISCOVERED",
+                    })
+                if results:
+                    return results
+            except Exception as exc:
+                logger.debug("[hr.ge] ng-state parse fallback: %s", exc)
 
+        # HTML fallback (for pages without ng-state or unit-test fixtures)
         cards = soup.select("a[href*='/announcement/'], div.announcement-item, tr.vacancy-row")
         for idx, item in enumerate(cards):
             a_tag = item if item.name == "a" else item.find("a", href=True)
@@ -43,15 +112,12 @@ class HrGeScraper(BasePortalScraper):
             if not title or len(title) < 4:
                 continue
 
-            # Filter out SSR sidebar/unrelated tiles immediately by domain keywords
-            lower_title = title.lower()
-            if not any(kw in lower_title for kw in kw_list):
+            if kw_list and not matches_domain_keywords(title, kw_list):
                 continue
 
             comp_el = item.select_one(".company, .employer-name, .company-title, a[href*='/company/']")
             company = comp_el.get_text(" ", strip=True) if comp_el else ""
             if not company and item.parent:
-                # Infer employer from card sibling spans if link doesn't embed it
                 cand_texts = [
                     x.get_text(" ", strip=True)
                     for x in item.parent.select("a[href*='/company/'], span, div")
@@ -94,9 +160,10 @@ class HrGeScraper(BasePortalScraper):
         return results
 
     async def _enrich_and_verify_item(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        is_live, clean_text, raw_html = await fetch_and_validate_live_vacancy(item["url"], timeout=8.0)
+        is_live, clean_text, raw_html = await fetch_and_validate_live_vacancy(item["url"], timeout=6.0)
         if not is_live or not clean_text:
-            return None
+            # Keep structured ng-state items that already have verified publishDate & company
+            return item if item.get("published_at") else None
 
         item["description_raw"] = clean_text
         item["is_link_live"] = True
@@ -113,7 +180,6 @@ class HrGeScraper(BasePortalScraper):
             target_email=target_email,
             fallback="კომპანია (HR.ge)",
         )
-
         item["channel"] = channel
         item["delivery_channel"] = channel
         item["target_email"] = target_email
@@ -135,6 +201,8 @@ class HrGeScraper(BasePortalScraper):
             lambda html: self.parse_html_listings(html, domain_keywords=domain_keywords),
             self._enrich_and_verify_item,
             limit=18,
+            page_timeout=10.0,
+            sort_newest_first=True,
         )
 
 

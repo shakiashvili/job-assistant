@@ -4,7 +4,6 @@ import {
   Shield,
   Briefcase,
   Code,
-  DollarSign,
   MessageSquare,
   Save,
   Plus,
@@ -12,7 +11,6 @@ import {
   CheckCircle2,
   AlertCircle,
   UploadCloud,
-  FileText,
   GraduationCap,
   RefreshCw,
 } from 'lucide-react';
@@ -354,82 +352,42 @@ export const ProfileVault: React.FC = () => {
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-6">
           <h3 className="text-base font-semibold text-white">Candidate Information</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">First Name</label>
-              <input
-                type="text"
-                value={candidate.first_name || ''}
-                onChange={(e) => setData({ ...data, candidate: { ...candidate, first_name: e.target.value } })}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Last Name</label>
-              <input
-                type="text"
-                value={candidate.last_name || ''}
-                onChange={(e) => setData({ ...data, candidate: { ...candidate, last_name: e.target.value } })}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Email</label>
-              <input
-                type="email"
-                value={candidate.email || ''}
-                onChange={(e) => setData({ ...data, candidate: { ...candidate, email: e.target.value } })}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Phone</label>
-              <input
-                type="text"
-                value={candidate.phone || ''}
-                onChange={(e) => setData({ ...data, candidate: { ...candidate, phone: e.target.value } })}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
-              />
-            </div>
-            <div className="md:col-span-2">
-              <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Professional Headline</label>
-              <input
-                type="text"
-                value={candidate.headline || ''}
-                onChange={(e) => setData({ ...data, candidate: { ...candidate, headline: e.target.value } })}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
-              />
-            </div>
+            {([
+              { key: 'first_name' as const, label: 'First Name', type: 'text' },
+              { key: 'last_name' as const, label: 'Last Name', type: 'text' },
+              { key: 'email' as const, label: 'Email', type: 'email' },
+              { key: 'phone' as const, label: 'Phone', type: 'text' },
+              { key: 'headline' as const, label: 'Professional Headline', type: 'text', wide: true },
+            ]).map((f) => (
+              <div key={f.key} className={f.wide ? 'md:col-span-2' : undefined}>
+                <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">{f.label}</label>
+                <input
+                  type={f.type}
+                  value={String(candidate[f.key] || '')}
+                  onChange={(e) => setData({ ...data, candidate: { ...candidate, [f.key]: e.target.value } })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+            ))}
           </div>
 
           <h3 className="text-base font-semibold text-white pt-4 border-t border-slate-800">URLs & Social Profiles</h3>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">LinkedIn</label>
-              <input
-                type="text"
-                value={links.linkedin || ''}
-                onChange={(e) => setData({ ...data, candidate: { ...candidate, links: { ...links, linkedin: e.target.value } } })}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 font-mono text-[11px]"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">GitHub</label>
-              <input
-                type="text"
-                value={links.github || ''}
-                onChange={(e) => setData({ ...data, candidate: { ...candidate, links: { ...links, github: e.target.value } } })}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 font-mono text-[11px]"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Portfolio</label>
-              <input
-                type="text"
-                value={links.portfolio || ''}
-                onChange={(e) => setData({ ...data, candidate: { ...candidate, links: { ...links, portfolio: e.target.value } } })}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 font-mono text-[11px]"
-              />
-            </div>
+            {([
+              ['linkedin', 'LinkedIn'],
+              ['github', 'GitHub'],
+              ['portfolio', 'Portfolio'],
+            ] as const).map(([key, label]) => (
+              <div key={key}>
+                <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">{label}</label>
+                <input
+                  type="text"
+                  value={links[key] || ''}
+                  onChange={(e) => setData({ ...data, candidate: { ...candidate, links: { ...links, [key]: e.target.value } } })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 font-mono text-[11px]"
+                />
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -515,60 +473,31 @@ export const ProfileVault: React.FC = () => {
             <div className="md:col-span-2">
               <label className="block text-xs font-semibold uppercase text-slate-400 mb-2">Compensation & Notice Preferences</label>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
-                  <span className="text-[10px] text-slate-400 uppercase block mb-1">Expected Salary (EUR)</span>
-                  <input
-                    type="number"
-                    min={0}
-                    value={Number(compensation.expected_salary_eur ?? 0)}
-                    onChange={(e) =>
-                      setData({
-                        ...data,
-                        candidate: {
-                          ...candidate,
-                          compensation: { ...compensation, expected_salary_eur: Number(e.target.value) || 0 },
-                        },
-                      })
-                    }
-                    className="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1 text-sm font-bold text-white"
-                  />
-                </div>
-                <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
-                  <span className="text-[10px] text-slate-400 uppercase block mb-1">Expected Salary (USD)</span>
-                  <input
-                    type="number"
-                    min={0}
-                    value={Number(compensation.expected_salary_usd ?? 0)}
-                    onChange={(e) =>
-                      setData({
-                        ...data,
-                        candidate: {
-                          ...candidate,
-                          compensation: { ...compensation, expected_salary_usd: Number(e.target.value) || 0 },
-                        },
-                      })
-                    }
-                    className="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1 text-sm font-bold text-white"
-                  />
-                </div>
-                <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
-                  <span className="text-[10px] text-slate-400 uppercase block mb-1">Notice Period</span>
-                  <input
-                    type="text"
-                    placeholder="e.g. Immediate / 2 weeks notice"
-                    value={compensation.notice_period || ''}
-                    onChange={(e) =>
-                      setData({
-                        ...data,
-                        candidate: {
-                          ...candidate,
-                          compensation: { ...compensation, notice_period: e.target.value },
-                        },
-                      })
-                    }
-                    className="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1 text-sm font-bold text-white"
-                  />
-                </div>
+                {([
+                  { key: 'expected_salary_eur' as const, label: 'Expected Salary (EUR)', numeric: true },
+                  { key: 'expected_salary_usd' as const, label: 'Expected Salary (USD)', numeric: true },
+                  { key: 'notice_period' as const, label: 'Notice Period', numeric: false, placeholder: 'e.g. Immediate / 2 weeks notice' },
+                ]).map((f) => (
+                  <div key={f.key} className="bg-slate-950 p-3 rounded-lg border border-slate-800">
+                    <span className="text-[10px] text-slate-400 uppercase block mb-1">{f.label}</span>
+                    <input
+                      type={f.numeric ? 'number' : 'text'}
+                      min={f.numeric ? 0 : undefined}
+                      placeholder={f.placeholder}
+                      value={f.numeric ? Number(compensation[f.key] ?? 0) : String(compensation[f.key] || '')}
+                      onChange={(e) =>
+                        setData({
+                          ...data,
+                          candidate: {
+                            ...candidate,
+                            compensation: { ...compensation, [f.key]: f.numeric ? Number(e.target.value) || 0 : e.target.value },
+                          },
+                        })
+                      }
+                      className="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1 text-sm font-bold text-white"
+                    />
+                  </div>
+                ))}
               </div>
             </div>
           </div>

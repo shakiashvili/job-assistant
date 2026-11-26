@@ -2,7 +2,6 @@ import asyncio
 import logging
 import math
 import re as _re
-import uuid
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query, Depends
 from pydantic import BaseModel
@@ -37,8 +36,7 @@ from ..services.scrape_worker import (
     scrape_queue,
 )
 from ..services.upload_utils import read_upload_bounded
-from pathlib import Path
-from .ground_truth import _purge_stale_unapplied_jobs, MAX_UPLOAD_SIZE_BYTES, record_candidate_document
+from .ground_truth import MAX_UPLOAD_SIZE_BYTES, record_candidate_document
 from ..db.document_repository import user_generated_resumes_dir
 
 logger = logging.getLogger(__name__)
@@ -211,10 +209,17 @@ async def trigger_multi_portal_scrape(
     request: Optional[ScrapeRequest] = None,
     current_user: User = Depends(get_current_user),
 ):
-    """Runs the live multi-portal scraper engine for the current user's profile."""
+    """Runs the live multi-portal scraper engine strictly after the user has uploaded their CV/skills profile."""
     portals = request.portals if request else None
     allow_net = request.allow_network if request else True
     owner = current_user.email if current_user.email != "guest@talentflow.local" else None
+    if allow_net:
+        prof = ground_truth_store.get_profile_record(owner_email=owner, user_id=current_user.id)
+        if not _is_profile_uploaded_for_user(prof, current_user.email) and not (prof and (prof.raw_markdown or "").strip()):
+            raise HTTPException(
+                status_code=400,
+                detail="Please upload your CV or skills file in Profile Vault first so TalentFlow targets roles matching your real skills and experience.",
+            )
     return await scraper_orchestrator.run_scrapers(
         portals=portals,
         allow_network=allow_net,
@@ -231,11 +236,18 @@ async def trigger_async_scrape(
     """
     Enqueues a durable DB-backed background scrape task with stale-task recovery,
     heartbeats, execution timeouts, and per-user duplicate run deduplication.
-    Returns a task_id that can be polled via GET /api/jobs/scrape/status/{task_id}.
+    Requires an uploaded CV/skills profile when allow_network=True.
     """
     portals = request.portals if request else None
     allow_net = request.allow_network if request else True
     owner = current_user.email if current_user.email != "guest@talentflow.local" else None
+    if allow_net:
+        prof = ground_truth_store.get_profile_record(owner_email=owner, user_id=current_user.id)
+        if not _is_profile_uploaded_for_user(prof, current_user.email) and not (prof and (prof.raw_markdown or "").strip()):
+            raise HTTPException(
+                status_code=400,
+                detail="Please upload your CV or skills file in Profile Vault first so TalentFlow targets roles matching your real skills and experience.",
+            )
 
     enqueued = scrape_queue.enqueue_task(
         user_id=current_user.id,
@@ -324,7 +336,8 @@ async def list_scraped_jobs(
     technology: Optional[str] = Query(None),
     experience_level: Optional[str] = Query(None, description="intern, junior, mid, or senior"),
     employment_type: Optional[str] = Query(None, description="full_time, part_time, contract, or internship"),
-    sort_by: str = Query("relevance", description="relevance, newest, salary_desc, or company_asc"),
+    sort_by: str = Query("newest", description="newest, relevance, salary_desc, or company_asc"),
+    posted_within_days: Optional[int] = Query(None, ge=1, le=365, description="Filter to vacancies posted within last N days"),
     only_new: bool = Query(False, description="Exclude jobs already applied to or saved"),
     only_saved: bool = Query(False, description="Only return jobs bookmarked by current user"),
     b2b_only: bool = Query(False, description="Only return remote B2B / international contractor eligible roles"),
@@ -496,6 +509,10 @@ async def list_scraped_jobs(
                     JobPosting.market.in_(["GLOBAL_REMOTE", "INT_REMOTE", "EU_REMOTE"]),
                 )
             )
+        if posted_within_days is not None:
+            from datetime import timedelta
+            cutoff_dt = utc_now() - timedelta(days=posted_within_days)
+            base_conds.append(func.coalesce(JobPosting.published_at, JobPosting.scraped_at) >= cutoff_dt)
 
         def _serialize_job_row(entry: Any) -> Dict[str, Any]:
             if use_user_matches:
@@ -542,7 +559,8 @@ async def list_scraped_jobs(
                 dumped["salary_source"] = "ai_estimated"
             else:
                 dumped["salary_source"] = "verified"
-            dumped["posting_date"] = dumped.get("scraped_at")
+            if not dumped.get("posting_date"):
+                dumped["posting_date"] = dumped.get("published_at") or dumped.get("scraped_at")
 
             loc_parts = [str(dumped.get(k) or "").strip() for k in ("city", "country", "market") if dumped.get(k)]
             geo_info = classify_georgia_b2b_suitability(
@@ -556,75 +574,66 @@ async def list_scraped_jobs(
             dumped.update(geo_info)
             return dumped
 
-        sort_norm = (sort_by or "relevance").strip().lower()
+        freshness_col = func.coalesce(JobPosting.published_at, JobPosting.scraped_at)
+        sort_norm = (sort_by or "newest").strip().lower()
         if sort_norm == "newest":
-            order_clauses = (JobPosting.scraped_at.desc(), score_col.desc())
+            order_clauses = (freshness_col.desc(), score_col.desc())
         elif sort_norm == "salary_desc":
-            order_clauses = (func.coalesce(JobPosting.salary_max, JobPosting.salary_min, -1).desc(), score_col.desc())
+            order_clauses = (func.coalesce(JobPosting.salary_max, JobPosting.salary_min, -1).desc(), freshness_col.desc())
         elif sort_norm == "company_asc":
-            order_clauses = (JobPosting.company.asc(), score_col.desc())
+            order_clauses = (JobPosting.company.asc(), freshness_col.desc())
         else:
-            order_clauses = (score_col.desc(), JobPosting.scraped_at.desc())
+            order_clauses = (score_col.desc(), freshness_col.desc())
 
         if geo_eligible_only:
-            if use_user_matches:
-                base_stmt = select(JobPosting, UserJobMatch).outerjoin(
+            base_stmt = (
+                select(JobPosting, UserJobMatch).outerjoin(
                     UserJobMatch,
                     (UserJobMatch.job_posting_id == JobPosting.id) & (UserJobMatch.user_id == uid),
                 )
-            else:
-                base_stmt = select(JobPosting)
+                if use_user_matches
+                else select(JobPosting)
+            )
             if base_conds:
                 base_stmt = base_stmt.where(*base_conds)
-            base_stmt = base_stmt.order_by(*order_clauses)
             all_geo_items = [
                 dumped
-                for entry in session.exec(base_stmt).all()
+                for entry in session.exec(base_stmt.order_by(*order_clauses)).all()
                 if (dumped := _serialize_job_row(entry)).get("georgia_eligible")
             ]
 
-            tier_counts = {"ALL": len(all_geo_items), "DIRECT": 0, "ADJACENT": 0, "PUBLIC_INTERNSHIP": 0}
-            status_counts = {"ALL": len(all_geo_items), "STAGED": 0, "AUDITED": 0}
-            for it in all_geo_items:
-                mt = it.get("match_tier")
-                if mt == "DIRECT":
-                    tier_counts["DIRECT"] += 1
-                elif mt == "ADJACENT":
-                    tier_counts["ADJACENT"] += 1
-                if mt == "PUBLIC_INTERNSHIP" or it.get("portal") == "hr.gov.ge":
-                    tier_counts["PUBLIC_INTERNSHIP"] += 1
-                st_val = it.get("status")
-                if st_val == "STAGED":
-                    status_counts["STAGED"] += 1
-                elif st_val == "AUDITED":
-                    status_counts["AUDITED"] += 1
+            tier_counts = {
+                "ALL": len(all_geo_items),
+                "DIRECT": sum(1 for it in all_geo_items if it.get("match_tier") == "DIRECT"),
+                "ADJACENT": sum(1 for it in all_geo_items if it.get("match_tier") == "ADJACENT"),
+                "PUBLIC_INTERNSHIP": sum(1 for it in all_geo_items if it.get("match_tier") == "PUBLIC_INTERNSHIP" or it.get("portal") == "hr.gov.ge"),
+            }
+            status_counts = {
+                "ALL": len(all_geo_items),
+                "STAGED": sum(1 for it in all_geo_items if it.get("status") == "STAGED"),
+                "AUDITED": sum(1 for it in all_geo_items if it.get("status") == "AUDITED"),
+            }
 
-            eligible_filtered = all_geo_items
-            if status and status.upper() != "ALL":
-                eligible_filtered = [it for it in eligible_filtered if it.get("status") == status]
-            if tier and tier.upper() != "ALL":
-                t_low = tier.strip().lower()
-                if t_low == "direct":
-                    eligible_filtered = [it for it in eligible_filtered if it.get("match_tier") == "DIRECT"]
-                elif t_low == "adjacent":
-                    eligible_filtered = [it for it in eligible_filtered if it.get("match_tier") == "ADJACENT"]
-                elif t_low in ("internship", "public_internship"):
-                    eligible_filtered = [
-                        it
-                        for it in eligible_filtered
-                        if it.get("match_tier") == "PUBLIC_INTERNSHIP" or it.get("portal") == "hr.gov.ge"
-                    ]
-
+            eligible_filtered = [
+                it
+                for it in all_geo_items
+                if (not status or status.upper() == "ALL" or it.get("status") == status)
+                and (
+                    not tier
+                    or tier.upper() == "ALL"
+                    or (tier.strip().lower() == "direct" and it.get("match_tier") == "DIRECT")
+                    or (tier.strip().lower() == "adjacent" and it.get("match_tier") == "ADJACENT")
+                    or (tier.strip().lower() in ("internship", "public_internship") and (it.get("match_tier") == "PUBLIC_INTERNSHIP" or it.get("portal") == "hr.gov.ge"))
+                )
+            ]
             total = len(eligible_filtered)
-            total_pages = max(1, math.ceil(total / limit))
             offset = (page - 1) * limit
-            items = eligible_filtered[offset : offset + limit]
             return {
-                "items": items,
+                "items": eligible_filtered[offset : offset + limit],
                 "total": total,
                 "page": page,
                 "limit": limit,
-                "total_pages": total_pages,
+                "total_pages": max(1, math.ceil(total / limit)),
                 "tier_counts": tier_counts,
                 "status_counts": status_counts,
             }
@@ -796,6 +805,32 @@ def remove_saved_job_bookmark(
         return {"status": "removed", "job_id": job_id}
 
 
+def _to_saved_search_out(r: SavedSearch) -> SavedSearchOut:
+    return SavedSearchOut(
+        id=r.id,
+        user_id=r.user_id,
+        name=r.name,
+        filters=r.filters or {},
+        notify_on_new=r.notify_on_new,
+        last_run_at=r.last_run_at.isoformat() if r.last_run_at else None,
+        created_at=r.created_at.isoformat() if r.created_at else "",
+    )
+
+
+def _to_notification_out(r: Notification) -> NotificationOut:
+    return NotificationOut(
+        id=r.id,
+        user_id=r.user_id,
+        job_posting_id=r.job_posting_id,
+        saved_search_id=r.saved_search_id,
+        title=r.title,
+        message=r.message,
+        notification_type=r.notification_type,
+        is_read=r.is_read,
+        created_at=r.created_at.isoformat() if r.created_at else "",
+    )
+
+
 @router.get("/saved-searches", response_model=List[SavedSearchOut])
 def list_saved_searches(current_user: User = Depends(get_current_user)):
     """Lists saved search filters for the current user."""
@@ -805,18 +840,7 @@ def list_saved_searches(current_user: User = Depends(get_current_user)):
             .where(SavedSearch.user_id == current_user.id)
             .order_by(SavedSearch.created_at.desc())
         ).all()
-        return [
-            SavedSearchOut(
-                id=r.id,
-                user_id=r.user_id,
-                name=r.name,
-                filters=r.filters or {},
-                notify_on_new=r.notify_on_new,
-                last_run_at=r.last_run_at.isoformat() if r.last_run_at else None,
-                created_at=r.created_at.isoformat() if r.created_at else "",
-            )
-            for r in rows
-        ]
+        return [_to_saved_search_out(r) for r in rows]
 
 
 @router.post("/saved-searches", response_model=SavedSearchOut)
@@ -826,24 +850,11 @@ def create_saved_search(
 ):
     """Creates a saved search filter and alert rule for the current user."""
     with Session(engine) as session:
-        row = SavedSearch(
-            user_id=current_user.id,
-            name=req.name,
-            filters=req.filters,
-            notify_on_new=req.notify_on_new,
-        )
+        row = SavedSearch(user_id=current_user.id, name=req.name, filters=req.filters, notify_on_new=req.notify_on_new)
         session.add(row)
         session.commit()
         session.refresh(row)
-        return SavedSearchOut(
-            id=row.id,
-            user_id=row.user_id,
-            name=row.name,
-            filters=row.filters or {},
-            notify_on_new=row.notify_on_new,
-            last_run_at=row.last_run_at.isoformat() if row.last_run_at else None,
-            created_at=row.created_at.isoformat() if row.created_at else "",
-        )
+        return _to_saved_search_out(row)
 
 
 @router.delete("/saved-searches/{search_id}")
@@ -873,20 +884,7 @@ def list_notifications(current_user: User = Depends(get_current_user)):
             .order_by(Notification.created_at.desc())
             .limit(50)
         ).all()
-        return [
-            NotificationOut(
-                id=r.id,
-                user_id=r.user_id,
-                job_posting_id=r.job_posting_id,
-                saved_search_id=r.saved_search_id,
-                title=r.title,
-                message=r.message,
-                notification_type=r.notification_type,
-                is_read=r.is_read,
-                created_at=r.created_at.isoformat() if r.created_at else "",
-            )
-            for r in rows
-        ]
+        return [_to_notification_out(r) for r in rows]
 
 
 @router.patch("/notifications/{notif_id}/read", response_model=NotificationOut)
@@ -905,17 +903,7 @@ def mark_notification_read(
         session.add(row)
         session.commit()
         session.refresh(row)
-        return NotificationOut(
-            id=row.id,
-            user_id=row.user_id,
-            job_posting_id=row.job_posting_id,
-            saved_search_id=row.saved_search_id,
-            title=row.title,
-            message=row.message,
-            notification_type=row.notification_type,
-            is_read=row.is_read,
-            created_at=row.created_at.isoformat() if row.created_at else "",
-        )
+        return _to_notification_out(row)
 
 
 @router.post("/admin/backup")

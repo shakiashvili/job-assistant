@@ -580,80 +580,28 @@ export const B2BMarketHub: React.FC = () => {
         </div>
 
         <form onSubmit={handleGenerateProposal} className="grid grid-cols-1 md:grid-cols-4 gap-3">
-          <div>
-            <label htmlFor="prop-role" className="block text-xs font-semibold text-slate-300 mb-1">
-              {isKa ? 'პოზიცია' : 'Target Role'}
-            </label>
-            <input
-              id="prop-role"
-              type="text"
-              required
-              value={propRole}
-              onChange={(e) => setPropRole(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
-            />
-          </div>
-
-          <div>
-            <label htmlFor="prop-company" className="block text-xs font-semibold text-slate-300 mb-1">
-              {isKa ? 'კომპანია / კლიენტი' : 'Company / Client'}
-            </label>
-            <input
-              id="prop-company"
-              type="text"
-              required
-              value={propCompany}
-              onChange={(e) => setPropCompany(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
-            />
-          </div>
-
-          <div>
-            <label htmlFor="prop-region" className="block text-xs font-semibold text-slate-300 mb-1">
-              {isKa ? 'კლიენტის რეგიონი' : 'Client Timezone / Region'}
-            </label>
-            <input
-              id="prop-region"
-              type="text"
-              value={propRegion}
-              onChange={(e) => setPropRegion(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
-            />
-          </div>
-
-          <div>
-            <label htmlFor="prop-rate" className="block text-xs font-semibold text-slate-300 mb-1">
-              {isKa ? 'განაკვეთი (არასავალდებულო)' : 'B2B Rate (Optional)'}
-            </label>
-            <input
-              id="prop-rate"
-              type="text"
-              value={propRate}
-              onChange={(e) => setPropRate(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
-            />
-          </div>
-
-          <div className="md:col-span-3">
-            <label htmlFor="prop-notes" className="block text-xs font-semibold text-slate-300 mb-1">
-              {isKa ? 'ვაკანსიის მოკლე მოთხოვნები (არასავალდებულო)' : 'Key Requirements Snippet (Optional)'}
-            </label>
-            <input
-              id="prop-notes"
-              type="text"
-              value={propNotes}
-              onChange={(e) => setPropNotes(e.target.value)}
-              placeholder="e.g. Playwright TypeScript E2E testing, REST API QA, GitHub Actions CI"
-              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-400"
-            />
-          </div>
-
+          {([
+            { id: 'prop-role', label: isKa ? 'პოზიცია' : 'Target Role', val: propRole, set: setPropRole, req: true },
+            { id: 'prop-company', label: isKa ? 'კომპანია / კლიენტი' : 'Company / Client', val: propCompany, set: setPropCompany, req: true },
+            { id: 'prop-region', label: isKa ? 'კლიენტის რეგიონი' : 'Client Timezone / Region', val: propRegion, set: setPropRegion },
+            { id: 'prop-rate', label: isKa ? 'განაკვეთი (არასავალდებულო)' : 'B2B Rate (Optional)', val: propRate, set: setPropRate },
+            { id: 'prop-notes', label: isKa ? 'ვაკანსიის მოკლე მოთხოვნები (არასავალდებულო)' : 'Key Requirements Snippet (Optional)', val: propNotes, set: setPropNotes, span: 'md:col-span-3', placeholder: 'e.g. Playwright TypeScript E2E testing, REST API QA, GitHub Actions CI' },
+          ]).map((f) => (
+            <div key={f.id} className={f.span}>
+              <label htmlFor={f.id} className="block text-xs font-semibold text-slate-300 mb-1">{f.label}</label>
+              <input
+                id={f.id}
+                type="text"
+                required={f.req}
+                value={f.val}
+                placeholder={f.placeholder}
+                onChange={(e) => f.set(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-400"
+              />
+            </div>
+          ))}
           <div className="flex items-end">
-            <button
-              type="submit"
-              disabled={propLoading}
-              className="w-full py-2.5 px-4 rounded-xl btn-primary-emerald text-xs font-bold disabled:opacity-50"
-            >
+            <button type="submit" disabled={propLoading} className="w-full py-2.5 px-4 rounded-xl btn-primary-emerald text-xs font-bold disabled:opacity-50">
               {propLoading ? 'Drafting...' : isKa ? 'B2B წერილის შექმნა' : 'Generate B2B Pitch'}
             </button>
           </div>
@@ -705,7 +653,7 @@ export const B2BMarketHub: React.FC = () => {
             e.preventDefault();
             setInvLoading(true);
             try {
-              const res = await generateB2BInvoice({
+              setInvoicePreview(await generateB2BInvoice({
                 client_name: invClient,
                 service_description: invService,
                 amount: invAmount,
@@ -713,102 +661,43 @@ export const B2BMarketHub: React.FC = () => {
                 payment_method: invMethod,
                 iban_or_account: invAccount,
                 language: lang,
-              });
-              setInvoicePreview(res);
-            } catch {
-              // ignored
-            } finally {
+              }));
+            } catch {} finally {
               setInvLoading(false);
             }
           }}
           className="grid grid-cols-1 md:grid-cols-6 gap-3"
         >
-          <div className="md:col-span-2">
-            <label htmlFor="inv-client" className="block text-xs font-semibold text-slate-300 mb-1">
-              {isKa ? 'კლიენტი / კომპანია' : 'Client Company'}
-            </label>
-            <input
-              id="inv-client"
-              type="text"
-              required
-              value={invClient}
-              onChange={(e) => setInvClient(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
-            />
-          </div>
-          <div className="md:col-span-2">
-            <label htmlFor="inv-service" className="block text-xs font-semibold text-slate-300 mb-1">
-              {isKa ? 'სერვისის აღწერა' : 'Service Description'}
-            </label>
-            <input
-              id="inv-service"
-              type="text"
-              required
-              value={invService}
-              onChange={(e) => setInvService(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
-            />
+          {([
+            { id: 'inv-client', label: isKa ? 'კლიენტი / კომპანია' : 'Client Company', val: invClient, set: setInvClient, req: true, span: 'md:col-span-2' },
+            { id: 'inv-service', label: isKa ? 'სერვისის აღწერა' : 'Service Description', val: invService, set: setInvService, req: true, span: 'md:col-span-2' },
+          ]).map((f) => (
+            <div key={f.id} className={f.span}>
+              <label htmlFor={f.id} className="block text-xs font-semibold text-slate-300 mb-1">{f.label}</label>
+              <input id={f.id} type="text" required={f.req} value={f.val} onChange={(e) => f.set(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white" />
+            </div>
+          ))}
+          <div>
+            <label htmlFor="inv-amount" className="block text-xs font-semibold text-slate-300 mb-1">{isKa ? 'თანხა' : 'Amount'}</label>
+            <input id="inv-amount" type="number" min={1} value={invAmount} onChange={(e) => setInvAmount(Math.max(1, Number(e.target.value) || 0))} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono" />
           </div>
           <div>
-            <label htmlFor="inv-amount" className="block text-xs font-semibold text-slate-300 mb-1">
-              {isKa ? 'თანხა' : 'Amount'}
-            </label>
-            <input
-              id="inv-amount"
-              type="number"
-              min={1}
-              value={invAmount}
-              onChange={(e) => setInvAmount(Math.max(1, Number(e.target.value) || 0))}
-              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono"
-            />
-          </div>
-          <div>
-            <label htmlFor="inv-currency" className="block text-xs font-semibold text-slate-300 mb-1">
-              {isKa ? 'ვალუტა' : 'Currency'}
-            </label>
-            <select
-              id="inv-currency"
-              value={invCurrency}
-              onChange={(e) => setInvCurrency(e.target.value as 'USD' | 'EUR' | 'GBP' | 'GEL')}
-              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
-            >
-              <option value="USD">USD</option>
-              <option value="EUR">EUR</option>
-              <option value="GBP">GBP</option>
-              <option value="GEL">GEL</option>
+            <label htmlFor="inv-currency" className="block text-xs font-semibold text-slate-300 mb-1">{isKa ? 'ვალუტა' : 'Currency'}</label>
+            <select id="inv-currency" value={invCurrency} onChange={(e) => setInvCurrency(e.target.value as 'USD' | 'EUR' | 'GBP' | 'GEL')} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white">
+              {(['USD', 'EUR', 'GBP', 'GEL'] as const).map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
           </div>
-          <div className="md:col-span-2">
-            <label htmlFor="inv-method" className="block text-xs font-semibold text-slate-300 mb-1">
-              {isKa ? 'გადახდის არხი' : 'Payment Rail'}
-            </label>
-            <input
-              id="inv-method"
-              type="text"
-              value={invMethod}
-              onChange={(e) => setInvMethod(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
-            />
-          </div>
-          <div className="md:col-span-3">
-            <label htmlFor="inv-iban" className="block text-xs font-semibold text-slate-300 mb-1">
-              {isKa ? 'IBAN / SWIFT ან Wise ანგარიში (არასავალდებულო)' : 'IBAN / SWIFT or Wise Account (Optional)'}
-            </label>
-            <input
-              id="inv-iban"
-              type="text"
-              value={invAccount}
-              onChange={(e) => setInvAccount(e.target.value)}
-              placeholder="GE00TB0000000000000000"
-              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono placeholder-slate-400"
-            />
-          </div>
+          {([
+            { id: 'inv-method', label: isKa ? 'გადახდის არხი' : 'Payment Rail', val: invMethod, set: setInvMethod, span: 'md:col-span-2' },
+            { id: 'inv-iban', label: isKa ? 'IBAN / SWIFT ან Wise ანგარიში (არასავალდებულო)' : 'IBAN / SWIFT or Wise Account (Optional)', val: invAccount, set: setInvAccount, span: 'md:col-span-3', placeholder: 'GE00TB0000000000000000', mono: true },
+          ]).map((f) => (
+            <div key={f.id} className={f.span}>
+              <label htmlFor={f.id} className="block text-xs font-semibold text-slate-300 mb-1">{f.label}</label>
+              <input id={f.id} type="text" value={f.val} placeholder={f.placeholder} onChange={(e) => f.set(e.target.value)} className={`w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-400 ${f.mono ? 'font-mono' : ''}`} />
+            </div>
+          ))}
           <div className="flex items-end">
-            <button
-              type="submit"
-              disabled={invLoading}
-              className="w-full py-2.5 px-4 rounded-xl btn-primary-emerald text-xs font-bold disabled:opacity-50"
-            >
+            <button type="submit" disabled={invLoading} className="w-full py-2.5 px-4 rounded-xl btn-primary-emerald text-xs font-bold disabled:opacity-50">
               {invLoading ? 'Building...' : isKa ? 'ინვოისის შექმნა' : 'Generate Invoice'}
             </button>
           </div>

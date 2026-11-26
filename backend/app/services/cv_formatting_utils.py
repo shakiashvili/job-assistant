@@ -25,15 +25,17 @@ def normalize_contact_href(raw: str, is_email: bool = False) -> str:
 
 
 def clean_foreign_script_text(raw: Any, cv_language: str = "en") -> str:
-    """Prevents foreign script contamination (e.g. Cyrillic) inside EN/KA CVs."""
+    """Prevents foreign script contamination (e.g. Cyrillic) inside EN/KA CVs while preserving paragraph breaks."""
     s = str(raw or "")
     if not s:
         return ""
     s = re.sub(r"[\u0400-\u04FF]+", "", s)
     if cv_language == "en":
         s = re.sub(r"[\u10A0-\u10FF]+", "", s)
-    s = re.sub(r"\s{2,}", " ", s)
-    s = re.sub(r"\s+([,.;:!?])", r"\1", s)
+    s = re.sub(r"[ \t]{2,}", " ", s)
+    s = re.sub(r"[ \t]+\n", "\n", s)
+    s = re.sub(r"\n[ \t]+", "\n", s)
+    s = re.sub(r"[ \t]+([,.;:!?])", r"\1", s)
     return s.strip(" -–—•|")
 
 
