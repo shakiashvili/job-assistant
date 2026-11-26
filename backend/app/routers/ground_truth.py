@@ -659,12 +659,14 @@ def _serve_resume_file(file_path: Path, safe_name: str) -> FileResponse:
 
 
 @router.post("/resumes/generate-edition")
-def generate_cv_edition(
+async def generate_cv_edition(
     req: GenerateEditionRequest,
     current_user: User = Depends(get_current_user),
 ):
-    """Generates an ATS-Optimized, Recruiter-Ready, or Job-Tailored CV (Word .docx + PDF) + Cover Letter."""
+    """Generates an ATS-Optimized, Recruiter-Ready, or Job-Tailored CV (Word .docx + PDF) + Cover & Motivational Letters."""
     from ..services.cv_generator_service import cv_generator_service
+    from ..services.audit_service import audit_service, validate_safe_external_url
+    from ..services.portal_detector import detect_portal_from_html
 
     live = load_live_candidate_profile(current_user.email, user_id=current_user.id)
     gt = ground_truth_store.get_data(owner_email=current_user.email, user_id=current_user.id)
@@ -676,8 +678,29 @@ def generate_cv_edition(
         or ("ATS Edition" if req.edition == "ats" else "Recruiter Edition" if req.edition == "recruiter" else "Target Company")
     )
     desc = (req.job_description or "").strip()
+    url_fetched = False
+    url_fetch_warning: Optional[str] = None
     if req.job_url and req.job_url.strip():
-        desc = f"{desc}\nJob URL: {req.job_url.strip()}".strip()
+        clean_url = req.job_url.strip()
+        try:
+            validate_safe_external_url(clean_url, require_dns=False)
+            if len(desc) < 120:
+                html_raw = await audit_service.fetch_url_content(clean_url)
+                if html_raw:
+                    _, meta = detect_portal_from_html(html_raw, clean_url)
+                    fetched_desc = str(meta.get("description_text") or "").strip()
+                    if len(fetched_desc) >= 80:
+                        desc = f"{desc}\n\n{fetched_desc}".strip() if desc else fetched_desc
+                        url_fetched = True
+                    else:
+                        url_fetch_warning = "Could not extract full vacancy text from URL; paste the job description for deeper tailoring."
+                else:
+                    url_fetch_warning = "Target job URL returned no readable text; paste the job description for deeper tailoring."
+        except ValueError as ssrf_err:
+            raise HTTPException(status_code=400, detail=str(ssrf_err))
+        except Exception as fetch_err:
+            logger.debug("Optional URL description fetch skipped for %s: %s", clean_url, fetch_err)
+            url_fetch_warning = "Could not fetch job URL automatically; paste the job description for full tailoring."
 
     pkg = cv_generator_service.prepare_email_application_package(
         job_title=role,
@@ -698,6 +721,8 @@ def generate_cv_edition(
     )
 
     cv_version_id: Optional[int] = None
+    persistence_status = "saved"
+    persistence_error: Optional[str] = None
     try:
         with Session(engine) as session:
             cv_ver = CVVersion(
@@ -709,6 +734,8 @@ def generate_cv_edition(
                 cv_language=pkg.get("cv_language") or req.cv_language or "en",
                 structured_content=pkg.get("cv_sections") or {},
                 rendered_html=pkg.get("rendered_html") or "",
+                cover_letter=str(pkg.get("cover_letter") or ""),
+                motivational_letter=str(pkg.get("motivational_letter") or ""),
                 pdf_filename=pkg.get("pdf_filename"),
                 docx_filename=pkg.get("docx_filename"),
                 version_number=1,
@@ -718,9 +745,21 @@ def generate_cv_edition(
             session.refresh(cv_ver)
             cv_version_id = cv_ver.id
     except Exception as ver_err:
-        logger.debug("Could not persist CVVersion snapshot: %s", ver_err)
+        persistence_status = "partial_failure"
+        persistence_error = str(ver_err)[:200]
+        logger.error("Failed to persist CVVersion snapshot for user=%s: %s", current_user.id, ver_err, exc_info=True)
 
-    return {"status": "ok", "edition": req.edition, "cv_version_id": cv_version_id, **pkg}
+    return {
+        "status": "ok" if persistence_status == "saved" else "partial_success",
+        "persistence_status": persistence_status,
+        "persistence_error": persistence_error,
+        "url_fetched": url_fetched,
+        "url_fetch_warning": url_fetch_warning,
+        "extracted_description_preview": desc[:500] if url_fetched else None,
+        "edition": req.edition,
+        "cv_version_id": cv_version_id,
+        **pkg,
+    }
 
 
 class CVVersionCreateRequest(BaseModel):
@@ -731,6 +770,8 @@ class CVVersionCreateRequest(BaseModel):
     language: str = "en"
     job_posting_id: Optional[int] = None
     structured_json: Dict[str, Any] = Field(default_factory=dict)
+    cover_letter: Optional[str] = None
+    motivational_letter: Optional[str] = None
 
 
 class CVVersionPatchRequest(BaseModel):
@@ -738,6 +779,8 @@ class CVVersionPatchRequest(BaseModel):
     target_company: Optional[str] = None
     target_role: Optional[str] = None
     structured_json: Optional[Dict[str, Any]] = None
+    cover_letter: Optional[str] = None
+    motivational_letter: Optional[str] = None
     language: Optional[str] = None
     edition: Optional[str] = None
 
@@ -755,6 +798,8 @@ def _serialize_cv_version(v: CVVersion) -> Dict[str, Any]:
         "language": v.cv_language,
         "structured_json": v.structured_content or {},
         "rendered_html": v.rendered_html or "",
+        "cover_letter": v.cover_letter or "",
+        "motivational_letter": v.motivational_letter or "",
         "pdf_filename": v.pdf_filename,
         "docx_filename": v.docx_filename,
         "pdf_url": f"/api/resumes/generated/{v.pdf_filename}" if v.pdf_filename else None,
@@ -859,6 +904,8 @@ def create_cv_version(
             cv_language=req.language,
             structured_content=sections,
             rendered_html=rendered.get("rendered_html") or "",
+            cover_letter=str(req.cover_letter or ""),
+            motivational_letter=str(req.motivational_letter or ""),
             pdf_filename=rendered.get("pdf_filename"),
             docx_filename=rendered.get("docx_filename"),
             version_number=1,
@@ -898,6 +945,10 @@ def update_cv_version(
             sections["target_company"] = ver.target_company
         if req.title is not None and req.title.strip():
             ver.title = req.title.strip()
+        if req.cover_letter is not None:
+            ver.cover_letter = req.cover_letter
+        if req.motivational_letter is not None:
+            ver.motivational_letter = req.motivational_letter
 
         rendered = cv_generator_service.render_cv_from_sections(
             sections,

@@ -59,11 +59,24 @@ export const ProfileVault: React.FC = () => {
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // New skill & FAQ inputs
+  // New skill, FAQ, work history, education & certification inputs
   const [newSkill, setNewSkill] = useState('');
   const [newFaqTrigger, setNewFaqTrigger] = useState('');
   const [newFaqAnswer, setNewFaqAnswer] = useState('');
   const [newFaqTags, setNewFaqTags] = useState('');
+  const [newRoleTitle, setNewRoleTitle] = useState('');
+  const [newRoleCompany, setNewRoleCompany] = useState('');
+  const [newRoleLocation, setNewRoleLocation] = useState('');
+  const [newRoleStart, setNewRoleStart] = useState('');
+  const [newRoleEnd, setNewRoleEnd] = useState('');
+  const [newRoleCurrent, setNewRoleCurrent] = useState(false);
+  const [newRoleHighlights, setNewRoleHighlights] = useState('');
+  const [newEduDegree, setNewEduDegree] = useState('');
+  const [newEduInstitution, setNewEduInstitution] = useState('');
+  const [newEduDates, setNewEduDates] = useState('');
+  const [newEduGpa, setNewEduGpa] = useState('');
+  const [newEduModules, setNewEduModules] = useState('');
+  const [newCert, setNewCert] = useState('');
   const [isDragging, setIsDragging] = useState(false);
   const [isUploadingSkills, setIsUploadingSkills] = useState(false);
   const [completeness, setCompleteness] = useState<{ score: number; missing: string[] } | null>(null);
@@ -123,6 +136,14 @@ export const ProfileVault: React.FC = () => {
     try {
       const updated = await saveGroundTruth(data);
       setData(updated);
+      window.dispatchEvent(new CustomEvent('talentflow:profile-updated'));
+      const analytics = await fetchCandidateAnalytics().catch(() => null);
+      if (analytics) {
+        setCompleteness({
+          score: analytics.completeness_score,
+          missing: analytics.missing_fields || [],
+        });
+      }
       setSuccessMsg('Profile saved & synced automatically across all generated Word/PDF CVs!');
       setTimeout(() => setSuccessMsg(null), 4000);
     } catch (err: any) {
@@ -185,6 +206,102 @@ export const ProfileVault: React.FC = () => {
     });
   };
 
+  const addWorkHistoryItem = () => {
+    if (!data || (!newRoleTitle.trim() && !newRoleCompany.trim())) return;
+    const bullets = newRoleHighlights
+      .split('\n')
+      .map((l) => l.replace(/^[-•*]\s*/, '').trim())
+      .filter(Boolean);
+    const nextEntry = {
+      role: newRoleTitle.trim() || 'Specialist',
+      company: newRoleCompany.trim() || 'Organization',
+      location: newRoleLocation.trim(),
+      start_date: newRoleStart.trim(),
+      end_date: newRoleCurrent ? 'Present' : newRoleEnd.trim(),
+      is_current: newRoleCurrent,
+      highlights: bullets,
+    };
+    setData({
+      ...data,
+      work_history: [nextEntry, ...(data.work_history || [])],
+    });
+    setNewRoleTitle('');
+    setNewRoleCompany('');
+    setNewRoleLocation('');
+    setNewRoleStart('');
+    setNewRoleEnd('');
+    setNewRoleCurrent(false);
+    setNewRoleHighlights('');
+  };
+
+  const removeWorkHistoryItem = (idxToRemove: number) => {
+    if (!data) return;
+    setData({
+      ...data,
+      work_history: (data.work_history || []).filter((_, i) => i !== idxToRemove),
+    });
+  };
+
+  const addEducationItem = () => {
+    if (!data || (!newEduDegree.trim() && !newEduInstitution.trim())) return;
+    const mods = newEduModules
+      .split(/[,;]+/)
+      .map((m) => m.trim())
+      .filter(Boolean);
+    const nextEdu = {
+      degree: newEduDegree.trim() || 'Degree',
+      institution: newEduInstitution.trim(),
+      dates: newEduDates.trim(),
+      gpa: newEduGpa.trim() || undefined,
+      modules: mods,
+    };
+    setData({
+      ...data,
+      education: [nextEdu, ...(data.education || [])],
+    });
+    setNewEduDegree('');
+    setNewEduInstitution('');
+    setNewEduDates('');
+    setNewEduGpa('');
+    setNewEduModules('');
+  };
+
+  const removeEducationItem = (idxToRemove: number) => {
+    if (!data) return;
+    setData({
+      ...data,
+      education: (data.education || []).filter((_, i) => i !== idxToRemove),
+    });
+  };
+
+  const addCertification = () => {
+    if (!data || !newCert.trim()) return;
+    const currentCerts = Array.isArray(data.certifications)
+      ? data.certifications
+      : Array.isArray((data as any).parsed_skills_taxonomy?.courses_and_certifications)
+      ? (data as any).parsed_skills_taxonomy.courses_and_certifications
+      : [];
+    const nextCerts = Array.from(new Set([...currentCerts, newCert.trim()]));
+    setData({
+      ...data,
+      certifications: nextCerts,
+    });
+    setNewCert('');
+  };
+
+  const removeCertification = (certToRemove: string) => {
+    if (!data) return;
+    const currentCerts = Array.isArray(data.certifications)
+      ? data.certifications
+      : Array.isArray((data as any).parsed_skills_taxonomy?.courses_and_certifications)
+      ? (data as any).parsed_skills_taxonomy.courses_and_certifications
+      : [];
+    setData({
+      ...data,
+      certifications: currentCerts.filter((c: string) => c !== certToRemove),
+    });
+  };
+
   const candidate = data.candidate || ({} as GroundTruth['candidate']);
   const links = candidate.links || { linkedin: '', github: '', portfolio: '' };
   const workAuth = candidate.work_authorization || {
@@ -205,7 +322,9 @@ export const ProfileVault: React.FC = () => {
   const skillsCore = data.skills?.core || [];
   const work_history = Array.isArray(data.work_history) ? data.work_history : [];
   const educationList = Array.isArray(data.education) ? data.education : [];
-  const certifications = Array.isArray((data as any).parsed_skills_taxonomy?.courses_and_certifications)
+  const certifications = Array.isArray(data.certifications)
+    ? data.certifications
+    : Array.isArray((data as any).parsed_skills_taxonomy?.courses_and_certifications)
     ? (data as any).parsed_skills_taxonomy.courses_and_certifications
     : [];
   const faq_bank = Array.isArray(data.faq_bank) ? data.faq_bank : [];
@@ -369,6 +488,16 @@ export const ProfileVault: React.FC = () => {
                 />
               </div>
             ))}
+            <div className="md:col-span-2">
+              <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Professional Summary</label>
+              <textarea
+                rows={3}
+                placeholder="Brief summary of your verified background, domain strengths, and target roles..."
+                value={String(candidate.summary || '')}
+                onChange={(e) => setData({ ...data, candidate: { ...candidate, summary: e.target.value } })}
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+              />
+            </div>
           </div>
 
           <h3 className="text-base font-semibold text-white pt-4 border-t border-slate-800">URLs & Social Profiles</h3>
@@ -583,26 +712,111 @@ export const ProfileVault: React.FC = () => {
       {/* Tab 4: Work History */}
       {activeTab === 'history' && (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-6">
-          <h3 className="text-base font-semibold text-white">Verified Career Experience</h3>
+          <div>
+            <h3 className="text-base font-semibold text-white">Verified Career Experience</h3>
+            <p className="text-xs text-slate-400 mt-1">
+              Add or edit roles manually (no CV upload required), then click Save Ground Truth above.
+            </p>
+          </div>
+
+          <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <input
+                type="text"
+                placeholder="Role / Title (e.g. Junior QA Engineer)"
+                value={newRoleTitle}
+                onChange={(e) => setNewRoleTitle(e.target.value)}
+                className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+              />
+              <input
+                type="text"
+                placeholder="Company / Organization"
+                value={newRoleCompany}
+                onChange={(e) => setNewRoleCompany(e.target.value)}
+                className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+              />
+              <input
+                type="text"
+                placeholder="Location (e.g. Tbilisi, Remote)"
+                value={newRoleLocation}
+                onChange={(e) => setNewRoleLocation(e.target.value)}
+                className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-center">
+              <input
+                type="text"
+                placeholder="Start Date (e.g. Jan 2025)"
+                value={newRoleStart}
+                onChange={(e) => setNewRoleStart(e.target.value)}
+                className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+              />
+              <input
+                type="text"
+                placeholder="End Date (e.g. Jun 2026)"
+                disabled={newRoleCurrent}
+                value={newRoleCurrent ? 'Present' : newRoleEnd}
+                onChange={(e) => setNewRoleEnd(e.target.value)}
+                className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
+              />
+              <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={newRoleCurrent}
+                  onChange={(e) => setNewRoleCurrent(e.target.checked)}
+                  className="rounded border-slate-700 bg-slate-900 text-emerald-500"
+                />
+                <span>Currently working here</span>
+              </label>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <textarea
+                rows={2}
+                placeholder="Achievements / bullets (one per line)..."
+                value={newRoleHighlights}
+                onChange={(e) => setNewRoleHighlights(e.target.value)}
+                className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+              />
+              <button
+                type="button"
+                onClick={addWorkHistoryItem}
+                className="min-h-[44px] px-4 py-2 bg-emerald-700 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1 self-end"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Role</span>
+              </button>
+            </div>
+          </div>
+
           {work_history.length === 0 ? (
             <div className="text-xs text-slate-400 py-6 text-center bg-slate-950 rounded-xl border border-slate-800">
-              No work history entries parsed yet. Upload your skills.md with a Work Experience section.
+              No work history entries yet. Add roles above or upload a CV / skills file.
             </div>
           ) : (
             <div className="space-y-4">
               {work_history.map((job, idx) => (
                 <div key={idx} className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
-                  <div className="flex items-start justify-between">
+                  <div className="flex items-start justify-between gap-2">
                     <div>
                       <h4 className="text-sm font-semibold text-white">{job.role || 'Role'}</h4>
                       <span className="text-xs text-emerald-400 font-medium">{job.company || 'Organization'}</span>
                       {job.location && <span className="text-xs text-slate-400"> • {job.location}</span>}
                     </div>
-                    {(job.start_date || job.end_date) && (
-                      <span className="text-xs text-slate-400 font-mono bg-slate-900 px-2 py-0.5 rounded">
-                        {[job.start_date, job.end_date].filter(Boolean).join(' – ')}
-                      </span>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {(job.start_date || job.end_date) && (
+                        <span className="text-xs text-slate-400 font-mono bg-slate-900 px-2 py-0.5 rounded">
+                          {[job.start_date, job.is_current ? 'Present' : job.end_date].filter(Boolean).join(' – ')}
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => removeWorkHistoryItem(idx)}
+                        aria-label={`Remove role ${job.role || idx}`}
+                        className="text-slate-400 hover:text-rose-400 transition-colors p-1"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                      </button>
+                    </div>
                   </div>
                   <ul className="list-disc list-inside text-xs text-slate-400 space-y-1 pt-1">
                     {(job.highlights || [])
@@ -624,12 +838,65 @@ export const ProfileVault: React.FC = () => {
           <div>
             <h3 className="text-base font-semibold text-white">Academic Degrees &amp; Education</h3>
             <p className="text-xs text-slate-400 mt-1">
-              Automatically parsed from your uploaded <code>skills.md</code> and used to unlock graduate &amp; adjacent roles.
+              Add degrees and certifications manually or parse them from your uploaded CV / <code>skills.md</code>.
             </p>
           </div>
+
+          <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <input
+                type="text"
+                placeholder="Degree / Program (e.g. B.Sc. in Economics)"
+                value={newEduDegree}
+                onChange={(e) => setNewEduDegree(e.target.value)}
+                className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+              />
+              <input
+                type="text"
+                placeholder="Institution / University"
+                value={newEduInstitution}
+                onChange={(e) => setNewEduInstitution(e.target.value)}
+                className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <input
+                type="text"
+                placeholder="Dates (e.g. 2022–2026)"
+                value={newEduDates}
+                onChange={(e) => setNewEduDates(e.target.value)}
+                className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+              />
+              <input
+                type="text"
+                placeholder="GPA (optional)"
+                value={newEduGpa}
+                onChange={(e) => setNewEduGpa(e.target.value)}
+                className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+              />
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Core modules (comma-separated)"
+                  value={newEduModules}
+                  onChange={(e) => setNewEduModules(e.target.value)}
+                  className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+                />
+                <button
+                  type="button"
+                  onClick={addEducationItem}
+                  className="min-h-[44px] px-3.5 py-2 bg-emerald-700 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
           {educationList.length === 0 ? (
             <div className="text-xs text-slate-400 py-6 text-center bg-slate-950 rounded-xl border border-slate-800">
-              No education entries parsed yet. Upload your skills.md with an Education section.
+              No education entries yet. Add your degree above or upload a CV / skills file.
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -666,11 +933,21 @@ export const ProfileVault: React.FC = () => {
                           <div className="text-xs text-emerald-400 font-medium mt-0.5">{institutionLine}</div>
                         )}
                       </div>
-                      {dateBadge && (
-                        <span className="text-[11px] text-slate-300 font-mono bg-slate-900 px-2 py-0.5 rounded border border-slate-800 flex-shrink-0">
-                          {dateBadge}
-                        </span>
-                      )}
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        {dateBadge && (
+                          <span className="text-[11px] text-slate-300 font-mono bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
+                            {dateBadge}
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => removeEducationItem(idx)}
+                          aria-label={`Remove degree ${degreeTitle}`}
+                          className="text-slate-400 hover:text-rose-400 transition-colors p-1"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                        </button>
+                      </div>
                     </div>
 
                     {edu.gpa && (
@@ -703,21 +980,49 @@ export const ProfileVault: React.FC = () => {
             </div>
           )}
 
-          {certifications.length > 0 && (
-            <div className="pt-4 border-t border-slate-800 space-y-3">
+          <div className="pt-4 border-t border-slate-800 space-y-3">
+            <div className="flex items-center justify-between flex-wrap gap-2">
               <h4 className="text-sm font-semibold text-white">Courses, Bootcamps &amp; Certifications</h4>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  placeholder="Add certification or course..."
+                  value={newCert}
+                  onChange={(e) => setNewCert(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && addCertification()}
+                  className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+                />
+                <button
+                  type="button"
+                  onClick={addCertification}
+                  aria-label="Add certification"
+                  className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-500 text-white rounded-lg text-xs font-medium"
+                >
+                  <Plus className="w-4 h-4" aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+            {certifications.length > 0 && (
               <div className="flex flex-wrap gap-2">
                 {certifications.map((cert: string, i: number) => (
                   <span
                     key={i}
-                    className="px-3 py-1.5 rounded-xl bg-cyan-950/60 border border-cyan-800/60 text-cyan-200 text-xs font-medium"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cyan-950/60 border border-cyan-800/60 text-cyan-200 text-xs font-medium"
                   >
-                    🎓 {cert}
+                    <span>🎓 {cert}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeCertification(cert)}
+                      aria-label={`Remove ${cert}`}
+                      className="text-cyan-300/70 hover:text-rose-400 transition-colors"
+                    >
+                      <Trash2 className="w-3 h-3" aria-hidden="true" />
+                    </button>
                   </span>
                 ))}
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       )}
 

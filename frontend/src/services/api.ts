@@ -360,6 +360,11 @@ export const generateCvEdition = (params: {
   ats_parse_report?: ATSParseReport;
   matched_skills?: string[];
   missing_skills?: string[];
+  url_fetched?: boolean;
+  url_fetch_warning?: string | null;
+  extracted_description_preview?: string;
+  persistence_status?: string;
+  persistence_error?: string | null;
 }> => apiJson('/resumes/generate-edition', { method: 'POST', body: params, errorMessage: 'Failed to generate CV edition' });
 
 export const prepareJobEmailPackage = (
@@ -682,11 +687,21 @@ export const createCvVersion = (payload: {
   edition?: string;
   language?: string;
   structured_json?: Record<string, any>;
+  cover_letter?: string;
+  motivational_letter?: string;
 }): Promise<CVVersionItem> => apiJson('/cv-versions', { method: 'POST', body: payload, errorMessage: 'Failed to save CV version' });
 
 export const patchCvVersion = (
   versionId: number,
-  payload: { title?: string; target_company?: string; target_role?: string; language?: string; structured_json?: Record<string, any> }
+  payload: {
+    title?: string;
+    target_company?: string;
+    target_role?: string;
+    language?: string;
+    structured_json?: Record<string, any>;
+    cover_letter?: string;
+    motivational_letter?: string;
+  }
 ): Promise<CVVersionItem> =>
   apiJson(`/cv-versions/${versionId}`, { method: 'PATCH', body: payload, errorMessage: 'Failed to update & re-render CV version' });
 

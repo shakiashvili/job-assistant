@@ -104,7 +104,12 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-# Tight CORS configuration: strict production allowlist, localhost only outside production, explicit extension IDs
+# Tight CORS configuration: strict production allowlist (never inherit localhost in production)
+def _is_localhost_origin(origin: str) -> bool:
+    low = (origin or "").strip().lower()
+    return any(h in low for h in ("://localhost", "://127.0.0.1", "://0.0.0.0", "://[::1]"))
+
+
 CORS_ALLOWED_ORIGINS = [] if IS_PRODUCTION else [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -113,14 +118,16 @@ CORS_ALLOWED_ORIGINS = [] if IS_PRODUCTION else [
     "http://localhost:8000",
     "http://127.0.0.1:8000",
 ]
-if FRONTEND_URL and FRONTEND_URL.rstrip("/") not in CORS_ALLOWED_ORIGINS:
-    CORS_ALLOWED_ORIGINS.append(FRONTEND_URL.rstrip("/"))
+if FRONTEND_URL:
+    _norm_fe = FRONTEND_URL.rstrip("/")
+    if (not IS_PRODUCTION or not _is_localhost_origin(_norm_fe)) and _norm_fe not in CORS_ALLOWED_ORIGINS:
+        CORS_ALLOWED_ORIGINS.append(_norm_fe)
 for _env_key in ("CORS_ORIGINS", "ALLOWED_ORIGINS"):
     _extra_origins = os.getenv(_env_key, "")
     for _orig in _extra_origins.split(","):
-        _orig = _orig.strip().rstrip("/")
-        if _orig and _orig not in CORS_ALLOWED_ORIGINS:
-            CORS_ALLOWED_ORIGINS.append(_orig)
+        _clean = _orig.strip().rstrip("/")
+        if _clean and (not IS_PRODUCTION or not _is_localhost_origin(_clean)) and _clean not in CORS_ALLOWED_ORIGINS:
+            CORS_ALLOWED_ORIGINS.append(_clean)
 
 _ext_ids_raw = os.getenv("CORS_ALLOWED_EXTENSION_IDS", "")
 _has_explicit_ext_ids = False

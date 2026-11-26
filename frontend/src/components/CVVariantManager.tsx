@@ -61,6 +61,8 @@ export const CVVariantManager: React.FC = () => {
   const [editHeadline, setEditHeadline] = useState('');
   const [editSkillsText, setEditSkillsText] = useState('');
   const [editWorkBulletsText, setEditWorkBulletsText] = useState('');
+  const [editCoverLetter, setEditCoverLetter] = useState('');
+  const [editMotivationalLetter, setEditMotivationalLetter] = useState('');
   const [isSavingVersion, setIsSavingVersion] = useState(false);
   const [copiedLetter, setCopiedLetter] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
@@ -98,6 +100,8 @@ export const CVVariantManager: React.FC = () => {
       })
       .join('\n\n');
     setEditWorkBulletsText(formattedWork);
+    setEditCoverLetter(String(ver.cover_letter ?? sec.cover_letter ?? ''));
+    setEditMotivationalLetter(String(ver.motivational_letter ?? sec.motivational_letter ?? ''));
   };
 
   const loadInitial = async (forceResyncEditor = false) => {
@@ -223,8 +227,8 @@ export const CVVariantManager: React.FC = () => {
         title: res.title,
         company: res.company,
         subject: res.subject,
-        cover_letter: res.cover_letter,
-        motivational_letter: res.motivational_letter || res.cover_letter,
+        cover_letter: res.cover_letter || '',
+        motivational_letter: res.motivational_letter || '',
         docx_filename: res.docx_filename,
         docx_url: res.docx_url,
         pdf_filename: res.pdf_filename,
@@ -244,6 +248,15 @@ export const CVVariantManager: React.FC = () => {
 
       // Immediately attempt download of ready Word (.docx) file and notify user accurately
       const downloadedOk = await triggerCrossOriginDownload(res.docx_url, res.docx_filename);
+
+      const warnings: string[] = [];
+      if (res.url_fetch_warning) warnings.push(res.url_fetch_warning);
+      if (res.persistence_status === 'partial_failure' && res.persistence_error) {
+        warnings.push(`CV Studio history save warning: ${res.persistence_error}`);
+      }
+      if (warnings.length > 0) {
+        setStatusError(warnings.join(' | '));
+      }
 
       setDownloadBanner(
         downloadedOk
@@ -291,6 +304,8 @@ export const CVVariantManager: React.FC = () => {
       const updated = await patchCvVersion(activeVersion.id, {
         target_role: editHeadline || activeVersion.target_role || '',
         language: cvLanguage,
+        cover_letter: editCoverLetter,
+        motivational_letter: editMotivationalLetter,
         structured_json: {
           ...(activeVersion.structured_json || {}),
           headline: editHeadline,
@@ -325,8 +340,8 @@ export const CVVariantManager: React.FC = () => {
   const copyCoverLetter = async () => {
     const activeText =
       letterTab === 'motivational'
-        ? generatedOutput?.motivational_letter || generatedOutput?.cover_letter
-        : generatedOutput?.cover_letter;
+        ? generatedOutput?.motivational_letter || ''
+        : generatedOutput?.cover_letter || '';
     if (!activeText) return;
     try {
       await navigator.clipboard.writeText(activeText);
@@ -919,6 +934,32 @@ export const CVVariantManager: React.FC = () => {
                     onChange={(e) => setEditWorkBulletsText(e.target.value)}
                     className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-emerald-500"
                   />
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-semibold uppercase text-slate-400 mb-1">
+                      Saved Cover Letter
+                    </label>
+                    <textarea
+                      rows={4}
+                      value={editCoverLetter}
+                      onChange={(e) => setEditCoverLetter(e.target.value)}
+                      placeholder="Persisted cover letter for this CV version..."
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold uppercase text-slate-400 mb-1">
+                      Saved Motivational Letter
+                    </label>
+                    <textarea
+                      rows={4}
+                      value={editMotivationalLetter}
+                      onChange={(e) => setEditMotivationalLetter(e.target.value)}
+                      placeholder="Persisted motivational letter for this CV version..."
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
                   <button

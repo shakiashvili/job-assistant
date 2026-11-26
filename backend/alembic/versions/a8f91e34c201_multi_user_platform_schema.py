@@ -296,37 +296,49 @@ def upgrade() -> None:
             sa.UniqueConstraint("task_id"),
         )
 
-    # 3. Deterministic ownership backfill ONLY when owner_email is explicitly verified
-    try:
-        from app.services.crypto_service import blind_index, decrypt_str
+    # 3. Deterministic ownership backfill ONLY when owner_email is explicitly verified (with structured diagnostics)
+    import logging
+    _mig_log = logging.getLogger("alembic.migration.a8f91e34c201")
+    from app.services.crypto_service import blind_index, decrypt_str
 
-        users_rows = bind.execute(sa.text("SELECT id, email_hash FROM users")).fetchall()
-        hash_to_uid = {row[1]: row[0] for row in users_rows if row[1]}
+    users_rows = bind.execute(sa.text("SELECT id, email_hash FROM users")).fetchall()
+    hash_to_uid = {row[1]: row[0] for row in users_rows if row[1]}
 
-        prof_rows = bind.execute(
-            sa.text("SELECT id, user_id, parsed_skills FROM candidate_profiles WHERE user_id IS NULL")
-        ).fetchall()
-        for pid, uid, raw_ps in prof_rows:
-            if uid is not None or not raw_ps:
-                continue
-            dec = decrypt_str(str(raw_ps))
-            if not dec:
-                continue
-            try:
-                ps_obj = json.loads(dec)
-            except Exception:
-                continue
-            owner_em = str((ps_obj or {}).get("owner_email") or "").strip().lower()
-            if owner_em and owner_em != "guest@talentflow.local":
-                matched_uid = hash_to_uid.get(blind_index(owner_em))
-                if matched_uid:
-                    bind.execute(
-                        sa.text("UPDATE candidate_profiles SET user_id = :uid WHERE id = :pid"),
-                        {"uid": matched_uid, "pid": pid},
-                    )
-    except Exception:
-        # Never fail schema upgrade if optional backfill encounters legacy unencrypted test rows
-        pass
+    prof_rows = bind.execute(
+        sa.text("SELECT id, user_id, parsed_skills FROM candidate_profiles WHERE user_id IS NULL")
+    ).fetchall()
+    processed_cnt, assigned_cnt, unresolved_ids = 0, 0, []
+    for pid, uid, raw_ps in prof_rows:
+        if uid is not None or not raw_ps:
+            continue
+        processed_cnt += 1
+        dec = decrypt_str(str(raw_ps))
+        if not dec:
+            unresolved_ids.append(pid)
+            continue
+        try:
+            ps_obj = json.loads(dec)
+        except (ValueError, TypeError):
+            unresolved_ids.append(pid)
+            continue
+        owner_em = str((ps_obj or {}).get("owner_email") or "").strip().lower()
+        if owner_em and owner_em != "guest@talentflow.local":
+            matched_uid = hash_to_uid.get(blind_index(owner_em))
+            if matched_uid:
+                bind.execute(
+                    sa.text("UPDATE candidate_profiles SET user_id = :uid WHERE id = :pid"),
+                    {"uid": matched_uid, "pid": pid},
+                )
+                assigned_cnt += 1
+            else:
+                unresolved_ids.append(pid)
+    if processed_cnt:
+        _mig_log.info(
+            "Ownership backfill summary: processed=%d assigned=%d unresolved_profile_ids=%s",
+            processed_cnt,
+            assigned_cnt,
+            unresolved_ids[:20],
+        )
 
 
 def downgrade() -> None:

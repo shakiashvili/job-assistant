@@ -61,16 +61,22 @@ class SalaryEstimateRequest(BaseModel):
 
 
 def _is_profile_uploaded_for_user(profile: Optional[CandidateProfile], user_email: str) -> bool:
+    """Returns True when the user has EITHER an uploaded CV/skills file OR a ready manually completed profile."""
     if not profile:
         return False
     ps = profile.parsed_skills or {}
-    if not bool(ps.get("user_uploaded", False)):
-        return False
     owner = str(ps.get("owner_email") or "").strip().lower()
     clean_user = (user_email or "").strip().lower()
     if owner and clean_user != owner:
         return False
-    return True
+    if bool(ps.get("user_uploaded", False)) or str(ps.get("profile_status") or "").lower() == "ready":
+        return True
+    vault = ps.get("ground_truth_vault") if isinstance(ps.get("ground_truth_vault"), dict) else {}
+    return bool(
+        (ps.get("all_skills") or [])
+        or (vault.get("work_history") or [])
+        or (vault.get("education") or [])
+    )
 
 
 @router.post("/profile/upload-skills")
@@ -368,9 +374,9 @@ async def list_scraped_jobs(
             }
 
         use_user_matches = uid is not None
-        score_col = func.coalesce(UserJobMatch.suitability_score, JobPosting.suitability_score) if use_user_matches else JobPosting.suitability_score
-        status_col = func.coalesce(UserJobMatch.status, JobPosting.status) if use_user_matches else JobPosting.status
-        tier_col = func.coalesce(UserJobMatch.match_tier, JobPosting.match_tier) if use_user_matches else JobPosting.match_tier
+        score_col = UserJobMatch.suitability_score if use_user_matches else JobPosting.suitability_score
+        status_col = UserJobMatch.status if use_user_matches else JobPosting.status
+        tier_col = UserJobMatch.match_tier if use_user_matches else JobPosting.match_tier
 
         base_conds = [JobPosting.is_expired == False]
         if not include_filtered:
@@ -587,7 +593,7 @@ async def list_scraped_jobs(
 
         if geo_eligible_only:
             base_stmt = (
-                select(JobPosting, UserJobMatch).outerjoin(
+                select(JobPosting, UserJobMatch).join(
                     UserJobMatch,
                     (UserJobMatch.job_posting_id == JobPosting.id) & (UserJobMatch.user_id == uid),
                 )
@@ -601,6 +607,17 @@ async def list_scraped_jobs(
                 for entry in session.exec(base_stmt.order_by(*order_clauses)).all()
                 if (dumped := _serialize_job_row(entry)).get("georgia_eligible")
             ]
+            if use_user_matches and not all_geo_items and not only_saved:
+                has_any_user_match = session.exec(
+                    select(UserJobMatch.id).where(UserJobMatch.user_id == uid).limit(1)
+                ).first()
+                if has_any_user_match is None and session.exec(select(JobPosting.id).limit(1)).first() is not None:
+                    scraper_orchestrator.rescore_existing_jobs(owner_email=owner, user_id=uid)
+                    all_geo_items = [
+                        dumped
+                        for entry in session.exec(base_stmt.order_by(*order_clauses)).all()
+                        if (dumped := _serialize_job_row(entry)).get("georgia_eligible")
+                    ]
 
             tier_counts = {
                 "ALL": len(all_geo_items),
@@ -652,7 +669,7 @@ async def list_scraped_jobs(
             func.sum(case((status_col == "AUDITED", 1), else_=0)).label("audited_cnt"),
         ).select_from(JobPosting)
         if use_user_matches:
-            agg_stmt = agg_stmt.outerjoin(
+            agg_stmt = agg_stmt.join(
                 UserJobMatch,
                 (UserJobMatch.job_posting_id == JobPosting.id) & (UserJobMatch.user_id == uid),
             )
@@ -660,6 +677,16 @@ async def list_scraped_jobs(
             agg_stmt = agg_stmt.where(*base_conds)
 
         agg_row = session.exec(agg_stmt).one()
+        if use_user_matches and int(agg_row.all_cnt or 0) == 0 and not only_saved:
+            # Lazy first-time scoring for a ready user who has no UserJobMatch rows yet while global postings exist.
+            has_any_user_match = session.exec(
+                select(UserJobMatch.id).where(UserJobMatch.user_id == uid).limit(1)
+            ).first()
+            if has_any_user_match is None:
+                has_any_global_job = session.exec(select(JobPosting.id).limit(1)).first()
+                if has_any_global_job is not None:
+                    scraper_orchestrator.rescore_existing_jobs(owner_email=owner, user_id=uid)
+                    agg_row = session.exec(agg_stmt).one()
         all_cnt = int(agg_row[0] or 0)
         tier_counts = {
             "ALL": all_cnt,
@@ -691,7 +718,7 @@ async def list_scraped_jobs(
         if has_extra_filter:
             count_stmt = select(func.count()).select_from(JobPosting)
             if use_user_matches:
-                count_stmt = count_stmt.outerjoin(
+                count_stmt = count_stmt.join(
                     UserJobMatch,
                     (UserJobMatch.job_posting_id == JobPosting.id) & (UserJobMatch.user_id == uid),
                 )
@@ -702,7 +729,7 @@ async def list_scraped_jobs(
         total_pages = max(1, math.ceil(total / limit))
 
         if use_user_matches:
-            stmt = select(JobPosting, UserJobMatch).outerjoin(
+            stmt = select(JobPosting, UserJobMatch).join(
                 UserJobMatch,
                 (UserJobMatch.job_posting_id == JobPosting.id) & (UserJobMatch.user_id == uid),
             )

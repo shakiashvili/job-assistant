@@ -43,6 +43,7 @@ export interface WorkHistoryItem {
   location: string;
   start_date: string;
   end_date: string;
+  is_current?: boolean;
   highlights: string[];
 }
 
@@ -87,6 +88,7 @@ export interface GroundTruth {
     last_name: string;
     full_name: string;
     headline: string;
+    summary?: string;
     email: string;
     phone: string;
     location: CandidateLocation;
@@ -508,6 +510,8 @@ export interface CVVersionItem {
   edition: string;
   language: string;
   structured_json: Record<string, any>;
+  cover_letter?: string;
+  motivational_letter?: string;
   rendered_html?: string;
   pdf_filename?: string | null;
   docx_filename?: string | null;
