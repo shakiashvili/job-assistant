@@ -130,6 +130,12 @@ class SkillsMdPayload(BaseModel):
     content: str
 
 
+class ProfileImportApplyRequest(BaseModel):
+    filename: str = "imported_cv"
+    extracted: Dict[str, Any]
+    section_modes: Dict[str, str] = Field(default_factory=dict)
+
+
 class GenerateEditionRequest(BaseModel):
     edition: str = "ats"  # "ats", "recruiter", or "tailored"
     target_role: Optional[str] = None
@@ -137,6 +143,74 @@ class GenerateEditionRequest(BaseModel):
     job_description: Optional[str] = ""
     job_url: Optional[str] = None
     cv_language: str = "en"
+
+
+@router.get("/profile/intelligence")
+def get_profile_intelligence(current_user: User = Depends(get_current_user)):
+    """Returns profile completeness, duplicate skill detection, timeline validation warnings, recommendations, and provenance."""
+    from ..services.profile_intelligence_service import compute_profile_intelligence
+
+    owner = current_user.email if not _is_guest(current_user) else None
+    uid = current_user.id if not _is_guest(current_user) else None
+    gt = ground_truth_store.get_data(owner_email=owner, user_id=uid)
+    prof = ground_truth_store.get_profile_record(owner_email=owner, user_id=uid)
+    return compute_profile_intelligence(gt, parsed_skills=prof.parsed_skills if prof else {})
+
+
+@router.post("/profile/import-preview")
+async def preview_profile_import(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    """Extracts structured fields from PDF/DOCX/MD/TXT for candidate review without overwriting saved profile data."""
+    from ..services.profile_intelligence_service import build_import_preview
+    from ..services.upload_utils import read_upload_bounded
+
+    raw_bytes = await read_upload_bounded(file, MAX_UPLOAD_SIZE_BYTES)
+    if len(raw_bytes) == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    filename = file.filename or "resume.pdf"
+    owner = current_user.email if not _is_guest(current_user) else None
+    uid = current_user.id if not _is_guest(current_user) else None
+    existing_gt = ground_truth_store.get_data(owner_email=owner, user_id=uid)
+    try:
+        return build_import_preview(raw_bytes, filename=filename, existing_gt=existing_gt)
+    except ValueError as parse_err:
+        raise HTTPException(status_code=400, detail=str(parse_err))
+
+
+@router.post("/profile/import-apply")
+def apply_profile_import(
+    payload: ProfileImportApplyRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Applies candidate-reviewed extracted fields using per-section merge/replace/skip modes (never silently overwriting)."""
+    from ..services.profile_intelligence_service import apply_import_merge, compute_profile_intelligence
+    from ..services.scrapers.scraper_orchestrator import scraper_orchestrator
+    from ..services.cv_generator_service import cv_generator_service
+
+    owner = current_user.email if not _is_guest(current_user) else None
+    uid = current_user.id if not _is_guest(current_user) else None
+    existing_gt = ground_truth_store.get_data(owner_email=owner, user_id=uid)
+    merged_gt = apply_import_merge(
+        existing_gt=existing_gt,
+        extracted=payload.extracted,
+        section_modes=payload.section_modes,
+        source_filename=payload.filename,
+    )
+    updated_gt = ground_truth_store.update_data(merged_gt, owner_email=owner, user_id=uid)
+    scraper_orchestrator.rescore_existing_jobs(owner_email=owner, user_id=uid)
+    synced_cv_versions = cv_generator_service.sync_user_cv_versions(
+        user_id=current_user.id,
+        owner_email=current_user.email,
+    )
+    prof = ground_truth_store.get_profile_record(owner_email=owner, user_id=uid)
+    return {
+        "status": "success",
+        "synced_cv_versions": synced_cv_versions,
+        "data": updated_gt,
+        "intelligence": compute_profile_intelligence(updated_gt, parsed_skills=prof.parsed_skills if prof else {}),
+    }
 
 
 @router.get("/ground-truth")
@@ -725,6 +799,12 @@ async def generate_cv_edition(
     persistence_error: Optional[str] = None
     try:
         with Session(engine) as session:
+            cv_sections = dict(pkg.get("cv_sections") or {})
+            cv_sections["template_name"] = req.edition or "ats"
+            if desc:
+                cv_sections["job_description_snapshot"] = desc[:6000]
+            if req.job_url:
+                cv_sections["job_url"] = req.job_url.strip()
             cv_ver = CVVersion(
                 user_id=current_user.id,
                 title=f"{role} — {company} ({req.edition.upper()})",
@@ -732,7 +812,7 @@ async def generate_cv_edition(
                 target_role=role,
                 edition=req.edition or "ats",
                 cv_language=pkg.get("cv_language") or req.cv_language or "en",
-                structured_content=pkg.get("cv_sections") or {},
+                structured_content=cv_sections,
                 rendered_html=pkg.get("rendered_html") or "",
                 cover_letter=str(pkg.get("cover_letter") or ""),
                 motivational_letter=str(pkg.get("motivational_letter") or ""),
@@ -768,6 +848,7 @@ class CVVersionCreateRequest(BaseModel):
     target_role: str = ""
     edition: str = "tailored"
     language: str = "en"
+    blank: bool = False
     job_posting_id: Optional[int] = None
     structured_json: Dict[str, Any] = Field(default_factory=dict)
     cover_letter: Optional[str] = None
@@ -868,19 +949,42 @@ def create_cv_version(
 
     sections = dict(req.structured_json or {})
     if not sections:
-        gt = ground_truth_store.get_data(owner_email=current_user.email, user_id=current_user.id)
-        cand = gt.get("candidate") or {}
-        sections = {
-            "candidate": cand,
-            "summary": cand.get("headline") or "",
-            "skills": (gt.get("skills") or {}).get("core") or [],
-            "work_history": gt.get("work_history") or [],
-            "education": gt.get("education") or [],
-            "target_role": req.target_role or cand.get("headline") or "Specialist",
-            "target_company": req.target_company or "Tailored",
-            "cv_language": req.language,
-            "cv_style": req.edition,
-        }
+        if req.blank:
+            sections = {
+                "candidate": {
+                    "full_name": current_user.full_name or "",
+                    "email": current_user.email or "",
+                    "phone": "",
+                    "location": {"city": "", "country": ""},
+                },
+                "headline": req.target_role or "",
+                "summary": "",
+                "skills": [],
+                "work_history": [],
+                "education": [],
+                "target_role": req.target_role or "Untitled Role",
+                "target_company": req.target_company or "",
+                "cv_language": req.language,
+                "cv_style": req.edition,
+                "template_name": req.edition,
+                "created_from_blank": True,
+            }
+        else:
+            gt = ground_truth_store.get_data(owner_email=current_user.email, user_id=current_user.id)
+            cand = gt.get("candidate") or {}
+            sections = {
+                "candidate": cand,
+                "headline": req.target_role or cand.get("headline") or "",
+                "summary": cand.get("summary") or cand.get("headline") or "",
+                "skills": (gt.get("skills") or {}).get("core") or [],
+                "work_history": gt.get("work_history") or [],
+                "education": gt.get("education") or [],
+                "target_role": req.target_role or cand.get("headline") or "Specialist",
+                "target_company": req.target_company or "Tailored",
+                "cv_language": req.language,
+                "cv_style": req.edition,
+                "template_name": req.edition,
+            }
 
     rendered = cv_generator_service.render_cv_from_sections(sections, user_id=current_user.id)
     if rendered.get("ats_parse_report"):
@@ -975,6 +1079,54 @@ def update_cv_version(
         session.commit()
         session.refresh(ver)
         return _serialize_cv_version(ver)
+
+
+@router.post("/cv-versions/{version_id}/duplicate")
+def duplicate_cv_version(
+    version_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    """Duplicates an existing CV Studio version (preserving letters & structured content) for safe branching."""
+    from ..services.cv_generator_service import cv_generator_service
+
+    with Session(engine) as session:
+        src = session.get(CVVersion, version_id)
+        if not src or src.user_id != current_user.id:
+            raise HTTPException(status_code=404, detail="CV version not found.")
+
+        sections = dict(src.structured_content or {})
+        sections["duplicated_from_version_id"] = src.id
+        rendered = cv_generator_service.render_cv_from_sections(sections, user_id=current_user.id)
+        if rendered.get("ats_parse_report"):
+            sections["ats_parse_report"] = rendered["ats_parse_report"]
+        _record_generated_cv_files(
+            current_user.id,
+            [rendered.get("pdf_filename"), rendered.get("docx_filename")],
+            doc_type=f"cv_studio_{src.edition}",
+            target_company=src.target_company,
+            target_role=src.target_role,
+        )
+
+        clone = CVVersion(
+            user_id=current_user.id,
+            job_posting_id=src.job_posting_id,
+            title=f"{src.title} (Copy)",
+            target_company=src.target_company,
+            target_role=src.target_role,
+            edition=src.edition,
+            cv_language=src.cv_language,
+            structured_content=sections,
+            rendered_html=rendered.get("rendered_html") or src.rendered_html or "",
+            cover_letter=src.cover_letter or "",
+            motivational_letter=src.motivational_letter or "",
+            pdf_filename=rendered.get("pdf_filename"),
+            docx_filename=rendered.get("docx_filename"),
+            version_number=(src.version_number or 1) + 1,
+        )
+        session.add(clone)
+        session.commit()
+        session.refresh(clone)
+        return _serialize_cv_version(clone)
 
 
 @router.delete("/cv-versions/{version_id}")

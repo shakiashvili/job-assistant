@@ -845,6 +845,12 @@ class ProfileRepository:
                 taxonomy["projects"] = save_copy["projects"]
             if isinstance(save_copy.get("certifications"), list):
                 taxonomy["courses_and_certifications"] = save_copy["certifications"]
+            if isinstance(save_copy.get("preferences"), dict):
+                taxonomy["preferences"] = save_copy["preferences"]
+            if isinstance(save_copy.get("import_provenance"), dict):
+                taxonomy["import_provenance"] = save_copy["import_provenance"]
+            if str(save_copy.get("profile_status") or "").strip().lower() in ("draft", "reviewed", "ready"):
+                taxonomy["profile_status"] = str(save_copy["profile_status"]).strip().lower()
             if isinstance(cand_in, dict) and isinstance(cand_in.get("languages"), list):
                 cleaned_langs = filter_spoken_language_entries(cand_in["languages"])
                 cand_in["languages"] = cleaned_langs

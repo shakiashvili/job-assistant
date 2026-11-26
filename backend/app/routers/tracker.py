@@ -50,6 +50,11 @@ class UpdateInterviewNotesRequest(BaseModel):
     status: Optional[str] = None
 
 
+class MockInterviewAnswerRequest(BaseModel):
+    question_id: int
+    answer_text: str = Field(..., min_length=5, max_length=6000)
+
+
 class CalendarEventRequest(BaseModel):
     interview_date: Optional[str] = None
     duration_minutes: int = Field(default=45, ge=15, le=240)
@@ -417,6 +422,50 @@ def update_interview_round(
     session.commit()
     session.refresh(round_rec)
     return round_rec
+
+
+@router.post("/{app_id}/interviews/{round_id}/mock-answer")
+def submit_mock_interview_answer(
+    app_id: str,
+    round_id: int,
+    req: MockInterviewAnswerRequest,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    """Evaluates a candidate's answer to one mock interview question at a time without fabricating experience."""
+    app_tracker = get_or_create_app_tracker(app_id, session, current_user=current_user)
+    round_rec = session.get(InterviewRound, round_id)
+    if not round_rec or round_rec.application_id != app_tracker.id:
+        raise HTTPException(status_code=404, detail=f"Interview round {round_id} not found.")
+    return interview_service.evaluate_mock_answer(
+        application=app_tracker,
+        round_rec=round_rec,
+        question_id=req.question_id,
+        answer_text=req.answer_text,
+        session=session,
+        user=current_user,
+    )
+
+
+@router.delete("/{app_id}/interviews/{round_id}")
+def delete_interview_round(
+    app_id: str,
+    round_id: int,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    """Privately deletes a saved interview preparation / mock session owned by the current user."""
+    app_tracker = get_or_create_app_tracker(app_id, session, current_user=current_user)
+    round_rec = session.get(InterviewRound, round_id)
+    if not round_rec or round_rec.application_id != app_tracker.id:
+        raise HTTPException(status_code=404, detail=f"Interview round {round_id} not found.")
+    for note in session.exec(
+        select(InterviewNote).where(InterviewNote.interview_round_id == round_id)
+    ).all():
+        session.delete(note)
+    session.delete(round_rec)
+    session.commit()
+    return {"status": "deleted", "round_id": round_id}
 
 
 @router.post("/{app_id}/interviews/{round_id}/notes")

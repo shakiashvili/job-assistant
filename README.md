@@ -133,3 +133,14 @@ With both backend (`:8000`) and frontend (`:5173`) running:
 cd backend
 pytest ../tests/non_functional/test_a11y_and_perf.py -v
 ```
+
+---
+
+## Core Platform Capabilities & Data Governance
+
+- **Candidate Profile Vault & Safe Import Merge:** Every registered user starts with an empty, persisted draft `CandidateProfile` strictly owned by `user_id`. Users can build profiles fully manually (Identity, Summary, Work History, Education, Skills, Projects, Languages, Certifications, Preferences, FAQ) or upload `.pdf` / `.docx` / `.md` / `.txt` files through `POST /api/profile/import-preview` and `POST /api/profile/import-apply` with per-section `merge` / `replace` / `skip` controls (never silently overwriting confirmed data). `GET /api/profile/intelligence` detects duplicate skill variants and experience/education timeline inconsistencies.
+- **Multi-Tenant Job Discovery & Feedback Loop:** Global `JobPosting` rows are isolated from per-user `UserJobMatch` evaluations and per-user profile-fingerprinted caches. Supports occupational industry filtering, normalized salary period (`monthly` / `annual` / `hourly`) and `gross` / `net` metadata, transparent heuristic `recommendation_breakdown` (explicitly labeled as profile-to-vacancy fit, never hiring probability), and per-user dismissal/restore feedback (`POST/DELETE /api/jobs/{job_id}/feedback`).
+- **CV Studio & Application Snapshots:** Supports blank CV creation, master-profile generation, SSRF-safe vacancy URL tailoring, version duplication (`POST /api/cv-versions/{id}/duplicate`), side-by-side comparison, independent persisted `cover_letter` and `motivational_letter` drafts, and English/Georgian PDF + Word (`.docx`) rendering. Linked applications capture immutable `document_snapshot` payloads so historical packages survive subsequent master-profile edits or CV deletions.
+- **Vacancy-Grounded Interview Copilot & Mock Sessions:** Generates vacancy-specific prep plans, experience-gap topics, and grounded STAR strategies, plus 1-question-at-a-time interactive mock-answer evaluation (`POST /api/applications/{app_id}/interviews/{round_id}/mock-answer`) and private session deletion (`DELETE /api/applications/{app_id}/interviews/{round_id}`).
+- **AI Provider Abstraction & Privacy:** External AI calls (Gemini when `GEMINI_API_KEY` is configured; deterministic fallback otherwise) are centralized in `backend/app/services/gemini_service.py` with prompt-injection wrapping, caching, and token/latency telemetry (`ai_operation_logs`). Only task-minimum skills/role context is sent externally; sensitive PII columns on `CandidateProfile` and `CVVersion` are encrypted at rest via Fernet (`crypto_service.py`), and web refresh tokens are restricted to `HttpOnly` cookies.
+

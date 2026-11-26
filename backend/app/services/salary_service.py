@@ -136,6 +136,48 @@ class SalaryService:
             return "Junior"
         return "Middle"
 
+    @staticmethod
+    def detect_salary_metadata(text: str, min_sal: Optional[float], max_sal: Optional[float]) -> Dict[str, Any]:
+        """Normalizes salary period (monthly/annual/hourly), gross/net label, and monthly equivalent without inventing FX rates."""
+        low = (text or "").lower()
+        gross_net = "unknown"
+        if re.search(r"\b(net|after\s+tax|take[- ]home|ხელზე)\b", low):
+            gross_net = "net"
+        elif re.search(r"\b(gross|before\s+tax|დარიცხული)\b", low):
+            gross_net = "gross"
+
+        period = "unknown"
+        if re.search(r"(?:/\s*h(?:r|our)?\b|\bper\s+hour\b|\bhourly\b|საათში)", low):
+            period = "hourly"
+        elif re.search(r"(?:/\s*(?:yr|year|annum)\b|\bper\s+year\b|\bannually\b|\bannual\b|\bp\.?a\.?\b|წლიური)", low):
+            period = "annual"
+        elif re.search(r"(?:/\s*(?:mo|month)\b|\bper\s+month\b|\bmonthly\b|თვეში|თვიური)", low):
+            period = "monthly"
+        elif max_sal is not None:
+            # Conservative inference only for unambiguous annual (>25,000) vs hourly (<180)
+            if max_sal >= 25000:
+                period = "annual"
+            elif max_sal < 180:
+                period = "hourly"
+            else:
+                period = "monthly"
+
+        def _to_monthly(v: Optional[float]) -> Optional[float]:
+            if v is None:
+                return None
+            if period == "annual":
+                return round(v / 12.0, 2)
+            if period == "hourly":
+                return round(v * 160.0, 2)
+            return round(v, 2)
+
+        return {
+            "salary_period": period,
+            "gross_net": gross_net,
+            "normalized_monthly_min": _to_monthly(min_sal),
+            "normalized_monthly_max": _to_monthly(max_sal),
+        }
+
     def extract_vacancy_salary(
         self,
         title: str,
@@ -150,15 +192,20 @@ class SalaryService:
         explicit = self.extract_explicit_salary(combined_text)
         if explicit:
             min_sal, max_sal, currency = explicit
+            meta = self.detect_salary_metadata(combined_text, min_sal, max_sal)
             return {
                 "min_salary": min_sal,
                 "max_salary": max_sal,
                 "currency": currency,
+                "salary_period": meta["salary_period"],
+                "gross_net": meta["gross_net"],
+                "normalized_monthly_min": meta["normalized_monthly_min"],
+                "normalized_monthly_max": meta["normalized_monthly_max"],
                 "salary_estimated_by_ai": False,
                 "is_unpaid": False,
                 "confidence_score": 0.96,
                 "seniority_detected": self._detect_seniority(title, description),
-                "rationale": f"Extracted explicit salary ({min_sal:g} - {max_sal:g} {currency}) directly from job description.",
+                "rationale": f"Extracted explicit {meta['salary_period']} salary ({min_sal:g} - {max_sal:g} {currency}, {meta['gross_net']}) directly from job description.",
             }
 
         is_unpaid = any(
@@ -175,6 +222,10 @@ class SalaryService:
             "min_salary": None,
             "max_salary": None,
             "currency": None,
+            "salary_period": "unknown",
+            "gross_net": "unknown",
+            "normalized_monthly_min": None,
+            "normalized_monthly_max": None,
             "salary_estimated_by_ai": False,
             "is_unpaid": is_unpaid,
             "confidence_score": 1.0 if is_unpaid else 0.0,

@@ -301,12 +301,14 @@ class TrackerAnalyticsResponse(BaseModel):
     offers_received: int
     rejections: int
     withdrawn: int
+    follow_ups_due: int = 0
     response_rate_pct: float
     interview_conversion_rate_pct: float
     offer_rate_pct: float
     by_status: Dict[str, int]
     by_portal: Dict[str, Dict[str, int]]
     by_role: Dict[str, Dict[str, int]]
+    by_cv_version: Dict[str, Dict[str, int]] = Field(default_factory=dict)
 
 
 class SavedSearchCreate(BaseModel):

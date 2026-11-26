@@ -23,12 +23,17 @@ logger = logging.getLogger(__name__)
 
 UI_TO_DB_STATUS = {
     "Discovered": "DISCOVERED",
+    "Interested": "INTERESTED",
+    "Shortlisted": "SHORTLISTED",
     "Saved": "SAVED",
     "Preparing": "PREPARING",
+    "Preparing Application": "PREPARING",
     "Ready to Apply": "READY_TO_APPLY",
     "Applied": "APPLIED",
     "Submitted": "APPLIED",
+    "Assessment": "ASSESSMENT",
     "HR Screening": "HR_SCREEN",
+    "Interview": "HR_SCREEN",
     "Interviewing": "HR_SCREEN",
     "Technical Interview": "TECH_INTERVIEW",
     "Final Interview": "FINAL_INTERVIEW",
@@ -40,12 +45,15 @@ UI_TO_DB_STATUS = {
 DB_TO_UI_STATUS = {
     "DISCOVERED": "Discovered",
     "STAGED": "Discovered",
+    "INTERESTED": "Interested",
+    "SHORTLISTED": "Shortlisted",
     "SAVED": "Saved",
     "Saved": "Saved",
     "PREPARING": "Preparing",
     "READY_TO_APPLY": "Ready to Apply",
     "SUBMITTED": "Applied",
     "APPLIED": "Applied",
+    "ASSESSMENT": "Assessment",
     "HR_SCREEN": "HR Screening",
     "INTERVIEW": "HR Screening",
     "TECH_INTERVIEW": "Technical Interview",
@@ -91,7 +99,9 @@ class TrackerRepository:
         salary_str = None
         if job and job.salary_min and job.salary_max:
             salary_str = f"{int(job.salary_min):,}–{int(job.salary_max):,} {job.salary_currency or 'USD'}"
-        snap = (app_tracker.jd_snapshot or {}) if app_tracker and isinstance(app_tracker.jd_snapshot, dict) else {}
+        snap = dict(app_tracker.jd_snapshot) if app_tracker and isinstance(app_tracker.jd_snapshot, dict) else {}
+        if not snap.get("document_snapshot") and isinstance(rec.screening_answers, dict) and rec.screening_answers.get("_document_snapshot"):
+            snap["document_snapshot"] = rec.screening_answers["_document_snapshot"]
         interview_dt = rec.interview_date.strftime("%Y-%m-%d %H:%M") if rec.interview_date else None
         company_val = (app_tracker.company_name if app_tracker and app_tracker.company_name else None) or (job.company if job else None) or snap.get("company") or "Hiring Company"
         role_val = (app_tracker.job_title if app_tracker and app_tracker.job_title else None) or (job.title if job else None) or snap.get("title") or "Specialist"
@@ -116,7 +126,7 @@ class TrackerRepository:
             recruiter_name=rec.recruiter_name,
             recruiter_email=rec.recruiter_email,
             company_reviews=None,
-            jd_snapshot=app_tracker.jd_snapshot if app_tracker else None,
+            jd_snapshot=snap or None,
             cv_pdf_url=rec.custom_cv_path or rec.cv_pdf_path or None,
             cv_version_id=rec.cv_version_id,
             cover_letter_text=rec.cover_letter_text or rec.cover_letter or None,
@@ -139,7 +149,10 @@ class TrackerRepository:
             stmt = (
                 select(ApplicationRecord, JobPosting, ApplicationTracker)
                 .outerjoin(JobPosting, ApplicationRecord.job_posting_id == JobPosting.id)
-                .outerjoin(ApplicationTracker, ApplicationRecord.id == ApplicationTracker.id)
+                .outerjoin(
+                    ApplicationTracker,
+                    (ApplicationRecord.id == ApplicationTracker.id) & (ApplicationTracker.user_id == ApplicationRecord.user_id),
+                )
                 .where(ApplicationRecord.user_id == user_id)
                 .order_by(ApplicationRecord.applied_at.desc(), ApplicationRecord.updated_at.desc())
             )
@@ -159,7 +172,10 @@ class TrackerRepository:
             stmt = (
                 select(ApplicationRecord, JobPosting, ApplicationTracker)
                 .outerjoin(JobPosting, ApplicationRecord.job_posting_id == JobPosting.id)
-                .outerjoin(ApplicationTracker, ApplicationRecord.id == ApplicationTracker.id)
+                .outerjoin(
+                    ApplicationTracker,
+                    (ApplicationRecord.id == ApplicationTracker.id) & (ApplicationTracker.user_id == ApplicationRecord.user_id),
+                )
                 .where(ApplicationRecord.id == int(rec_id_str))
             )
             triple = session.exec(stmt).first()
@@ -225,8 +241,33 @@ class TrackerRepository:
 
             app_t: Optional[ApplicationTracker] = None
             if rec.id is not None:
+                from .models import CVVersion
+
                 existing_app_t = session.get(ApplicationTracker, rec.id)
                 safe_app_t_id = rec.id if existing_app_t is None else None
+                doc_snapshot = None
+                if item_in.cv_version_id is not None:
+                    cv_v = session.get(CVVersion, item_in.cv_version_id)
+                    if cv_v and cv_v.user_id == user_id:
+                        sc = dict(cv_v.structured_content or {})
+                        doc_snapshot = {
+                            "cv_version_id": cv_v.id,
+                            "title": cv_v.title,
+                            "edition": cv_v.edition,
+                            "language": cv_v.cv_language,
+                            "version_number": cv_v.version_number,
+                            "summary": sc.get("summary") or "",
+                            "skills": list(sc.get("skills") or [])[:30],
+                            "pdf_filename": cv_v.pdf_filename,
+                            "docx_filename": cv_v.docx_filename,
+                            "cover_letter": item_in.cover_letter_text or cv_v.cover_letter or "",
+                            "motivational_letter": cv_v.motivational_letter or "",
+                            "captured_at": utc_now().isoformat(),
+                        }
+                        sa_dict = dict(rec.screening_answers or {})
+                        sa_dict["_document_snapshot"] = doc_snapshot
+                        rec.screening_answers = sa_dict
+                        session.add(rec)
                 app_t = ApplicationTracker(
                     id=safe_app_t_id,
                     user_id=user_id,
@@ -250,6 +291,7 @@ class TrackerRepository:
                         "company": job.company or item_in.company,
                         "url": job.url or url,
                         "description_raw": job.description_raw or "",
+                        "document_snapshot": doc_snapshot,
                         "captured_at": utc_now().isoformat(),
                     },
                 )
@@ -437,9 +479,11 @@ class TrackerRepository:
         by_status: Dict[str, int] = {}
         by_portal: Dict[str, Dict[str, int]] = {}
         by_role: Dict[str, Dict[str, int]] = {}
+        by_cv_version: Dict[str, Dict[str, int]] = {}
 
         submitted_statuses = {
             "Applied",
+            "Assessment",
             "HR Screening",
             "Technical Interview",
             "Final Interview",
@@ -447,6 +491,7 @@ class TrackerRepository:
             "Rejected",
         }
         interview_statuses = {
+            "Assessment",
             "HR Screening",
             "Technical Interview",
             "Final Interview",
@@ -459,6 +504,8 @@ class TrackerRepository:
         offers = 0
         rejections = 0
         withdrawn = 0
+        follow_ups_due = 0
+        today_iso = utc_now().strftime("%Y-%m-%d")
 
         for it in items:
             st = it.status or "Discovered"
@@ -471,30 +518,47 @@ class TrackerRepository:
             r_bucket = by_role.setdefault(rl, {"total": 0, "applied": 0, "interviews": 0, "offers": 0})
             r_bucket["total"] += 1
 
+            doc_snap = (it.jd_snapshot or {}).get("document_snapshot") if isinstance(it.jd_snapshot, dict) else None
+            cv_label = (
+                str(doc_snap.get("title"))
+                if isinstance(doc_snap, dict) and doc_snap.get("title")
+                else (f"CV #{it.cv_version_id}" if it.cv_version_id else "Unlinked")
+            )
+            cv_bucket = by_cv_version.setdefault(cv_label, {"total": 0, "applied": 0, "interviews": 0, "offers": 0})
+            cv_bucket["total"] += 1
+
+            if it.follow_up_date and st not in ("Rejected", "Withdrawn", "Offer"):
+                if str(it.follow_up_date)[:10] <= today_iso:
+                    follow_ups_due += 1
+
             if st in submitted_statuses:
                 submitted += 1
                 p_bucket["applied"] += 1
                 r_bucket["applied"] += 1
+                cv_bucket["applied"] += 1
             if st == "Applied":
                 awaiting += 1
             if st in interview_statuses:
                 interviews += 1
                 p_bucket["interviews"] += 1
                 r_bucket["interviews"] += 1
+                cv_bucket["interviews"] += 1
             if st == "Offer":
                 offers += 1
                 p_bucket["offers"] += 1
                 r_bucket["offers"] += 1
+                cv_bucket["offers"] += 1
             if st == "Rejected":
                 rejections += 1
             if st == "Withdrawn":
                 withdrawn += 1
 
-        denom = max(submitted, total, 1)
+        # Compute conversion rates strictly over submitted applications (never inflate denominator with unsent drafts)
+        denom = submitted if submitted > 0 else 0
         responded = interviews + rejections
-        response_rate = round((responded / denom) * 100.0, 1) if total > 0 else 0.0
-        interview_rate = round((interviews / denom) * 100.0, 1) if total > 0 else 0.0
-        offer_rate = round((offers / denom) * 100.0, 1) if total > 0 else 0.0
+        response_rate = round((responded / denom) * 100.0, 1) if denom > 0 else 0.0
+        interview_rate = round((interviews / denom) * 100.0, 1) if denom > 0 else 0.0
+        offer_rate = round((offers / denom) * 100.0, 1) if denom > 0 else 0.0
 
         return TrackerAnalyticsResponse(
             total_tracked=total,
@@ -504,12 +568,14 @@ class TrackerRepository:
             offers_received=offers,
             rejections=rejections,
             withdrawn=withdrawn,
+            follow_ups_due=follow_ups_due,
             response_rate_pct=response_rate,
             interview_conversion_rate_pct=interview_rate,
             offer_rate_pct=offer_rate,
             by_status=by_status,
             by_portal=by_portal,
             by_role=by_role,
+            by_cv_version=by_cv_version,
         )
 
     def export_applications(

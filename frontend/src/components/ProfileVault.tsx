@@ -14,8 +14,15 @@ import {
   GraduationCap,
   RefreshCw,
 } from 'lucide-react';
-import { fetchGroundTruth, saveGroundTruth, uploadSkillsMdFile, fetchCandidateAnalytics } from '../services/api';
-import { GroundTruth } from '../types';
+import {
+  fetchGroundTruth,
+  saveGroundTruth,
+  fetchCandidateAnalytics,
+  fetchProfileIntelligence,
+  previewProfileImport,
+  applyProfileImport,
+} from '../services/api';
+import { GroundTruth, ProfileImportPreviewResponse, ProfileIntelligenceResponse } from '../types';
 
 const DEFAULT_GROUND_TRUTH: GroundTruth = {
   candidate: {
@@ -77,8 +84,18 @@ export const ProfileVault: React.FC = () => {
   const [newEduGpa, setNewEduGpa] = useState('');
   const [newEduModules, setNewEduModules] = useState('');
   const [newCert, setNewCert] = useState('');
+  const [newLangName, setNewLangName] = useState('');
+  const [newLangProf, setNewLangProf] = useState('Fluent (C1)');
+  const [newProjTitle, setNewProjTitle] = useState('');
+  const [newProjOrg, setNewProjOrg] = useState('');
+  const [newProjDates, setNewProjDates] = useState('');
+  const [newProjBullets, setNewProjBullets] = useState('');
   const [isDragging, setIsDragging] = useState(false);
   const [isUploadingSkills, setIsUploadingSkills] = useState(false);
+  const [importPreview, setImportPreview] = useState<ProfileImportPreviewResponse | null>(null);
+  const [importModes, setImportModes] = useState<Record<string, 'merge' | 'replace' | 'skip'>>({});
+  const [isApplyingImport, setIsApplyingImport] = useState(false);
+  const [intelligence, setIntelligence] = useState<ProfileIntelligenceResponse | null>(null);
   const [completeness, setCompleteness] = useState<{ score: number; missing: string[] } | null>(null);
   const dropInputRef = React.useRef<HTMLInputElement | null>(null);
 
@@ -87,15 +104,50 @@ export const ProfileVault: React.FC = () => {
     setIsUploadingSkills(true);
     setErrorMsg(null);
     try {
-      const res = await uploadSkillsMdFile(file);
-      await loadData();
-      window.dispatchEvent(new CustomEvent('talentflow:profile-updated'));
-      setSuccessMsg(`Successfully parsed ${file.name} into CandidateProfile (${res.extracted_skills.length} skills) & synced saved CVs!`);
-      setTimeout(() => setSuccessMsg(null), 4000);
+      const preview = await previewProfileImport(file);
+      setImportPreview(preview);
+      setImportModes(preview.recommended_modes || {
+        candidate: 'merge',
+        skills: 'merge',
+        work_history: 'merge',
+        education: 'merge',
+        projects: 'merge',
+        certifications: 'merge',
+        languages: 'merge',
+      });
     } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to upload and parse CV / skills file');
+      setErrorMsg(err.message || 'Failed to parse uploaded CV / skills file');
     } finally {
       setIsUploadingSkills(false);
+    }
+  };
+
+  const handleConfirmImportMerge = async () => {
+    if (!importPreview) return;
+    setIsApplyingImport(true);
+    setErrorMsg(null);
+    try {
+      const res = await applyProfileImport({
+        filename: importPreview.filename,
+        extracted: importPreview.extracted,
+        section_modes: importModes,
+      });
+      setData({ ...DEFAULT_GROUND_TRUTH, ...res.data });
+      if (res.intelligence) {
+        setIntelligence(res.intelligence);
+        setCompleteness({
+          score: res.intelligence.completeness_score,
+          missing: res.intelligence.missing_fields || [],
+        });
+      }
+      setImportPreview(null);
+      window.dispatchEvent(new CustomEvent('talentflow:profile-updated'));
+      setSuccessMsg(`Imported "${importPreview.filename}" with your chosen merge rules and synced saved CVs!`);
+      setTimeout(() => setSuccessMsg(null), 4500);
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Failed to apply reviewed import');
+    } finally {
+      setIsApplyingImport(false);
     }
   };
 
@@ -107,14 +159,21 @@ export const ProfileVault: React.FC = () => {
     setIsLoading(true);
     setErrorMsg(null);
     try {
-      const [gt, analytics] = await Promise.all([
+      const [gt, analytics, intel] = await Promise.all([
         fetchGroundTruth(),
         fetchCandidateAnalytics().catch(() => null),
+        fetchProfileIntelligence().catch(() => null),
       ]);
       if (gt && typeof gt === 'object') {
         setData({ ...DEFAULT_GROUND_TRUTH, ...gt });
       }
-      if (analytics) {
+      if (intel) {
+        setIntelligence(intel);
+        setCompleteness({
+          score: intel.completeness_score,
+          missing: intel.missing_fields || [],
+        });
+      } else if (analytics) {
         setCompleteness({
           score: analytics.completeness_score,
           missing: analytics.missing_fields || [],
@@ -302,6 +361,63 @@ export const ProfileVault: React.FC = () => {
     });
   };
 
+  const addLanguageItem = () => {
+    if (!data || !newLangName.trim()) return;
+    const currentLangs = Array.isArray(data.candidate?.languages) ? data.candidate.languages : [];
+    setData({
+      ...data,
+      candidate: {
+        ...data.candidate,
+        languages: [...currentLangs, { language: newLangName.trim(), proficiency: newLangProf }],
+      },
+    });
+    setNewLangName('');
+  };
+
+  const removeLanguageItem = (idx: number) => {
+    if (!data) return;
+    const currentLangs = Array.isArray(data.candidate?.languages) ? data.candidate.languages : [];
+    setData({
+      ...data,
+      candidate: {
+        ...data.candidate,
+        languages: currentLangs.filter((_, i) => i !== idx),
+      },
+    });
+  };
+
+  const addProjectItem = () => {
+    if (!data || !newProjTitle.trim()) return;
+    const bullets = newProjBullets
+      .split('\n')
+      .map((b) => b.replace(/^[-•*]\s*/, '').trim())
+      .filter(Boolean);
+    setData({
+      ...data,
+      projects: [
+        {
+          title: newProjTitle.trim(),
+          organization: newProjOrg.trim() || undefined,
+          dates: newProjDates.trim() || undefined,
+          highlights: bullets,
+        },
+        ...(data.projects || []),
+      ],
+    });
+    setNewProjTitle('');
+    setNewProjOrg('');
+    setNewProjDates('');
+    setNewProjBullets('');
+  };
+
+  const removeProjectItem = (idx: number) => {
+    if (!data) return;
+    setData({
+      ...data,
+      projects: (data.projects || []).filter((_, i) => i !== idx),
+    });
+  };
+
   const candidate = data.candidate || ({} as GroundTruth['candidate']);
   const links = candidate.links || { linkedin: '', github: '', portfolio: '' };
   const workAuth = candidate.work_authorization || {
@@ -409,31 +525,128 @@ export const ProfileVault: React.FC = () => {
       )}
 
       {completeness && (
-        <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2 text-xs font-bold text-white">
-              <span>Vault Completeness: {completeness.score}%</span>
-              {completeness.missing.length === 0 && (
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800">
-                  Ready
-                </span>
+        <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-4 space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="space-y-1">
+              <div className="flex flex-wrap items-center gap-2 text-xs font-bold text-white">
+                <span>Vault Completeness: {completeness.score}%</span>
+                <select
+                  aria-label="Profile review status"
+                  value={data.profile_status || intelligence?.profile_status || 'draft'}
+                  onChange={(e) => setData({ ...data, profile_status: e.target.value })}
+                  className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full bg-slate-950 text-emerald-300 border border-emerald-800/70 focus:outline-none"
+                >
+                  <option value="draft">Draft</option>
+                  <option value="reviewed">Reviewed</option>
+                  <option value="ready">Ready</option>
+                </select>
+                {intelligence?.provenance?.source_filename && (
+                  <span className="text-[10px] font-normal px-2 py-0.5 rounded-full bg-slate-950 text-slate-300 border border-slate-700">
+                    Imported: {intelligence.provenance.source_filename}
+                  </span>
+                )}
+              </div>
+              {completeness.missing.length > 0 ? (
+                <p className="text-[11px] text-amber-300">
+                  Missing fields (never guessed or fabricated): {completeness.missing.join(', ')}
+                </p>
+              ) : (
+                <p className="text-[11px] text-slate-400">
+                  All core identity, skills, history, and education fields are verified in your vault.
+                </p>
               )}
             </div>
-            {completeness.missing.length > 0 ? (
-              <p className="text-[11px] text-amber-300">
-                Missing fields (never guessed or fabricated): {completeness.missing.join(', ')}
-              </p>
-            ) : (
-              <p className="text-[11px] text-slate-400">
-                All core identity, skills, history, and education fields are verified in your vault.
-              </p>
-            )}
+            <div className="w-full sm:w-44 h-2 bg-slate-800 rounded-full overflow-hidden">
+              <div
+                className={`h-full ${completeness.score >= 80 ? 'bg-emerald-500' : 'bg-amber-500'}`}
+                style={{ width: `${Math.min(100, Math.max(5, completeness.score))}%` }}
+              />
+            </div>
           </div>
-          <div className="w-full sm:w-44 h-2 bg-slate-800 rounded-full overflow-hidden">
-            <div
-              className={`h-full ${completeness.score >= 80 ? 'bg-emerald-500' : 'bg-amber-500'}`}
-              style={{ width: `${Math.min(100, Math.max(5, completeness.score))}%` }}
-            />
+
+          {intelligence && (intelligence.duplicate_skills.length > 0 || intelligence.timeline_warnings.length > 0) && (
+            <div className="pt-2 border-t border-slate-800/80 space-y-1.5 text-[11px]">
+              {intelligence.duplicate_skills.map((dup, i) => (
+                <div key={`dup-${i}`} className="text-amber-300">
+                  Duplicate skill group detected ({dup.canonical}): {dup.variants.join(' / ')}
+                </div>
+              ))}
+              {intelligence.timeline_warnings.map((w, i) => (
+                <div key={`tw-${i}`} className={w.severity === 'warning' ? 'text-rose-300' : 'text-slate-300'}>
+                  Timeline check: {w.message}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Safe Import Preview & Selective Merge Modal */}
+      {importPreview && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Review Imported Profile"
+          className="bg-slate-900 border-2 border-emerald-500/60 rounded-2xl p-5 space-y-4 shadow-2xl"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-bold text-white">Review Extracted Profile: {importPreview.filename}</h3>
+              <p className="text-xs text-slate-400">
+                Choose how each section should be applied. Existing confirmed data is never silently overwritten when Merge or Skip is selected.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setImportPreview(null)}
+              className="text-xs text-slate-400 hover:text-white px-2.5 py-1 rounded-lg border border-slate-700"
+            >
+              Cancel
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {([
+              { key: 'candidate', label: 'Identity & Summary', count: importPreview.extracted?.candidate?.full_name || 'Header fields' },
+              { key: 'skills', label: 'Core Skills', count: `${importPreview.diff_summary?.extracted_skills_count ?? 0} extracted (${importPreview.diff_summary?.new_skills_count ?? 0} new)` },
+              { key: 'work_history', label: 'Work History', count: `${importPreview.diff_summary?.extracted_work_count ?? 0} roles extracted` },
+              { key: 'education', label: 'Education', count: `${importPreview.diff_summary?.extracted_education_count ?? 0} degrees extracted` },
+              { key: 'projects', label: 'Projects', count: `${importPreview.diff_summary?.extracted_projects_count ?? 0} projects extracted` },
+              { key: 'certifications', label: 'Certifications', count: `${importPreview.diff_summary?.extracted_certifications_count ?? 0} certs extracted` },
+            ]).map((sec) => (
+              <div key={sec.key} className="bg-slate-950 border border-slate-800 rounded-xl p-3 space-y-1.5">
+                <div className="text-xs font-semibold text-white">{sec.label}</div>
+                <div className="text-[11px] text-slate-400">{sec.count}</div>
+                <select
+                  aria-label={`Import mode for ${sec.label}`}
+                  value={importModes[sec.key] || 'merge'}
+                  onChange={(e) => setImportModes({ ...importModes, [sec.key]: e.target.value as 'merge' | 'replace' | 'skip' })}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-emerald-300"
+                >
+                  <option value="merge">Merge (keep existing + add new)</option>
+                  <option value="replace">Replace with extracted</option>
+                  <option value="skip">Skip (do not modify)</option>
+                </select>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setImportPreview(null)}
+              className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-300 bg-slate-800 hover:bg-slate-700"
+            >
+              Discard
+            </button>
+            <button
+              type="button"
+              disabled={isApplyingImport}
+              onClick={handleConfirmImportMerge}
+              className="px-5 py-2 rounded-xl text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50"
+            >
+              {isApplyingImport ? 'Applying Merge...' : 'Apply Reviewed Import'}
+            </button>
           </div>
         </div>
       )}
@@ -500,7 +713,7 @@ export const ProfileVault: React.FC = () => {
             </div>
           </div>
 
-          <h3 className="text-base font-semibold text-white pt-4 border-t border-slate-800">URLs & Social Profiles</h3>
+          <h3 className="text-base font-semibold text-white pt-4 border-t border-slate-800">URLs &amp; Social Profiles</h3>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {([
               ['linkedin', 'LinkedIn'],
@@ -517,6 +730,61 @@ export const ProfileVault: React.FC = () => {
                 />
               </div>
             ))}
+          </div>
+
+          <div className="pt-4 border-t border-slate-800 space-y-3">
+            <h3 className="text-base font-semibold text-white">Languages &amp; Proficiency</h3>
+            <div className="flex flex-wrap gap-2">
+              <input
+                type="text"
+                placeholder="Language (e.g. Georgian, English, German)"
+                value={newLangName}
+                onChange={(e) => setNewLangName(e.target.value)}
+                className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+              />
+              <select
+                value={newLangProf}
+                onChange={(e) => setNewLangProf(e.target.value)}
+                className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+              >
+                <option value="Native">Native</option>
+                <option value="Fluent (C2)">Fluent (C2)</option>
+                <option value="Fluent (C1)">Fluent (C1)</option>
+                <option value="Upper-Intermediate (B2)">Upper-Intermediate (B2)</option>
+                <option value="Intermediate (B1)">Intermediate (B1)</option>
+                <option value="Elementary (A2)">Elementary (A2)</option>
+              </select>
+              <button
+                type="button"
+                onClick={addLanguageItem}
+                className="px-3.5 py-2 bg-emerald-700 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Language</span>
+              </button>
+            </div>
+            {(candidate.languages || []).length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {(candidate.languages || []).map((lang, lIdx) => (
+                  <span
+                    key={lIdx}
+                    className="inline-flex items-center gap-1.5 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-xl text-xs text-slate-200"
+                  >
+                    <span>
+                      <strong>{lang.language}</strong> ({lang.proficiency})
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removeLanguageItem(lIdx)}
+                      aria-label={`Remove ${lang.language}`}
+                      className="text-slate-400 hover:text-rose-400"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -829,6 +1097,86 @@ export const ProfileVault: React.FC = () => {
               ))}
             </div>
           )}
+
+          {/* Projects & Portfolios CRUD */}
+          <div className="pt-4 border-t border-slate-800 space-y-4">
+            <div>
+              <h4 className="text-sm font-semibold text-white">Projects &amp; Portfolios ({(data.projects || []).length})</h4>
+              <p className="text-xs text-slate-400">Add academic, freelance, or personal portfolio projects manually.</p>
+            </div>
+            <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <input
+                  type="text"
+                  placeholder="Project Title"
+                  value={newProjTitle}
+                  onChange={(e) => setNewProjTitle(e.target.value)}
+                  className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+                />
+                <input
+                  type="text"
+                  placeholder="Organization / Link (optional)"
+                  value={newProjOrg}
+                  onChange={(e) => setNewProjOrg(e.target.value)}
+                  className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+                />
+                <input
+                  type="text"
+                  placeholder="Dates (e.g. 2026)"
+                  value={newProjDates}
+                  onChange={(e) => setNewProjDates(e.target.value)}
+                  className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <textarea
+                  rows={2}
+                  placeholder="Project highlights / deliverables (one per line)..."
+                  value={newProjBullets}
+                  onChange={(e) => setNewProjBullets(e.target.value)}
+                  className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+                />
+                <button
+                  type="button"
+                  onClick={addProjectItem}
+                  className="min-h-[44px] px-4 py-2 bg-emerald-700 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1 self-end"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add Project</span>
+                </button>
+              </div>
+            </div>
+            {(data.projects || []).length > 0 && (
+              <div className="space-y-2.5">
+                {(data.projects || []).map((proj, pIdx) => (
+                  <div key={pIdx} className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <span className="text-xs font-semibold text-white">{proj.title}</span>
+                        {proj.organization && <span className="text-xs text-emerald-400"> • {proj.organization}</span>}
+                        {proj.dates && <span className="text-[11px] text-slate-400 ml-2 font-mono">{proj.dates}</span>}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeProjectItem(pIdx)}
+                        aria-label={`Remove project ${proj.title}`}
+                        className="text-slate-400 hover:text-rose-400"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                    {(proj.highlights || []).length > 0 && (
+                      <ul className="list-disc list-inside text-xs text-slate-400 space-y-0.5">
+                        {proj.highlights.map((h, hi) => (
+                          <li key={hi}>{h}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
