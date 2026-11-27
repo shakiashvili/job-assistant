@@ -4,7 +4,6 @@ import {
   JobAuditResponse,
   GenerateAnswersResponse,
   ScreeningQuestion,
-  StageApplicationResponse,
   ApplicationItem,
   PortalVacancyItem,
   SkillsPresetItem,
@@ -346,17 +345,6 @@ export async function fetchScrapedJobs(
 export const fetchScraperSourceHealth = (): Promise<{ sources: ScraperSourceHealthItem[]; default_portals: string[] }> =>
   apiJson('/jobs/sources/health', { errorMessage: 'Failed to fetch source health' });
 
-export const triggerMultiPortalScrape = (
-  allowNetwork = true
-): Promise<{
-  total_processed: number;
-  staged_ready_count: number;
-  filtered_out_count: number;
-  cache_hits?: number;
-  rejection_reasons?: Array<{ portal: string; title: string; company: string; reason: string }>;
-  jobs: DbJobPosting[];
-}> => apiJson('/jobs/scrape', { method: 'POST', body: { allow_network: allowNetwork }, errorMessage: 'Scraper run failed' });
-
 export const triggerAsyncScrape = (allowNetwork = true): Promise<{ task_id: string; status: string; deduplicated?: boolean }> =>
   apiJson('/jobs/scrape/async', { method: 'POST', body: { allow_network: allowNetwork }, errorMessage: 'Failed to start background scraper' });
 
@@ -468,21 +456,6 @@ export const generateAnswers = (params: {
   cv_language?: 'en' | 'ka';
 }): Promise<GenerateAnswersResponse> =>
   apiJson('/generate-answers', { method: 'POST', body: params, errorMessage: 'Failed to generate screening answers' });
-
-export const stageApplication = (params: {
-  job_url: string;
-  variant?: string;
-  custom_pdf_filename?: string;
-  custom_answers?: Record<string, string>;
-  applicant_summary?: string;
-  motivation_letter?: string;
-  expected_salary?: string;
-  start_date?: string;
-  bypass_company_gate?: boolean;
-  auto_submit?: boolean;
-  headless?: boolean;
-}): Promise<StageApplicationResponse> =>
-  apiJson('/stage-application', { method: 'POST', body: params, errorMessage: 'Staging failed' });
 
 export const fetchApplications = (): Promise<ApplicationItem[]> =>
   apiJson('/applications', { errorMessage: 'Failed to fetch applications' });

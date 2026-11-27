@@ -16,8 +16,6 @@ from ..schemas.api_schemas import (  # noqa: F401
     GenerateAnswersRequest,
     ScreeningAnswer,
     GenerateAnswersResponse,
-    StageApplicationRequest,
-    StageApplicationResponse,
     PortalVacancyItem,
     ApplicationItem,
     ApplicationCreate,

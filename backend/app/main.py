@@ -10,7 +10,7 @@ from sqlalchemy import text
 from .config import (
     AI_STARTUP_HEALTHCHECK,
     DATABASE_URL,
-    ENABLE_PLAYWRIGHT,
+    ENABLE_B2B_HUB,
     FRONTEND_URL,
     GEMINI_FAST_MODEL,
     GEMINI_MODEL,
@@ -22,7 +22,6 @@ from .services.scrape_worker import SCRAPE_WORKER_MODE, scrape_queue
 from .services.storage_service import storage_service
 from .routers.audit import router as audit_router
 from .routers.answers import router as answers_router
-from .routers.stage import router as stage_router
 from .routers.ground_truth import router as ground_truth_router
 from .routers.tracker import router as tracker_router
 from .routers.jobs import router as jobs_router
@@ -65,13 +64,6 @@ async def lifespan(app: FastAPI):
         await scrape_queue.stop_embedded_worker()
     except Exception as exc:
         logger.debug("Durable scrape worker shutdown note: %s", exc)
-    # Clean up lingering Playwright sessions and browser processes on shutdown
-    try:
-        from .services.playwright_service import playwright_service
-        await playwright_service.close_all_sessions()
-        logger.info("Playwright active browser sessions cleanly terminated.")
-    except Exception as e:
-        logger.debug(f"Playwright session shutdown cleanup: {e}")
 
 
 app = FastAPI(
@@ -173,11 +165,11 @@ app.include_router(plans_router)
 app.include_router(jobs_router)
 app.include_router(audit_router)
 app.include_router(answers_router)
-app.include_router(stage_router)
 app.include_router(ground_truth_router)
 app.include_router(tracker_router)
 app.include_router(extension_router)
-app.include_router(b2b_router)
+if ENABLE_B2B_HUB:
+    app.include_router(b2b_router)
 
 @app.get("/")
 def root():
@@ -217,7 +209,7 @@ def healthcheck():
                 "database_reachable": False,
                 "storage": storage_service.get_storage_status(),
                 "scrape_worker_mode": SCRAPE_WORKER_MODE,
-                "playwright_enabled": ENABLE_PLAYWRIGHT,
+                "b2b_hub_enabled": ENABLE_B2B_HUB,
             },
         )
 
@@ -228,7 +220,7 @@ def healthcheck():
         "database_reachable": True,
         "storage": storage_service.get_storage_status(),
         "scrape_worker_mode": SCRAPE_WORKER_MODE,
-        "playwright_enabled": ENABLE_PLAYWRIGHT,
+        "b2b_hub_enabled": ENABLE_B2B_HUB,
         "gemini": {
             "model": GEMINI_MODEL,
             "fast_model": GEMINI_FAST_MODEL,

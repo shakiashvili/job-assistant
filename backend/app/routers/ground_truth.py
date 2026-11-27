@@ -442,15 +442,6 @@ async def upload_skills_md_file(
         raise HTTPException(status_code=500, detail="Failed to process uploaded CV file.")
 
 
-@router.get("/cv-variants")
-def get_cv_variants(current_user: User = Depends(get_current_user)):
-    """Lists CV variants for the current user."""
-    return ground_truth_store.get_data(
-        owner_email=current_user.email,
-        user_id=current_user.id,
-    ).get("cv_variants", {})
-
-
 @router.get("/resumes/my-cvs")
 def list_my_uploaded_cvs(current_user: User = Depends(get_current_user)):
     """Lists user-uploaded personal CV files (.pdf, .docx, .md, .txt) strictly scoped to the current user."""

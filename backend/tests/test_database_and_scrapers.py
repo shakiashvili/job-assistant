@@ -191,9 +191,12 @@ def test_multi_portal_scrapers_and_suitability_promotion():
     assert dou_scraper._fallback_curated_listings() == []
     assert djinni_scraper._fallback_curated_listings() == []
 
-    res_offline = client.post("/api/jobs/scrape", json={"allow_network": False})
+    # Unified async job scrape API (duplicate sync /api/jobs/scrape retired in Phase 4)
+    assert client.post("/api/jobs/scrape", json={"allow_network": False}).status_code == 404
+    res_offline = client.post("/api/jobs/scrape/async", json={"allow_network": False})
     assert res_offline.status_code == 200
-    assert res_offline.json()["total_processed"] == 0
+    assert res_offline.json()["status"] == "COMPLETED"
+    assert res_offline.json()["task_id"]
 
     # 2. Verify dynamic role-based query mapping from QA skills.md
     search_cfg = profile_service.get_search_queries_for_profile({"target_industry": "qa_tech", "qa_automation": ["Playwright"]})

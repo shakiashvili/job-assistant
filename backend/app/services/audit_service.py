@@ -1,15 +1,13 @@
 import os
-import asyncio
 import ipaddress
 import logging
 import socket
 import urllib.parse
 import urllib.request
 import httpx
-from bs4 import BeautifulSoup
 from pathlib import Path
 from typing import List, Optional, Dict, Any
-from ..config import ENABLE_PLAYWRIGHT, TEST_FORMS_DIR
+from ..config import TEST_FORMS_DIR
 from ..db.document_repository import record_candidate_document, resolve_user_id_by_email
 from ..db.profile_repository import ground_truth_store
 from ..services.gemini_service import gemini_service
@@ -112,28 +110,12 @@ def validate_safe_external_url(
     return clean
 
 
-def _fetch_spa_html_with_playwright(url: str) -> str:
-    """Isolated headless Playwright fallback for client-side hydrated SPA job boards."""
-    validate_safe_external_url(url, require_dns=True)
-    from playwright.sync_api import sync_playwright
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        try:
-            page = browser.new_page()
-            page.goto(url, wait_until="domcontentloaded", timeout=12000)
-            page.wait_for_timeout(500)
-            return page.content()
-        finally:
-            browser.close()
-
-
 class AuditService:
     async def fetch_url_content(self, url: str) -> str:
         """
-        Hybrid fetching strategy for job pages with SSRF protection:
+        SSRF-hardened job page fetcher:
         1. Validates URL against SSRF blocklist (loopback, RFC1918 private IPs, cloud metadata, file://).
         2. Fast HTTP fetch via httpx with realistic browser headers and per-hop redirect SSRF validation.
-        3. Optional headless Playwright fallback if ENABLE_PLAYWRIGHT=true and body text < 150 chars.
         """
         validate_safe_external_url(url, require_dns=True)
         html_text = ""
@@ -164,22 +146,6 @@ class AuditService:
             raise
         except Exception as e:
             logger.debug(f"Fast httpx fetch note for {url}: {e}")
-
-        soup = BeautifulSoup(html_text or "", "html.parser")
-        body_text = (soup.body.get_text(" ", strip=True) if soup.body else soup.get_text(" ", strip=True)).strip()
-
-        if len(body_text) < 150 and url.startswith(("http://", "https://", "file://")):
-            if not ENABLE_PLAYWRIGHT:
-                logger.info(
-                    f"Body text length ({len(body_text)} < 150 chars) on {url}, "
-                    "but ENABLE_PLAYWRIGHT=false; skipping headless Chromium SPA hydration and using httpx HTML."
-                )
-            else:
-                logger.info(f"Body text length ({len(body_text)} < 150 chars) on {url}; falling back to headless Playwright SPA hydration.")
-                try:
-                    html_text = await asyncio.to_thread(_fetch_spa_html_with_playwright, url)
-                except Exception as pw_err:
-                    logger.warning(f"Headless Playwright SPA hydration fallback failed for {url}: {pw_err}")
 
         return html_text
 

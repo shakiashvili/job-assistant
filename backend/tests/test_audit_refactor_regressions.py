@@ -1,4 +1,3 @@
-import asyncio
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
@@ -17,7 +16,6 @@ from app.services.scrapers.base_scraper import (
     evaluate_remote_and_language_gate,
     is_georgia_country_location,
 )
-from app.services.scrapers.linkedin_scraper import LinkedInScraper
 from app.services.scrapers.scraper_orchestrator import (
     canonical_title_company,
     normalize_job_url,
@@ -161,24 +159,9 @@ def test_georgia_us_state_vs_country_and_linkedin_tos_safe_default(monkeypatch):
     )
     assert status_ge == "DISCOVERED"
 
-    # LinkedIn public scrape disabled by default
-    monkeypatch.setenv("ENABLE_LINKEDIN_PUBLIC_SCRAPE", "false")
-    li = LinkedInScraper()
-    assert asyncio.run(li.scrape(allow_network=True)) == []
-
-    # Account Manager is not rejected as a senior engineering title
-    sample_html = """
-    <div class="job-search-card">
-      <h3 class="base-search-card__title">Account Manager</h3>
-      <h4 class="base-search-card__subtitle">Global Corp</h4>
-      <span class="job-search-card__location">Tbilisi, Georgia</span>
-      <a class="base-card__full-link" href="https://www.linkedin.com/jobs/view/123456789?trk=abc">View</a>
-    </div>
-    """
-    cards = li.parse_html_listings(sample_html, max_allowed_years=2.0)
-    assert len(cards) == 1
-    assert cards[0]["status"] == "DISCOVERED"
-    assert cards[0]["market"] == "GE_DOMESTIC"
+    # LinkedIn server-side scraper is permanently retired (extension-only policy)
+    assert "linkedin.com" not in scraper_orchestrator.SCRAPER_MAP
+    assert "linkedin.com" not in scraper_orchestrator.DEFAULT_PORTALS
 
 
 def test_cross_source_deduplication_and_job_search_sorting_and_health():
@@ -494,7 +477,7 @@ def test_multi_industry_query_builder_covers_all_jobs_ge_categories_and_portals(
         cfg = build_search_queries({"target_industry": ind, "primary_role": role, "years_of_experience": 1.5}, headline=role)
         assert any(expected_cid in u for u in cfg["jobs_ge_urls"]), f"{ind} missing {expected_cid}"
         assert any("area=28" in u and "order_by=publication_time" in u for u in cfg["headhunter_urls"])
-        assert any("Tbilisi%2C+Georgia" in u for u in cfg["linkedin_urls"])
+        assert "linkedin_urls" not in cfg
         if expected_djinni:
             assert expected_djinni in (cfg["djinni_url"] or "")
 
@@ -893,9 +876,10 @@ def test_upload_first_gate_blocks_scraping_before_skills_upload_and_google_calen
     headers = _register_and_auth(client, email)
 
     # 1. User who has NOT uploaded CV/skills file must NOT auto-target QA or any jobs
-    r_scrape = client.post("/api/jobs/scrape", json={"allow_network": True}, headers=headers)
+    r_scrape = client.post("/api/jobs/scrape/async", json={"allow_network": True}, headers=headers)
     assert r_scrape.status_code == 400
     assert "upload" in r_scrape.json()["detail"].lower()
+    assert client.post("/api/jobs/scrape", json={"allow_network": True}, headers=headers).status_code == 404
 
     # 2. Integrations status reports DB integrity, Alembic head, profile=not uploaded, and Google Calendar ready
     r_int = client.get("/api/applications/integrations/status", headers=headers)

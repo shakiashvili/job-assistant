@@ -30,7 +30,6 @@ from .dou_scraper import dou_scraper
 from .djinni_scraper import djinni_scraper
 from .justjoin_scraper import justjoin_scraper
 from .headhunter_scraper import headhunter_scraper
-from .linkedin_scraper import linkedin_scraper
 from .ats_board_scraper import greenhouse_scraper, lever_scraper
 from .remote_b2b_scrapers import remotive_scraper, himalayas_scraper, remoteok_scraper
 
@@ -108,7 +107,6 @@ class ScraperOrchestrator:
         "dou.ua": dou_scraper,
         "djinni.co": djinni_scraper,
         "justjoin.it": justjoin_scraper,
-        "linkedin.com": linkedin_scraper,
         "greenhouse.io": greenhouse_scraper,
         "lever.co": lever_scraper,
     }
@@ -131,7 +129,6 @@ class ScraperOrchestrator:
         "justjoin.it",
         "greenhouse.io",
         "lever.co",
-        "linkedin.com",
     ]
 
     def __init__(self) -> None:
@@ -207,14 +204,6 @@ class ScraperOrchestrator:
         if canonical == "justjoin.it":
             url = search_cfg.get("justjoin_url")
             return (scraper.scrape(allow_network=True, search_url=url, candidate_languages=cand_langs) if url else None), canonical
-        if canonical == "linkedin.com":
-            return scraper.scrape(
-                allow_network=True,
-                search_urls=search_cfg.get("linkedin_urls") or [],
-                domain_keywords=combined_kw,
-                candidate_languages=cand_langs,
-                max_allowed_years=max_allowed_years,
-            ), canonical
         # Greenhouse, Lever, Remotive, Himalayas, RemoteOK share a unified signature
         return scraper.scrape(allow_network=True, domain_keywords=combined_kw, candidate_languages=cand_langs), canonical
 

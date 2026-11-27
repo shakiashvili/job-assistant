@@ -25,7 +25,6 @@ import {
   saveSkillsMdText,
   fetchScrapedJobs,
   fetchDbProfile,
-  triggerMultiPortalScrape,
   triggerAsyncScrape,
   fetchScrapeTaskStatus,
   prepareJobEmailPackage,
@@ -362,37 +361,35 @@ export const AuditPanel: React.FC = () => {
     }
   };
 
+  const runAsyncScrapeAndPoll = async (allowNetwork = true): Promise<{ filteredOutCount: number }> => {
+    const asyncStart = await triggerAsyncScrape(allowNetwork);
+    const taskId = asyncStart.task_id;
+    let filteredOutCount = 0;
+    for (let attempt = 0; attempt < 45; attempt++) {
+      await new Promise((r) => setTimeout(r, 1200));
+      const st = await fetchScrapeTaskStatus(taskId);
+      setScrapeTaskInfo({
+        status: st.status,
+        progressPct: st.progress_pct ?? (st.status === 'COMPLETED' ? 100 : 50),
+        errorMessage: st.error_message,
+      });
+      if (st.status === 'COMPLETED') {
+        filteredOutCount = st.filtered_out_count || 0;
+        break;
+      }
+      if (st.status === 'FAILED') {
+        throw new Error(st.error_message || 'Background scan failed');
+      }
+    }
+    return { filteredOutCount };
+  };
+
   const handleRunMultiPortalScrapers = async () => {
     setIsScraping(true);
     setError(null);
     setScrapeTaskInfo({ status: 'QUEUED', progressPct: 10 });
     try {
-      let filteredOutCount = 0;
-      try {
-        const asyncStart = await triggerAsyncScrape(true);
-        const taskId = asyncStart.task_id;
-        for (let attempt = 0; attempt < 45; attempt++) {
-          await new Promise((r) => setTimeout(r, 1200));
-          const st = await fetchScrapeTaskStatus(taskId);
-          setScrapeTaskInfo({
-            status: st.status,
-            progressPct: st.progress_pct ?? (st.status === 'COMPLETED' ? 100 : 50),
-            errorMessage: st.error_message,
-          });
-          if (st.status === 'COMPLETED') {
-            filteredOutCount = st.filtered_out_count || 0;
-            break;
-          }
-          if (st.status === 'FAILED') {
-            throw new Error(st.error_message || 'Background scan failed');
-          }
-        }
-      } catch (asyncErr: unknown) {
-        console.debug('Async scrape unavailable; falling back to direct multi-portal scan:', asyncErr);
-        const res = await triggerMultiPortalScrape(true);
-        filteredOutCount = res.filtered_out_count || 0;
-        setScrapeTaskInfo({ status: 'COMPLETED', progressPct: 100 });
-      }
+      const { filteredOutCount } = await runAsyncScrapeAndPoll(true);
       const paged = await loadPagedJobs({ page: 1 });
       const validJobs = paged.items || [];
       if (validJobs.length > 0 && !jobUrl) {
@@ -443,15 +440,15 @@ export const AuditPanel: React.FC = () => {
 
       // Trigger live portal refresh after profile & initial matches are already displayed
       try {
-        await triggerMultiPortalScrape(true);
+        await runAsyncScrapeAndPoll(true);
         const freshPaged = await loadPagedJobs({ page: 1 });
         setSkillsStatusMsg(`Profile indexed: ${res.message}. Found ${freshPaged.total || validJobs.length} live verified vacancies.`);
-      } catch (refreshErr: any) {
-        setSkillsStatusMsg(`Profile indexed (${res.message}). Live portal scan could not complete automatically: ${refreshErr?.message || 'try clicking Run Live Role Scrapers'}.`);
+      } catch (refreshErr: unknown) {
+        setSkillsStatusMsg(`Profile indexed (${res.message}). Live portal scan could not complete automatically: ${getErrorMessage(refreshErr, 'try clicking Run Live Role Scrapers')}.`);
       }
       setTimeout(() => setSkillsStatusMsg(null), 6000);
-    } catch (err: any) {
-      setError(err.message || 'Failed to upload .md file');
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to upload .md file'));
     } finally {
       setIsScraping(false);
     }
@@ -463,17 +460,14 @@ export const AuditPanel: React.FC = () => {
       const res = await saveSkillsMdText(skillsMdContent);
       setProfileUploaded(true);
       setExtractedSkillsCount(res.extracted_skills.length);
-      const scrapeRes = await triggerMultiPortalScrape(true);
-      if (scrapeRes.rejection_reasons?.length) {
-        console.debug('[TalentFlow Matcher Diagnostics] Rejected vacancies:', scrapeRes.rejection_reasons);
-      }
+      await runAsyncScrapeAndPoll(true);
       const paged = await loadPagedJobs({ page: 1 });
       await refreshProfileData();
       setSkillsStatusMsg(`✅ Synced CandidateProfile (${res.extracted_skills.length} skills) & scanned ${paged.total} live vacancies!`);
       setShowSkillsEditor(false);
       setTimeout(() => setSkillsStatusMsg(null), 5000);
-    } catch (err: any) {
-      setError(err.message || 'Failed to save skills.md');
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to save skills.md'));
     } finally {
       setIsScraping(false);
     }

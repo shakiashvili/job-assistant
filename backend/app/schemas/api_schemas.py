@@ -161,37 +161,6 @@ class GenerateAnswersResponse(BaseModel):
     default_start_date: str = ""
 
 
-# --- Stage Application Schemas ---
-
-class StageApplicationRequest(BaseModel):
-    job_url: str
-    variant: Optional[str] = None
-    cv_language: Optional[str] = "en"
-    custom_pdf_filename: Optional[str] = None
-    custom_answers: Optional[Dict[str, str]] = None
-    applicant_summary: Optional[str] = None
-    motivation_letter: Optional[str] = None
-    expected_salary: Optional[str] = None
-    start_date: Optional[str] = None
-    bypass_company_gate: Optional[bool] = False
-    auto_submit: Optional[bool] = False
-    headless: Optional[bool] = False
-    timeout_seconds: Optional[int] = 45
-
-
-class StageApplicationResponse(BaseModel):
-    status: str  # staged, submitted, blocked_by_reviews, error
-    portal_detected: str
-    fields_filled: List[str]
-    captcha_status: str = "none_detected"
-    file_uploaded: bool
-    resume_file_path: Optional[str] = None
-    company_validation: Optional[CompanyValidation] = None
-    message: str
-    manual_review_needed: bool = True
-    page_title: Optional[str] = None
-
-
 # --- Vacancy Feed Schema ---
 
 class PortalVacancyItem(BaseModel):

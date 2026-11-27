@@ -23,7 +23,6 @@ from app.services.crypto_service import blind_index, decrypt_str, encrypt_str, r
 from app.services.cv_generator_service import cv_generator_service, resolve_candidate_headline
 from app.services.gemini_service import gemini_service
 from app.services.gmail_service import gmail_service
-from app.services.playwright_service import playwright_service
 
 
 client = TestClient(app)
@@ -191,17 +190,7 @@ def test_crit_02_03_04_and_09_jwt_admin_attachment_and_crypto():
             os.environ["BLIND_INDEX_KEY"] = orig_bk
 
 
-def test_crit_06_and_07_zero_fabrication_cv_narratives_and_playwright(monkeypatch):
-    # CRIT-06: Path traversal in playwright_service.get_resume_path fails closed
-    outside = GENERATED_RESUMES_DIR.parent.parent / f"outside_{uuid.uuid4().hex[:6]}.pdf"
-    outside.write_bytes(b"%PDF-1.4\n")
-    try:
-        assert playwright_service.get_resume_path("", custom_pdf_filename=str(outside)) is None
-        assert playwright_service.get_resume_path("", custom_pdf_filename=f"../../{outside.name}") is None
-    finally:
-        if outside.exists():
-            outside.unlink()
-
+def test_crit_07_zero_fabrication_cv_narratives(monkeypatch):
     # CRIT-07: Non-QA profiles never receive hardcoded QA headline or synthetic QA/VIP bullets
     nurse_headline = resolve_candidate_headline(
         {"headline": "", "primary_role": "Registered ICU Nurse"},

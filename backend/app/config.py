@@ -87,8 +87,8 @@ OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemma-3-27b-it:free").s
 OPENROUTER_FAST_MODEL = os.getenv("OPENROUTER_FAST_MODEL", "meta-llama/llama-3.3-70b-instruct:free").strip()
 OPENROUTER_TIMEOUT_SECONDS = float(os.getenv("OPENROUTER_TIMEOUT_SECONDS", "25"))
 
-# LinkedIn public scraping is opt-in (disabled by default for ToS-safe operation)
-ENABLE_LINKEDIN_PUBLIC_SCRAPE = os.getenv("ENABLE_LINKEDIN_PUBLIC_SCRAPE", "false").strip().lower() in (
+# Georgia B2B Tax & Remote Hub feature flag (enabled by default; cited with Article 90 effective date)
+ENABLE_B2B_HUB = os.getenv("ENABLE_B2B_HUB", "true").strip().lower() in (
     "1", "true", "yes", "on"
 )
 
@@ -224,7 +224,6 @@ def resolve_gemini_model_pricing(
     return base
 PORT = int(os.getenv("PORT", "8000"))
 HOST = os.getenv("HOST", "0.0.0.0")
-ENABLE_PLAYWRIGHT = os.getenv("ENABLE_PLAYWRIGHT", "true").strip().lower() in ("1", "true", "yes", "on")
 
 # Security & JWT Auth
 _DEV_FALLBACK_SECRET = "talentflow-ai-ultra-secure-jwt-secret-key-production-hardening-64chars-min-entropy"

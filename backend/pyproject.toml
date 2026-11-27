@@ -40,7 +40,6 @@ max-statements = 60
 "app/services/cv_generator_service.py" = ["C901", "PLR0912", "PLR0915", "SIM"]
 "app/services/gemini_service.py" = ["C901", "PLR0912", "PLR0915", "SIM"]
 "app/services/matcher_service.py" = ["C901", "PLR0912", "PLR0915", "SIM"]
-"app/services/playwright_service.py" = ["C901", "PLR0912", "PLR0915", "SIM", "S"]
 "app/services/profile_service.py" = ["C901", "PLR0912", "PLR0915", "SIM"]
 "app/services/profile_intelligence_service.py" = ["C901", "PLR0912", "PLR0915", "SIM"]
 "app/services/audit_service.py" = ["C901", "PLR0912", "PLR0915", "SIM"]

@@ -435,19 +435,6 @@ export interface GenerateAnswersResponse {
   default_start_date?: string;
 }
 
-export interface StageApplicationResponse {
-  status: string;
-  portal_detected: string;
-  fields_filled: string[];
-  captcha_status?: string;
-  file_uploaded: boolean;
-  resume_file_path?: string;
-  company_validation?: CompanyValidation;
-  message: string;
-  manual_review_needed: boolean;
-  page_title?: string;
-}
-
 export interface ApplicationItem {
   id: string;
   company: string;
