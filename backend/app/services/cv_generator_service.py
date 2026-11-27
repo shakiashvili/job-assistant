@@ -453,7 +453,7 @@ def _format_education_row(edu: Dict[str, Any], is_ka: bool) -> Dict[str, Any]:
         focus = f"{lbl}{', '.join(mods)}"
     elif edu.get("field_of_study") and str(edu["field_of_study"]).strip().lower() not in (deg.lower(), inst.lower()):
         focus = _clean_foreign_script_text(edu["field_of_study"], "ka" if is_ka else "en")
-    if gpa and f"gpa" not in focus.lower():
+    if gpa and "gpa" not in focus.lower():
         gpa_str = f"GPA: {gpa}"
         focus = f"{gpa_str}  •  {focus}" if focus else gpa_str
 
@@ -1011,8 +1011,8 @@ class CVGeneratorService:
             try:
                 st = doc.styles[style_name]
                 st.font.name = font_family
-            except Exception:
-                pass
+            except KeyError:
+                logger.debug("DOCX style '%s' absent in template; skipping font override", style_name)
         for sec in doc.sections:
             sec.top_margin = Inches(0.50)
             sec.bottom_margin = Inches(0.50)
@@ -1400,7 +1400,10 @@ class CVGeneratorService:
         languages_line: Optional[str] = None,
     ) -> str:
         is_ka = cv_language == "ka"
-        esc = lambda v: html_lib.escape(str(v or ""), quote=True)
+
+        def esc(v: Any) -> str:
+            return html_lib.escape(str(v or ""), quote=True)
+
         ctx = _prepare_cv_render_context(candidate, candidate_headline, display_skills, cv_language, cv_style)
         full_name = ctx["full_name"]
         html_contact_parts = []

@@ -375,9 +375,9 @@ def test_shared_persistent_rate_limiting_and_ip_buckets():
         assert ip_exc.value.status_code == 429
 
         # Expired SQL rows from one-off probes are cleaned up while active buckets are preserved
-        stale_key_1 = hashlib.sha256(f"probe_{uuid.uuid4().hex}@example.com".encode("utf-8")).hexdigest()
-        stale_key_2 = hashlib.sha256(f"probe_{uuid.uuid4().hex}@example.com".encode("utf-8")).hexdigest()
-        active_key = hashlib.sha256(f"active_{uuid.uuid4().hex}@example.com".encode("utf-8")).hexdigest()
+        stale_key_1 = hashlib.sha256(f"probe_{uuid.uuid4().hex}@example.com".encode()).hexdigest()
+        stale_key_2 = hashlib.sha256(f"probe_{uuid.uuid4().hex}@example.com".encode()).hexdigest()
+        active_key = hashlib.sha256(f"active_{uuid.uuid4().hex}@example.com".encode()).hexdigest()
         now_val = time.time()
         with Session(engine) as sess:
             sess.add(AuthRateLimit(bucket_key=stale_key_1, attempts=1, window_started_at=now_val - 900, expires_at=now_val - 300))
@@ -393,7 +393,7 @@ def test_shared_persistent_rate_limiting_and_ip_buckets():
             assert sess.get(AuthRateLimit, active_key) is not None
 
         # Throttled periodic sweep during live consume_rate_limit also prunes expired buckets
-        stale_key_3 = hashlib.sha256(f"probe_{uuid.uuid4().hex}@example.com".encode("utf-8")).hexdigest()
+        stale_key_3 = hashlib.sha256(f"probe_{uuid.uuid4().hex}@example.com".encode()).hexdigest()
         with Session(engine) as sess:
             sess.add(AuthRateLimit(bucket_key=stale_key_3, attempts=1, window_started_at=now_val - 900, expires_at=now_val - 60))
             sess.commit()

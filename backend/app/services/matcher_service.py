@@ -531,7 +531,7 @@ Markdown:
         combined = f"{title}\n{cleaned_desc}".lower()
         required: List[str] = []
 
-        for category, items in QA_TAXONOMY_CATALOG.items():
+        for _category, items in QA_TAXONOMY_CATALOG.items():
             for skill in items:
                 pattern = r"(?<![A-Za-z0-9_])" + re.escape(skill.lower()) + r"(?![A-Za-z0-9_])"
                 if re.search(pattern, combined) and skill not in required:
@@ -605,15 +605,15 @@ Markdown:
             try:
                 low_v, high_v = float(rm.group(1)), float(rm.group(2))
                 found_years.append(high_v if low_v >= 2.0 else low_v)
-            except Exception:
-                pass
+            except ValueError as err:
+                logger.debug("Skipping malformed experience range '%s': %s", rm.group(0), err)
 
         # 2. Minimum / at least format (e.g. "მინიმუმ 3 წელი", "at least 3 years", "სულ მცირე 3 წელი", "досвід від 3 років")
         for mm in re.finditer(r"(?:მინიმუმ|სულ\s+მცირე|არანაკლებ|at least|minimum of|minimum|min\.?|від|от)\s*[:\-–]?\s*(\d+(?:\.\d+)?)\s*\+?\s*(?:years?|yrs?|წ(?:ელი|ლიანი)?|рок(?:ів)?|лет|года)?", combined):
             try:
                 found_years.append(float(mm.group(1)))
-            except Exception:
-                pass
+            except ValueError as err:
+                logger.debug("Skipping malformed minimum experience '%s': %s", mm.group(0), err)
 
         # 3. Direct years of experience (e.g. "3+ years of experience", "2+ years", "3 წლიანი გამოცდილება")
         for ym in re.finditer(r"(\d+(?:\.\d+)?)\s*(\+)?\s*(?:years?|yrs?|წ(?:ელი|ლიანი)?|рок(?:ів)?|лет|года)(?:\s+of)?\s*(?:experience|გამოცდილება|досвід|опыт)?", combined):
@@ -623,15 +623,15 @@ Markdown:
                 if ym.group(2) == "+" and val >= 2.0:
                     val = round(val + 0.1, 1)
                 found_years.append(val)
-            except Exception:
-                pass
+            except ValueError as err:
+                logger.debug("Skipping malformed direct experience '%s': %s", ym.group(0), err)
 
         # 4. Keyed requirements (e.g. "Experience: 3 years", "გამოცდილება: 3 წელი")
         for em in re.finditer(r"(?:experience|გამოცდილება|досвід|опыт)\s*[:\-–]\s*(\d+(?:\.\d+)?)", combined):
             try:
                 found_years.append(float(em.group(1)))
-            except Exception:
-                pass
+            except ValueError as err:
+                logger.debug("Skipping malformed keyed experience '%s': %s", em.group(0), err)
 
         # Filter out calendar years (2020+) and extreme values, keeping legitimate professional experience requirements
         valid_exp = [y for y in found_years if 0.5 <= y <= 15.0]
@@ -1090,7 +1090,6 @@ Markdown:
                 "skill_overlap_pct": None,
             }
 
-        cand_lower = {s.lower() for s in candidate_skills}
         cand_blob = " ".join(candidate_skills).lower()
         has_automation_stack = bool(parsed_skills.get("qa_automation")) or any(
             w in cand_blob for w in ["playwright", "selenium", "cypress", "pytest", "automation"]

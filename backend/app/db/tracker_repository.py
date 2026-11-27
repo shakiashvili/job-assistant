@@ -4,7 +4,7 @@ import json
 import logging
 import uuid
 from typing import List, Optional, Dict
-from sqlmodel import Session, select, or_, delete
+from sqlmodel import Session, select, delete
 
 from .database import engine, init_db
 from .models import (
@@ -18,6 +18,7 @@ from .models import (
     ApplicationUpdate,
     TrackerAnalyticsResponse,
 )
+from datetime import UTC
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +154,10 @@ class TrackerRepository:
                     ApplicationTracker,
                     (ApplicationRecord.id == ApplicationTracker.id) & (ApplicationTracker.user_id == ApplicationRecord.user_id),
                 )
-                .where(ApplicationRecord.user_id == user_id)
+                .where(
+                    ApplicationRecord.user_id == user_id,
+                    ApplicationRecord.submission_status != "DELETED",
+                )
                 .order_by(ApplicationRecord.applied_at.desc(), ApplicationRecord.updated_at.desc())
             )
             triples = session.exec(stmt).all()
@@ -182,6 +186,8 @@ class TrackerRepository:
             if not triple:
                 return None
             rec, job, app_t = triple
+            if rec.submission_status == "DELETED":
+                return None
             if not self._ownership_matches(rec.user_id, user_id, is_guest=is_guest):
                 raise PermissionError("Forbidden: application belongs to another user")
             return self._record_to_item(rec, job, app_t)
@@ -396,7 +402,7 @@ class TrackerRepository:
             if item_update.interview_date is not None:
                 raw_idt = str(item_update.interview_date).strip()
                 if raw_idt:
-                    from datetime import datetime, timezone
+                    from datetime import datetime
                     parsed_idt = None
                     try:
                         parsed_idt = datetime.fromisoformat(raw_idt.replace("Z", "+00:00"))
@@ -409,7 +415,7 @@ class TrackerRepository:
                                 continue
                     if parsed_idt is not None:
                         if parsed_idt.tzinfo is None:
-                            parsed_idt = parsed_idt.replace(tzinfo=timezone.utc)
+                            parsed_idt = parsed_idt.replace(tzinfo=UTC)
                         rec.interview_date = parsed_idt
                 else:
                     rec.interview_date = None
@@ -449,23 +455,45 @@ class TrackerRepository:
         item_id: str,
         user_id: Optional[int] = None,
         is_guest: bool = False,
+        hard: bool = False,
     ) -> bool:
         rec_id_str = str(item_id).replace("app-", "")
         if not rec_id_str.isdigit():
             return False
         with Session(engine) as session:
             rec = session.get(ApplicationRecord, int(rec_id_str))
-            if not rec:
+            if not rec or (not hard and rec.submission_status == "DELETED"):
                 return False
             if not self._ownership_matches(rec.user_id, user_id, is_guest=is_guest):
                 raise PermissionError("Forbidden: application belongs to another user")
-            session.exec(
-                delete(ApplicationEvent).where(ApplicationEvent.application_id == rec.id)
-            )
             tracker_row = session.get(ApplicationTracker, rec.id)
-            if tracker_row and tracker_row.user_id == rec.user_id:
-                session.delete(tracker_row)
-            session.delete(rec)
+            if hard:
+                session.exec(
+                    delete(ApplicationEvent).where(ApplicationEvent.application_id == rec.id)
+                )
+                if tracker_row and tracker_row.user_id == rec.user_id:
+                    session.delete(tracker_row)
+                session.delete(rec)
+            else:
+                old_status = rec.submission_status
+                rec.submission_status = "DELETED"
+                rec.updated_at = utc_now()
+                session.add(rec)
+                if tracker_row and tracker_row.user_id == rec.user_id:
+                    tracker_row.is_deleted = True
+                    tracker_row.updated_at = utc_now()
+                    session.add(tracker_row)
+                if rec.id is not None:
+                    session.add(
+                        ApplicationEvent(
+                            application_id=rec.id,
+                            user_id=rec.user_id,
+                            from_status=old_status,
+                            to_status="DELETED",
+                            event_type="soft_deleted",
+                            note="Application archived/soft-deleted by candidate",
+                        )
+                    )
             session.commit()
             return True
 

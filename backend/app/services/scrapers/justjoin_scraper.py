@@ -44,11 +44,11 @@ class JustJoinScraper(BasePortalScraper):
                     "workplace": (wp_m.group(1) or "").lower() if wp_m else "",
                     "skills": req_skills[:10],
                 }
-        except Exception:
-            pass
+        except Exception as meta_err:
+            logger.debug("[justjoin.it] Could not parse embedded slug metadata: %s", meta_err)
 
         offers = soup.select("a[href*='/job-offer/']")
-        for idx, a_tag in enumerate(offers):
+        for _idx, a_tag in enumerate(offers):
             href = str(a_tag.get("href") or "").strip()
             if not href:
                 continue
@@ -63,7 +63,7 @@ class JustJoinScraper(BasePortalScraper):
             seen_urls.add(full_url)
 
             slug = full_url.rstrip("/").split("/")[-1]
-            ext_id = f"justjoin-{hashlib.md5(slug.encode('utf-8')).hexdigest()[:12]}"
+            ext_id = f"justjoin-{hashlib.md5(slug.encode('utf-8'), usedforsecurity=False).hexdigest()[:12]}"
             meta = slug_meta.get(slug, {})
 
             company = meta.get("company", "")

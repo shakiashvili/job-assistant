@@ -23,6 +23,7 @@ import {
   duplicateCvVersion,
   patchCvVersion,
   deleteCvVersion,
+  downloadAuthorizedFile,
   BACKEND_ORIGIN,
 } from '../services/api';
 import { DbJobPosting, CVVersionItem, BulletDiffItem, ATSParseReport } from '../types';
@@ -153,22 +154,8 @@ export const CVVariantManager: React.FC = () => {
   }, [vacancySearch]);
 
   const triggerCrossOriginDownload = async (relativeOrFullUrl: string, filename: string): Promise<boolean> => {
-    const targetUrl = relativeOrFullUrl.startsWith('http') ? relativeOrFullUrl : `${BACKEND_ORIGIN}${relativeOrFullUrl}`;
     try {
-      const token = localStorage.getItem('talentflow_token');
-      const res = await fetch(targetUrl, {
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const blob = await res.blob();
-      const blobUrl = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = blobUrl;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+      await downloadAuthorizedFile(relativeOrFullUrl, filename);
       return true;
     } catch (err: any) {
       setStatusError(err?.message ? `Direct download blocked (${err.message}). Use the download buttons below.` : 'Direct download failed. Use the download buttons below.');

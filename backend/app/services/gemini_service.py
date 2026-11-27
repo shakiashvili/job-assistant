@@ -410,7 +410,7 @@ class GeminiService:
             )
 
         resp = _exec()
-        setattr(resp, "_tf_retry_count", max(0, attempts["count"] - 1))
+        resp._tf_retry_count = max(0, attempts["count"] - 1)
         return resp
 
     def _call_openrouter_with_retry(

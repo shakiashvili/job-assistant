@@ -1,10 +1,10 @@
 import pytest
 from fastapi.testclient import TestClient
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from app.main import app
 from app.db.database import engine, init_db
-from app.db.models import User, ApplicationTracker, SkillActionPlan, InterviewRound
+from app.db.models import User
 from app.services.auth_service import hash_password, create_access_token, get_user_by_email
 
 client = TestClient(app)

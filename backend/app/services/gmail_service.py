@@ -23,6 +23,7 @@ from ..config import (
 from ..db.document_repository import resolve_owned_generated_document, user_generated_resumes_dir
 from ..db.models import User
 from .crypto_service import mask_email
+from datetime import UTC
 
 logger = logging.getLogger(__name__)
 
@@ -649,9 +650,9 @@ class GmailService:
 
     @staticmethod
     def _parse_interview_window(start_iso: Optional[str], duration_minutes: int = 45):
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         start_dt = None
         if start_iso:
             raw = str(start_iso).strip()
@@ -706,7 +707,7 @@ class GmailService:
         uid_seed: str = "talentflow",
     ) -> str:
         """Generates a standards-compliant RFC 5545 .ics calendar invite with 60m and 15m reminders."""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         def _ics_escape(val: str) -> str:
             return (
@@ -719,7 +720,7 @@ class GmailService:
             )
 
         start_dt, end_dt = self._parse_interview_window(start_iso, duration_minutes)
-        dtstamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        dtstamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         dtstart = start_dt.strftime("%Y%m%dT%H%M%S")
         dtend = end_dt.strftime("%Y%m%dT%H%M%S")
         event_uid = f"{re.sub(r'[^A-Za-z0-9_-]+', '-', uid_seed)}-{dtstart}@talentflow.local"

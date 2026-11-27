@@ -1,6 +1,6 @@
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import Dict, Any, List, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import httpx
@@ -48,7 +48,7 @@ def _ingest_nbg_payload(payload: Any, now: float) -> Optional[Dict[str, Any]]:
         _FX_CACHE["rates"] = parsed
         _FX_CACHE["source"] = "nbg_live"
         _FX_CACHE["fetched_at"] = now
-        _FX_CACHE["as_of"] = str(block.get("date") or datetime.now(timezone.utc).date().isoformat())[:10]
+        _FX_CACHE["as_of"] = str(block.get("date") or datetime.now(UTC).date().isoformat())[:10]
         return dict(_FX_CACHE)
     return None
 
@@ -390,8 +390,8 @@ def generate_b2b_contractor_proposal(
                     "proposal_text": ai_txt.strip(),
                     "language": "en",
                 }
-        except Exception:
-            pass
+        except Exception as ai_err:
+            logger.warning("B2B proposal Gemini generation failed; using deterministic template: %s", ai_err)
 
     subject = f"Remote B2B Contractor — {req.target_role} | {full_name} (UTC+4)"
     rate_line = f"- Proposed Rate: {req.contract_rate}\n" if req.contract_rate else ""
@@ -425,7 +425,7 @@ async def generate_b2b_invoice_preview(
     cand_email = str(cand.get("email") or current_user.email or "").strip()
     location = str(cand.get("location") or "Tbilisi, Georgia").strip()
 
-    today_str = datetime.now(timezone.utc).date().isoformat()
+    today_str = datetime.now(UTC).date().isoformat()
     inv_no = (req.invoice_number or f"INV-{today_str.replace('-', '')}-01").strip()
     cur = req.currency.upper()
     nbg = await get_cached_nbg_rates_async(allow_network=(cur != "GEL"))

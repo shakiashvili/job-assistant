@@ -249,21 +249,22 @@ def update_application(
 @router.delete("/{app_id}")
 def delete_application(
     app_id: str,
-    hard: bool = Query(False, description="Permanent hard delete if true"),
+    hard: bool = Query(False, description="Permanent hard delete if true; soft-delete otherwise"),
     current_user: User = Depends(get_current_user),
 ):
-    """Removes an application from tracking after verifying ownership."""
+    """Soft-deletes (default) or permanently purges (hard=true) an application after verifying ownership."""
     try:
         deleted = tracker_store.delete(
             app_id,
             user_id=current_user.id,
-            is_guest=False,
+            hard=hard,
         )
     except PermissionError as exc:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Application {app_id} not found")
-    return {"status": "success", "message": f"Application {app_id} deleted"}
+    mode = "permanently deleted" if hard else "archived (soft-deleted)"
+    return {"status": "success", "hard": hard, "message": f"Application {app_id} {mode}"}
 
 
 @router.get("/{app_id}/events")
@@ -539,7 +540,6 @@ def get_integrations_status(current_user: User = Depends(get_current_user)):
     """Unified live status & test diagnostics for Profile, Google Calendar, Email, AI, and DB Migrations."""
     from sqlalchemy import text as sa_text
     from ..config import get_smtp_config
-    from ..db.database import engine
     from ..db.profile_repository import ground_truth_store
     from ..services.gemini_service import gemini_service
 

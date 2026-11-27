@@ -1,4 +1,3 @@
-import io
 import re
 import uuid
 import zipfile
@@ -22,8 +21,6 @@ from app.services.cv_parser_service import cv_parser_service
 from app.services.gemini_service import gemini_service, wrap_untrusted_input
 from app.services.portal_detector import detect_portal_from_html
 from app.services.scrapers.linkedin_scraper import LinkedInScraper
-from app.services.scrapers.remote_b2b_scrapers import HimalayasScraper
-from app.services.scrapers.scraper_orchestrator import scraper_orchestrator
 
 client = TestClient(app)
 

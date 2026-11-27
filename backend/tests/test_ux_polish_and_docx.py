@@ -78,7 +78,7 @@ def test_ground_truth_vault_never_returns_null_faq_or_compensation():
     assert isinstance(gt.get("faq_bank"), list)
     assert isinstance(gt.get("work_history"), list)
     assert isinstance(gt.get("skills", {}).get("core"), list)
-    assert isinstance(gt.get("candidate", {}).get("compensation", {}).get("expected_salary_eur"), (int, float))
+    assert isinstance(gt.get("candidate", {}).get("compensation", {}).get("expected_salary_eur"), int | float)
     assert isinstance(gt.get("candidate", {}).get("work_authorization", {}).get("us_work_authorization"), str)
 
 

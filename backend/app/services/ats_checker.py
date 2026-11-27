@@ -23,7 +23,14 @@ def _inspect_single_column_layout(reader: PdfReader) -> tuple[bool, bool]:
             page_width = 595.0
         rows: Dict[float, List[tuple[float, str]]] = {}
 
-        def _visitor(text: str, cm: Any, tm: Any, _font_dict: Any, _font_size: Any) -> None:
+        def _visitor(
+            text: str,
+            cm: Any,
+            tm: Any,
+            _font_dict: Any,
+            _font_size: Any,
+            _rows: Dict[float, List[Any]] = rows,
+        ) -> None:
             nonlocal total_fragments
             clean = (text or "").strip()
             if len(clean) < 2:
@@ -36,15 +43,16 @@ def _inspect_single_column_layout(reader: PdfReader) -> tuple[bool, bool]:
                     y = float(cm[1]) * tx + float(cm[3]) * ty + float(cm[5])
                 else:
                     x, y = tx, ty
-            except Exception:
+            except (TypeError, ValueError, IndexError):
                 return
             total_fragments += 1
             y_bin = round(y / 4.0) * 4.0
-            rows.setdefault(y_bin, []).append((x, clean))
+            _rows.setdefault(y_bin, []).append((x, clean))
 
         try:
             page.extract_text(visitor_text=_visitor)
-        except Exception:
+        except Exception as visit_err:
+            logger.debug("PDF layout visitor fallback on page: %s", visit_err)
             continue
 
         for spans in rows.values():

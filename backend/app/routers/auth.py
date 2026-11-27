@@ -1,7 +1,7 @@
 import logging
 import re
 import secrets
-from datetime import timedelta, timezone
+from datetime import timedelta, UTC
 from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, status
@@ -10,9 +10,9 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import update
 from sqlmodel import Session, select
 
-from ..config import BASE_DIR, reload_env_files, get_email_delivery_config, get_smtp_config, IS_PRODUCTION
-from ..db.database import get_session, delete_job_posting_cascade
-from ..db.models import User, UserOTP, CandidateProfile, JobPosting, utc_now
+from ..config import BASE_DIR, reload_env_files, get_email_delivery_config, IS_PRODUCTION
+from ..db.database import get_session
+from ..db.models import User, UserOTP, CandidateProfile, utc_now
 from ..services.crypto_service import blind_index, blind_index_candidates, mask_email
 from ..services.auth_service import (
     MAX_IP_AUTH_ATTEMPTS,
@@ -23,7 +23,6 @@ from ..services.auth_service import (
     verify_password,
     create_access_token,
     create_refresh_token,
-    decode_access_token,
     decode_refresh_token,
     create_oauth_state_token,
     decode_oauth_state_token,
@@ -509,7 +508,7 @@ def verify_otp_code(
     now_utc = utc_now()
     expires_at = otp_record.expires_at if otp_record else None
     if expires_at is not None and expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
+        expires_at = expires_at.replace(tzinfo=UTC)
 
     if not otp_record or not expires_at or expires_at < now_utc:
         record_login_failure(otp_key)

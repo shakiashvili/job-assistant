@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import os
 import re
@@ -23,7 +22,7 @@ except ImportError:  # pragma: no cover - slim cloud deploys with ENABLE_PLAYWRI
     BrowserContext = Any
     Page = Any
 
-from ..config import RESUMES_DIR, GENERATED_RESUMES_DIR, ENABLE_PLAYWRIGHT
+from ..config import ENABLE_PLAYWRIGHT
 from ..db.document_repository import (
     is_valid_safe_doc_name,
     record_candidate_document,

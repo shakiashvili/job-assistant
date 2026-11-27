@@ -3,10 +3,9 @@ from typing import Dict, Any, List, Optional
 from urllib.parse import quote_plus
 from pydantic import BaseModel, Field
 
-logger = logging.getLogger(__name__)
-
-
 from .linkedin_scraper import build_linkedin_search_urls
+
+logger = logging.getLogger(__name__)
 
 
 class SearchQueryPackage(BaseModel):
@@ -263,7 +262,7 @@ def build_search_queries(
     jobs_ge_urls: List[str] = []
     if jobs_ge_cid:
         jobs_ge_urls.append(f"https://jobs.ge/ge/?page=1&cid={jobs_ge_cid}")
-    for idx, q in enumerate((primary_ge[:3] + adjacent_ge[:1])):
+    for idx, q in enumerate(primary_ge[:3] + adjacent_ge[:1]):
         enc = quote_plus(q)
         cat_part = cid_suffix if idx < len(primary_ge[:3]) else ""
         u = f"https://jobs.ge/ge/?page=1&q={enc}{cat_part}"

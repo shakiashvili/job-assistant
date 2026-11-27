@@ -1,5 +1,4 @@
 import io
-from pathlib import Path
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 from app.main import app

@@ -9,6 +9,7 @@ from ..db.database import engine, init_db
 from ..db.models import CandidateProfile, utc_now
 from .gemini_service import gemini_service, sanitize_untrusted_input
 from .matcher_service import matcher_service
+from datetime import UTC
 
 logger = logging.getLogger(__name__)
 
@@ -63,11 +64,11 @@ def compute_dynamic_experience_bounds(
     - Never hardcodes 2.0 years for entry-level/student profiles (0-0.5 yr -> max 1.0 yr, blocking 2+ yr roles).
     - Dynamically scales ceiling for Junior (1.5 yr), Junior-Mid (2.5 yr), Mid (yrs+1.5), and Senior/Lead (yrs+3+).
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     resolved: Optional[float] = explicit_years
     if resolved is None and work_history:
-        now_yr = datetime.now(timezone.utc).year
+        now_yr = datetime.now(UTC).year
         total_yrs = 0.0
         for item in work_history:
             if not isinstance(item, dict):

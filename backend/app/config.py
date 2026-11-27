@@ -1,7 +1,7 @@
 import json
 import logging
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, UTC
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -38,8 +38,8 @@ def reload_env_files(override: bool = False) -> None:
                     v = v.strip().strip('"').strip("'")
                     if k and (override or k not in os.environ):
                         os.environ[k] = v
-            except Exception:
-                pass
+            except OSError as env_err:
+                logging.getLogger(__name__).warning("Could not read env file %s: %s", p, env_err)
 
 
 # Initial load at startup
@@ -173,7 +173,7 @@ def resolve_gemini_model_pricing(
     if selected_tier == "free":
         return (0.0, 0.0)
 
-    check_date = as_of or datetime.now(timezone.utc).date()
+    check_date = as_of or datetime.now(UTC).date()
     low_model = (model_name or "").strip().lower()
 
     pricing_table: Dict[str, Dict[str, Any]] = dict(GEMINI_DEFAULT_PRICING)
@@ -199,7 +199,7 @@ def resolve_gemini_model_pricing(
         if check_date <= date(2026, 12, 31) and isinstance(matched_entry.get("effective_until_2026"), dict):
             tier_map = matched_entry["effective_until_2026"]
         rates = tier_map.get(selected_tier) or tier_map.get("standard")
-        if isinstance(rates, (list, tuple)) and len(rates) == 2:
+        if isinstance(rates, list | tuple) and len(rates) == 2:
             return (float(rates[0]), float(rates[1]))
 
     if "flash-lite" in low_model:

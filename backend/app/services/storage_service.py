@@ -4,7 +4,7 @@ import hmac
 import logging
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import quote, urlparse
@@ -12,6 +12,7 @@ from urllib.parse import quote, urlparse
 import httpx
 
 from .crypto_service import decrypt_str, encrypt_str
+import contextlib
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ def _sigv4_headers(
     canonical_uri = quote(parsed.path or "/", safe="/~-._")
     canonical_querystring = parsed.query or ""
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     amz_date = now.strftime("%Y%m%dT%H%M%SZ")
     date_stamp = now.strftime("%Y%m%d")
     payload_hash = hashlib.sha256(payload).hexdigest()
@@ -149,10 +150,8 @@ def _atomic_write_bytes(target_path: Path, data: bytes) -> Path:
             f.write(data)
         os.replace(tmp_name, target_path)
     except Exception:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp_name)
-        except OSError:
-            pass
         raise
     return target_path
 

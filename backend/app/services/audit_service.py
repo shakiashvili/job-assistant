@@ -51,8 +51,8 @@ def validate_safe_external_url(
                 local_path = Path(urllib.request.url2pathname(parsed_file.path)).resolve()
                 if local_path.is_relative_to(TEST_FORMS_DIR.resolve()):
                     return clean
-            except Exception:
-                pass
+            except (OSError, ValueError) as file_err:
+                logger.debug("Blocked invalid test file:// URL '%s': %s", clean, file_err)
         raise ValueError("SSRF Protection: arbitrary file:// URLs are forbidden.")
 
     parsed = urllib.parse.urlparse(clean)

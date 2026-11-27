@@ -1,7 +1,7 @@
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import Dict, Any, List, Optional
 from sqlmodel import Session, select
 
@@ -188,8 +188,8 @@ class InterviewService:
             parsed = json.loads(reflection_notes)
             if isinstance(parsed, dict) and isinstance(parsed.get("mock_evaluations"), list):
                 return parsed["mock_evaluations"]
-        except Exception:
-            pass
+        except (json.JSONDecodeError, TypeError, ValueError) as parse_err:
+            logger.debug("Could not parse mock interview reflection JSON: %s", parse_err)
         return []
 
     def evaluate_mock_answer(
@@ -262,7 +262,7 @@ class InterviewService:
             "covered_verified_skills": covered_skills,
             "missing_points": missing_points,
             "improvement_suggestions": suggestions,
-            "evaluated_at": datetime.now(timezone.utc).isoformat(),
+            "evaluated_at": datetime.now(UTC).isoformat(),
         }
 
         history = [h for h in self._load_mock_history(round_rec.reflection_notes) if int(h.get("question_id", -1)) != int(question_id)]
@@ -300,7 +300,7 @@ class InterviewService:
         follow_ups = [
             f"What does success look like in the first 90 days for the {role} role at {company}?",
             f"How does the {company} team currently balance delivery velocity with quality and operational stability?",
-            f"What are the biggest technical or workflow challenges the team is prioritizing this quarter?",
+            "What are the biggest technical or workflow challenges the team is prioritizing this quarter?",
             "How do cross-functional teams collaborate during release cycles and incident retrospectives?",
         ]
         return {
@@ -435,7 +435,7 @@ Return ONLY valid JSON.
             {
                 "id": 4,
                 "category": "Technical",
-                "question": f"How do you diagnose and document an intermittent or hard-to-reproduce issue in a live environment?",
+                "question": "How do you diagnose and document an intermittent or hard-to-reproduce issue in a live environment?",
                 "star_strategy": {
                     "situation": "Describe an issue where initial reproduction steps were unclear.",
                     "task": "Isolate the root trigger and provide actionable evidence for resolution.",

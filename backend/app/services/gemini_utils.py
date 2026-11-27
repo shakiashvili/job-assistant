@@ -42,8 +42,8 @@ def safe_parse_json(text: str) -> Optional[Any]:
             if match:
                 try:
                     return json.loads(match.group(0))
-                except Exception:
-                    pass
+                except json.JSONDecodeError:
+                    continue
     return None
 
 

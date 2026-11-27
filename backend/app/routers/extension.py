@@ -508,7 +508,7 @@ def prepare_application(
             cv_language=cv_lang,
             candidate_profile=parsed_skills,
         )
-        for f, ans_obj in zip(non_file_fields, raw_ans):
+        for f, ans_obj in zip(non_file_fields, raw_ans, strict=False):
             val = str(ans_obj.get("answer", "")).strip() if isinstance(ans_obj, dict) else ""
             q_label = (f.label or f.placeholder or f.name or "").lower()
             if any(k in q_label for k in ("cover letter", "motivational", "motivation letter", "სამოტივაციო")):

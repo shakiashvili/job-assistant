@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 import logging
 import re
 import ssl
@@ -51,12 +51,12 @@ def parse_portal_published_at(raw_val: Any) -> Tuple[Optional[datetime], Optiona
     if raw_val is None or raw_val == "":
         return None, None
     try:
-        if isinstance(raw_val, (int, float)):
+        if isinstance(raw_val, int | float):
             ts = float(raw_val)
             if ts > 1e12:
                 ts /= 1000.0
             if ts > 1e8:
-                dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+                dt = datetime.fromtimestamp(ts, tz=UTC)
                 return dt, dt.date().isoformat()
         s = str(raw_val).strip()
         if not s:
@@ -70,12 +70,12 @@ def parse_portal_published_at(raw_val: Any) -> Tuple[Optional[datetime], Optiona
         # Ukrainian / Russian day + month (e.g. "18 листопада", "5 ноября")
         sl_m = re.search(r"\b(\d{1,2})\s+([а-яіїєґё]+)(?:\s+(\d{4}))?", s.lower())
         if sl_m and sl_m.group(2) in _UA_RU_MONTHS:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             day, month = int(sl_m.group(1)), _UA_RU_MONTHS[sl_m.group(2)]
             year = int(sl_m.group(3)) if sl_m.group(3) else now.year
-            dt = datetime(year, month, day, tzinfo=timezone.utc)
+            dt = datetime(year, month, day, tzinfo=UTC)
             if not sl_m.group(3) and (dt - now).days > 45:
-                dt = datetime(year - 1, month, day, tzinfo=timezone.utc)
+                dt = datetime(year - 1, month, day, tzinfo=UTC)
             return dt, dt.date().isoformat()
         from ..link_validator import parse_vacancy_published_date
         dt = parse_vacancy_published_date(s)

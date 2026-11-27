@@ -71,7 +71,7 @@ def test_phase2_safe_import_preview_selective_merge_and_profile_intelligence():
         "## Work Experience\n"
         "### Data Analyst | Bank of Georgia | Jan 2024 - Jan 2025\n"
         "- Built SQL reports.\n"
-    ).encode("utf-8")
+    ).encode()
     r_prev = client.post(
         "/api/profile/import-preview",
         files={"file": ("resume.md", imported_md, "text/markdown")},

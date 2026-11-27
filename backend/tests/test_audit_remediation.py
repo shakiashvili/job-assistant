@@ -460,7 +460,6 @@ def test_high_05_06_09_11_12_14_backup_extension_cache_matching_and_uploads(tmp_
 
 def test_phase3_modularization_admin_aggregates_and_b2b_precision():
     from app.db.document_repository import record_candidate_document
-    from app.db.models import ApplicationTracker
     from app.routers.admin import list_all_users, get_platform_metrics
     from app.routers.b2b import calculate_georgia_b2b_net, TaxCalculatorRequest, get_tbilisi_timezone_matrix
     from app.services.cv_formatting_utils import format_pdf_mixed_script, GEORGIAN_PDF_FONT_NAME, UNICODE_FONT_NAME
@@ -539,7 +538,7 @@ def test_phase3_modularization_admin_aggregates_and_b2b_precision():
 
 
 def test_phase4_ats_pdf_checker_evidence_diffs_and_immutable_jd_snapshots(monkeypatch):
-    from app.db.models import SavedJob, ApplicationTracker
+    from app.db.models import SavedJob
     from app.db.tracker_repository import tracker_store
     from app.schemas.api_schemas import ApplicationCreate
     from app.services.ats_checker import check_pdf_ats_parseability

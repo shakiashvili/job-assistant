@@ -54,9 +54,8 @@ class HrGovScraper(BasePortalScraper):
         soup = self.make_soup(html)
         results: List[Dict[str, Any]] = []
         seen_ids: set[str] = set()
-        kw_lower = [k.lower() for k in (keywords or []) if len(k) >= 2]
 
-        for idx, tr in enumerate(soup.select("tr")):
+        for _idx, tr in enumerate(soup.select("tr")):
             links = tr.select("a[href*='/Details/']")
             if not links:
                 continue

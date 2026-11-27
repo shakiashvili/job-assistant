@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import Optional, List, Dict, Any
 from sqlmodel import SQLModel, Field, Column, Relationship
 from sqlalchemy import JSON, Text, UniqueConstraint, Index, event
@@ -30,7 +30,7 @@ from ..schemas.api_schemas import (  # noqa: F401
 
 
 def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class User(SQLModel, table=True):

@@ -1,5 +1,5 @@
 import asyncio
-from datetime import timedelta, timezone
+from datetime import timedelta, UTC
 import hashlib
 import json
 import logging
@@ -289,7 +289,7 @@ class ScraperOrchestrator:
                     items = data if isinstance(data, list) else []
                     self._record_source_health(portal_name, "ok", len(items), latency_ms)
                     return items
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     latency_ms = int((time.perf_counter() - started) * 1000)
                     self._record_source_health(portal_name, "timeout", 0, latency_ms, "Timed out after 32s")
                     logger.debug("Portal scraper %s timed out", portal_name)
@@ -583,9 +583,9 @@ class ScraperOrchestrator:
 
                 # Per-user 24h evaluation cache: NEVER reuse another user's score; require matching (user_id, job_id, profile_fp, matcher_ver)
                 if existing and existing.scraped_at:
-                    scr_ts = existing.scraped_at if existing.scraped_at.tzinfo else existing.scraped_at.replace(tzinfo=timezone.utc)
+                    scr_ts = existing.scraped_at if existing.scraped_at.tzinfo else existing.scraped_at.replace(tzinfo=UTC)
                     prof_ts = (
-                        (profile.updated_at if profile.updated_at.tzinfo else profile.updated_at.replace(tzinfo=timezone.utc))
+                        (profile.updated_at if profile.updated_at.tzinfo else profile.updated_at.replace(tzinfo=UTC))
                         if profile and profile.updated_at
                         else scr_ts
                     )
@@ -596,7 +596,7 @@ class ScraperOrchestrator:
                         user_um = existing_matches.get(existing.id) if existing.id is not None else None
                         um_bd = (user_um.match_breakdown or {}) if user_um else {}
                         um_ts = (
-                            (user_um.evaluated_at if user_um.evaluated_at.tzinfo else user_um.evaluated_at.replace(tzinfo=timezone.utc))
+                            (user_um.evaluated_at if user_um.evaluated_at.tzinfo else user_um.evaluated_at.replace(tzinfo=UTC))
                             if user_um and user_um.evaluated_at
                             else None
                         )

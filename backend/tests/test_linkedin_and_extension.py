@@ -312,8 +312,6 @@ Tbilisi, Georgia • +995 571-15-68-07 • [giorgishakiashvili21@gmail.com](mail
 
 def test_cv_filename_uniqueness_html_escape_languages_and_download_headers():
     """Verifies role-specific CV filenames, HTML XSS escaping, dynamic Languages from skills.md, ATS header, and Content-Disposition."""
-    import uuid
-    from pathlib import Path
     from docx import Document
     from app.config import GENERATED_RESUMES_DIR
     from app.services.cv_generator_service import cv_generator_service, UNICODE_FONT_NAME

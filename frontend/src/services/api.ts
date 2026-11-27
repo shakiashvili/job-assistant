@@ -95,6 +95,34 @@ export async function apiFetch(url: string, init: RequestInit = {}): Promise<Res
   return res;
 }
 
+export class ApiError extends Error {
+  status: number;
+  detail: string;
+  constructor(message: string, status = 0) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.detail = message;
+  }
+}
+
+export async function downloadAuthorizedFile(relativeOrFullUrl: string, filename: string): Promise<void> {
+  const targetUrl = relativeOrFullUrl.startsWith('http') ? relativeOrFullUrl : `${BACKEND_ORIGIN}${relativeOrFullUrl}`;
+  const res = await apiFetch(targetUrl);
+  if (!res.ok) {
+    throw new ApiError(await readErrorDetail(res, `HTTP ${res.status}`), res.status);
+  }
+  const blob = await res.blob();
+  const blobUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = blobUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+}
+
 async function readErrorDetail(res: Response, fallback: string): Promise<string> {
   try {
     const data = await res.json();
