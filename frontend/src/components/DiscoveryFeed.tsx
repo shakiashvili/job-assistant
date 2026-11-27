@@ -20,7 +20,7 @@ import {
   SlidersHorizontal,
   AlertTriangle,
 } from 'lucide-react';
-import { DbJobPosting, JobSearchParams, SavedSearchItem, NotificationItem } from '../types';
+import { DbJobPosting, JobSearchParams, SavedSearchItem, NotificationItem, ScraperSourceHealthItem } from '../types';
 import { BACKEND_ORIGIN } from '../services/api';
 
 export interface CandidateRoleHeaderInfo {
@@ -81,6 +81,7 @@ interface DiscoveryFeedProps {
   onPageChange?: (page: number) => void;
   scrapeStats: { total: number; staged: number; filteredOut: number } | null;
   scrapeTaskInfo?: { status: string; progressPct: number; errorMessage?: string | null } | null;
+  sourceHealth?: ScraperSourceHealthItem[];
   preparedEmailPkg: PreparedEmailPkg | null;
   onDismissEmailPkg: () => void;
   draftingJobId: number | null;
@@ -174,6 +175,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
   onPageChange,
   scrapeStats,
   scrapeTaskInfo,
+  sourceHealth = [],
   preparedEmailPkg,
   onDismissEmailPkg,
   draftingJobId,
@@ -253,6 +255,8 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
   const adjacentRoles = candidateProfile?.adjacent_roles || [];
   const eduList = candidateProfile?.education || [];
 
+  const [showPortalHealth, setShowPortalHealth] = useState(false);
+
   const portals = [
     'ALL',
     'jobs.ge',
@@ -262,7 +266,6 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
     'remotive.com',
     'himalayas.app',
     'remoteok.com',
-    'linkedin.com',
     'djinni.co',
     'dou.ua',
     'justjoin.it',
@@ -897,6 +900,61 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
         </div>
       )}
 
+      {/* Portal Source Health Strip (Phase 5 P0) */}
+      {sourceHealth.length > 0 && (
+        <div className="rounded-xl bg-slate-950/70 border border-slate-800 px-3.5 py-2.5 text-xs">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-2 text-slate-300">
+              <Database className="w-3.5 h-3.5 text-emerald-400" aria-hidden="true" />
+              <span className="font-semibold">Portal Source Health ({sourceHealth.length} active sources)</span>
+              {sourceHealth.some((s) => s.zero_run_alert || s.status === 'error' || s.status === 'timeout') && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-700/70 text-amber-300 text-[10px] font-semibold">
+                  <AlertTriangle className="w-3 h-3" aria-hidden="true" />
+                  <span>
+                    {sourceHealth.filter((s) => s.zero_run_alert || s.status === 'error' || s.status === 'timeout').length} source alert(s)
+                  </span>
+                </span>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowPortalHealth((prev) => !prev)}
+              aria-expanded={showPortalHealth}
+              className="text-[11px] font-semibold text-emerald-400 hover:text-emerald-300"
+            >
+              {showPortalHealth ? 'Hide source status' : 'Inspect source status'}
+            </button>
+          </div>
+          {showPortalHealth && (
+            <div className="mt-2.5 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+              {sourceHealth.map((src) => {
+                const count = src.last_count ?? src.jobs_found ?? 0;
+                const isErr = src.status === 'error' || src.status === 'timeout';
+                const isZeroAlert = Boolean(src.zero_run_alert);
+                return (
+                  <div
+                    key={src.portal}
+                    className={`px-2.5 py-1.5 rounded-lg border text-[11px] ${
+                      isErr
+                        ? 'bg-rose-950/40 border-rose-800/70 text-rose-200'
+                        : isZeroAlert
+                        ? 'bg-amber-950/40 border-amber-800/70 text-amber-200'
+                        : 'bg-slate-900 border-slate-800 text-slate-300'
+                    }`}
+                    title={src.last_error || `${src.portal}: ${src.status}`}
+                  >
+                    <div className="font-semibold truncate">{src.portal}</div>
+                    <div className="text-[10px] text-slate-400">
+                      {isZeroAlert ? '0 results (3+ runs)' : `${src.status} • ${count} jobs`}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
         {filteredDbJobs.map((job) => {
@@ -926,9 +984,19 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
             >
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between gap-1 flex-wrap">
-                  <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-slate-900 text-emerald-300 border border-slate-700">
-                    {job.portal} • {job.market}
-                  </span>
+                  <div className="flex items-center gap-1 flex-wrap">
+                    <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-slate-900 text-emerald-300 border border-slate-700">
+                      {job.portal} • {job.market}
+                    </span>
+                    {job.also_on_portals && job.also_on_portals.length > 0 && (
+                      <span
+                        className="text-[10px] font-semibold px-2 py-0.5 rounded bg-slate-900 text-cyan-300 border border-cyan-800/70"
+                        title={`Cross-portal duplicate clustered from: ${job.also_on_portals.join(', ')}`}
+                      >
+                        Also on: {job.also_on_portals.join(', ')}
+                      </span>
+                    )}
+                  </div>
                   <div className="flex items-center gap-1">
                     {onToggleSaveJob && (
                       <button

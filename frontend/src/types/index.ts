@@ -208,6 +208,7 @@ export interface DbJobPosting {
   posting_date?: string | null;
   published_at?: string | null;
   suitability_score: number;
+  also_on_portals?: string[];
   match_rationale: string;
   match_tier?: 'DIRECT' | 'ADJACENT' | 'PUBLIC_INTERNSHIP' | string;
   adjacent_role_tag?: string | null;
@@ -767,11 +768,16 @@ export interface JobSearchParams {
 export interface ScraperSourceHealthItem {
   portal: string;
   status: string;
+  last_run_at?: string | null;
   last_attempt_at?: string | null;
   last_success_at?: string | null;
-  jobs_found: number;
-  latency_ms: number;
+  last_count?: number;
+  jobs_found?: number;
+  last_latency_ms?: number;
+  latency_ms?: number;
   consecutive_failures: number;
+  consecutive_zero_runs?: number;
+  zero_run_alert?: boolean;
   last_error?: string | null;
 }
 

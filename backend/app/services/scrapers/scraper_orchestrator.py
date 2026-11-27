@@ -150,6 +150,8 @@ class ScraperOrchestrator:
                     "last_latency_ms": 0,
                     "last_error": None,
                     "consecutive_failures": 0,
+                    "consecutive_zero_runs": 0,
+                    "zero_run_alert": False,
                 })
         return items
 
@@ -163,6 +165,7 @@ class ScraperOrchestrator:
     ) -> None:
         prev = self._source_health.get(portal) or {}
         failures = 0 if status in ("ok", "disabled") else int(prev.get("consecutive_failures", 0)) + 1
+        zero_runs = int(prev.get("consecutive_zero_runs", 0)) + 1 if count == 0 else 0
         self._source_health[portal] = {
             "portal": portal,
             "status": status,
@@ -171,6 +174,8 @@ class ScraperOrchestrator:
             "last_latency_ms": latency_ms,
             "last_error": error,
             "consecutive_failures": failures,
+            "consecutive_zero_runs": zero_runs,
+            "zero_run_alert": zero_runs >= 3,
         }
 
     def _build_portal_coro(

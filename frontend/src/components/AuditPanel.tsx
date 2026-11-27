@@ -36,6 +36,7 @@ import {
   deleteSavedSearch,
   fetchNotifications,
   markNotificationRead,
+  fetchScraperSourceHealth,
   BACKEND_ORIGIN
 } from '../services/api';
 import {
@@ -45,6 +46,7 @@ import {
   JobSearchParams,
   SavedSearchItem,
   NotificationItem,
+  ScraperSourceHealthItem,
 } from '../types';
 import { DiscoveryFeed } from './DiscoveryFeed';
 
@@ -84,6 +86,7 @@ export const AuditPanel: React.FC = () => {
   const [savedJobIds, setSavedJobIds] = useState<Set<number>>(new Set());
   const [savedSearches, setSavedSearches] = useState<SavedSearchItem[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [sourceHealth, setSourceHealth] = useState<ScraperSourceHealthItem[]>([]);
   const [page, setPage] = useState<number>(1);
   const [totalPages, setTotalPages] = useState<number>(1);
   const [totalJobs, setTotalJobs] = useState<number>(0);
@@ -327,17 +330,19 @@ export const AuditPanel: React.FC = () => {
   const loadInitialData = async () => {
     const uploaded = await refreshProfileData();
     try {
-      const [mdData, savedRes, ssList, notifList] = await Promise.all([
+      const [mdData, savedRes, ssList, notifList, healthRes] = await Promise.all([
         fetchSkillsMd(),
         fetchSavedJobs().catch(() => ({ items: [] })),
         fetchSavedSearches().catch(() => []),
         fetchNotifications().catch(() => []),
+        fetchScraperSourceHealth().catch(() => ({ sources: [], default_portals: [] })),
       ]);
       setSkillsMdContent(mdData.content);
       setSkillsFilename(mdData.filename);
       setSavedJobIds(new Set((savedRes.items || []).map((it) => it.job.id)));
       setSavedSearches(ssList);
       setNotifications(notifList);
+      setSourceHealth(healthRes.sources || []);
 
       if (!uploaded) {
         setScrapedJobs([]);
@@ -390,7 +395,11 @@ export const AuditPanel: React.FC = () => {
     setScrapeTaskInfo({ status: 'QUEUED', progressPct: 10 });
     try {
       const { filteredOutCount } = await runAsyncScrapeAndPoll(true);
-      const paged = await loadPagedJobs({ page: 1 });
+      const [paged, healthRes] = await Promise.all([
+        loadPagedJobs({ page: 1 }),
+        fetchScraperSourceHealth().catch(() => ({ sources: [], default_portals: [] })),
+      ]);
+      setSourceHealth(healthRes.sources || []);
       const validJobs = paged.items || [];
       if (validJobs.length > 0 && !jobUrl) {
         setJobUrl(validJobs[0].url);
@@ -778,6 +787,7 @@ export const AuditPanel: React.FC = () => {
         onPageChange={(nextP) => applyFilters({ page: nextP })}
         scrapeStats={scrapeStats}
         scrapeTaskInfo={scrapeTaskInfo}
+        sourceHealth={sourceHealth}
         preparedEmailPkg={preparedEmailPkg}
         onDismissEmailPkg={() => setPreparedEmailPkg(null)}
         draftingJobId={draftingJobId}

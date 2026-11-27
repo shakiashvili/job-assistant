@@ -1,5 +1,7 @@
 import os
 import logging
+import time
+import uuid
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,7 +20,9 @@ from .config import (
 )
 from .db.database import engine, init_db
 from .services.gemini_service import gemini_service
+from .services.observability import log_structured_request, runtime_metrics
 from .services.scrape_worker import SCRAPE_WORKER_MODE, scrape_queue
+from .services.scrapers.scraper_orchestrator import scraper_orchestrator
 from .services.storage_service import storage_service
 from .routers.audit import router as audit_router
 from .routers.answers import router as answers_router
@@ -82,7 +86,19 @@ app = FastAPI(
 
 @app.middleware("http")
 async def security_headers_middleware(request: Request, call_next):
+    req_id = (request.headers.get("X-Request-ID") or "").strip()[:64] or uuid.uuid4().hex[:16]
+    started = time.perf_counter()
     response = await call_next(request)
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
+    runtime_metrics.record(status_code=response.status_code, latency_ms=elapsed_ms)
+    log_structured_request(
+        request_id=req_id,
+        method=request.method,
+        path=request.url.path,
+        status_code=response.status_code,
+        latency_ms=elapsed_ms,
+    )
+    response.headers["X-Request-ID"] = req_id
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
@@ -182,6 +198,7 @@ def root():
     }
 
 
+@app.get("/healthz")
 @app.get("/health/live")
 @app.get("/api/health/live")
 def liveness_check():
@@ -189,6 +206,7 @@ def liveness_check():
     return {"status": "alive"}
 
 
+@app.get("/readyz")
 @app.get("/health")
 @app.get("/api/health")
 @app.get("/api/health/ready")
@@ -228,4 +246,23 @@ def healthcheck():
             "mode": f"live_{GEMINI_MODEL}" if gemini_service.is_available else "ground_truth_heuristic_engine",
         },
         "ai": ai_health,
+    }
+
+
+@app.get("/api/metrics")
+def operational_metrics():
+    """Returns lightweight runtime HTTP, scraper health, and feature-flag operational metrics."""
+    sources = scraper_orchestrator.get_source_health()
+    zero_alerts = [s["portal"] for s in sources if s.get("zero_run_alert")]
+    failing = [s["portal"] for s in sources if s.get("status") in ("error", "timeout")]
+    return {
+        "http": runtime_metrics.snapshot(),
+        "scrapers": {
+            "total_sources": len(sources),
+            "failing_sources": failing,
+            "zero_run_alert_sources": zero_alerts,
+        },
+        "features": {
+            "b2b_hub_enabled": ENABLE_B2B_HUB,
+        },
     }

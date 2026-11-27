@@ -1,7 +1,7 @@
 import math
 import re
 from datetime import timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from fastapi import Query
 from sqlalchemy import String, case, cast, func
 from sqlmodel import Session, and_, or_, select
@@ -331,6 +331,33 @@ def _query_geo_eligible(session: Session, f: JobFilters, base_conds: List[Any], 
     return {"items": filtered[offset : offset + f.limit], "total": len(filtered), "page": f.page, "limit": f.limit, "total_pages": max(1, math.ceil(len(filtered) / f.limit)), "tier_counts": tier_counts, "status_counts": status_counts}
 
 
+def cluster_cross_portal_jobs(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Clusters duplicate vacancies across portals by normalized (company, title).
+    Keeps the primary card (highest order rank) and attaches `also_on_portals` listing other portals.
+    """
+    clustered: List[Dict[str, Any]] = []
+    by_key: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for raw in items:
+        item = dict(raw)
+        item.setdefault("also_on_portals", [])
+        comp = re.sub(r"[^a-z0-9\u10A0-\u10FF]+", " ", str(item.get("company") or "").lower()).strip()
+        title = re.sub(r"[^a-z0-9\u10A0-\u10FF]+", " ", str(item.get("title") or "").lower()).strip()
+        portal = str(item.get("portal") or "").strip()
+        if not comp or not title or comp in ("hiring company", "unknown", "confidential", "company"):
+            clustered.append(item)
+            continue
+        key = (comp, title)
+        if key not in by_key:
+            by_key[key] = item
+            clustered.append(item)
+        else:
+            primary = by_key[key]
+            if portal and portal != primary.get("portal") and portal not in primary["also_on_portals"]:
+                primary["also_on_portals"].append(portal)
+    return clustered
+
+
 def query_jobs_paginated(filters: JobFilters, current_user: User, is_profile_ready_fn: Any) -> Dict[str, Any]:
     """Executes user-scoped paginated job discovery with single-query tier/status aggregation."""
     init_db()
@@ -396,7 +423,7 @@ def query_jobs_paginated(filters: JobFilters, current_user: User, is_profile_rea
         stmt = select(JobPosting, UserJobMatch).join(UserJobMatch, (UserJobMatch.job_posting_id == JobPosting.id) & (UserJobMatch.user_id == uid)) if use_um else select(JobPosting)
         rows = session.exec(stmt.where(*conditions).order_by(*order_clauses).offset((filters.page - 1) * filters.limit).limit(filters.limit)).all()
         return {
-            "items": [_serialize_job_row(e, use_um) for e in rows],
+            "items": cluster_cross_portal_jobs([_serialize_job_row(e, use_um) for e in rows]),
             "total": total,
             "page": filters.page,
             "limit": filters.limit,
