@@ -324,6 +324,41 @@ def _build_jd_snapshot(job: JobPosting) -> Dict[str, Any]:
     }
 
 
+@router.get("/jobs/saved")
+def list_saved_job_bookmarks(
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Lists all bookmarked jobs for the current authenticated user."""
+    with Session(engine) as session:
+        rows = session.exec(
+            select(SavedJob, JobPosting)
+            .join(JobPosting, SavedJob.job_posting_id == JobPosting.id)
+            .where(SavedJob.user_id == current_user.id)
+            .order_by(SavedJob.created_at.desc())
+        ).all()
+        items = [
+            {
+                "saved_id": sj.id,
+                "notes": sj.notes or "",
+                "saved_at": sj.created_at.isoformat() if sj.created_at else "",
+                "job": {
+                    "id": job.id,
+                    "portal": job.portal,
+                    "external_id": job.external_id,
+                    "title": job.title,
+                    "company": job.company,
+                    "url": job.url,
+                    "market": job.market,
+                    "is_remote": job.is_remote,
+                    "suitability_score": job.suitability_score,
+                    "status": job.status,
+                },
+            }
+            for sj, job in rows
+        ]
+        return {"items": items}
+
+
 @router.post("/jobs/{job_id}/save")
 def save_job_bookmark(
     job_id: int,

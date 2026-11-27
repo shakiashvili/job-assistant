@@ -1,10 +1,11 @@
 {
   "manifest_version": 3,
   "name": "TalentFlow AI Job Copilot",
-  "version": "3.0.0",
-  "description": "Domain-agnostic AI Job Copilot: authenticates with TalentFlow, analyzes LinkedIn/Workday/Greenhouse/Georgian jobs, builds tailored ATS PDFs, and fills multi-step forms safely (Human-in-the-Loop).",
+  "version": "3.1.0",
+  "description": "Domain-agnostic AI Job Copilot: authenticates with TalentFlow, analyzes LinkedIn/Workday/Greenhouse/Georgian jobs, builds & downloads tailored ATS PDF/DOCX CVs, fills multi-step forms safely, and syncs to the Kanban Tracker.",
   "permissions": [
     "activeTab",
+    "downloads",
     "scripting",
     "storage",
     "sidePanel",

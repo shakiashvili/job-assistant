@@ -46,6 +46,11 @@ logger = logging.getLogger("job_assistant_backend")
 async def lifespan(app: FastAPI):
     init_db()
     try:
+        from .db.tracker_repository import tracker_store
+        tracker_store.reconcile_all_orphaned_trackers()
+    except Exception as exc:
+        logger.debug("Startup orphan tracker reconciliation skipped: %s", exc)
+    try:
         from .services.auth_service import purge_expired_rate_limits
         purge_expired_rate_limits()
     except Exception as exc:

@@ -142,11 +142,16 @@
         </div>
 
         <div id="cv-download-bar" class="cv-download-bar hidden" style="display:flex; justify-content:space-between; align-items:center; gap:6px; flex-wrap:wrap;">
-          <span id="cv-filename-label" style="color:#cbd5e1; font-size:10px;">Tailored Resume</span>
-          <div style="display:flex; gap:8px; align-items:center;">
-            <a id="cv-download-link" href="#" target="_blank" rel="noopener noreferrer">PDF ↗</a>
-            <a id="cv-docx-download-link" href="#" target="_blank" rel="noopener noreferrer" class="hidden">Word (.docx) ↗</a>
+          <span id="cv-filename-label" style="color:#cbd5e1; font-size:10px; word-break:break-all;">Tailored Resume</span>
+          <div style="display:flex; gap:6px; align-items:center;">
+            <button id="cv-download-link" type="button" class="btn-link" style="font-weight:700; color:#34d399;">⬇ PDF</button>
+            <button id="cv-docx-download-link" type="button" class="btn-link hidden" style="font-weight:700; color:#60a5fa;">⬇ Word (.docx)</button>
           </div>
+        </div>
+
+        <div id="contact-email-bar" class="hidden" style="margin-top:6px; padding:6px 8px; border-radius:6px; background:#0f172a; border:1px solid #1e293b; display:flex; justify-content:space-between; align-items:center; gap:6px;">
+          <span style="font-size:10px; color:#cbd5e1;">Apply Email: <strong id="contact-email-text" style="color:#34d399;"></strong></span>
+          <button id="btn-copy-email" class="btn-link" type="button">Copy Email</button>
         </div>
 
         <div id="summary-box-wrap" class="hidden" style="margin-top:8px;">

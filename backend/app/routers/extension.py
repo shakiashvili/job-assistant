@@ -3,13 +3,15 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
-from sqlmodel import Session, select
+from sqlmodel import Session
 
-from ..db.database import engine, get_session, init_db
-from ..db.document_repository import record_candidate_document
-from ..db.models import ApplicationTracker, User, utc_now
+from ..db.database import get_session, init_db
+from ..db.document_repository import record_candidate_document, resolve_owned_generated_document
+from ..db.models import User
+from ..db.tracker_repository import tracker_store
 from ..services.answer_service import load_live_candidate_profile
 from ..services.auth_service import decode_access_token, get_user_by_email
 from ..services.cv_generator_service import cv_generator_service
@@ -303,19 +305,41 @@ def prepare_application(
         )
 
     portal = _infer_portal(req.url, req.portal)
+    _GENERIC_PORTAL_PLACEHOLDERS = {
+        "unknown", "unknown title", "unknown company",
+        "jobs.ge", "jobs", "hr.ge", "hr", "headhunter.ge", "headhunter", "hr.gov.ge",
+        "linkedin", "linkedin.com", "djinni", "djinni.co", "dou", "dou.ua",
+    }
     dom_title = (req.job_title or "").strip()
     dom_company = (req.company_name or "").strip()
+    if dom_title.lower() in _GENERIC_PORTAL_PLACEHOLDERS:
+        dom_title = ""
+    if dom_company.lower() in _GENERIC_PORTAL_PLACEHOLDERS:
+        dom_company = ""
     desc_text = (req.job_description or req.raw_page_text or "").strip()
 
+    # Deterministic Georgian jobs.ge header extraction before AI/fallback when DOM fields are blank
+    if not dom_title or not dom_company:
+        m_title = re.search(r"(?:დასახელება|Title)\s*:\s*([^\n|]{3,120})", desc_text, re.IGNORECASE)
+        m_comp = re.search(r"(?:მომწოდებელი|Provider|Company)\s*:\s*([^\n|]{2,100})", desc_text, re.IGNORECASE)
+        if not dom_title and m_title:
+            cand_t = m_title.group(1).strip()
+            if cand_t.lower() not in _GENERIC_PORTAL_PLACEHOLDERS:
+                dom_title = cand_t
+        if not dom_company and m_comp:
+            cand_c = m_comp.group(1).strip()
+            if cand_c.lower() not in _GENERIC_PORTAL_PLACEHOLDERS:
+                dom_company = cand_c
+
     extraction_failed = False
-    if not dom_title or not dom_company or dom_title.lower() in ("unknown", "unknown title") or dom_company.lower() in ("unknown", "unknown company"):
+    if not dom_title or not dom_company:
         fallback_blob = "\n".join(x for x in [dom_title, f"Company: {dom_company}" if dom_company else "", desc_text] if x)
         extracted = gemini_service.extract_job_details(fallback_blob or req.url, portal=portal)
-        raw_title = (dom_title if dom_title.lower() not in ("unknown", "unknown title") else "") or str(extracted.get("title") or "").strip()
-        raw_company = (dom_company if dom_company.lower() not in ("unknown", "unknown company") else "") or str(extracted.get("company") or "").strip()
-        if raw_title.lower() in ("unknown", "unknown title"):
+        raw_title = dom_title or str(extracted.get("title") or "").strip()
+        raw_company = dom_company or str(extracted.get("company") or "").strip()
+        if raw_title.lower() in _GENERIC_PORTAL_PLACEHOLDERS:
             raw_title = ""
-        if raw_company.lower() in ("unknown", "unknown company"):
+        if raw_company.lower() in _GENERIC_PORTAL_PLACEHOLDERS:
             raw_company = ""
         extraction_failed = bool(extracted.get("extraction_failed") or not raw_title or not raw_company)
         job_title = raw_title
@@ -560,49 +584,55 @@ def prepare_application(
     )
 
 
+@router.get("/download-cv/{filename}")
+def download_extension_cv(
+    filename: str,
+    current_user: User = Depends(require_extension_user),
+):
+    """Strictly authenticated download endpoint for extension-generated PDF/DOCX CVs."""
+    path, err = resolve_owned_generated_document(
+        filename,
+        user_id=current_user.id,
+        is_guest=False,
+    )
+    if err == "invalid":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid CV filename.")
+    if err == "forbidden":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: CV belongs to another user.")
+    if err or path is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tailored CV file not found.")
+
+    low = path.name.lower()
+    media = (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        if low.endswith(".docx")
+        else "application/pdf"
+    )
+    return FileResponse(
+        path=str(path),
+        filename=path.name,
+        media_type=media,
+        headers={"Content-Disposition": f'attachment; filename="{path.name}"'},
+    )
+
+
 @router.post("/log-application")
 def log_extension_application(
     req: LogApplicationRequest,
     current_user: User = Depends(require_extension_user),
 ) -> Dict[str, Any]:
-    """Records a completed human-reviewed external/Easy-Apply submission in the user's Kanban tracker."""
+    """Records a human-reviewed submission atomically in both ApplicationRecord and ApplicationTracker."""
     init_db()
-    allowed_statuses = {"SAVED", "STAGED", "APPLIED", "HR_SCREEN", "TECH_INTERVIEW", "FINAL_ROUND", "OFFER", "REJECTED"}
-    target_status = req.status.upper() if req.status and req.status.upper() in allowed_statuses else "APPLIED"
-
-    with Session(engine) as session:
-        existing = session.exec(
-            select(ApplicationTracker).where(
-                (ApplicationTracker.user_id == current_user.id)
-                & (ApplicationTracker.job_url == req.job_url)
-                & (ApplicationTracker.is_deleted == False)
-            )
-        ).first()
-        if existing:
-            existing.status = target_status
-            existing.salary_offered = req.salary_offered or existing.salary_offered
-            existing.cv_pdf_path = req.cv_pdf_path or existing.cv_pdf_path
-            existing.cover_letter_text = req.cover_letter_text or existing.cover_letter_text
-            existing.updated_at = utc_now()
-            session.add(existing)
-            session.commit()
-            session.refresh(existing)
-            return {"status": "updated", "application_id": existing.id, "company_name": existing.company_name, "job_title": existing.job_title}
-
-        app_row = ApplicationTracker(
-            user_id=current_user.id,
-            company_name=req.company_name.strip(),
-            job_title=req.job_title.strip(),
-            job_url=req.job_url.strip(),
-            portal=req.portal or "custom",
-            status=target_status,
-            salary_offered=req.salary_offered,
-            cv_pdf_path=req.cv_pdf_path,
-            cover_letter_text=req.cover_letter_text,
-            applied_at=utc_now(),
-            updated_at=utc_now(),
-        )
-        session.add(app_row)
-        session.commit()
-        session.refresh(app_row)
-        return {"status": "created", "application_id": app_row.id, "company_name": app_row.company_name, "job_title": app_row.job_title}
+    if current_user.id is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authenticated user required.")
+    return tracker_store.upsert_external_application(
+        user_id=current_user.id,
+        company_name=req.company_name,
+        job_title=req.job_title,
+        job_url=req.job_url,
+        portal=req.portal or "custom",
+        status=req.status or "APPLIED",
+        salary_offered=req.salary_offered,
+        cv_pdf_path=req.cv_pdf_path,
+        cover_letter_text=req.cover_letter_text,
+    )

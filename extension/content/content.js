@@ -130,17 +130,56 @@
       ]) || "";
       location = firstText([".location-text", ".job-additional-info--item"]);
       jobDescription = firstText([".job-post__description", ".profile-page-section", "main"]);
+    } else if (portal === "jobs.ge") {
+      // Dedicated jobs.ge extractor: avoids picking site banner "Jobs.GE" / hostname "Jobs"
+      const bodyText = document.body?.innerText || "";
+      jobTitle =
+        firstText(["td.dtitle", "#job_view h1", "#job_view h2", ".dtitle", "table.dtable b"]) ||
+        (bodyText.match(/(?:დასახელება|Title)\s*:\s*([^\n]{3,120})/i)?.[1] || "").trim();
+      if (!jobTitle) {
+        // First prominent bold heading above "მომწოდებელი:" in the job container
+        const headings = Array.from(document.querySelectorAll("h1, h2, h3, td b, p b"))
+          .map((n) => cleanText(n))
+          .filter((t) => t.length >= 4 && t.length <= 120 && !/^jobs\.?ge$/i.test(t) && !/ვაკანსიები|ტრენინგები|სტიპენდიები/i.test(t));
+        jobTitle = headings[0] || "";
+      }
+      const provMatch = bodyText.match(/(?:მომწოდებელი|Provider)\s*:\s*([^\n]{2,100})/i);
+      companyName =
+        (provMatch ? provMatch[1].trim() : "") ||
+        firstText(['a[href*="cid="][href*="client"]', 'a[href*="view=client"]', ".client_name"]);
+      location = (bodyText.match(/(?:ადგილმდებარეობა|Location)\s*:\s*([^\n]{2,80})/i)?.[1] || "Georgia").trim();
+      jobDescription = firstText(["#job_view", "table.dtable", "#content", "main"]) || bodyText;
+    } else if (portal === "hr.ge") {
+      jobTitle = firstText(["h1.vacancy-title", "h1", ".announcement-title", "h2"]);
+      companyName = firstText(['a[href*="/company/"]', ".company-name", ".employer-title"]);
+      location = firstText([".location", ".city", '[class*="location"]']) || "Georgia";
+      jobDescription = firstText([".vacancy-description", ".description", "article", "main"]);
+    } else if (portal === "headhunter.ge") {
+      jobTitle = firstText(['[data-qa="vacancy-title"]', "h1.bloko-header-section-1", "h1"]);
+      companyName = firstText(['[data-qa="vacancy-company-name"]', ".vacancy-company-name"]);
+      location = firstText(['[data-qa="vacancy-view-location"]', '[data-qa="vacancy-view-raw-address"]']) || "Georgia";
+      jobDescription = firstText(['[data-qa="vacancy-description"]', ".vacancy-description", "main"]);
+    } else if (portal === "hr.gov.ge") {
+      jobTitle = firstText(["h1", ".vacancy-title", ".job-title"]);
+      companyName = firstText([".organization-name", ".agency-name", ".company-name"]);
+      location = "Georgia";
+      jobDescription = firstText([".vacancy-details", ".description", "main"]);
     } else {
-      jobTitle = firstText(["h1.job-title", "h1", ".vacancy-title", ".job-header h2", "h2"]);
+      const genericPortalSites = new Set([
+        "dou", "dou.ua", "djinni", "djinni.co", "jobs", "jobs.ge", "hr", "hr.ge", "hr.gov.ge",
+        "headhunter", "headhunter.ge", "linkedin", "workday", "greenhouse", "lever",
+        "ashby", "workable", "indeed", "glassdoor"
+      ]);
+      const rawTitle = firstText(["h1.job-title", "h1", ".vacancy-title", ".job-header h2", "h2"]);
+      jobTitle = rawTitle && !genericPortalSites.has(rawTitle.toLowerCase()) ? rawTitle : "";
       if (!jobTitle) {
         const ogTitle = (document.querySelector('meta[property="og:title"]')?.getAttribute("content") || "").trim();
-        jobTitle = ogTitle ? ogTitle.split(/\s[|\-–—]\s/)[0].trim() : (document.title || "").split(/\s[|\-–—]\s/)[0].trim();
+        const fallbackT = ogTitle ? ogTitle.split(/\s[|\-–—]\s/)[0].trim() : (document.title || "").split(/\s[|\-–—]\s/)[0].trim();
+        if (fallbackT && !genericPortalSites.has(fallbackT.toLowerCase())) {
+          jobTitle = fallbackT;
+        }
       }
       const metaSite = (document.querySelector('meta[property="og:site_name"]')?.getAttribute("content") || "").trim();
-      const genericPortalSites = new Set([
-        "dou", "dou.ua", "djinni", "djinni.co", "jobs.ge", "hr.ge", "hr.gov.ge",
-        "linkedin", "workday", "greenhouse", "lever", "ashby", "workable", "indeed", "glassdoor"
-      ]);
       const hostParts = (window.location.hostname || "")
         .replace(/^(www|careers|jobs|apply|boards|hire)\./i, "")
         .split(".");
@@ -155,12 +194,18 @@
     }
 
     const rawPageText = (document.body?.innerText || "").replace(/\s+/g, " ").trim().slice(0, 6000);
+    const mailtoHref = document.querySelector('a[href^="mailto:"]')?.getAttribute("href") || "";
+    const mailtoAddr = mailtoHref.replace(/^mailto:/i, "").split("?")[0].trim();
+    const bodyEmailMatch = rawPageText.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/);
+    const contactEmail = mailtoAddr || (bodyEmailMatch ? bodyEmailMatch[0] : "");
+
     return {
       url: window.location.href,
       portal,
       job_title: jobTitle,
       company_name: companyName.replace(/^at\s+/i, "").trim(),
       location,
+      contact_email: contactEmail,
       job_description: (jobDescription || rawPageText).slice(0, 5000),
       raw_page_text: rawPageText,
     };
@@ -449,11 +494,15 @@
     }
 
     if (!attached) {
-      triggerBrowserDownload(file, filename || "Tailored_Resume.pdf");
-      document
-        .querySelectorAll('input[type="file"], .jobs-document-upload__upload-button-container, [data-automation-id="file-upload-drop-zone"]')
-        .forEach((el) => el.classList.add("ai-upload-highlight"));
-      showToast(`Saved ${filename} — drop it into the highlighted Upload box!`, false);
+      if (fileInputs.length > 0) {
+        triggerBrowserDownload(file, filename || "Tailored_Resume.pdf");
+        document
+          .querySelectorAll('input[type="file"], .jobs-document-upload__upload-button-container, [data-automation-id="file-upload-drop-zone"]')
+          .forEach((el) => el.classList.add("ai-upload-highlight"));
+        showToast(`Saved ${filename} — drop it into the highlighted Upload box!`, false);
+      } else {
+        showToast(`No upload field on this page — use Download PDF / Word in the Side Panel.`, false);
+      }
     } else {
       showToast(`Tailored CV attached: ${filename} (Human review before Submit)`, false);
     }
@@ -483,7 +532,10 @@
           <span class="hud-status-dot" id="tf-hud-dot"></span>
           <span>TalentFlow Copilot</span>
         </div>
-        <span style="font-size:11px; color:#94a3b8;" id="tf-hud-chevron">▲</span>
+        <div style="display:flex; align-items:center; gap:6px;">
+          <span style="font-size:11px; color:#94a3b8;" id="tf-hud-chevron">▲</span>
+          <button type="button" id="tf-hud-close" title="Hide HUD" style="background:none;border:none;color:#94a3b8;cursor:pointer;font-size:12px;padding:0 2px;">×</button>
+        </div>
       </div>
       <div class="hud-body">
         <div class="blocker-alert" id="tf-hud-warn" style="display:none;"></div>
@@ -492,17 +544,25 @@
         </div>
         <button class="hud-btn-primary" id="tf-hud-fill-btn">Analyze, Build CV &amp; Fill</button>
         <button class="hud-btn-secondary" id="tf-hud-step-btn">Fill Current Modal Step</button>
+        <button class="hud-btn-secondary" id="tf-hud-applied-btn" style="margin-top:4px; border-color:#10b981; color:#6ee7b7;">✅ Mark Applied (Tracker)</button>
       </div>
     `;
     document.body.appendChild(hud);
     const portalBadgeEl = document.getElementById("tf-hud-portal");
     if (portalBadgeEl) portalBadgeEl.textContent = detectPortal().toUpperCase();
 
+    document.getElementById("tf-hud-close")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      hud.remove();
+    });
+
     document.getElementById("tf-hud-toggle")?.addEventListener("click", () => {
       hud.classList.toggle("minimized");
       const chev = document.getElementById("tf-hud-chevron");
       if (chev) chev.textContent = hud.classList.contains("minimized") ? "▲" : "▼";
     });
+
+    let lastHudPrepared = null;
 
     async function runHudFill(useLastCvOnly) {
       const cap = detectCaptcha();
@@ -525,8 +585,8 @@
       chrome.runtime.sendMessage(
         { type: "PREPARE_APPLICATION", payload: { ...ctx, fields } },
         (res) => {
-          if (!res || !res.ok) {
-            const errMsg = res?.error || "Open the extension popup to sign in first.";
+          if (chrome.runtime.lastError || !res || !res.ok) {
+            const errMsg = chrome.runtime.lastError?.message || res?.error || "Open the extension popup to sign in first.";
             if (warnEl) {
               warnEl.style.display = "block";
               warnEl.textContent = errMsg;
@@ -535,28 +595,50 @@
             return;
           }
           const data = res.data;
+          lastHudPrepared = { ctx, data };
           if (data.seniority_blocked && warnEl) {
             warnEl.style.display = "block";
             warnEl.textContent = `Warning: ${data.seniority_warning}`;
           }
-          const applied = applyFieldAnswers(data.field_answers || []);
+          const applied = fields.length > 0 ? applyFieldAnswers(data.field_answers || []) : { filledCount: 0 };
           if (metaEl) {
             metaEl.dataset.locked = "true";
-            metaEl.textContent = `${data.job_title} (${data.match_score}% ${data.match_tier}) · Filled ${applied.filledCount} fields`;
+            metaEl.textContent = fields.length > 0
+              ? `${data.job_title} (${data.match_score}% ${data.match_tier}) · Filled ${applied.filledCount} fields`
+              : `${data.job_title} (${data.match_score}% ${data.match_tier}) · CV Ready`;
           }
+          const hasFileInput = fields.some((f) => f.field_type === "file");
           if (!useLastCvOnly && data.tailored_cv?.pdf_url) {
-            chrome.runtime.sendMessage(
-              { type: "FETCH_CV_BLOB", pdfUrl: data.tailored_cv.pdf_url },
-              (pdfRes) => {
-                if (pdfRes?.ok && pdfRes.base64) {
-                  attachResumePdf(pdfRes.base64, data.tailored_cv.pdf_filename || pdfRes.filename);
-                } else {
-                  showToast(`Filled ${applied.filledCount} fields — please verify before Submit.`, false);
+            if (hasFileInput) {
+              chrome.runtime.sendMessage(
+                { type: "FETCH_CV_BLOB", pdfUrl: data.tailored_cv.pdf_url, filename: data.tailored_cv.pdf_filename || "" },
+                (pdfRes) => {
+                  if (!chrome.runtime.lastError && pdfRes?.ok && pdfRes.base64) {
+                    attachResumePdf(pdfRes.base64, data.tailored_cv.pdf_filename || pdfRes.filename);
+                  } else {
+                    showToast(`Filled ${applied.filledCount} fields — download CV from the Side Panel.`, false);
+                  }
                 }
-              }
-            );
+              );
+            } else {
+              chrome.runtime.sendMessage(
+                { type: "DOWNLOAD_CV_FILE", fileUrl: data.tailored_cv.pdf_url, filename: data.tailored_cv.pdf_filename || "" },
+                (dlRes) => {
+                  if (!chrome.runtime.lastError && dlRes?.ok) {
+                    showToast(`Tailored PDF downloaded (${dlRes.filename})! Open Side Panel for Word/Cover Letter.`, false);
+                  } else {
+                    showToast("CV & Cover Letter ready in Side Panel (click Download PDF / Word).", false);
+                  }
+                }
+              );
+            }
           } else {
-            showToast(`Step filled (${applied.filledCount} fields) — review before clicking Next/Submit.`, false);
+            showToast(
+              fields.length > 0
+                ? `Step filled (${applied.filledCount} fields) — review before clicking Next/Submit.`
+                : "No web form on this page — use the Side Panel to download CV & copy cover letter.",
+              false
+            );
           }
         }
       );
@@ -564,6 +646,32 @@
 
     document.getElementById("tf-hud-fill-btn")?.addEventListener("click", () => runHudFill(false));
     document.getElementById("tf-hud-step-btn")?.addEventListener("click", () => runHudFill(true));
+    document.getElementById("tf-hud-applied-btn")?.addEventListener("click", () => {
+      const ctx = lastHudPrepared?.ctx || extractJobContext();
+      const data = lastHudPrepared?.data || {};
+      chrome.runtime.sendMessage(
+        {
+          type: "LOG_APPLICATION",
+          payload: {
+            company_name: data.company_name || ctx.company_name || "Unknown Company",
+            job_title: data.job_title || ctx.job_title || "Unknown Title",
+            job_url: ctx.url,
+            portal: ctx.portal || "custom",
+            salary_offered: data.salary_info?.display || null,
+            cv_pdf_path: data.tailored_cv?.pdf_url || data.tailored_cv?.pdf_filename || null,
+            cover_letter_text: data.cover_letter || null,
+            status: "APPLIED",
+          },
+        },
+        (res) => {
+          if (!chrome.runtime.lastError && res?.ok) {
+            showToast(`Saved "${data.job_title || ctx.job_title}" to your Application Tracker board as Applied!`, false);
+          } else {
+            showToast(chrome.runtime.lastError?.message || res?.error || "Sign in via Side Panel to save to Tracker.", true);
+          }
+        }
+      );
+    });
   }
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
