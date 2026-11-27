@@ -90,7 +90,8 @@ class GmailService:
             return {"error": "Google OAuth credentials are not configured on the server."}
 
         try:
-            import requests
+            import httpx
+
             token_url = "https://oauth2.googleapis.com/token"
             data = {
                 "code": code,
@@ -99,14 +100,13 @@ class GmailService:
                 "redirect_uri": GOOGLE_REDIRECT_URI,
                 "grant_type": "authorization_code",
             }
-            res = requests.post(token_url, data=data, timeout=10)
-            if res.ok:
+            res = httpx.post(token_url, data=data, timeout=10.0)
+            if res.is_success:
                 return res.json()
-            else:
-                logger.error(f"Google token exchange failed: {res.text}")
-                return {"error": res.text}
+            logger.error("Google token exchange failed (HTTP %s): %s", res.status_code, res.text[:300])
+            return {"error": res.text}
         except Exception as e:
-            logger.error(f"Exception during Google token exchange: {e}")
+            logger.error("Exception during Google token exchange: %s", e)
             return {"error": str(e)}
 
     def build_mime_message(

@@ -1,0 +1,64 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "SIM", "C901", "PLR0912", "PLR0915", "UP", "S"]
+ignore = [
+    "E501",    # Line length handled progressively
+    "B008",    # FastAPI Depends() in default arguments is idiomatic
+    "S101",    # assert allowed where appropriate (further relaxed in tests/)
+    "S104",    # Binding 0.0.0.0 in container configs
+    "S105",    # False positives on enum/token-type string constants
+    "S106",    # False positives on token_type="bearer"
+    "UP007",   # Optional[X] compatibility with SQLModel/Pydantic
+    "UP035",   # typing.Dict/List compatibility during progressive migration
+    "UP006",   # typing generics compatibility during progressive migration
+    "SIM108",  # Ternary style preference
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
+
+[tool.ruff.lint.pylint]
+max-branches = 15
+max-statements = 60
+
+[tool.ruff.lint.per-file-ignores]
+# Ratchet allowlist for pre-existing high-complexity modules slated for Phase 2 refactoring.
+# Remove files from this list as each Phase 2 refactor completes.
+"tests/**" = ["S", "C901", "PLR0912", "PLR0915", "B", "SIM", "E402"]
+"alembic/**" = ["C901", "PLR0912", "PLR0915", "S", "SIM", "E402"]
+"app/services/cv_generator_service.py" = ["C901", "PLR0912", "PLR0915", "SIM"]
+"app/services/gemini_service.py" = ["C901", "PLR0912", "PLR0915", "SIM"]
+"app/services/matcher_service.py" = ["C901", "PLR0912", "PLR0915", "SIM"]
+"app/services/playwright_service.py" = ["C901", "PLR0912", "PLR0915", "SIM", "S"]
+"app/services/profile_service.py" = ["C901", "PLR0912", "PLR0915", "SIM"]
+"app/services/profile_intelligence_service.py" = ["C901", "PLR0912", "PLR0915", "SIM"]
+"app/services/audit_service.py" = ["C901", "PLR0912", "PLR0915", "SIM"]
+"app/services/gmail_service.py" = ["C901", "PLR0912", "PLR0915", "SIM"]
+"app/services/answer_service.py" = ["C901", "PLR0912", "PLR0915", "SIM"]
+"app/services/company_validator.py" = ["C901", "PLR0912", "PLR0915", "SIM"]
+"app/services/salary_service.py" = ["C901", "PLR0912", "PLR0915", "SIM"]
+"app/services/link_validator.py" = ["C901", "PLR0912", "PLR0915", "SIM"]
+"app/services/scrapers/**" = ["C901", "PLR0912", "PLR0915", "SIM", "S"]
+"app/db/profile_repository.py" = ["C901", "PLR0912", "PLR0915", "SIM"]
+"app/db/tracker_repository.py" = ["C901", "PLR0912", "PLR0915", "SIM"]
+"app/db/database.py" = ["C901", "PLR0912", "PLR0915", "SIM"]
+"app/routers/**" = ["C901", "PLR0912", "PLR0915", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = false
+warn_unused_ignores = true
+ignore_missing_imports = true
+check_untyped_defs = false
+files = ["app/services", "app/db"]
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["tests/*", "alembic/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false

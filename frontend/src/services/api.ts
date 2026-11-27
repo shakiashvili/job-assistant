@@ -99,7 +99,9 @@ async function readErrorDetail(res: Response, fallback: string): Promise<string>
   try {
     const data = await res.json();
     if (data?.detail) return String(data.detail);
-  } catch {}
+  } catch (parseErr) {
+    console.debug('Error response was not JSON:', parseErr);
+  }
   return fallback;
 }
 

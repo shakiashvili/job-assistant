@@ -145,7 +145,9 @@ export const B2BMarketHub: React.FC = () => {
       const next = { ...prev, [id]: !prev[id] };
       try {
         localStorage.setItem(CHECKLIST_STORAGE_KEY, JSON.stringify(next));
-      } catch {}
+      } catch (err) {
+        console.warn('Could not persist B2B checklist in localStorage:', err);
+      }
       return next;
     });
   };
@@ -662,7 +664,9 @@ export const B2BMarketHub: React.FC = () => {
                 iban_or_account: invAccount,
                 language: lang,
               }));
-            } catch {} finally {
+            } catch (err) {
+              console.warn('B2B invoice generation failed:', err);
+            } finally {
               setInvLoading(false);
             }
           }}

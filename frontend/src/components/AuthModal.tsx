@@ -51,6 +51,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
     };
   }, [isOpen, mode]);
 
+  useEffect(() => {
+    if (!isOpen || isGate) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [isOpen, isGate, onClose]);
+
   if (!isOpen) return null;
 
   const handleSaveSmtp = async (e: React.FormEvent) => {
@@ -148,15 +157,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
       setLoading(false);
     }
   };
-
-  useEffect(() => {
-    if (!isOpen || isGate) return;
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
-  }, [isOpen, isGate, onClose]);
 
   return (
     <div

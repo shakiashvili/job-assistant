@@ -26,7 +26,17 @@ from ..db.models import (
 logger = logging.getLogger(__name__)
 
 
-def validate_safe_external_url(url: str, require_dns: bool = False) -> str:
+def _resolve_host_ips(host: str) -> List[str]:
+    """Resolves a hostname to IP strings; isolated for deterministic offline testing."""
+    addr_info = socket.getaddrinfo(host, None)
+    return [item[4][0].split("%")[0] for item in addr_info]
+
+
+def validate_safe_external_url(
+    url: str,
+    require_dns: bool = False,
+    resolver: Optional[Any] = None,
+) -> str:
     """
     Validates that a user-supplied URL does not target loopback, RFC1918 private networks,
     link-local cloud metadata endpoints (169.254.169.254), or arbitrary local files (SSRF protection).
@@ -88,10 +98,9 @@ def validate_safe_external_url(url: str, require_dns: bool = False) -> str:
         if "SSRF Protection" in str(ve):
             raise
         # Hostname rather than literal IP: resolve via DNS and inspect every returned IP
+        resolve_fn = resolver or _resolve_host_ips
         try:
-            addr_info = socket.getaddrinfo(host, None)
-            for item in addr_info:
-                resolved_ip = item[4][0].split("%")[0]
+            for resolved_ip in resolve_fn(host):
                 _check_ip_public(resolved_ip)
         except ValueError as dns_ve:
             if "SSRF Protection" in str(dns_ve):

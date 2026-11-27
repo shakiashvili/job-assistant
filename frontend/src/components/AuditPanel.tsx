@@ -218,7 +218,9 @@ export const AuditPanel: React.FC = () => {
         });
         return uploaded;
       }
-    } catch {}
+    } catch (err) {
+      console.warn('Could not load candidate DB profile:', err);
+    }
     return false;
   };
 
