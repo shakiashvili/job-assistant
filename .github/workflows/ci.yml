@@ -37,7 +37,12 @@ jobs:
           python -m playwright install chromium --with-deps
       - name: Run Python lint check (ruff)
         working-directory: backend
-        run: ruff check app tests
+        run: ruff check app tests evals
+      - name: Run offline AI golden-set & groundedness evaluation
+        working-directory: backend
+        env:
+          PYTHONPATH: .
+        run: python -m evals.eval_runner
       - name: Run Python type check (mypy, non-blocking during Phase 2 ratchet)
         working-directory: backend
         continue-on-error: true

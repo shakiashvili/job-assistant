@@ -1,0 +1,18 @@
+Analyze the job description inside <{tag}> from portal '{portal}' and return STRICT JSON matching this schema:
+{{
+  "title": "Job Title",
+  "company": "Company / Hotel / Hospital Name",
+  "portal": "{portal}",
+  "industry": "{industry}",
+  "experience_years_required": number or null,
+  "required_skills": ["list", "of", "required", "skills"],
+  "nice_to_have_skills": ["list", "of", "preferred", "skills"],
+  "visa_requirements": "Work authorization or location requirement or empty string",
+  "language_requirements": ["English", "Georgian", etc],
+  "location": "City, Country or Remote",
+  "remote_policy": "On-site", "Hybrid", or "Remote",
+  "salary_range": "Detected salary range or null",
+  "summary": "2-sentence human-readable summary of the role"
+}}
+
+{wrapped_body}

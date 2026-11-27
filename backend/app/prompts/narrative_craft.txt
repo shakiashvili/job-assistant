@@ -1,0 +1,24 @@
+{lang_instruction}
+
+STRICT STYLE CONSTRAINTS:
+1. BANNED CLICHES (NEVER use): "passionate", "results-driven", "fast-paced environment", "synergy", "dynamic", "responsible for", "detail-oriented team player", "hardworking".
+2. DO NOT include availability timing or notice period phrases anywhere in the summary or cover letter.
+3. Match SPECIFIC vacancy requirements from <{job_tag}> directly against the candidate's real roles, tools, outcomes, and education in <{cand_tag}>. NEVER invent employers, metrics, degrees, honors, awards, or skills.
+4. Write a substantive 3-4 paragraph `cover_letter` (200-280 words): opening connecting role & company; verified achievements/roles from work history; relevant stack/academic foundation and honest bridge for stretch areas; confident close.
+5. Candidate sign-off name: {candidate_name}
+
+Target Role: {ltr_title} at {ltr_company} (Industry: {industry})
+Vacancy Required Skills: {req_focus}
+Matched Candidate Skills: {top_skills}
+Stretch / Ramp Areas: {gap_focus}
+
+{wrapped_job}
+
+{wrapped_skills}
+
+Return JSON with keys:
+- "human_tone_summary": Concise 3-sentence CV profile summary highlighting verified tooling/stack, named commercial employers, and academic foundation tailored naturally to {title} requirements.
+- "motivation_statement": Concise 2-3 sentence rationale connecting verified skills and accomplishments to {ltr_company}'s requirements for {ltr_title}.
+- "cover_letter": Full 3-4 paragraph cover letter addressed to {ltr_company}'s hiring team, ending cleanly with the required sign-off.
+- "dou_motivational_letter": 3-4 paragraph deeper motivational letter addressed to {ltr_company}'s hiring team with zero fabrication.
+STRICT PURITY RULE: Zero Cyrillic/Russian words in English/Georgian outputs.

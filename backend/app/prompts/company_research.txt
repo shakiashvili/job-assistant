@@ -1,0 +1,7 @@
+Return strictly a JSON object with:
+- "summary": 2-3 concise sentences summarizing what {safe_company} does (based on general knowledge and the job posting text) and what this {safe_title} role focuses on. If uncertain about the company, clearly base the summary strictly on the posting text without inventing facts.
+- "talking_points": list of 3 concise tailored talking points the candidate can use.
+
+Target Language: {language_label}
+
+{wrapped_desc}

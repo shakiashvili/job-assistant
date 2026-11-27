@@ -7,7 +7,15 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 
 from sqlalchemy import text
-from .config import GEMINI_MODEL, GEMINI_FAST_MODEL, DATABASE_URL, FRONTEND_URL, ENABLE_PLAYWRIGHT, IS_PRODUCTION
+from .config import (
+    AI_STARTUP_HEALTHCHECK,
+    DATABASE_URL,
+    ENABLE_PLAYWRIGHT,
+    FRONTEND_URL,
+    GEMINI_FAST_MODEL,
+    GEMINI_MODEL,
+    IS_PRODUCTION,
+)
 from .db.database import engine, init_db
 from .services.gemini_service import gemini_service
 from .services.scrape_worker import SCRAPE_WORKER_MODE, scrape_queue
@@ -50,6 +58,8 @@ async def lifespan(app: FastAPI):
         )
     else:
         logger.info(f"✅ Gemini API active using model '{gemini_service.model_name}'.")
+        if IS_PRODUCTION and AI_STARTUP_HEALTHCHECK:
+            gemini_service.verify_startup_model_health(fail_loudly=True)
     yield
     try:
         await scrape_queue.stop_embedded_worker()

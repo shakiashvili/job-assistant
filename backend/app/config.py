@@ -68,6 +68,14 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 GEMINI_FAST_MODEL = os.getenv("GEMINI_FAST_MODEL", "gemini-3.5-flash-lite")
 GEMINI_TIMEOUT_MS = int(os.getenv("GEMINI_TIMEOUT_MS", "30000"))
 GEMINI_PRICING_TIER = os.getenv("GEMINI_PRICING_TIER", "standard").strip().lower() or "standard"
+AI_DAILY_TOKEN_BUDGET_PER_USER = int(os.getenv("AI_DAILY_TOKEN_BUDGET_PER_USER", "250000"))
+AI_MAX_CACHE_ENTRIES = int(os.getenv("AI_MAX_CACHE_ENTRIES", "1000"))
+AI_THIRD_PARTY_CONSENT_REQUIRED = os.getenv("AI_THIRD_PARTY_CONSENT_REQUIRED", "false").strip().lower() in (
+    "1", "true", "yes", "on"
+)
+AI_STARTUP_HEALTHCHECK = os.getenv("AI_STARTUP_HEALTHCHECK", "false").strip().lower() in (
+    "1", "true", "yes", "on"
+)
 
 # Optional Free-Tier / Low-Cost OpenAI-Compatible Fallback (e.g. OpenRouter :free models)
 AI_PROVIDER = os.getenv("AI_PROVIDER", "auto").strip().lower() or "auto"
