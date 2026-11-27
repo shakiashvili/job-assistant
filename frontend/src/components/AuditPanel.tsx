@@ -155,6 +155,14 @@ export const AuditPanel: React.FC = () => {
     draft_error?: string | null;
   } | null>(null);
 
+  const getErrorMessage = (err: unknown, fallback: string): string => {
+    if (err instanceof Error && err.message) return err.message;
+    if (typeof err === 'object' && err !== null && 'message' in err && typeof (err as { message?: unknown }).message === 'string') {
+      return (err as { message: string }).message;
+    }
+    return fallback;
+  };
+
   const handleDraftInGmail = async (job: DbJobPosting) => {
     setDraftingJobId(job.id);
     setError(null);
@@ -182,8 +190,8 @@ export const AuditPanel: React.FC = () => {
 
       // Open Gmail Drafts (file already attached!) or Compose fallback
       window.open(gmailUrl, '_blank', 'noopener,noreferrer');
-    } catch (err: any) {
-      setError(err.message || 'Failed to prepare Gmail cover letter and Word CV.');
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to prepare Gmail cover letter and Word CV.'));
     } finally {
       setDraftingJobId(null);
     }
@@ -379,7 +387,8 @@ export const AuditPanel: React.FC = () => {
             throw new Error(st.error_message || 'Background scan failed');
           }
         }
-      } catch (_asyncErr) {
+      } catch (asyncErr: unknown) {
+        console.debug('Async scrape unavailable; falling back to direct multi-portal scan:', asyncErr);
         const res = await triggerMultiPortalScrape(true);
         filteredOutCount = res.filtered_out_count || 0;
         setScrapeTaskInfo({ status: 'COMPLETED', progressPct: 100 });
@@ -395,9 +404,10 @@ export const AuditPanel: React.FC = () => {
         staged: validJobs.filter((j) => j.status === 'STAGED').length,
         filteredOut: filteredOutCount,
       });
-    } catch (err: any) {
-      setError(err.message || 'Live multi-portal scrape failed');
-      setScrapeTaskInfo({ status: 'FAILED', progressPct: 0, errorMessage: err?.message });
+    } catch (err: unknown) {
+      const msg = getErrorMessage(err, 'Live multi-portal scrape failed');
+      setError(msg);
+      setScrapeTaskInfo({ status: 'FAILED', progressPct: 0, errorMessage: msg });
     } finally {
       setIsScraping(false);
     }
@@ -585,10 +595,10 @@ export const AuditPanel: React.FC = () => {
           </div>
 
           {/* Prominent Bilingual CV Language Switcher */}
-          <div className="bg-slate-950/90 border border-slate-800 p-3.5 rounded-2xl flex flex-col gap-2 min-w-[260px]">
+          <div className="bg-slate-950/90 border border-slate-800 p-3.5 rounded-2xl flex flex-col gap-2 min-w-[260px]" role="group" aria-label="Target CV output language">
             <div className="flex items-center justify-between text-xs font-bold text-slate-300">
               <span className="flex items-center gap-1.5">
-                <Languages className="w-4 h-4 text-emerald-400" />
+                <Languages className="w-4 h-4 text-emerald-400" aria-hidden="true" />
                 <span>Target CV Output Language</span>
               </span>
               <span className="text-[10px] uppercase px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800">
@@ -599,6 +609,8 @@ export const AuditPanel: React.FC = () => {
               {([['en', '🇬🇧 English CV'], ['ka', '🇬🇪 ქართული CV']] as const).map(([lang, label]) => (
                 <button
                   key={lang}
+                  type="button"
+                  aria-pressed={cvLanguage === lang}
                   onClick={() => setCvLanguage(lang)}
                   className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border transition-all ${
                     cvLanguage === lang
@@ -670,14 +682,16 @@ export const AuditPanel: React.FC = () => {
         </div>
 
         {skillsStatusMsg && (
-          <div className="text-xs text-emerald-300 font-medium bg-emerald-950/40 border border-emerald-800/60 px-3.5 py-2 rounded-xl">
+          <div role="status" aria-live="polite" className="text-xs text-emerald-300 font-medium bg-emerald-950/40 border border-emerald-800/60 px-3.5 py-2 rounded-xl">
             {skillsStatusMsg}
           </div>
         )}
 
         {showSkillsEditor && (
           <div className="pt-2 space-y-2">
+            <label htmlFor="audit-skills-md-editor" className="sr-only">Candidate skills markdown content</label>
             <textarea
+              id="audit-skills-md-editor"
               rows={9}
               value={skillsMdContent}
               onChange={(e) => setSkillsMdContent(e.target.value)}
@@ -780,13 +794,13 @@ export const AuditPanel: React.FC = () => {
       />
 
       {/* 4. Main Audit Input & Output Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      <section aria-label="Vacancy audit and tailored CV workspace" className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column: Job URL & Description Input */}
         <div className="lg:col-span-6 space-y-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
             <div>
               <div className="flex items-center justify-between mb-1.5">
-                <label className="block text-xs font-semibold uppercase text-slate-400">
+                <label htmlFor="audit-job-url-input" className="block text-xs font-semibold uppercase text-slate-400">
                   Vacancy Application URL (Jobs.ge, HR.ge, DOU.ua, Djinni, etc.)
                 </label>
                 {jobUrl && (
@@ -797,11 +811,12 @@ export const AuditPanel: React.FC = () => {
                     className="text-xs text-emerald-400 hover:underline flex items-center gap-1"
                   >
                     <span>Open Portal Page</span>
-                    <ExternalLink className="w-3 h-3" />
+                    <ExternalLink className="w-3 h-3" aria-hidden="true" />
                   </a>
                 )}
               </div>
               <input
+                id="audit-job-url-input"
                 type="text"
                 value={jobUrl}
                 onChange={(e) => setJobUrl(e.target.value)}
@@ -812,12 +827,13 @@ export const AuditPanel: React.FC = () => {
 
             <div>
               <div className="flex items-center justify-between mb-1.5">
-                <label className="block text-xs font-semibold uppercase text-slate-400">
+                <label htmlFor="audit-job-description-input" className="block text-xs font-semibold uppercase text-slate-400">
                   Job Description (English or Georgian / ქართულად)
                 </label>
                 <span className="text-[11px] text-slate-500">Auto-estimates salary if unstated</span>
               </div>
               <textarea
+                id="audit-job-description-input"
                 rows={8}
                 value={jobText}
                 onChange={(e) => setJobText(e.target.value)}
@@ -834,19 +850,21 @@ export const AuditPanel: React.FC = () => {
               ]).map(({ lang, busy, idle, Icon }) => (
                 <button
                   key={lang}
+                  type="button"
+                  aria-busy={isAuditing && cvLanguage === lang}
                   onClick={() => handleRunAudit(lang)}
                   disabled={isAuditing}
                   className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-bold text-xs text-white bg-gradient-to-r from-emerald-700 to-teal-700 hover:from-emerald-400 hover:to-teal-500 shadow-lg shadow-emerald-600/20 transition-all disabled:opacity-50"
                 >
-                  {isAuditing && cvLanguage === lang ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Icon className="w-4 h-4" />}
+                  {isAuditing && cvLanguage === lang ? <RefreshCw className="w-4 h-4 animate-spin" aria-hidden="true" /> : <Icon className="w-4 h-4" aria-hidden="true" />}
                   <span>{isAuditing && cvLanguage === lang ? busy : idle}</span>
                 </button>
               ))}
             </div>
 
             {error && (
-              <div className="p-3 bg-rose-950/30 border border-rose-900/60 rounded-xl text-xs text-rose-300 flex items-center gap-2">
-                <AlertOctagon className="w-4 h-4 text-rose-400 flex-shrink-0" />
+              <div role="alert" className="p-3 bg-rose-950/30 border border-rose-900/60 rounded-xl text-xs text-rose-300 flex items-center gap-2">
+                <AlertOctagon className="w-4 h-4 text-rose-400 flex-shrink-0" aria-hidden="true" />
                 <span>{error}</span>
               </div>
             )}
@@ -1038,7 +1056,7 @@ export const AuditPanel: React.FC = () => {
               </div>
 
               {saveSuccessMsg && (
-                <div className="text-center text-xs text-emerald-400 font-medium py-1">
+                <div role="status" aria-live="polite" className="text-center text-xs text-emerald-400 font-medium py-1">
                   ✓ {saveSuccessMsg}
                 </div>
               )}
@@ -1046,7 +1064,7 @@ export const AuditPanel: React.FC = () => {
           ) : (
             <div className="bg-slate-900/50 border border-dashed border-slate-800 rounded-2xl p-10 flex flex-col items-center justify-center text-center space-y-3 min-h-[420px]">
               <div className="w-12 h-12 rounded-2xl bg-slate-800/80 flex items-center justify-center text-emerald-400">
-                <Search className="w-6 h-6" />
+                <Search className="w-6 h-6" aria-hidden="true" />
               </div>
               <div>
                 <h4 className="text-sm font-semibold text-slate-200">
@@ -1059,7 +1077,7 @@ export const AuditPanel: React.FC = () => {
             </div>
           )}
         </div>
-      </div>
+      </section>
 
       {/* Screening Answers Generator */}
       {auditResult && (
