@@ -1,102 +1,23 @@
 import logging
-import time
-from datetime import datetime, UTC
-from typing import Dict, Any, List, Optional
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-import httpx
+from datetime import UTC, datetime
+from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from ..db.models import User
 from ..db.profile_repository import ground_truth_store
 from ..services.auth_service import get_current_user
+from ..services.b2b_tax_service import (
+    DEFAULT_FX_TO_GEL,
+    _FX_CACHE,  # noqa: F401 - re-exported for test cache resets
+    compute_georgia_b2b_net,
+    compute_timezone_matrix,
+    get_cached_nbg_rates_async,
+)
 from ..services.gemini_service import gemini_service, wrap_untrusted_input
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/b2b", tags=["Georgia & Global Remote B2B Toolkit"])
-
-DEFAULT_FX_TO_GEL = {
-    "GEL": 1.0,
-    "USD": 2.70,
-    "EUR": 2.90,
-    "GBP": 3.45,
-}
-
-NBG_RATES_URL = "https://nbg.gov.ge/gw/api/ct/monetarypolicy/currencies/en/json/"
-_FX_CACHE: Dict[str, Any] = {
-    "rates": dict(DEFAULT_FX_TO_GEL),
-    "source": "default_fallback",
-    "fetched_at": 0.0,
-    "as_of": None,
-}
-_FX_CACHE_TTL_SEC = 4 * 3600  # 4 hours
-
-
-def _ingest_nbg_payload(payload: Any, now: float) -> Optional[Dict[str, Any]]:
-    if not isinstance(payload, list) or not payload:
-        return None
-    block = payload[0]
-    currencies = block.get("currencies") or []
-    parsed = {"GEL": 1.0}
-    for item in currencies:
-        code = str(item.get("code") or "").upper()
-        qty = float(item.get("quantity") or 1)
-        rate = float(item.get("rate") or 0)
-        if code in ("USD", "EUR", "GBP") and rate > 0 and qty > 0:
-            parsed[code] = round(rate / qty, 4)
-    if len(parsed) >= 3:
-        _FX_CACHE["rates"] = parsed
-        _FX_CACHE["source"] = "nbg_live"
-        _FX_CACHE["fetched_at"] = now
-        _FX_CACHE["as_of"] = str(block.get("date") or datetime.now(UTC).date().isoformat())[:10]
-        return dict(_FX_CACHE)
-    return None
-
-
-def get_cached_nbg_rates(allow_network: bool = True) -> Dict[str, Any]:
-    """
-    Returns GEL conversion rates for USD/EUR/GBP from National Bank of Georgia (nbg.gov.ge)
-    with in-memory TTL caching and deterministic offline fallback.
-    """
-    now = time.time()
-    if now - _FX_CACHE["fetched_at"] < _FX_CACHE_TTL_SEC and _FX_CACHE["source"] == "nbg_live":
-        return dict(_FX_CACHE)
-
-    if not allow_network:
-        return dict(_FX_CACHE)
-
-    try:
-        resp = httpx.get(NBG_RATES_URL, timeout=3.5)
-        if resp.status_code == 200:
-            updated = _ingest_nbg_payload(resp.json(), now)
-            if updated is not None:
-                return updated
-    except Exception as exc:
-        logger.debug(f"NBG live FX rate fetch skipped (using fallback): {exc}")
-
-    return dict(_FX_CACHE)
-
-
-async def get_cached_nbg_rates_async(allow_network: bool = True) -> Dict[str, Any]:
-    """Non-blocking async NBG FX rate fetcher with TTL cache and deterministic offline fallback."""
-    now = time.time()
-    if now - _FX_CACHE["fetched_at"] < _FX_CACHE_TTL_SEC and _FX_CACHE["source"] == "nbg_live":
-        return dict(_FX_CACHE)
-
-    if not allow_network:
-        return dict(_FX_CACHE)
-
-    try:
-        async with httpx.AsyncClient(timeout=3.5) as client:
-            resp = await client.get(NBG_RATES_URL)
-        if resp.status_code == 200:
-            updated = _ingest_nbg_payload(resp.json(), now)
-            if updated is not None:
-                return updated
-    except Exception as exc:
-        logger.debug(f"Async NBG live FX rate fetch skipped (using fallback): {exc}")
-
-    return dict(_FX_CACHE)
 
 
 class TaxCalculatorRequest(BaseModel):
@@ -139,193 +60,34 @@ async def fetch_georgia_fx_rates() -> Dict[str, Any]:
 
 @router.post("/tax-calculator")
 async def calculate_georgia_b2b_net(req: TaxCalculatorRequest) -> Dict[str, Any]:
-    """
-    Compares Georgian Individual Entrepreneur 1% Small Business B2B taxation (up to 500,000 GEL/year)
-    against a standard Georgian labor contract (20% Personal Income Tax + 2% employee pension).
-    """
+    """Compares Georgian IE 1% Small Business B2B taxation against a standard Georgian labor contract."""
     cur = req.currency.upper()
     if req.custom_fx_to_gel:
-        fx = float(req.custom_fx_to_gel)
-        fx_source = "custom"
-        fx_as_of = None
+        fx, fx_source, fx_as_of = float(req.custom_fx_to_gel), "custom", None
     else:
         nbg = await get_cached_nbg_rates_async(allow_network=(cur != "GEL"))
         fx = float(nbg["rates"].get(cur, DEFAULT_FX_TO_GEL.get(cur, 1.0)))
         fx_source = "nbg_live" if nbg.get("source") == "nbg_live" and cur != "GEL" else "default_fallback"
         fx_as_of = nbg.get("as_of")
 
-    if req.billing_period == "hourly":
-        monthly_orig = req.amount * req.hours_per_month
-    elif req.billing_period == "annual":
-        monthly_orig = req.amount / 12.0
-    else:
-        monthly_orig = req.amount
-
-    monthly_gross_gel = monthly_orig * fx
-    projected_annual_gross_gel = monthly_gross_gel * 12.0
-    ytd_gel = float(req.ytd_revenue_gel or 0.0)
-
-    # Article 90 (Georgian Tax Code): 3% applies starting from the month in which ACTUAL cumulative
-    # calendar-year turnover exceeds 500,000 GEL — NEVER purely from an annualized projection.
-    actual_cumulative_gel = ytd_gel + monthly_gross_gel
-    actual_under_500k_cap = actual_cumulative_gel <= 500_000.0
-    b2b_tax_rate = 0.01 if actual_under_500k_cap else 0.03
-    b2b_tax_gel = monthly_gross_gel * b2b_tax_rate
-    transfer_fee_gel = monthly_gross_gel * (req.transfer_fee_pct / 100.0) if cur != "GEL" else 0.0
-    b2b_net_gel = monthly_gross_gel - b2b_tax_gel - transfer_fee_gel
-    b2b_net_orig = b2b_net_gel / fx
-
-    # Separate 12-month run-rate projection & crossing-month analysis (distinct from current-month tax)
-    projected_cumulative_gel = ytd_gel + projected_annual_gross_gel
-    projected_exceeds_500k = projected_cumulative_gel > 500_000.0
-    threshold_crossing_month: Optional[int] = None
-    if ytd_gel > 500_000.0:
-        threshold_crossing_month = 0  # Already exceeded before this billing month
-    elif monthly_gross_gel > 0 and projected_exceeds_500k:
-        for m_idx in range(1, 13):
-            if ytd_gel + (monthly_gross_gel * m_idx) > 500_000.0:
-                threshold_crossing_month = m_idx
-                break
-
-    projected_annual_tax_gel = 0.0
-    for m_idx in range(1, 13):
-        cum_m = ytd_gel + (monthly_gross_gel * m_idx)
-        projected_annual_tax_gel += monthly_gross_gel * (0.01 if cum_m <= 500_000.0 else 0.03)
-    projected_effective_tax_rate_pct = (
-        round((projected_annual_tax_gel / projected_annual_gross_gel) * 100.0, 2)
-        if projected_annual_gross_gel > 0
-        else 1.0
+    return compute_georgia_b2b_net(
+        amount=req.amount,
+        currency=cur,
+        billing_period=req.billing_period,
+        hours_per_month=req.hours_per_month,
+        fx=fx,
+        fx_source=fx_source,
+        fx_as_of=fx_as_of,
+        include_pension_for_labor=req.include_pension_for_labor,
+        transfer_fee_pct=req.transfer_fee_pct,
+        ytd_revenue_gel=req.ytd_revenue_gel,
     )
-
-    # 2. Standard Georgian Labor Contract (2% employee pension + 20% income tax on remaining 98% = 21.6% total)
-    pension_rate = 0.02 if req.include_pension_for_labor else 0.0
-    pension_gel = monthly_gross_gel * pension_rate
-    taxable_labor_gel = monthly_gross_gel - pension_gel
-    pit_gel = taxable_labor_gel * 0.20
-    labor_net_gel = monthly_gross_gel - pension_gel - pit_gel
-    labor_net_orig = labor_net_gel / fx
-
-    monthly_savings_gel = max(0.0, b2b_net_gel - labor_net_gel)
-    effective_hourly_net_orig = b2b_net_orig / max(req.hours_per_month, 1)
-
-    return {
-        "currency": cur,
-        "fx_to_gel": round(fx, 4),
-        "fx_source": fx_source,
-        "fx_as_of": fx_as_of,
-        "monthly_gross_orig": round(monthly_orig, 2),
-        "monthly_gross_gel": round(monthly_gross_gel, 2),
-        "ytd_revenue_gel": round(ytd_gel, 2),
-        "actual_cumulative_gel": round(actual_cumulative_gel, 2),
-        "under_500k_cap": actual_under_500k_cap,
-        "actual_cap_usage_pct": round(min(999.0, (actual_cumulative_gel / 500_000.0) * 100.0), 1),
-        "annual_gross_gel": round(projected_annual_gross_gel, 2),
-        "cumulative_annual_gel": round(projected_cumulative_gel, 2),
-        "projected_annual_gross_gel": round(projected_annual_gross_gel, 2),
-        "projected_cumulative_gel": round(projected_cumulative_gel, 2),
-        "projected_exceeds_500k_cap": projected_exceeds_500k,
-        "threshold_crossing_month": threshold_crossing_month,
-        "projected_annual_tax_gel": round(projected_annual_tax_gel, 2),
-        "projected_effective_tax_rate_pct": projected_effective_tax_rate_pct,
-        "projected_cap_usage_pct": round(min(999.0, (projected_cumulative_gel / 500_000.0) * 100.0), 1),
-        "b2b_small_business": {
-            "tax_rate_pct": round(b2b_tax_rate * 100, 1),
-            "tax_gel": round(b2b_tax_gel, 2),
-            "transfer_fee_gel": round(transfer_fee_gel, 2),
-            "net_gel": round(b2b_net_gel, 2),
-            "net_orig": round(b2b_net_orig, 2),
-            "hourly_net_orig": round(effective_hourly_net_orig, 2),
-        },
-        "standard_labor_contract": {
-            "pension_gel": round(pension_gel, 2),
-            "income_tax_gel": round(pit_gel, 2),
-            "net_gel": round(labor_net_gel, 2),
-            "net_orig": round(labor_net_orig, 2),
-        },
-        "monthly_b2b_advantage_gel": round(monthly_savings_gel, 2),
-        "cap_usage_pct": round(min(999.0, (actual_cumulative_gel / 500_000.0) * 100.0), 1),
-        "notes": [
-            "Georgian Tax Code Article 90: Small Business 1% rate applies while actual cumulative calendar-year turnover stays at or below 500,000 GEL; the 3% rate starts in the month the threshold is exceeded.",
-            "Scope: models the standard 500,000 GEL Small Business threshold only (specialized exceptions such as the 700,000 GEL wine-/agro-tourism cap are excluded).",
-            "Projected 12-month totals are estimates only and do not apply the 3% rate before the threshold is actually crossed.",
-            "Foreign B2B digital service exports are outside Georgian VAT territorial scope (consult a Georgian CPA for tax filing advice).",
-        ],
-    }
-
-
-def _resolve_tz_offset_hours(tz_name: str, fallback_offset: int) -> tuple[int, bool]:
-    """Resolves live UTC offset and DST active flag via zoneinfo with offline fallback."""
-    try:
-        now_local = datetime.now(ZoneInfo(tz_name))
-        utc_off = now_local.utcoffset()
-        dst_off = now_local.dst()
-        offset_h = int(round(utc_off.total_seconds() / 3600)) if utc_off is not None else fallback_offset
-        is_dst = bool(dst_off and dst_off.total_seconds() != 0)
-        return offset_h, is_dst
-    except (ZoneInfoNotFoundError, Exception):
-        return fallback_offset, False
-
-
-def _format_wrapped_overlap(hours: List[int]) -> str:
-    if not hours:
-        return "Async handoff only"
-    # Detect contiguous ranges cleanly even across midnight boundaries
-    runs: List[List[int]] = []
-    for h in sorted(hours):
-        if not runs or h != runs[-1][-1] + 1:
-            runs.append([h])
-        else:
-            runs[-1].append(h)
-    return ", ".join(f"{r[0]:02d}:00–{(r[-1] + 1) % 24:02d}:00 GET" for r in runs)
 
 
 @router.get("/timezone-matrix")
 def get_tbilisi_timezone_matrix(work_start_get: int = 11, work_end_get: int = 19) -> Dict[str, Any]:
-    """
-    Computes exact DST-aware working-hour overlap between Georgia Time (GET, UTC+4 fixed year-round)
-    and key remote hiring hubs across Europe, UK, Middle East, and North America.
-    """
-    start_get = max(0, min(23, int(work_start_get)))
-    end_get = max(1, min(24, int(work_end_get)))
-    if end_get <= start_get:
-        end_get = min(24, start_get + 8)
-
-    ge_hours = set(range(start_get, end_get))
-    tbilisi_offset, _ = _resolve_tz_offset_hours("Asia/Tbilisi", 4)
-
-    regions = [
-        {"region": "UAE / Gulf (Dubai GST)", "tz": "Asia/Dubai", "fallback_offset": 4},
-        {"region": "Central Europe (Berlin / Warsaw)", "tz": "Europe/Berlin", "fallback_offset": 1},
-        {"region": "United Kingdom (London)", "tz": "Europe/London", "fallback_offset": 0},
-        {"region": "US East Coast (New York)", "tz": "America/New_York", "fallback_offset": -5},
-        {"region": "US West Coast (San Francisco)", "tz": "America/Los_Angeles", "fallback_offset": -8},
-    ]
-
-    matrix: List[Dict[str, Any]] = []
-    for reg in regions:
-        cur_offset, dst_active = _resolve_tz_offset_hours(reg["tz"], reg["fallback_offset"])
-        diff = tbilisi_offset - cur_offset
-        client_start_in_get = 9 + diff
-        client_end_in_get = 17 + diff
-        client_hours_in_get = {h % 24 for h in range(client_start_in_get, client_end_in_get)}
-        overlap = sorted(ge_hours & client_hours_in_get)
-        recommended_get_start = max(8, min(16, client_start_in_get % 24))
-        wrap_suffix = " (+1d)" if client_end_in_get > 24 else ""
-        dst_tag = " · DST" if dst_active else ""
-        matrix.append({
-            "region": f"{reg['region']}{dst_tag}",
-            "hours_behind_tbilisi": diff,
-            "client_hours_tbilisi_time": f"{client_start_in_get % 24:02d}:00–{client_end_in_get % 24:02d}:00 GET{wrap_suffix}",
-            "overlap_hours_count": len(overlap),
-            "overlap_window_get": _format_wrapped_overlap(overlap),
-            "recommended_shift_get": f"{recommended_get_start:02d}:00–{(recommended_get_start + 8) % 24:02d}:00 GET",
-        })
-
-    return {
-        "base_timezone": "Asia/Tbilisi (GET, UTC+4, No DST)",
-        "selected_shift_get": f"{start_get:02d}:00–{end_get:02d}:00 GET",
-        "regions": matrix,
-    }
+    """Computes exact DST-aware working-hour overlap between Georgia Time (UTC+4) and global hubs."""
+    return compute_timezone_matrix(work_start_get=work_start_get, work_end_get=work_end_get)
 
 
 @router.post("/proposal")
