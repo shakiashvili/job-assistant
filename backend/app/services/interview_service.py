@@ -1,8 +1,11 @@
+import json
 import logging
+import re
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from sqlmodel import Session, select
 
-from ..db.models import ApplicationTracker, InterviewRound
+from ..db.models import ApplicationTracker, InterviewRound, JobPosting
 from ..services.gemini_service import gemini_service, wrap_untrusted_input
 from ..db.profile_repository import ground_truth_store
 
@@ -53,6 +56,8 @@ class InterviewService:
         company = application.company_name or "Hiring Company"
         role = application.job_title or "Specialist"
         cand_ctx = self._get_candidate_context(application, user=user)
+        jd_text = self._get_vacancy_description(application, session=session)
+        gap_info = self._analyze_vacancy_gaps_and_plan(role, company, round_type, jd_text, cand_ctx)
 
         if session and application.id:
             existing_round = session.exec(
@@ -63,6 +68,7 @@ class InterviewService:
             ).first()
             if existing_round and existing_round.predicted_questions:
                 heuristic_extra = self._build_glossary_and_followups(company, role, round_type, cand_ctx)
+                mock_history = self._load_mock_history(existing_round.reflection_notes)
                 return {
                     "round_id": existing_round.id,
                     "application_id": application.id,
@@ -74,6 +80,13 @@ class InterviewService:
                     "predicted_questions": existing_round.predicted_questions,
                     "technical_glossary": heuristic_extra["technical_glossary"],
                     "follow_up_questions": heuristic_extra["follow_up_questions"],
+                    "experience_gaps": gap_info["experience_gaps"],
+                    "prep_plan": gap_info["prep_plan"],
+                    "mock_progress": {
+                        "answered_count": len(mock_history),
+                        "total_questions": len(existing_round.predicted_questions),
+                        "evaluations": mock_history,
+                    },
                     "candidate_notes": existing_round.candidate_notes or "",
                 }
 
@@ -94,6 +107,7 @@ class InterviewService:
         if session and application.id:
             round_rec = InterviewRound(
                 application_id=application.id,
+                user_id=getattr(user, "id", None) or application.user_id,
                 round_type=round_type,
                 company_intel_summary=intel_data["company_intel"],
                 predicted_questions=intel_data["predicted_questions"],
@@ -114,7 +128,157 @@ class InterviewService:
             "predicted_questions": intel_data["predicted_questions"],
             "technical_glossary": technical_glossary,
             "follow_up_questions": follow_up_questions,
+            "experience_gaps": gap_info["experience_gaps"],
+            "prep_plan": gap_info["prep_plan"],
+            "mock_progress": {
+                "answered_count": 0,
+                "total_questions": len(intel_data["predicted_questions"]),
+                "evaluations": [],
+            },
             "candidate_notes": "",
+        }
+
+    @staticmethod
+    def _get_vacancy_description(application: ApplicationTracker, session: Optional[Session] = None) -> str:
+        snap = application.jd_snapshot if isinstance(application.jd_snapshot, dict) else {}
+        raw = str(snap.get("description_raw") or "").strip()
+        if raw:
+            return raw
+        if session and application.job_posting_id:
+            jp = session.get(JobPosting, application.job_posting_id)
+            if jp and jp.description_raw:
+                return jp.description_raw.strip()
+        return ""
+
+    @staticmethod
+    def _analyze_vacancy_gaps_and_plan(
+        role: str,
+        company: str,
+        round_type: str,
+        jd_text: str,
+        cand_ctx: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        cand_skills_low = {s.lower() for s in (cand_ctx.get("skills") or [])}
+        jd_low = (jd_text or "").lower()
+        common_topics = [
+            "Playwright", "Cypress", "Selenium", "Python", "TypeScript", "JavaScript", "SQL", "PostgreSQL",
+            "REST API", "Postman", "Docker", "Kubernetes", "CI/CD", "Git", "Jira", "IFRS", "Financial Modeling",
+            "Excel", "Power BI", "Tableau", "Compliance", "AML", "KYC", "Project Management", "Agile", "Scrum",
+            "CRM", "Salesforce", "HubSpot", "Opera PMS", "Supply Chain", "Procurement",
+        ]
+        mentioned = [t for t in common_topics if re.search(rf"\b{re.escape(t.lower())}\b", jd_low)]
+        gaps = [t for t in mentioned if t.lower() not in cand_skills_low][:6]
+        prep_plan = [
+            f"1. Review {company}'s product/service model and connect it to your verified background for {role}.",
+            f"2. Prepare 3 concrete STAR examples grounded strictly in your real roles ({round_type} focus).",
+            (
+                f"3. Address potential job-description gap areas honestly (bridge via transferable skills, never fabricate): {', '.join(gaps)}."
+                if gaps
+                else "3. Rehearse deep-dive explanations of your top verified tools and quality/delivery decisions."
+            ),
+            f"4. Practice answering 1 mock question at a time below and prepare 2-3 thoughtful questions for {company}.",
+        ]
+        return {"experience_gaps": gaps, "prep_plan": prep_plan}
+
+    @staticmethod
+    def _load_mock_history(reflection_notes: Optional[str]) -> List[Dict[str, Any]]:
+        if not reflection_notes:
+            return []
+        try:
+            parsed = json.loads(reflection_notes)
+            if isinstance(parsed, dict) and isinstance(parsed.get("mock_evaluations"), list):
+                return parsed["mock_evaluations"]
+        except Exception:
+            pass
+        return []
+
+    def evaluate_mock_answer(
+        self,
+        application: ApplicationTracker,
+        round_rec: InterviewRound,
+        question_id: int,
+        answer_text: str,
+        session: Session,
+        user: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """Evaluates one candidate mock-interview answer for relevance, STAR completeness, and missing points without inventing experience."""
+        questions = list(round_rec.predicted_questions or [])
+        target_q = next((q for q in questions if int(q.get("id", -1)) == int(question_id)), None)
+        if not target_q:
+            target_q = {"id": question_id, "category": "General", "question": f"Interview question #{question_id}"}
+
+        cand_ctx = self._get_candidate_context(application, user=user)
+        ans_clean = (answer_text or "").strip()
+        ans_low = ans_clean.lower()
+        words = re.findall(r"[A-Za-zÀ-ÿ\u10A0-\u10FF0-9]+", ans_clean)
+        word_count = len(words)
+
+        # Evaluate STAR coverage honestly
+        star_checks = {
+            "situation": bool(re.search(r"\b(when|during|at|project|team|company|sprint|client|situation|context|როდესაც|პროექტ)\b", ans_low)),
+            "task": bool(re.search(r"\b(goal|objective|responsible|needed|task|challenge|problem|მიზან|ამოცან)\b", ans_low)),
+            "action": bool(re.search(r"\b(built|tested|designed|created|implemented|analyzed|resolved|configured|wrote|led|reviewed|automated|გავაკეთ|შევქმენ|შევამოწმ)\b", ans_low)),
+            "result": bool(re.search(r"\b(result|outcome|reduced|improved|prevented|delivered|passed|resolved|caught|faster|reliable|შედეგ|გაუმჯობეს)\b", ans_low)),
+        }
+        covered_skills = [s for s in (cand_ctx.get("skills") or []) if s.lower() in ans_low][:8]
+        q_tokens = {
+            t for t in re.findall(r"[a-z]{4,}", str(target_q.get("question") or "").lower())
+            if t not in ("what", "when", "where", "which", "with", "that", "this", "from", "have", "your", "about", "describe", "tell", "time")
+        }
+        matched_q_terms = [t for t in q_tokens if t in ans_low]
+
+        star_score = sum(15 for ok in star_checks.values() if ok)
+        depth_score = 20 if word_count >= 55 else (12 if word_count >= 25 else 5)
+        relevance_score = min(20, len(matched_q_terms) * 6 + len(covered_skills) * 4)
+        total_score = min(100, star_score + depth_score + relevance_score)
+
+        missing_points: List[str] = []
+        suggestions: List[str] = []
+        if not star_checks["situation"]:
+            missing_points.append("Situation / context was not clearly stated.")
+            suggestions.append("Open with 1 sentence naming the real project, team, or setting from your profile.")
+        if not star_checks["task"]:
+            missing_points.append("Specific responsibility or goal (Task) was unclear.")
+            suggestions.append("Clarify what you personally were responsible for achieving or verifying.")
+        if not star_checks["action"]:
+            missing_points.append("Concrete personal actions and tools used were missing.")
+            suggestions.append("Explain the exact steps you took and which verified tools/methods you applied.")
+        if not star_checks["result"]:
+            missing_points.append("Observable outcome or learning (Result) was omitted.")
+            suggestions.append("Close with the real qualitative or verified outcome (do not invent percentages).")
+        if word_count < 30:
+            missing_points.append("Answer is brief; interviewers usually expect a 60–90 second structured explanation.")
+        if not suggestions:
+            suggestions.append("Strong structure! Keep delivery concise (60–90 seconds) and highlight one concrete trade-off you considered.")
+
+        eval_entry = {
+            "question_id": int(question_id),
+            "question": str(target_q.get("question") or ""),
+            "category": str(target_q.get("category") or "General"),
+            "answer_text": ans_clean,
+            "relevance_score": total_score,
+            "word_count": word_count,
+            "star_coverage": star_checks,
+            "covered_verified_skills": covered_skills,
+            "missing_points": missing_points,
+            "improvement_suggestions": suggestions,
+            "evaluated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        history = [h for h in self._load_mock_history(round_rec.reflection_notes) if int(h.get("question_id", -1)) != int(question_id)]
+        history.append(eval_entry)
+        round_rec.reflection_notes = json.dumps({"mock_evaluations": history}, ensure_ascii=False)
+        session.add(round_rec)
+        session.commit()
+        session.refresh(round_rec)
+
+        return {
+            "evaluation": eval_entry,
+            "mock_progress": {
+                "answered_count": len(history),
+                "total_questions": len(questions),
+                "evaluations": history,
+            },
         }
 
     def _build_glossary_and_followups(

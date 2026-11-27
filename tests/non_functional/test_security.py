@@ -118,7 +118,8 @@ def test_refresh_token_rotation_and_type_isolation():
     assert reg.status_code == 201
     reg_data = reg.json()
     access_tok = reg_data["access_token"]
-    refresh_tok = reg_data["refresh_token"]
+    assert "refresh_token" not in reg_data
+    refresh_tok = reg.cookies.get("talentflow_refresh_token")
     assert access_tok and refresh_tok
 
     assert client.get("/api/auth/me", headers={"Authorization": f"Bearer {access_tok}"}).status_code == 200
@@ -129,8 +130,10 @@ def test_refresh_token_rotation_and_type_isolation():
 
     assert client.post("/api/auth/refresh", json={"refresh_token": access_tok}).status_code == 401
 
-    ok_refresh = client.post("/api/auth/refresh", json={"refresh_token": refresh_tok})
+    client.cookies.set("talentflow_refresh_token", refresh_tok)
+    ok_refresh = client.post("/api/auth/refresh")
     assert ok_refresh.status_code == 200
+    assert "refresh_token" not in ok_refresh.json()
     assert ok_refresh.json()["user"]["email"] == unique_email
 
 

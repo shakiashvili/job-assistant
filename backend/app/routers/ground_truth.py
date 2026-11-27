@@ -130,6 +130,12 @@ class SkillsMdPayload(BaseModel):
     content: str
 
 
+class ProfileImportApplyRequest(BaseModel):
+    filename: str = "imported_cv"
+    extracted: Dict[str, Any]
+    section_modes: Dict[str, str] = Field(default_factory=dict)
+
+
 class GenerateEditionRequest(BaseModel):
     edition: str = "ats"  # "ats", "recruiter", or "tailored"
     target_role: Optional[str] = None
@@ -137,6 +143,74 @@ class GenerateEditionRequest(BaseModel):
     job_description: Optional[str] = ""
     job_url: Optional[str] = None
     cv_language: str = "en"
+
+
+@router.get("/profile/intelligence")
+def get_profile_intelligence(current_user: User = Depends(get_current_user)):
+    """Returns profile completeness, duplicate skill detection, timeline validation warnings, recommendations, and provenance."""
+    from ..services.profile_intelligence_service import compute_profile_intelligence
+
+    owner = current_user.email if not _is_guest(current_user) else None
+    uid = current_user.id if not _is_guest(current_user) else None
+    gt = ground_truth_store.get_data(owner_email=owner, user_id=uid)
+    prof = ground_truth_store.get_profile_record(owner_email=owner, user_id=uid)
+    return compute_profile_intelligence(gt, parsed_skills=prof.parsed_skills if prof else {})
+
+
+@router.post("/profile/import-preview")
+async def preview_profile_import(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    """Extracts structured fields from PDF/DOCX/MD/TXT for candidate review without overwriting saved profile data."""
+    from ..services.profile_intelligence_service import build_import_preview
+    from ..services.upload_utils import read_upload_bounded
+
+    raw_bytes = await read_upload_bounded(file, MAX_UPLOAD_SIZE_BYTES)
+    if len(raw_bytes) == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    filename = file.filename or "resume.pdf"
+    owner = current_user.email if not _is_guest(current_user) else None
+    uid = current_user.id if not _is_guest(current_user) else None
+    existing_gt = ground_truth_store.get_data(owner_email=owner, user_id=uid)
+    try:
+        return build_import_preview(raw_bytes, filename=filename, existing_gt=existing_gt)
+    except ValueError as parse_err:
+        raise HTTPException(status_code=400, detail=str(parse_err))
+
+
+@router.post("/profile/import-apply")
+def apply_profile_import(
+    payload: ProfileImportApplyRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Applies candidate-reviewed extracted fields using per-section merge/replace/skip modes (never silently overwriting)."""
+    from ..services.profile_intelligence_service import apply_import_merge, compute_profile_intelligence
+    from ..services.scrapers.scraper_orchestrator import scraper_orchestrator
+    from ..services.cv_generator_service import cv_generator_service
+
+    owner = current_user.email if not _is_guest(current_user) else None
+    uid = current_user.id if not _is_guest(current_user) else None
+    existing_gt = ground_truth_store.get_data(owner_email=owner, user_id=uid)
+    merged_gt = apply_import_merge(
+        existing_gt=existing_gt,
+        extracted=payload.extracted,
+        section_modes=payload.section_modes,
+        source_filename=payload.filename,
+    )
+    updated_gt = ground_truth_store.update_data(merged_gt, owner_email=owner, user_id=uid)
+    scraper_orchestrator.rescore_existing_jobs(owner_email=owner, user_id=uid)
+    synced_cv_versions = cv_generator_service.sync_user_cv_versions(
+        user_id=current_user.id,
+        owner_email=current_user.email,
+    )
+    prof = ground_truth_store.get_profile_record(owner_email=owner, user_id=uid)
+    return {
+        "status": "success",
+        "synced_cv_versions": synced_cv_versions,
+        "data": updated_gt,
+        "intelligence": compute_profile_intelligence(updated_gt, parsed_skills=prof.parsed_skills if prof else {}),
+    }
 
 
 @router.get("/ground-truth")
@@ -659,12 +733,14 @@ def _serve_resume_file(file_path: Path, safe_name: str) -> FileResponse:
 
 
 @router.post("/resumes/generate-edition")
-def generate_cv_edition(
+async def generate_cv_edition(
     req: GenerateEditionRequest,
     current_user: User = Depends(get_current_user),
 ):
-    """Generates an ATS-Optimized, Recruiter-Ready, or Job-Tailored CV (Word .docx + PDF) + Cover Letter."""
+    """Generates an ATS-Optimized, Recruiter-Ready, or Job-Tailored CV (Word .docx + PDF) + Cover & Motivational Letters."""
     from ..services.cv_generator_service import cv_generator_service
+    from ..services.audit_service import audit_service, validate_safe_external_url
+    from ..services.portal_detector import detect_portal_from_html
 
     live = load_live_candidate_profile(current_user.email, user_id=current_user.id)
     gt = ground_truth_store.get_data(owner_email=current_user.email, user_id=current_user.id)
@@ -676,8 +752,29 @@ def generate_cv_edition(
         or ("ATS Edition" if req.edition == "ats" else "Recruiter Edition" if req.edition == "recruiter" else "Target Company")
     )
     desc = (req.job_description or "").strip()
+    url_fetched = False
+    url_fetch_warning: Optional[str] = None
     if req.job_url and req.job_url.strip():
-        desc = f"{desc}\nJob URL: {req.job_url.strip()}".strip()
+        clean_url = req.job_url.strip()
+        try:
+            validate_safe_external_url(clean_url, require_dns=False)
+            if len(desc) < 120:
+                html_raw = await audit_service.fetch_url_content(clean_url)
+                if html_raw:
+                    _, meta = detect_portal_from_html(html_raw, clean_url)
+                    fetched_desc = str(meta.get("description_text") or "").strip()
+                    if len(fetched_desc) >= 80:
+                        desc = f"{desc}\n\n{fetched_desc}".strip() if desc else fetched_desc
+                        url_fetched = True
+                    else:
+                        url_fetch_warning = "Could not extract full vacancy text from URL; paste the job description for deeper tailoring."
+                else:
+                    url_fetch_warning = "Target job URL returned no readable text; paste the job description for deeper tailoring."
+        except ValueError as ssrf_err:
+            raise HTTPException(status_code=400, detail=str(ssrf_err))
+        except Exception as fetch_err:
+            logger.debug("Optional URL description fetch skipped for %s: %s", clean_url, fetch_err)
+            url_fetch_warning = "Could not fetch job URL automatically; paste the job description for full tailoring."
 
     pkg = cv_generator_service.prepare_email_application_package(
         job_title=role,
@@ -698,8 +795,16 @@ def generate_cv_edition(
     )
 
     cv_version_id: Optional[int] = None
+    persistence_status = "saved"
+    persistence_error: Optional[str] = None
     try:
         with Session(engine) as session:
+            cv_sections = dict(pkg.get("cv_sections") or {})
+            cv_sections["template_name"] = req.edition or "ats"
+            if desc:
+                cv_sections["job_description_snapshot"] = desc[:6000]
+            if req.job_url:
+                cv_sections["job_url"] = req.job_url.strip()
             cv_ver = CVVersion(
                 user_id=current_user.id,
                 title=f"{role} — {company} ({req.edition.upper()})",
@@ -707,8 +812,10 @@ def generate_cv_edition(
                 target_role=role,
                 edition=req.edition or "ats",
                 cv_language=pkg.get("cv_language") or req.cv_language or "en",
-                structured_content=pkg.get("cv_sections") or {},
+                structured_content=cv_sections,
                 rendered_html=pkg.get("rendered_html") or "",
+                cover_letter=str(pkg.get("cover_letter") or ""),
+                motivational_letter=str(pkg.get("motivational_letter") or ""),
                 pdf_filename=pkg.get("pdf_filename"),
                 docx_filename=pkg.get("docx_filename"),
                 version_number=1,
@@ -718,9 +825,21 @@ def generate_cv_edition(
             session.refresh(cv_ver)
             cv_version_id = cv_ver.id
     except Exception as ver_err:
-        logger.debug("Could not persist CVVersion snapshot: %s", ver_err)
+        persistence_status = "partial_failure"
+        persistence_error = str(ver_err)[:200]
+        logger.error("Failed to persist CVVersion snapshot for user=%s: %s", current_user.id, ver_err, exc_info=True)
 
-    return {"status": "ok", "edition": req.edition, "cv_version_id": cv_version_id, **pkg}
+    return {
+        "status": "ok" if persistence_status == "saved" else "partial_success",
+        "persistence_status": persistence_status,
+        "persistence_error": persistence_error,
+        "url_fetched": url_fetched,
+        "url_fetch_warning": url_fetch_warning,
+        "extracted_description_preview": desc[:500] if url_fetched else None,
+        "edition": req.edition,
+        "cv_version_id": cv_version_id,
+        **pkg,
+    }
 
 
 class CVVersionCreateRequest(BaseModel):
@@ -729,8 +848,11 @@ class CVVersionCreateRequest(BaseModel):
     target_role: str = ""
     edition: str = "tailored"
     language: str = "en"
+    blank: bool = False
     job_posting_id: Optional[int] = None
     structured_json: Dict[str, Any] = Field(default_factory=dict)
+    cover_letter: Optional[str] = None
+    motivational_letter: Optional[str] = None
 
 
 class CVVersionPatchRequest(BaseModel):
@@ -738,6 +860,8 @@ class CVVersionPatchRequest(BaseModel):
     target_company: Optional[str] = None
     target_role: Optional[str] = None
     structured_json: Optional[Dict[str, Any]] = None
+    cover_letter: Optional[str] = None
+    motivational_letter: Optional[str] = None
     language: Optional[str] = None
     edition: Optional[str] = None
 
@@ -755,6 +879,8 @@ def _serialize_cv_version(v: CVVersion) -> Dict[str, Any]:
         "language": v.cv_language,
         "structured_json": v.structured_content or {},
         "rendered_html": v.rendered_html or "",
+        "cover_letter": v.cover_letter or "",
+        "motivational_letter": v.motivational_letter or "",
         "pdf_filename": v.pdf_filename,
         "docx_filename": v.docx_filename,
         "pdf_url": f"/api/resumes/generated/{v.pdf_filename}" if v.pdf_filename else None,
@@ -823,19 +949,42 @@ def create_cv_version(
 
     sections = dict(req.structured_json or {})
     if not sections:
-        gt = ground_truth_store.get_data(owner_email=current_user.email, user_id=current_user.id)
-        cand = gt.get("candidate") or {}
-        sections = {
-            "candidate": cand,
-            "summary": cand.get("headline") or "",
-            "skills": (gt.get("skills") or {}).get("core") or [],
-            "work_history": gt.get("work_history") or [],
-            "education": gt.get("education") or [],
-            "target_role": req.target_role or cand.get("headline") or "Specialist",
-            "target_company": req.target_company or "Tailored",
-            "cv_language": req.language,
-            "cv_style": req.edition,
-        }
+        if req.blank:
+            sections = {
+                "candidate": {
+                    "full_name": current_user.full_name or "",
+                    "email": current_user.email or "",
+                    "phone": "",
+                    "location": {"city": "", "country": ""},
+                },
+                "headline": req.target_role or "",
+                "summary": "",
+                "skills": [],
+                "work_history": [],
+                "education": [],
+                "target_role": req.target_role or "Untitled Role",
+                "target_company": req.target_company or "",
+                "cv_language": req.language,
+                "cv_style": req.edition,
+                "template_name": req.edition,
+                "created_from_blank": True,
+            }
+        else:
+            gt = ground_truth_store.get_data(owner_email=current_user.email, user_id=current_user.id)
+            cand = gt.get("candidate") or {}
+            sections = {
+                "candidate": cand,
+                "headline": req.target_role or cand.get("headline") or "",
+                "summary": cand.get("summary") or cand.get("headline") or "",
+                "skills": (gt.get("skills") or {}).get("core") or [],
+                "work_history": gt.get("work_history") or [],
+                "education": gt.get("education") or [],
+                "target_role": req.target_role or cand.get("headline") or "Specialist",
+                "target_company": req.target_company or "Tailored",
+                "cv_language": req.language,
+                "cv_style": req.edition,
+                "template_name": req.edition,
+            }
 
     rendered = cv_generator_service.render_cv_from_sections(sections, user_id=current_user.id)
     if rendered.get("ats_parse_report"):
@@ -859,6 +1008,8 @@ def create_cv_version(
             cv_language=req.language,
             structured_content=sections,
             rendered_html=rendered.get("rendered_html") or "",
+            cover_letter=str(req.cover_letter or ""),
+            motivational_letter=str(req.motivational_letter or ""),
             pdf_filename=rendered.get("pdf_filename"),
             docx_filename=rendered.get("docx_filename"),
             version_number=1,
@@ -898,6 +1049,10 @@ def update_cv_version(
             sections["target_company"] = ver.target_company
         if req.title is not None and req.title.strip():
             ver.title = req.title.strip()
+        if req.cover_letter is not None:
+            ver.cover_letter = req.cover_letter
+        if req.motivational_letter is not None:
+            ver.motivational_letter = req.motivational_letter
 
         rendered = cv_generator_service.render_cv_from_sections(
             sections,
@@ -924,6 +1079,54 @@ def update_cv_version(
         session.commit()
         session.refresh(ver)
         return _serialize_cv_version(ver)
+
+
+@router.post("/cv-versions/{version_id}/duplicate")
+def duplicate_cv_version(
+    version_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    """Duplicates an existing CV Studio version (preserving letters & structured content) for safe branching."""
+    from ..services.cv_generator_service import cv_generator_service
+
+    with Session(engine) as session:
+        src = session.get(CVVersion, version_id)
+        if not src or src.user_id != current_user.id:
+            raise HTTPException(status_code=404, detail="CV version not found.")
+
+        sections = dict(src.structured_content or {})
+        sections["duplicated_from_version_id"] = src.id
+        rendered = cv_generator_service.render_cv_from_sections(sections, user_id=current_user.id)
+        if rendered.get("ats_parse_report"):
+            sections["ats_parse_report"] = rendered["ats_parse_report"]
+        _record_generated_cv_files(
+            current_user.id,
+            [rendered.get("pdf_filename"), rendered.get("docx_filename")],
+            doc_type=f"cv_studio_{src.edition}",
+            target_company=src.target_company,
+            target_role=src.target_role,
+        )
+
+        clone = CVVersion(
+            user_id=current_user.id,
+            job_posting_id=src.job_posting_id,
+            title=f"{src.title} (Copy)",
+            target_company=src.target_company,
+            target_role=src.target_role,
+            edition=src.edition,
+            cv_language=src.cv_language,
+            structured_content=sections,
+            rendered_html=rendered.get("rendered_html") or src.rendered_html or "",
+            cover_letter=src.cover_letter or "",
+            motivational_letter=src.motivational_letter or "",
+            pdf_filename=rendered.get("pdf_filename"),
+            docx_filename=rendered.get("docx_filename"),
+            version_number=(src.version_number or 1) + 1,
+        )
+        session.add(clone)
+        session.commit()
+        session.refresh(clone)
+        return _serialize_cv_version(clone)
 
 
 @router.delete("/cv-versions/{version_id}")

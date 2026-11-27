@@ -121,15 +121,26 @@ def _clear_refresh_cookie(response: Response) -> None:
     )
 
 
-def _build_auth_response(user: User, response: Optional[Response] = None) -> AuthResponse:
-    """Issues a fresh Access Token (60m) and Refresh Token (14d) for an authenticated user."""
+def _build_auth_response(
+    user: User,
+    response: Optional[Response] = None,
+    request: Optional[Request] = None,
+) -> AuthResponse:
+    """
+    Issues a fresh Access Token (60m) and HttpOnly Refresh Cookie (14d).
+    Web JSON responses NEVER include refresh_token (preventing XSS token theft);
+    only the Chrome Extension client (explicit X-Client-Type: chrome-extension) receives it in JSON.
+    """
     claims = {"sub": user.email, "is_admin": user.is_admin, "user_id": user.id}
     refresh_tok = create_refresh_token(claims)
     if response is not None:
         _set_refresh_cookie(response, refresh_tok)
+    is_extension_client = bool(
+        request and (request.headers.get("x-client-type") or "").strip().lower() == "chrome-extension"
+    )
     return AuthResponse(
         access_token=create_access_token(claims),
-        refresh_token=refresh_tok,
+        refresh_token=refresh_tok if is_extension_client else None,
         token_type="bearer",
         user=UserOut(
             id=user.id,
@@ -173,8 +184,9 @@ def _sync_profile_owner_on_auth(session: Session, clean_email: str, force_reset:
     session.commit()
 
 
-@router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
-def register_user(req: RegisterRequest, response: Response, session: Session = Depends(get_session)):
+@router.post("/register", response_model=AuthResponse, response_model_exclude_none=True, status_code=status.HTTP_201_CREATED)
+def register_user(req: RegisterRequest, request: Request, response: Response, session: Session = Depends(get_session)):
+    from ..db.profile_repository import profile_repository
     clean_email = sanitize_email(req.email)
 
     existing = get_user_by_email(session, clean_email)
@@ -208,14 +220,21 @@ def register_user(req: RegisterRequest, response: Response, session: Session = D
         is_admin=False,
     )
     session.add(user)
+    session.flush()
+    profile_repository.ensure_user_draft_profile(
+        session,
+        user_id=user.id,
+        email=clean_email,
+        full_name=user.full_name,
+    )
     session.commit()
     session.refresh(user)
 
     _sync_profile_owner_on_auth(session, clean_email, force_reset=True)
-    return _build_auth_response(user, response=response)
+    return _build_auth_response(user, response=response, request=request)
 
 
-@router.post("/login", response_model=AuthResponse)
+@router.post("/login", response_model=AuthResponse, response_model_exclude_none=True)
 def login_user(
     req: LoginRequest,
     request: Request,
@@ -257,7 +276,7 @@ def login_user(
 
     reset_login_attempts(clean_email)
     _sync_profile_owner_on_auth(session, clean_email, force_reset=False)
-    return _build_auth_response(user, response=response)
+    return _build_auth_response(user, response=response, request=request)
 
 
 @router.get("/smtp-status")
@@ -451,7 +470,7 @@ def send_otp_code(
     }
 
 
-@router.post("/verify-otp", response_model=AuthResponse)
+@router.post("/verify-otp", response_model=AuthResponse, response_model_exclude_none=True)
 def verify_otp_code(
     req: VerifyOTPRequest,
     request: Request,
@@ -532,6 +551,7 @@ def verify_otp_code(
     reset_login_attempts(otp_key)
 
     if not user:
+        from ..db.profile_repository import profile_repository
         candidate_name = clean_email.split("@")[0].replace(".", " ").title()
         user = User(
             email=clean_email,
@@ -541,16 +561,23 @@ def verify_otp_code(
             is_admin=False,
         )
         session.add(user)
+        session.flush()
+        profile_repository.ensure_user_draft_profile(
+            session,
+            user_id=user.id,
+            email=clean_email,
+            full_name=user.full_name,
+        )
 
     session.commit()
     session.refresh(user)
 
     reset_login_attempts(clean_email)
     _sync_profile_owner_on_auth(session, clean_email, force_reset=False)
-    return _build_auth_response(user, response=response)
+    return _build_auth_response(user, response=response, request=request)
 
 
-@router.post("/refresh", response_model=AuthResponse)
+@router.post("/refresh", response_model=AuthResponse, response_model_exclude_none=True)
 def refresh_session(
     request: Request,
     response: Response,
@@ -600,7 +627,7 @@ def refresh_session(
             detail="Account is inactive or disabled by admin.",
         )
 
-    return _build_auth_response(user, response=response)
+    return _build_auth_response(user, response=response, request=request)
 
 
 @router.post("/logout")

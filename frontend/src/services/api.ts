@@ -240,6 +240,30 @@ export const fetchDbProfile = (): Promise<{
   updated_at: string;
 }> => apiJson('/profile', { errorMessage: 'Failed to load CandidateProfile from DB' });
 
+export const fetchProfileIntelligence = (): Promise<import('../types').ProfileIntelligenceResponse> =>
+  apiJson('/profile/intelligence', { errorMessage: 'Failed to load profile intelligence' });
+
+export async function previewProfileImport(file: File): Promise<import('../types').ProfileImportPreviewResponse> {
+  const formData = new FormData();
+  formData.append('file', file);
+  return apiJson('/profile/import-preview', {
+    method: 'POST',
+    rawBody: formData,
+    errorMessage: 'Failed to extract CV preview',
+  });
+}
+
+export const applyProfileImport = (payload: {
+  filename: string;
+  extracted: Record<string, any>;
+  section_modes: Record<string, string>;
+}): Promise<{ status: string; synced_cv_versions: number; data: GroundTruth; intelligence: import('../types').ProfileIntelligenceResponse }> =>
+  apiJson('/profile/import-apply', {
+    method: 'POST',
+    body: payload,
+    errorMessage: 'Failed to apply reviewed profile import',
+  });
+
 export async function fetchScrapedJobs(
   params?: JobSearchParams | string,
   signal?: AbortSignal
@@ -256,6 +280,8 @@ export async function fetchScrapedJobs(
       ['status', params.status !== 'ALL' ? params.status : undefined],
       ['min_score', params.min_score],
       ['include_filtered', params.include_filtered ? 'true' : undefined],
+      ['include_dismissed', params.include_dismissed ? 'true' : undefined],
+      ['industry', params.industry && params.industry !== 'ALL' ? params.industry : undefined],
       ['tier', params.tier !== 'ALL' ? params.tier : undefined],
       ['search', params.search?.trim()],
       ['country', params.country?.trim()],
@@ -360,6 +386,11 @@ export const generateCvEdition = (params: {
   ats_parse_report?: ATSParseReport;
   matched_skills?: string[];
   missing_skills?: string[];
+  url_fetched?: boolean;
+  url_fetch_warning?: string | null;
+  extracted_description_preview?: string;
+  persistence_status?: string;
+  persistence_error?: string | null;
 }> => apiJson('/resumes/generate-edition', { method: 'POST', body: params, errorMessage: 'Failed to generate CV edition' });
 
 export const prepareJobEmailPackage = (
@@ -647,6 +678,18 @@ export const unsaveJob = (jobId: number): Promise<{ status: string; job_posting_
 export const fetchSavedJobs = (): Promise<{ items: Array<{ saved_id: number; notes: string; saved_at: string; job: DbJobPosting }> }> =>
   apiJson('/jobs/saved', { fallbackValue: { items: [] } });
 
+export const submitJobFeedback = (
+  jobId: number,
+  action: 'dismiss' | 'irrelevant' | 'restore',
+  reason?: string,
+  note?: string
+): Promise<{ status: string; job_id: number; is_ignored: boolean; reason?: string | null }> =>
+  apiJson(`/jobs/${jobId}/feedback`, {
+    method: 'POST',
+    body: { action, reason, note },
+    errorMessage: 'Failed to save job feedback',
+  });
+
 export async function fetchSavedSearches(): Promise<SavedSearchItem[]> {
   const data = await apiJson<SavedSearchItem[] | { items?: SavedSearchItem[] }>('/saved-searches', { fallbackValue: [] });
   return Array.isArray(data) ? data : data?.items || [];
@@ -681,17 +724,49 @@ export const createCvVersion = (payload: {
   target_role?: string;
   edition?: string;
   language?: string;
+  blank?: boolean;
   structured_json?: Record<string, any>;
+  cover_letter?: string;
+  motivational_letter?: string;
 }): Promise<CVVersionItem> => apiJson('/cv-versions', { method: 'POST', body: payload, errorMessage: 'Failed to save CV version' });
+
+export const duplicateCvVersion = (versionId: number): Promise<CVVersionItem> =>
+  apiJson(`/cv-versions/${versionId}/duplicate`, { method: 'POST', errorMessage: 'Failed to duplicate CV version' });
 
 export const patchCvVersion = (
   versionId: number,
-  payload: { title?: string; target_company?: string; target_role?: string; language?: string; structured_json?: Record<string, any> }
+  payload: {
+    title?: string;
+    target_company?: string;
+    target_role?: string;
+    language?: string;
+    structured_json?: Record<string, any>;
+    cover_letter?: string;
+    motivational_letter?: string;
+  }
 ): Promise<CVVersionItem> =>
   apiJson(`/cv-versions/${versionId}`, { method: 'PATCH', body: payload, errorMessage: 'Failed to update & re-render CV version' });
 
 export const deleteCvVersion = (versionId: number): Promise<void> =>
   apiVoid(`/cv-versions/${versionId}`, 'DELETE', 'Failed to delete CV version');
+
+export const submitMockInterviewAnswer = (
+  appId: string,
+  roundId: number,
+  questionId: number,
+  answerText: string
+): Promise<{
+  evaluation: import('../types').MockAnswerEvaluation;
+  mock_progress: NonNullable<InterviewBrief['mock_progress']>;
+}> =>
+  apiJson(`/applications/${encodeURIComponent(appId)}/interviews/${roundId}/mock-answer`, {
+    method: 'POST',
+    body: { question_id: questionId, answer_text: answerText },
+    errorMessage: 'Failed to evaluate mock interview answer',
+  });
+
+export const deleteInterviewRound = (appId: string, roundId: number): Promise<void> =>
+  apiVoid(`/applications/${encodeURIComponent(appId)}/interviews/${roundId}`, 'DELETE', 'Failed to delete interview session');
 
 export const calculateB2BTax = (payload: {
   amount: number;

@@ -967,3 +967,357 @@ def test_fresh_database_alembic_upgrade_head_clean(tmp_path):
         rev = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
         assert rev == "a3c9d14e7b52"
     eng.dispose()
+
+
+def test_p0_first_time_manual_profile_creation_repeated_saves_and_two_user_isolation():
+    """P0 #1 & P1 #1/#5: Fresh users start with a persisted draft profile, can save manually without CV upload, sync relational children, and stay isolated."""
+    from sqlmodel import select
+    from app.db.models import CandidateEducation, CandidateExperience, CandidateProfile, CandidateSkill
+
+    init_db()
+    client = TestClient(app)
+
+    headers_a = _register_and_auth(client, "p0_manual_user_a@example.ge")
+    headers_b = _register_and_auth(client, "p0_manual_user_b@example.ge")
+    uid_a = client.get("/api/auth/me", headers=headers_a).json()["id"]
+    uid_b = client.get("/api/auth/me", headers=headers_b).json()["id"]
+
+    # Both users immediately have their own persisted draft profile row owned by their user_id
+    with Session(engine) as session:
+        prof_a = session.exec(select(CandidateProfile).where(CandidateProfile.user_id == uid_a)).first()
+        prof_b = session.exec(select(CandidateProfile).where(CandidateProfile.user_id == uid_b)).first()
+        assert prof_a is not None and prof_a.id is not None and prof_a.user_id == uid_a
+        assert prof_b is not None and prof_b.id is not None and prof_b.user_id == uid_b
+        assert prof_a.id != prof_b.id
+
+    # User A saves a manual profile without ever uploading skills.md
+    manual_payload = {
+        "candidate": {
+            "first_name": "Nino",
+            "last_name": "Beridze",
+            "full_name": "Nino Beridze",
+            "headline": "Junior QA Engineer",
+            "summary": "Hands-on QA engineer specializing in Playwright, REST API testing, and SQL.",
+            "email": "p0_manual_user_a@example.ge",
+            "phone": "+995 599 123456",
+            "location": {"city": "Tbilisi", "country": "Georgia", "open_to_relocation": False, "remote_preference": "Remote"},
+            "links": {"linkedin": "https://linkedin.com/in/nino-qa", "github": "https://github.com/nino-qa", "portfolio": ""},
+        },
+        "skills": {"core": ["Playwright", "Python", "SQL", "Postman", "REST API", "Jira"], "secondary": []},
+        "work_history": [
+            {
+                "role": "QA Intern",
+                "company": "Tbilisi FinTech Lab",
+                "location": "Tbilisi",
+                "start_date": "Jan 2026",
+                "end_date": "Present",
+                "is_current": True,
+                "highlights": ["Built Playwright E2E regression tests", "Validated REST API responses in Postman"],
+            }
+        ],
+        "education": [
+            {
+                "degree": "B.Sc. in Computer Science",
+                "institution": "Tbilisi State University",
+                "dates": "2022-2026",
+                "gpa": "3.8",
+            }
+        ],
+        "certifications": ["ISTQB CTFL Foundation"],
+    }
+    r_save1 = client.put("/api/ground-truth", json=manual_payload, headers=headers_a)
+    assert r_save1.status_code == 200, r_save1.text
+
+    # Repeated save must update the same profile cleanly without duplicating rows
+    manual_payload["skills"]["core"].append("Docker")
+    r_save2 = client.put("/api/ground-truth", json=manual_payload, headers=headers_a)
+    assert r_save2.status_code == 200, r_save2.text
+
+    # Manual profile must be recognized as ready/uploaded across /api/profile and /api/jobs
+    prof_resp_a = client.get("/api/profile", headers=headers_a)
+    assert prof_resp_a.status_code == 200
+    assert prof_resp_a.json()["profile_uploaded"] is True
+
+    # Relational children must be synced including end_date & is_current
+    with Session(engine) as session:
+        prof_rows_a = session.exec(select(CandidateProfile).where(CandidateProfile.user_id == uid_a)).all()
+        assert len(prof_rows_a) == 1
+        pid_a = prof_rows_a[0].id
+        skills_a = session.exec(select(CandidateSkill).where(CandidateSkill.profile_id == pid_a)).all()
+        exps_a = session.exec(select(CandidateExperience).where(CandidateExperience.profile_id == pid_a)).all()
+        edus_a = session.exec(select(CandidateEducation).where(CandidateEducation.profile_id == pid_a)).all()
+        assert {s.skill_name for s in skills_a} >= {"Playwright", "Python", "SQL", "Docker"}
+        assert len(exps_a) == 1
+        assert exps_a[0].end_date == "Present"
+        assert exps_a[0].is_current is True
+        assert len(edus_a) == 1
+
+    # User B must remain completely isolated from User A's profile data
+    gt_b = client.get("/api/ground-truth", headers=headers_b).json()
+    assert gt_b["candidate"]["full_name"] != "Nino Beridze"
+    assert "Playwright" not in (gt_b.get("skills", {}).get("core") or [])
+    prof_resp_b = client.get("/api/profile", headers=headers_b).json()
+    assert prof_resp_b["profile_uploaded"] is False
+
+
+def test_p0_shared_job_not_deleted_when_other_user_filters_it_out():
+    """P0 #2: Candidate B getting FILTERED_OUT on a shared JobPosting must NEVER delete the posting or Candidate A's saved/tracked records."""
+    from sqlmodel import select
+    from app.db.models import ApplicationTracker, SavedJob
+    from app.services.scrapers.scraper_orchestrator import scraper_orchestrator
+
+    init_db()
+    client = TestClient(app)
+
+    headers_a = _register_and_auth(client, "p0_shared_qa_a@example.ge")
+    headers_b = _register_and_auth(client, "p0_shared_fin_b@example.ge")
+    uid_a = client.get("/api/auth/me", headers=headers_a).json()["id"]
+    uid_b = client.get("/api/auth/me", headers=headers_b).json()["id"]
+
+    # User A is a QA Engineer; User B is an IFRS Financial Accountant
+    assert client.post(
+        "/api/skills-md",
+        headers=headers_a,
+        json={"content": "# User A QA — Junior QA Engineer\n## Skills\n- Playwright, Python, SQL, REST API, Manual Testing, Jira\n"},
+    ).status_code == 200
+    assert client.post(
+        "/api/skills-md",
+        headers=headers_b,
+        json={"content": "# User B Finance — Junior Financial Accountant\n## Skills\n- IFRS, Financial Reporting, Tax Accounting, Excel, 1C, Audit\n"},
+    ).status_code == 200
+
+    shared_job_payload = [{
+        "portal": "jobs.ge",
+        "external_id": "shared-qa-preserve-9001",
+        "title": "Junior QA Automation Engineer (Playwright & Python)",
+        "company": "Tbilisi Cloud Systems",
+        "url": "https://jobs.ge/ge/?view=jobs&id=9909001",
+        "market": "GE_DOMESTIC",
+        "is_remote": False,
+        "description_raw": "Entry-level QA Engineer writing Playwright E2E tests in Python, testing REST APIs and SQL queries in Jira.",
+    }]
+
+    # User A ingests, saves, and tracks this job
+    res_a = scraper_orchestrator.ingest_scraped_jobs(shared_job_payload, owner_email="p0_shared_qa_a@example.ge", user_id=uid_a)
+    assert res_a["total_processed"] >= 1
+    with Session(engine) as session:
+        job_row = session.exec(select(JobPosting).where(JobPosting.external_id == "shared-qa-preserve-9001")).first()
+        assert job_row is not None and job_row.id is not None
+        job_id = job_row.id
+
+    r_save = client.post(f"/api/jobs/{job_id}/save", json={"notes": "Top QA choice"}, headers=headers_a)
+    assert r_save.status_code == 200
+    r_app = client.post(
+        "/api/applications",
+        json={
+            "company": "Tbilisi Cloud Systems",
+            "role": "Junior QA Automation Engineer (Playwright & Python)",
+            "portal": "jobs.ge",
+            "url": "https://jobs.ge/ge/?view=jobs&id=9909001",
+            "status": "Applied",
+            "job_posting_id": job_id,
+        },
+        headers=headers_a,
+    )
+    assert r_app.status_code in (200, 201)
+
+    # User B (Finance profile) ingests the EXACT same job and filters it out
+    res_b = scraper_orchestrator.ingest_scraped_jobs(shared_job_payload, owner_email="p0_shared_fin_b@example.ge", user_id=uid_b)
+    assert res_b["filtered_out_count"] >= 1
+
+    # Assert shared JobPosting AND all of User A's records survived intact, while User B has a FILTERED_OUT UserJobMatch
+    with Session(engine) as session:
+        job_still = session.get(JobPosting, job_id)
+        assert job_still is not None, "Shared JobPosting was erroneously deleted by another user's filter!"
+        saved_a = session.exec(select(SavedJob).where(SavedJob.user_id == uid_a, SavedJob.job_posting_id == job_id)).first()
+        assert saved_a is not None
+        tracker_a = session.exec(select(ApplicationTracker).where(ApplicationTracker.user_id == uid_a, ApplicationTracker.job_posting_id == job_id)).first()
+        assert tracker_a is not None
+        match_a = session.exec(select(UserJobMatch).where(UserJobMatch.user_id == uid_a, UserJobMatch.job_posting_id == job_id)).first()
+        match_b = session.exec(select(UserJobMatch).where(UserJobMatch.user_id == uid_b, UserJobMatch.job_posting_id == job_id)).first()
+        assert match_a is not None and match_a.status != "FILTERED_OUT"
+        assert match_b is not None and match_b.status == "FILTERED_OUT"
+
+
+def test_p0_shared_scrape_cache_never_leaks_candidate_a_score_to_candidate_b():
+    """P0 #3: 24h scrape cache is strictly per-user/profile-fingerprint, and GET /api/jobs never falls back to JobPosting.suitability_score."""
+    from sqlmodel import select
+    from app.services.scrapers.scraper_orchestrator import scraper_orchestrator
+
+    init_db()
+    client = TestClient(app)
+
+    headers_a = _register_and_auth(client, "p0_cache_qa_a@example.ge")
+    headers_b = _register_and_auth(client, "p0_cache_dev_b@example.ge")
+    uid_a = client.get("/api/auth/me", headers=headers_a).json()["id"]
+    uid_b = client.get("/api/auth/me", headers=headers_b).json()["id"]
+
+    assert client.post(
+        "/api/skills-md",
+        headers=headers_a,
+        json={"content": "# QA Candidate — Junior QA Automation Engineer\n## Skills\n- Playwright, Selenium, Cypress, Python, SQL, REST API, Jira\n"},
+    ).status_code == 200
+    assert client.post(
+        "/api/skills-md",
+        headers=headers_b,
+        json={"content": "# Backend Candidate — Junior Java Spring Developer\n## Skills\n- Java, Spring Boot, Hibernate, Kafka, Kubernetes\n"},
+    ).status_code == 200
+
+    vacancy = [{
+        "portal": "jobs.ge",
+        "external_id": "cache-isolation-qa-9002",
+        "title": "Junior QA Automation Engineer (Playwright)",
+        "company": "Vention Labs",
+        "url": "https://jobs.ge/ge/?view=jobs&id=9909002",
+        "market": "GE_DOMESTIC",
+        "is_remote": False,
+        "description_raw": "Junior QA role focusing on Playwright, Cypress, REST API testing, SQL validation, and Jira defect tracking.",
+    }]
+
+    # User A ingests first -> gets scored & cached for User A
+    res_a1 = scraper_orchestrator.ingest_scraped_jobs(vacancy, owner_email="p0_cache_qa_a@example.ge", user_id=uid_a)
+    assert res_a1["cache_hits"] == 0
+    assert len(res_a1["jobs"]) == 1
+    score_a = res_a1["jobs"][0]["suitability_score"]
+    assert score_a >= 65.0
+
+    # User A re-ingests immediately -> SHOULD hit User A's own per-user cache
+    res_a2 = scraper_orchestrator.ingest_scraped_jobs(vacancy, owner_email="p0_cache_qa_a@example.ge", user_id=uid_a)
+    assert res_a2["cache_hits"] == 1
+
+    # User B ingests the SAME job right away -> MUST NOT hit User A's cache!
+    res_b = scraper_orchestrator.ingest_scraped_jobs(vacancy, owner_email="p0_cache_dev_b@example.ge", user_id=uid_b)
+    assert res_b["cache_hits"] == 0
+
+    with Session(engine) as session:
+        job_row = session.exec(select(JobPosting).where(JobPosting.external_id == "cache-isolation-qa-9002")).first()
+        assert job_row is not None
+        match_a = session.exec(select(UserJobMatch).where(UserJobMatch.user_id == uid_a, UserJobMatch.job_posting_id == job_row.id)).first()
+        match_b = session.exec(select(UserJobMatch).where(UserJobMatch.user_id == uid_b, UserJobMatch.job_posting_id == job_row.id)).first()
+        assert match_a is not None and match_b is not None
+        assert match_a.suitability_score != match_b.suitability_score
+        # Force an obviously fake legacy global JobPosting score to prove GET /api/jobs NEVER falls back to it
+        job_row.suitability_score = 99.9
+        session.add(job_row)
+        session.commit()
+
+    r_jobs_b = client.get("/api/jobs?include_filtered=true&search=Vention", headers=headers_b)
+    assert r_jobs_b.status_code == 200
+    for item in r_jobs_b.json()["items"]:
+        if item["external_id"] == "cache-isolation-qa-9002":
+            assert item["suitability_score"] != 99.9
+
+
+def test_p0_web_auth_responses_hide_refresh_token_and_extension_header_receives_it():
+    """P0 #4: Web /register, /login, /refresh must NEVER expose refresh_token in JSON; only HttpOnly cookie (or explicit Chrome extension header)."""
+    init_db()
+    client = TestClient(app)
+
+    email = "p0_token_cookie_user@example.ge"
+    pw = "StrongPassword123!"
+
+    r_reg = client.post("/api/auth/register", json={"email": email, "password": pw, "full_name": "Token Test"})
+    assert r_reg.status_code == 201, r_reg.text
+    assert "refresh_token" not in r_reg.json()
+    assert "talentflow_refresh_token" in r_reg.cookies
+
+    r_login = client.post("/api/auth/login", json={"email": email, "password": pw})
+    assert r_login.status_code == 200
+    assert "refresh_token" not in r_login.json()
+    cookie_val = r_login.cookies.get("talentflow_refresh_token")
+    assert cookie_val
+
+    client.cookies.set("talentflow_refresh_token", cookie_val)
+    r_ref_web = client.post("/api/auth/refresh")
+    assert r_ref_web.status_code == 200
+    assert "refresh_token" not in r_ref_web.json()
+    assert r_ref_web.json().get("access_token")
+
+    # Explicit Chrome extension client receives JSON refresh_token for chrome.storage.local rotation
+    r_login_ext = client.post(
+        "/api/auth/login",
+        json={"email": email, "password": pw},
+        headers={"X-Client-Type": "chrome-extension"},
+    )
+    assert r_login_ext.status_code == 200
+    assert r_login_ext.json().get("refresh_token")
+
+
+def test_p1_cv_version_persists_letters_url_fetch_tailoring_and_cors_production_guard(monkeypatch):
+    """P1 #2, #3, #5: CVVersion persists distinct cover/motivational letters, job_url fetches real vacancy content, and production CORS blocks localhost."""
+    from app.main import _is_localhost_origin
+    from app.services.audit_service import audit_service
+
+    init_db()
+    client = TestClient(app)
+    headers = _register_and_auth(client, "p1_cv_letters_user@example.ge")
+    assert client.post(
+        "/api/skills-md",
+        headers=headers,
+        json={
+            "content": (
+                "# Nino QA — Junior QA Engineer\n"
+                "## Skills\n- Playwright, Python, SQL, REST API, Postman, Jira\n"
+                "## Work Experience\n"
+                "### QA Intern | Alpha Systems | Jan 2025 - Jan 2026\n"
+                "- Automated smoke tests in Playwright and Python.\n"
+                "- Validated REST API contracts in Postman.\n"
+            )
+        },
+    ).status_code == 200
+
+    async def _fake_fetch_url(url: str):
+        return (
+            "<html><body><h1>Junior QA Engineer</h1>"
+            "<p>We need strong Playwright, Python, SQL, and REST API testing skills for our fintech platform.</p>"
+            "</body></html>"
+        )
+
+    monkeypatch.setattr(audit_service, "fetch_url_content", _fake_fetch_url)
+
+    r_gen = client.post(
+        "/api/resumes/generate-edition",
+        headers=headers,
+        json={
+            "edition": "tailored",
+            "target_role": "Junior QA Engineer",
+            "target_company": "ProCredit Bank",
+            "job_url": "https://jobs.ge/ge/?view=jobs&id=778899",
+            "job_description": "",
+            "cv_language": "en",
+        },
+    )
+    assert r_gen.status_code == 200, r_gen.text
+    gen = r_gen.json()
+    assert gen["url_fetched"] is True
+    assert "Playwright" in gen["extracted_description_preview"]
+    assert gen["persistence_status"] == "saved"
+    assert gen["cv_version_id"] is not None
+
+    # Fetch persisted CV versions and verify BOTH cover_letter and motivational_letter survived
+    r_list = client.get("/api/cv-versions", headers=headers)
+    assert r_list.status_code == 200
+    versions = r_list.json()["items"]
+    ver = next((v for v in versions if v["id"] == gen["cv_version_id"]), None)
+    assert ver is not None
+    assert ver.get("cover_letter") and len(ver["cover_letter"]) > 20
+    assert ver.get("motivational_letter") and len(ver["motivational_letter"]) > 20
+
+    # PATCH letters and confirm persistence
+    r_patch = client.patch(
+        f"/api/cv-versions/{ver['id']}",
+        headers=headers,
+        json={
+            "cover_letter": "Custom persisted cover letter body.",
+            "motivational_letter": "Custom persisted motivational letter body.",
+        },
+    )
+    assert r_patch.status_code == 200
+    assert r_patch.json()["cover_letter"] == "Custom persisted cover letter body."
+    assert r_patch.json()["motivational_letter"] == "Custom persisted motivational letter body."
+
+    # P1 #5: Localhost origin guard
+    assert _is_localhost_origin("http://localhost:5173") is True
+    assert _is_localhost_origin("http://127.0.0.1:8000") is True
+    assert _is_localhost_origin("https://talentflow.ge") is False
+

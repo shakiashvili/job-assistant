@@ -412,6 +412,11 @@ class ProfileRepository:
             if work_history:
                 for wh_item in work_history:
                     if isinstance(wh_item, dict):
+                        end_raw = str(wh_item.get("end_date") or "").strip()
+                        is_curr = bool(
+                            wh_item.get("is_current")
+                            or end_raw.lower() in ("present", "current", "now", "დღემდე", "მიმდინარე")
+                        )
                         session.add(
                             CandidateExperience(
                                 profile_id=profile.id,
@@ -419,7 +424,9 @@ class ProfileRepository:
                                 company=str(wh_item.get("company") or "Experience"),
                                 role_title=str(wh_item.get("role") or wh_item.get("title") or fallback_role),
                                 location=str(wh_item.get("location") or ""),
-                                start_date=str(wh_item.get("dates") or wh_item.get("start_date") or ""),
+                                start_date=str(wh_item.get("start_date") or wh_item.get("dates") or ""),
+                                end_date=end_raw or ("Present" if is_curr else None),
+                                is_current=is_curr,
                                 highlights=list(wh_item.get("highlights") or wh_item.get("bullets") or []),
                             )
                         )
@@ -655,6 +662,63 @@ class ProfileRepository:
         raw_vault = dict((profile.parsed_skills or {}).get("ground_truth_vault") or {})
         return self._normalize_vault(raw_vault, profile)
 
+    @staticmethod
+    def ensure_user_draft_profile(
+        session: Session,
+        *,
+        user_id: int,
+        email: str,
+        full_name: str = "",
+    ) -> CandidateProfile:
+        """
+        Transaction-safe creation of an empty persisted draft CandidateProfile for a new user.
+        Never claims an arbitrary unowned profile and never fabricates fake candidate history.
+        """
+        clean_email = (email or "").strip().lower()
+        existing = session.exec(
+            select(CandidateProfile)
+            .where(CandidateProfile.user_id == user_id)
+            .order_by(CandidateProfile.updated_at.desc())
+        ).first()
+        if existing:
+            return existing
+        clean_name = sanitize_person_name(full_name)
+        parts = clean_name.split()
+        draft = CandidateProfile(
+            user_id=user_id,
+            full_name=clean_name,
+            email=clean_email,
+            raw_markdown="",
+            parsed_skills={
+                "user_uploaded": False,
+                "profile_status": "draft",
+                "profile_source": "manual",
+                "owner_email": clean_email,
+                "user_id": user_id,
+                "all_skills": [],
+                "education": [],
+                "ground_truth_vault": {
+                    "candidate": {
+                        "full_name": clean_name,
+                        "first_name": parts[0] if parts else "",
+                        "last_name": " ".join(parts[1:]) if len(parts) > 1 else "",
+                        "email": clean_email,
+                        "headline": "",
+                        "summary": "",
+                    },
+                    "skills": {"core": [], "secondary": []},
+                    "work_history": [],
+                    "education": [],
+                    "projects": [],
+                    "certifications": [],
+                },
+            },
+            experience_years=None,
+        )
+        session.add(draft)
+        session.flush()
+        return draft
+
     def update_data(
         self,
         data: Dict[str, Any],
@@ -665,18 +729,52 @@ class ProfileRepository:
         raw_md = save_copy.pop("skills_md_raw", None)
         save_copy.pop("parsed_skills_taxonomy", None)
 
-        is_guest_owner = (owner_email or "").strip().lower() == "guest@talentflow.local"
+        clean_owner = (owner_email or "").strip().lower()
+        is_guest_owner = clean_owner == "guest@talentflow.local"
         eff_uid = None if is_guest_owner else user_id
-        target_prof = self.get_profile_record(owner_email=owner_email, user_id=eff_uid)
+        eff_email = "" if is_guest_owner else clean_owner
 
         with Session(engine) as session:
-            profile = session.get(CandidateProfile, target_prof.id) if target_prof and target_prof.id else None
-            if not profile:
-                profile = self._ensure_seeded()
-                profile = session.get(CandidateProfile, profile.id)
+            from .models import User
+            from ..services.auth_service import get_user_by_email
 
-            if eff_uid is not None and profile.user_id is None:
-                profile.user_id = eff_uid
+            if eff_uid is None and eff_email:
+                u_row = get_user_by_email(session, eff_email)
+                if u_row and (u_row.email or "").strip().lower() != "guest@talentflow.local":
+                    eff_uid = u_row.id
+
+            profile: Optional[CandidateProfile] = None
+            if eff_uid is not None:
+                profile = session.exec(
+                    select(CandidateProfile)
+                    .where(CandidateProfile.user_id == eff_uid)
+                    .order_by(CandidateProfile.updated_at.desc())
+                ).first()
+                if profile is None:
+                    u_owner = session.get(User, eff_uid)
+                    profile = self.ensure_user_draft_profile(
+                        session,
+                        user_id=eff_uid,
+                        email=eff_email or (u_owner.email if u_owner else ""),
+                        full_name=(u_owner.full_name if u_owner else ""),
+                    )
+            else:
+                profile = session.exec(
+                    select(CandidateProfile)
+                    .where(CandidateProfile.user_id.is_(None))
+                    .order_by(CandidateProfile.updated_at.desc())
+                ).first()
+                if profile is None:
+                    profile = CandidateProfile(
+                        user_id=None,
+                        full_name="",
+                        email="",
+                        raw_markdown="",
+                        parsed_skills={"user_uploaded": False, "profile_status": "draft", "profile_source": "manual", "all_skills": []},
+                        experience_years=None,
+                    )
+                    session.add(profile)
+                    session.flush()
 
             if raw_md is not None:
                 profile.raw_markdown = raw_md
@@ -684,7 +782,7 @@ class ProfileRepository:
             cand_in = save_copy.get("candidate")
             if isinstance(cand_in, dict):
                 if cand_in.get("full_name"):
-                    profile.full_name = str(cand_in["full_name"]).strip()
+                    profile.full_name = sanitize_person_name(str(cand_in["full_name"])) or str(cand_in["full_name"]).strip()
                 elif cand_in.get("first_name") or cand_in.get("last_name"):
                     profile.full_name = f"{cand_in.get('first_name', '')} {cand_in.get('last_name', '')}".strip()
                 if "email" in cand_in and cand_in.get("email") is not None:
@@ -704,15 +802,22 @@ class ProfileRepository:
                         profile.github_url = str(links_in.get("github") or "").strip()
 
             existing_ps = dict(profile.parsed_skills or {})
-            taxonomy = matcher_service.parse_skills_markdown(profile.raw_markdown)
+            taxonomy = matcher_service.parse_skills_markdown(profile.raw_markdown or "")
             if isinstance(cand_in, dict) and cand_in.get("headline") is not None:
                 taxonomy["headline"] = str(cand_in["headline"]).strip()
+                if taxonomy["headline"]:
+                    taxonomy["primary_role"] = taxonomy["headline"]
+            if isinstance(cand_in, dict) and cand_in.get("summary") is not None:
+                taxonomy["summary"] = str(cand_in["summary"]).strip()
             if isinstance(save_copy.get("skills"), dict) and isinstance(save_copy["skills"].get("core"), list):
                 cleaned_core = dedupe_skills_case_insensitive([str(x) for x in save_copy["skills"]["core"]])
                 save_copy["skills"]["core"] = cleaned_core
                 taxonomy["all_skills"] = cleaned_core
+                taxonomy["verified_skills"] = cleaned_core
             for preserve_key in (
                 "user_uploaded",
+                "profile_status",
+                "profile_source",
                 "owner_email",
                 "user_id",
                 "education",
@@ -724,20 +829,28 @@ class ProfileRepository:
                 "adjacent_roles",
                 "verified_skills",
                 "max_allowed_years",
+                "target_seniority_label",
                 "seniority_level",
                 "years_of_experience",
                 "experience_status",
                 "internship_tracks",
             ):
-                if preserve_key in existing_ps:
+                if preserve_key in existing_ps and preserve_key not in taxonomy:
                     taxonomy[preserve_key] = existing_ps[preserve_key]
 
             if isinstance(save_copy.get("education"), list):
-                taxonomy["education"] = save_copy["education"]
+                taxonomy["education"] = [e for e in save_copy["education"] if not is_corrupted_education_entry(e)]
+                save_copy["education"] = taxonomy["education"]
             if isinstance(save_copy.get("projects"), list):
                 taxonomy["projects"] = save_copy["projects"]
             if isinstance(save_copy.get("certifications"), list):
                 taxonomy["courses_and_certifications"] = save_copy["certifications"]
+            if isinstance(save_copy.get("preferences"), dict):
+                taxonomy["preferences"] = save_copy["preferences"]
+            if isinstance(save_copy.get("import_provenance"), dict):
+                taxonomy["import_provenance"] = save_copy["import_provenance"]
+            if str(save_copy.get("profile_status") or "").strip().lower() in ("draft", "reviewed", "ready"):
+                taxonomy["profile_status"] = str(save_copy["profile_status"]).strip().lower()
             if isinstance(cand_in, dict) and isinstance(cand_in.get("languages"), list):
                 cleaned_langs = filter_spoken_language_entries(cand_in["languages"])
                 cand_in["languages"] = cleaned_langs
@@ -746,8 +859,42 @@ class ProfileRepository:
                     for l in cleaned_langs
                 ]
 
-            if owner_email and not is_guest_owner:
-                taxonomy["owner_email"] = owner_email.strip().lower()
+            # Recompute dynamic industry/experience/readiness for manually edited profiles too
+            wh_saved = save_copy.get("work_history") if isinstance(save_copy.get("work_history"), list) else []
+            edu_saved = taxonomy.get("education") if isinstance(taxonomy.get("education"), list) else []
+            skills_saved = taxonomy.get("all_skills") or []
+            headline_saved = str(taxonomy.get("headline") or taxonomy.get("primary_role") or "").strip()
+            has_usable_manual_data = bool(skills_saved or wh_saved or edu_saved or headline_saved)
+            if has_usable_manual_data:
+                taxonomy["profile_status"] = "ready"
+                taxonomy["profile_source"] = existing_ps.get("profile_source") or ("imported" if existing_ps.get("user_uploaded") else "manual")
+                taxonomy["user_uploaded"] = True
+                if not taxonomy.get("target_industry") or taxonomy.get("target_industry") == "general_professional":
+                    from ..services.profile_service import profile_service, compute_dynamic_experience_bounds
+                    probe_md = f"# {profile.full_name}\nHeadline: {headline_saved}\n## Core Skills\n- {', '.join(skills_saved)}"
+                    inferred = profile_service.extract_structured_profile(probe_md)
+                    taxonomy["target_industry"] = inferred.target_industry
+                    taxonomy["detected_industry"] = inferred.detected_industry
+                    if not taxonomy.get("primary_role"):
+                        taxonomy["primary_role"] = headline_saved or inferred.primary_role
+                    if not taxonomy.get("adjacent_roles"):
+                        taxonomy["adjacent_roles"] = inferred.adjacent_roles
+                if wh_saved and taxonomy.get("years_of_experience") is None:
+                    from ..services.profile_service import compute_dynamic_experience_bounds
+                    res_y, max_y, sen_c, sen_l = compute_dynamic_experience_bounds(None, work_history=wh_saved)
+                    if res_y is not None:
+                        taxonomy["years_of_experience"] = res_y
+                        taxonomy["experience_status"] = "confirmed"
+                        profile.experience_years = res_y
+                    taxonomy["max_allowed_years"] = max_y
+                    taxonomy["seniority_level"] = sen_c
+                    taxonomy["target_seniority_label"] = sen_l
+            else:
+                taxonomy.setdefault("profile_status", "draft")
+                taxonomy.setdefault("profile_source", "manual")
+
+            if eff_email:
+                taxonomy["owner_email"] = eff_email
             if eff_uid is not None:
                 taxonomy["user_id"] = eff_uid
             taxonomy["ground_truth_vault"] = save_copy
@@ -758,8 +905,10 @@ class ProfileRepository:
             self.sync_relational_children(
                 session,
                 profile,
-                work_history=save_copy["work_history"] if isinstance(save_copy.get("work_history"), list) else None,
-                education_entries=save_copy["education"] if isinstance(save_copy.get("education"), list) else None,
+                skills_payload=taxonomy,
+                work_history=wh_saved if isinstance(save_copy.get("work_history"), list) else None,
+                education_entries=edu_saved if isinstance(save_copy.get("education"), list) else None,
+                fallback_role=headline_saved or "Role",
             )
             session.commit()
 

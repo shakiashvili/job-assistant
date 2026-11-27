@@ -12,8 +12,13 @@ import {
   AlertCircle,
   BookOpen,
 } from 'lucide-react';
-import { prepareInterview, fetchApplicationInterviews, updateInterviewNotes } from '../services/api';
-import { InterviewBrief, PredictedQuestion } from '../types';
+import {
+  prepareInterview,
+  updateInterviewNotes,
+  submitMockInterviewAnswer,
+  deleteInterviewRound,
+} from '../services/api';
+import { InterviewBrief, MockAnswerEvaluation } from '../types';
 
 interface InterviewPrepModalProps {
   isOpen: boolean;
@@ -31,8 +36,13 @@ export const InterviewPrepModal: React.FC<InterviewPrepModalProps> = ({
   jobTitle,
 }) => {
   const [roundType, setRoundType] = useState<string>('HR_SCREEN');
+  const [modeTab, setModeTab] = useState<'brief' | 'mock'>('brief');
   const [brief, setBrief] = useState<InterviewBrief | null>(null);
   const [expandedQuestion, setExpandedQuestion] = useState<number | null>(null);
+  const [mockIndex, setMockIndex] = useState<number>(0);
+  const [mockAnswerText, setMockAnswerText] = useState<string>('');
+  const [mockSubmitting, setMockSubmitting] = useState<boolean>(false);
+  const [latestMockEval, setLatestMockEval] = useState<MockAnswerEvaluation | null>(null);
   const [notes, setNotes] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
   const [savingNotes, setSavingNotes] = useState<boolean>(false);
@@ -53,6 +63,9 @@ export const InterviewPrepModal: React.FC<InterviewPrepModalProps> = ({
       const data = await prepareInterview(appId, round);
       setBrief(data);
       setNotes(data.candidate_notes || '');
+      setMockIndex(0);
+      setMockAnswerText('');
+      setLatestMockEval(null);
       if (data.predicted_questions && data.predicted_questions.length > 0) {
         setExpandedQuestion(data.predicted_questions[0].id);
       }
@@ -74,6 +87,34 @@ export const InterviewPrepModal: React.FC<InterviewPrepModalProps> = ({
       setError(err.message || 'Failed to save reflections');
     } finally {
       setSavingNotes(false);
+    }
+  };
+
+  const handleSubmitMockAnswer = async () => {
+    if (!brief || !mockAnswerText.trim()) return;
+    const currentQ = brief.predicted_questions[mockIndex];
+    if (!currentQ) return;
+    setMockSubmitting(true);
+    setError(null);
+    try {
+      const res = await submitMockInterviewAnswer(appId, brief.round_id, currentQ.id, mockAnswerText.trim());
+      setLatestMockEval(res.evaluation);
+      setBrief({ ...brief, mock_progress: res.mock_progress });
+    } catch (err: any) {
+      setError(err.message || 'Failed to evaluate mock answer');
+    } finally {
+      setMockSubmitting(false);
+    }
+  };
+
+  const handleDeleteSession = async () => {
+    if (!brief) return;
+    try {
+      await deleteInterviewRound(appId, brief.round_id);
+      setBrief(null);
+      onClose();
+    } catch (err: any) {
+      setError(err.message || 'Failed to delete interview session');
     }
   };
 
@@ -121,25 +162,50 @@ export const InterviewPrepModal: React.FC<InterviewPrepModalProps> = ({
           </button>
         </div>
 
-        {/* Round Selector Tabs */}
-        <div className="p-3 bg-slate-950 border-b border-slate-800/80 flex items-center gap-1.5 overflow-x-auto">
-          {[
-            { id: 'HR_SCREEN', label: '📞 HR Screening' },
-            { id: 'TECH_INTERVIEW', label: '💻 Role / Technical Round' },
-            { id: 'FINAL_ROUND', label: '🏆 Final Leadership' },
-          ].map((tab) => (
+        {/* Round Selector Tabs + Brief / Mock Mode Switcher */}
+        <div className="p-3 bg-slate-950 border-b border-slate-800/80 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 overflow-x-auto">
+            {[
+              { id: 'HR_SCREEN', label: 'HR Screening' },
+              { id: 'TECH_INTERVIEW', label: 'Technical / Role' },
+              { id: 'ANALYTICAL', label: 'Analytical / Case' },
+              { id: 'MANAGERIAL', label: 'Managerial' },
+              { id: 'FINAL_ROUND', label: 'Final Round' },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setRoundType(tab.id)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
+                  roundType === tab.id
+                    ? 'bg-emerald-700 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-900'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-lg border border-slate-800">
             <button
-              key={tab.id}
-              onClick={() => setRoundType(tab.id)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
-                roundType === tab.id
-                  ? 'bg-emerald-700 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-900'
+              type="button"
+              onClick={() => setModeTab('brief')}
+              className={`px-2.5 py-1 rounded text-[11px] font-semibold ${
+                modeTab === 'brief' ? 'bg-slate-800 text-emerald-300' : 'text-slate-400 hover:text-white'
               }`}
             >
-              {tab.label}
+              Prep Brief
             </button>
-          ))}
+            <button
+              type="button"
+              onClick={() => setModeTab('mock')}
+              className={`px-2.5 py-1 rounded text-[11px] font-semibold ${
+                modeTab === 'mock' ? 'bg-slate-800 text-cyan-300' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              Interactive Mock ({brief?.mock_progress?.answered_count ?? 0}/{brief?.predicted_questions?.length ?? 0})
+            </button>
+          </div>
         </div>
 
         {/* Scrollable Content */}
@@ -159,8 +225,121 @@ export const InterviewPrepModal: React.FC<InterviewPrepModalProps> = ({
             </div>
           )}
 
-          {!loading && brief && (
+          {!loading && brief && modeTab === 'mock' && (() => {
+            const currentQ = brief.predicted_questions[mockIndex];
+            const savedEval =
+              latestMockEval && currentQ && latestMockEval.question_id === currentQ.id
+                ? latestMockEval
+                : (brief.mock_progress?.evaluations || []).find((ev) => currentQ && ev.question_id === currentQ.id) || null;
+            return (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between text-xs text-slate-300">
+                  <span>
+                    Question <strong>{mockIndex + 1}</strong> of <strong>{brief.predicted_questions.length}</strong>
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={mockIndex === 0}
+                      onClick={() => { setMockIndex((i) => Math.max(0, i - 1)); setMockAnswerText(''); setLatestMockEval(null); }}
+                      className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-200 disabled:opacity-40"
+                    >
+                      Previous
+                    </button>
+                    <button
+                      type="button"
+                      disabled={mockIndex >= brief.predicted_questions.length - 1}
+                      onClick={() => { setMockIndex((i) => Math.min(brief.predicted_questions.length - 1, i + 1)); setMockAnswerText(''); setLatestMockEval(null); }}
+                      className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-200 disabled:opacity-40"
+                    >
+                      Next Question
+                    </button>
+                  </div>
+                </div>
+                {currentQ && (
+                  <div className="p-4 rounded-xl bg-slate-950 border border-cyan-800/60 space-y-2">
+                    <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">
+                      {currentQ.category}
+                    </span>
+                    <div className="text-sm font-semibold text-white">{currentQ.question}</div>
+                  </div>
+                )}
+                <textarea
+                  rows={5}
+                  value={mockAnswerText}
+                  onChange={(e) => setMockAnswerText(e.target.value)}
+                  placeholder="Write your own answer using real examples from your experience (Situation, Task, Action, Result)..."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white focus:outline-none focus:border-cyan-500"
+                />
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    disabled={mockSubmitting || mockAnswerText.trim().length < 5}
+                    onClick={handleSubmitMockAnswer}
+                    className="px-4 py-2 rounded-xl bg-cyan-700 hover:bg-cyan-600 text-white text-xs font-semibold disabled:opacity-50"
+                  >
+                    {mockSubmitting ? 'Evaluating...' : 'Evaluate My Answer'}
+                  </button>
+                </div>
+                {savedEval && (
+                  <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-white">Grounded Answer Evaluation</span>
+                      <span className="font-mono font-bold text-emerald-300">{savedEval.relevance_score}/100</span>
+                    </div>
+                    <div className="flex flex-wrap gap-2 text-[11px]">
+                      {(['situation', 'task', 'action', 'result'] as const).map((k) => (
+                        <span
+                          key={k}
+                          className={`px-2 py-0.5 rounded uppercase font-semibold ${
+                            savedEval.star_coverage[k]
+                              ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                              : 'bg-amber-950 text-amber-300 border border-amber-800'
+                          }`}
+                        >
+                          {k}: {savedEval.star_coverage[k] ? 'covered' : 'missing'}
+                        </span>
+                      ))}
+                    </div>
+                    {savedEval.missing_points.length > 0 && (
+                      <div className="text-amber-300 space-y-0.5">
+                        <div className="font-semibold">Missing points:</div>
+                        <ul className="list-disc pl-4">
+                          {savedEval.missing_points.map((mp, idx) => <li key={idx}>{mp}</li>)}
+                        </ul>
+                      </div>
+                    )}
+                    <div className="text-slate-300 space-y-0.5">
+                      <div className="font-semibold text-cyan-300">Coaching suggestions (without inventing experience):</div>
+                      <ul className="list-disc pl-4">
+                        {savedEval.improvement_suggestions.map((sg, idx) => <li key={idx}>{sg}</li>)}
+                      </ul>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          {!loading && brief && modeTab === 'brief' && (
             <>
+              {(brief.prep_plan && brief.prep_plan.length > 0) && (
+                <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2 text-xs">
+                  <div className="font-bold text-cyan-300 uppercase tracking-wider text-[11px]">
+                    Vacancy-Specific Preparation Plan
+                  </div>
+                  <ul className="space-y-1 text-slate-300">
+                    {brief.prep_plan.map((step, sIdx) => (
+                      <li key={sIdx}>{step}</li>
+                    ))}
+                  </ul>
+                  {brief.experience_gaps && brief.experience_gaps.length > 0 && (
+                    <div className="pt-1 text-[11px] text-amber-300">
+                      Potential JD Gap Topics to Prepare Honestly: <strong>{brief.experience_gaps.join(', ')}</strong>
+                    </div>
+                  )}
+                </div>
+              )}
               {/* Company Intel Overview */}
               <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5">
                 <div className="flex items-center gap-2 text-xs font-bold text-emerald-400 uppercase tracking-wider">
@@ -312,8 +491,18 @@ export const InterviewPrepModal: React.FC<InterviewPrepModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="p-4 bg-slate-950/80 border-t border-slate-800 flex justify-end">
+        <div className="p-4 bg-slate-950/80 border-t border-slate-800 flex items-center justify-between gap-2">
+          {brief ? (
+            <button
+              type="button"
+              onClick={handleDeleteSession}
+              className="px-3 py-2 rounded-xl bg-rose-950/60 hover:bg-rose-900/70 text-rose-300 border border-rose-800/60 font-semibold text-xs"
+            >
+              Delete Prep Session
+            </button>
+          ) : <span />}
           <button
+            type="button"
             onClick={onClose}
             className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-500 text-white font-semibold text-xs"
           >

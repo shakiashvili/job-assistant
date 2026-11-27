@@ -8,8 +8,8 @@ Built for job seekers in **Georgia (Tbilisi, `UTC+4`)** and global remote profes
 
 ## Core Capabilities
 
-### 1. Upload-First Universal Profile Engine & Dynamic Experience Bounds
-- **Upload-First Gate (Zero Auto-Seeded Drafts)**: TalentFlow never seeds a hardcoded QA or sample draft profile and blocks live portal scraping until you upload your own `.pdf`, `.docx`, `.md`, or `.txt` CV / skills file (`POST /api/profile/upload-skills` or `POST /api/skills-md/upload`).
+### 1. Candidate Profile Vault (Manual or Safe Import) & Dynamic Experience Bounds
+- **Zero Auto-Seeded Drafts (Manual or Document Import)**: Every registered user starts with an empty, persisted draft profile strictly owned by their account. Candidates can either build their profile completely manually (Identity, Summary, Work History, Education, Skills, Projects, Languages, Certifications, FAQ) or import `.pdf`, `.docx`, `.md`, or `.txt` files with preview & per-section `merge` / `replace` / `skip` controls (`POST /api/profile/import-preview`, `POST /api/profile/import-apply`). Live scraping unlocks as soon as either a manual or imported profile is ready.
 - **Clean Multi-Format Parser**: Handles both Markdown and PDF/DOCX text exports (including ALL-CAPS headers, Word bullets, wrapped lines, and pipe-separated spoken languages), strips YAML frontmatter and AI meta-prompt instructions, canonicalizes skill casing (`FastAPI`, `PostgreSQL`, `REST API`, `SDLC`, `STLC`), and cleanly separates university degrees from technical trainings/certifications.
 - **Universal Person-Adaptive Experience Analyzer**: Dynamically computes target experience bounds and seniority ceilings from each candidate's real history (`Entry-Level / Intern` → `Junior` → `Junior–Mid` → `Mid-Level` → `Senior` → `Lead / Principal`) and passes them into both live scraper query parameters and vacancy matching gates.
 
@@ -133,3 +133,14 @@ With both backend (`:8000`) and frontend (`:5173`) running:
 cd backend
 pytest ../tests/non_functional/test_a11y_and_perf.py -v
 ```
+
+---
+
+## Core Platform Capabilities & Data Governance
+
+- **Candidate Profile Vault & Safe Import Merge:** Every registered user starts with an empty, persisted draft `CandidateProfile` strictly owned by `user_id`. Users can build profiles fully manually (Identity, Summary, Work History, Education, Skills, Projects, Languages, Certifications, Preferences, FAQ) or upload `.pdf` / `.docx` / `.md` / `.txt` files through `POST /api/profile/import-preview` and `POST /api/profile/import-apply` with per-section `merge` / `replace` / `skip` controls (never silently overwriting confirmed data). `GET /api/profile/intelligence` detects duplicate skill variants and experience/education timeline inconsistencies.
+- **Multi-Tenant Job Discovery & Feedback Loop:** Global `JobPosting` rows are isolated from per-user `UserJobMatch` evaluations and per-user profile-fingerprinted caches. Supports occupational industry filtering, normalized salary period (`monthly` / `annual` / `hourly`) and `gross` / `net` metadata, transparent heuristic `recommendation_breakdown` (explicitly labeled as profile-to-vacancy fit, never hiring probability), and per-user dismissal/restore feedback (`POST/DELETE /api/jobs/{job_id}/feedback`).
+- **CV Studio & Application Snapshots:** Supports blank CV creation, master-profile generation, SSRF-safe vacancy URL tailoring, version duplication (`POST /api/cv-versions/{id}/duplicate`), side-by-side comparison, independent persisted `cover_letter` and `motivational_letter` drafts, and English/Georgian PDF + Word (`.docx`) rendering. Linked applications capture immutable `document_snapshot` payloads so historical packages survive subsequent master-profile edits or CV deletions.
+- **Vacancy-Grounded Interview Copilot & Mock Sessions:** Generates vacancy-specific prep plans, experience-gap topics, and grounded STAR strategies, plus 1-question-at-a-time interactive mock-answer evaluation (`POST /api/applications/{app_id}/interviews/{round_id}/mock-answer`) and private session deletion (`DELETE /api/applications/{app_id}/interviews/{round_id}`).
+- **AI Provider Abstraction & Privacy:** External AI calls (Gemini when `GEMINI_API_KEY` is configured; deterministic fallback otherwise) are centralized in `backend/app/services/gemini_service.py` with prompt-injection wrapping, caching, and token/latency telemetry (`ai_operation_logs`). Only task-minimum skills/role context is sent externally; sensitive PII columns on `CandidateProfile` and `CVVersion` are encrypted at rest via Fernet (`crypto_service.py`), and web refresh tokens are restricted to `HttpOnly` cookies.
+

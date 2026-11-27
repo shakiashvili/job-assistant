@@ -49,7 +49,10 @@ async function tryRefreshSession(cfg) {
   try {
     const resp = await fetchWithTimeout(`${cfg.apiBaseUrl}/api/auth/refresh`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-Client-Type": "chrome-extension",
+      },
       body: JSON.stringify({ refresh_token: cfg.refreshToken }),
     });
     if (!resp.ok) return null;
@@ -82,7 +85,10 @@ async function apiRequest(path, { method = "GET", body = null, requiresAuth = tr
   }
 
   const execute = (token) => {
-    const headers = { "Content-Type": "application/json" };
+    const headers = {
+      "Content-Type": "application/json",
+      "X-Client-Type": "chrome-extension",
+    };
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
     }
@@ -419,12 +425,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           target: { tabId: webTab.id },
           func: () => ({
             token: localStorage.getItem("talentflow_token") || "",
-            refreshToken: localStorage.getItem("talentflow_refresh_token") || "",
             userRaw: localStorage.getItem("talentflow_user") || "",
           }),
         });
         const extracted = results?.[0]?.result;
-        if (!extracted || (!extracted.token && !extracted.refreshToken)) {
+        if (!extracted || !extracted.token) {
           sendResponse({
             ok: false,
             error: "No active login token found in the open Web Portal tab. Please sign in on the web portal first.",
@@ -437,7 +442,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         } catch (_e) {}
         await chrome.storage.local.set({
           jwtToken: extracted.token,
-          refreshToken: extracted.refreshToken || "",
           userEmail: parsedUser.email || "",
           userName: parsedUser.full_name || "",
         });

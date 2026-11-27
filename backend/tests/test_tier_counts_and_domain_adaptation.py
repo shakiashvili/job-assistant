@@ -200,28 +200,41 @@ def test_global_tier_and_status_counts():
         test_uid = test_user.id
 
         # Add 3 direct, 2 adjacent, 1 public internship (all >= 60), plus 1 sub-threshold job (25.0)
+        seeded_rows = []
         for i in range(3):
-            session.add(JobPosting(
+            seeded_rows.append(JobPosting(
                 portal="jobs.ge", external_id=f"test-dir-{i}", url=f"https://jobs.ge/{i}",
                 title=f"Direct Role {i}", company="Comp", match_tier="DIRECT", status="STAGED",
                 suitability_score=85.0, description_raw="Desc",
             ))
         for i in range(2):
-            session.add(JobPosting(
+            seeded_rows.append(JobPosting(
                 portal="jobs.ge", external_id=f"test-adj-{i}", url=f"https://jobs.ge/adj-{i}",
                 title=f"Adjacent Role {i}", company="Comp", match_tier="ADJACENT", status="AUDITED",
                 suitability_score=68.0, description_raw="Desc",
             ))
-        session.add(JobPosting(
+        seeded_rows.append(JobPosting(
             portal="hr.gov.ge", external_id="test-pub-1", url="https://hr.gov.ge/1",
             title="Internship", company="Agency", match_tier="PUBLIC_INTERNSHIP", status="STAGED",
             suitability_score=76.0, description_raw="Desc",
         ))
-        session.add(JobPosting(
+        seeded_rows.append(JobPosting(
             portal="jobs.ge", external_id="test-low-1", url="https://jobs.ge/low-1",
             title="Low Match Role", company="Comp", match_tier="DIRECT", status="STAGED",
             suitability_score=25.0, description_raw="Desc",
         ))
+        for jr in seeded_rows:
+            session.add(jr)
+        session.flush()
+        for jr in seeded_rows:
+            session.add(UserJobMatch(
+                user_id=test_uid,
+                job_posting_id=jr.id,
+                suitability_score=jr.suitability_score,
+                match_score=jr.suitability_score,
+                match_tier=jr.match_tier,
+                status=jr.status,
+            ))
         session.commit()
 
     # Query with default min_score=60 and limit=2 (page 1 of 3 -> excludes the 25.0 job)

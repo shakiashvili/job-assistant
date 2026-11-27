@@ -19,6 +19,8 @@ import {
   generateCvEdition,
   fetchScrapedJobs,
   fetchCvVersions,
+  createCvVersion,
+  duplicateCvVersion,
   patchCvVersion,
   deleteCvVersion,
   BACKEND_ORIGIN,
@@ -61,6 +63,9 @@ export const CVVariantManager: React.FC = () => {
   const [editHeadline, setEditHeadline] = useState('');
   const [editSkillsText, setEditSkillsText] = useState('');
   const [editWorkBulletsText, setEditWorkBulletsText] = useState('');
+  const [editCoverLetter, setEditCoverLetter] = useState('');
+  const [editMotivationalLetter, setEditMotivationalLetter] = useState('');
+  const [compareVersionId, setCompareVersionId] = useState<number | null>(null);
   const [isSavingVersion, setIsSavingVersion] = useState(false);
   const [copiedLetter, setCopiedLetter] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
@@ -98,6 +103,8 @@ export const CVVariantManager: React.FC = () => {
       })
       .join('\n\n');
     setEditWorkBulletsText(formattedWork);
+    setEditCoverLetter(String(ver.cover_letter ?? sec.cover_letter ?? ''));
+    setEditMotivationalLetter(String(ver.motivational_letter ?? sec.motivational_letter ?? ''));
   };
 
   const loadInitial = async (forceResyncEditor = false) => {
@@ -223,8 +230,8 @@ export const CVVariantManager: React.FC = () => {
         title: res.title,
         company: res.company,
         subject: res.subject,
-        cover_letter: res.cover_letter,
-        motivational_letter: res.motivational_letter || res.cover_letter,
+        cover_letter: res.cover_letter || '',
+        motivational_letter: res.motivational_letter || '',
         docx_filename: res.docx_filename,
         docx_url: res.docx_url,
         pdf_filename: res.pdf_filename,
@@ -244,6 +251,15 @@ export const CVVariantManager: React.FC = () => {
 
       // Immediately attempt download of ready Word (.docx) file and notify user accurately
       const downloadedOk = await triggerCrossOriginDownload(res.docx_url, res.docx_filename);
+
+      const warnings: string[] = [];
+      if (res.url_fetch_warning) warnings.push(res.url_fetch_warning);
+      if (res.persistence_status === 'partial_failure' && res.persistence_error) {
+        warnings.push(`CV Studio history save warning: ${res.persistence_error}`);
+      }
+      if (warnings.length > 0) {
+        setStatusError(warnings.join(' | '));
+      }
 
       setDownloadBanner(
         downloadedOk
@@ -291,6 +307,8 @@ export const CVVariantManager: React.FC = () => {
       const updated = await patchCvVersion(activeVersion.id, {
         target_role: editHeadline || activeVersion.target_role || '',
         language: cvLanguage,
+        cover_letter: editCoverLetter,
+        motivational_letter: editMotivationalLetter,
         structured_json: {
           ...(activeVersion.structured_json || {}),
           headline: editHeadline,
@@ -317,16 +335,54 @@ export const CVVariantManager: React.FC = () => {
       if (activeVersion?.id === versionId) {
         syncEditorFromVersion(remaining[0] || null);
       }
+      if (compareVersionId === versionId) setCompareVersionId(null);
     } catch (err: any) {
       setStatusError(err.message || 'Could not delete CV version');
+    }
+  };
+
+  const handleCreateBlankCv = async () => {
+    setIsSavingVersion(true);
+    setStatusError(null);
+    try {
+      const created = await createCvVersion({
+        title: `Blank CV (${cvLanguage.toUpperCase()})`,
+        target_role: targetRole || 'Untitled Role',
+        target_company: targetCompany || '',
+        edition: 'minimalist',
+        language: cvLanguage,
+        blank: true,
+      });
+      setCvVersions((prev) => [created, ...prev]);
+      syncEditorFromVersion(created);
+      setDownloadBanner(`Created blank CV "${created.title}". Fill your verified sections below and save to re-render.`);
+    } catch (err: any) {
+      setStatusError(err.message || 'Could not create blank CV');
+    } finally {
+      setIsSavingVersion(false);
+    }
+  };
+
+  const handleDuplicateVersion = async (versionId: number) => {
+    setIsSavingVersion(true);
+    setStatusError(null);
+    try {
+      const cloned = await duplicateCvVersion(versionId);
+      setCvVersions((prev) => [cloned, ...prev]);
+      syncEditorFromVersion(cloned);
+      setDownloadBanner(`Duplicated "${cloned.title}" (v${cloned.version_number}) with preserved cover & motivational letters.`);
+    } catch (err: any) {
+      setStatusError(err.message || 'Could not duplicate CV version');
+    } finally {
+      setIsSavingVersion(false);
     }
   };
 
   const copyCoverLetter = async () => {
     const activeText =
       letterTab === 'motivational'
-        ? generatedOutput?.motivational_letter || generatedOutput?.cover_letter
-        : generatedOutput?.cover_letter;
+        ? generatedOutput?.motivational_letter || ''
+        : generatedOutput?.cover_letter || '';
     if (!activeText) return;
     try {
       await navigator.clipboard.writeText(activeText);
@@ -831,21 +887,84 @@ export const CVVariantManager: React.FC = () => {
       )}
 
       {/* 4. Interactive CV Studio: Saved Versions, Inline Section Editor & Live HTML Preview */}
-      {cvVersions.length > 0 && (
-        <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl space-y-5">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <div>
-              <h3 className="text-base font-bold text-white flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-emerald-400" />
-                <span>CV Studio: Saved Versions &amp; Live Editor ({cvVersions.length})</span>
-              </h3>
-              <p className="text-xs text-slate-400">
-                Edit your Summary, Skills, or Work Bullets inline and re-render PDF, Word (.docx), and HTML without fabricating experience.
-              </p>
-            </div>
+      <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h3 className="text-base font-bold text-white flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-emerald-400" />
+              <span>CV Studio: Saved Versions &amp; Live Editor ({cvVersions.length})</span>
+            </h3>
+            <p className="text-xs text-slate-400">
+              Create from blank, duplicate, compare versions, or edit Summary, Skills, Work Bullets &amp; Letters inline without fabricating experience.
+            </p>
           </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleCreateBlankCv}
+              disabled={isSavingVersion}
+              className="px-3.5 py-2 rounded-xl bg-slate-950 hover:bg-slate-800 border border-emerald-700/60 text-emerald-300 text-xs font-semibold disabled:opacity-50"
+            >
+              + New Blank CV
+            </button>
+            {cvVersions.length >= 2 && activeVersion && (
+              <select
+                aria-label="Compare with saved CV version"
+                value={compareVersionId ?? ''}
+                onChange={(e) => setCompareVersionId(e.target.value ? Number(e.target.value) : null)}
+                className="px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-slate-200"
+              >
+                <option value="">Compare with version...</option>
+                {cvVersions
+                  .filter((v) => v.id !== activeVersion.id)
+                  .map((v) => (
+                    <option key={v.id} value={v.id}>
+                      Compare vs: {v.title} (v{v.version_number})
+                    </option>
+                  ))}
+              </select>
+            )}
+          </div>
+        </div>
 
-          {/* Version Switcher Pills */}
+        {/* Side-by-Side Version Comparison */}
+        {activeVersion && compareVersionId && (() => {
+          const other = cvVersions.find((v) => v.id === compareVersionId);
+          if (!other) return null;
+          const activeSkills = new Set<string>(Array.isArray(activeVersion.structured_json?.skills) ? activeVersion.structured_json.skills : []);
+          const otherSkills = new Set<string>(Array.isArray(other.structured_json?.skills) ? other.structured_json.skills : []);
+          const addedSkills = Array.from(activeSkills).filter((s) => !otherSkills.has(s));
+          const removedSkills = Array.from(otherSkills).filter((s) => !activeSkills.has(s));
+          return (
+            <div className="bg-slate-950 border border-cyan-800/60 rounded-xl p-4 space-y-3 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-cyan-300">
+                  Version Comparison: {activeVersion.title} (v{activeVersion.version_number}) vs {other.title} (v{other.version_number})
+                </span>
+                <button type="button" onClick={() => setCompareVersionId(null)} className="text-slate-400 hover:text-white">
+                  Close
+                </button>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="p-3 rounded-lg bg-slate-900 border border-slate-800 space-y-1">
+                  <div className="text-[10px] uppercase text-emerald-400 font-bold">Active Summary ({activeVersion.edition})</div>
+                  <p className="text-slate-300">{String(activeVersion.structured_json?.summary || 'Empty')}</p>
+                </div>
+                <div className="p-3 rounded-lg bg-slate-900 border border-slate-800 space-y-1">
+                  <div className="text-[10px] uppercase text-slate-400 font-bold">Compared Summary ({other.edition})</div>
+                  <p className="text-slate-300">{String(other.structured_json?.summary || 'Empty')}</p>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-3 text-[11px]">
+                <span className="text-emerald-300">Only in active: {addedSkills.join(', ') || 'None'}</span>
+                <span className="text-amber-300">Only in compared: {removedSkills.join(', ') || 'None'}</span>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Version Switcher Pills */}
+        {cvVersions.length > 0 && (
           <div className="flex flex-wrap gap-2">
             {cvVersions.map((ver) => (
               <div
@@ -861,6 +980,15 @@ export const CVVariantManager: React.FC = () => {
                 </button>
                 <button
                   type="button"
+                  onClick={() => handleDuplicateVersion(ver.id)}
+                  aria-label={`Duplicate CV version ${ver.title}`}
+                  className="text-slate-400 hover:text-cyan-300"
+                  title="Duplicate saved CV version"
+                >
+                  <Copy className="w-3 h-3" aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
                   onClick={() => handleDeleteVersion(ver.id)}
                   aria-label={`Delete CV version ${ver.title}`}
                   className="text-slate-400 hover:text-rose-400"
@@ -871,6 +999,7 @@ export const CVVariantManager: React.FC = () => {
               </div>
             ))}
           </div>
+        )}
 
           {activeVersion && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -919,6 +1048,32 @@ export const CVVariantManager: React.FC = () => {
                     onChange={(e) => setEditWorkBulletsText(e.target.value)}
                     className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-emerald-500"
                   />
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-semibold uppercase text-slate-400 mb-1">
+                      Saved Cover Letter
+                    </label>
+                    <textarea
+                      rows={4}
+                      value={editCoverLetter}
+                      onChange={(e) => setEditCoverLetter(e.target.value)}
+                      placeholder="Persisted cover letter for this CV version..."
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold uppercase text-slate-400 mb-1">
+                      Saved Motivational Letter
+                    </label>
+                    <textarea
+                      rows={4}
+                      value={editMotivationalLetter}
+                      onChange={(e) => setEditMotivationalLetter(e.target.value)}
+                      placeholder="Persisted motivational letter for this CV version..."
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
                   <button
@@ -985,8 +1140,7 @@ export const CVVariantManager: React.FC = () => {
               </div>
             </div>
           )}
-        </div>
-      )}
+      </div>
     </div>
   );
 };

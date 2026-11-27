@@ -4,7 +4,7 @@ import math
 import re as _re
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import String, cast, func, case
 from sqlmodel import Session, select, or_, and_
 
@@ -61,16 +61,22 @@ class SalaryEstimateRequest(BaseModel):
 
 
 def _is_profile_uploaded_for_user(profile: Optional[CandidateProfile], user_email: str) -> bool:
+    """Returns True when the user has EITHER an uploaded CV/skills file OR a ready manually completed profile."""
     if not profile:
         return False
     ps = profile.parsed_skills or {}
-    if not bool(ps.get("user_uploaded", False)):
-        return False
     owner = str(ps.get("owner_email") or "").strip().lower()
     clean_user = (user_email or "").strip().lower()
     if owner and clean_user != owner:
         return False
-    return True
+    if bool(ps.get("user_uploaded", False)) or str(ps.get("profile_status") or "").lower() == "ready":
+        return True
+    vault = ps.get("ground_truth_vault") if isinstance(ps.get("ground_truth_vault"), dict) else {}
+    return bool(
+        (ps.get("all_skills") or [])
+        or (vault.get("work_history") or [])
+        or (vault.get("education") or [])
+    )
 
 
 @router.post("/profile/upload-skills")
@@ -327,6 +333,8 @@ async def list_scraped_jobs(
     tier: Optional[str] = Query(None, description="Optional tier filter: direct, adjacent, or internship"),
     min_score: Optional[float] = Query(60.0, description="Minimum suitability score threshold."),
     include_filtered: bool = Query(False, description="Include FILTERED_OUT (blocked/disqualified) jobs."),
+    include_dismissed: bool = Query(False, description="Include vacancies dismissed by the current user."),
+    industry: Optional[str] = Query(None, description="Occupational industry category filter (e.g. software_it, finance_banking, marketing_sales, operations, hr, legal, logistics, healthcare, hospitality, public_sector)"),
     search: Optional[str] = Query(None, description="Multi-keyword search across title, company, description, rationale"),
     country: Optional[str] = Query(None),
     city: Optional[str] = Query(None),
@@ -368,11 +376,13 @@ async def list_scraped_jobs(
             }
 
         use_user_matches = uid is not None
-        score_col = func.coalesce(UserJobMatch.suitability_score, JobPosting.suitability_score) if use_user_matches else JobPosting.suitability_score
-        status_col = func.coalesce(UserJobMatch.status, JobPosting.status) if use_user_matches else JobPosting.status
-        tier_col = func.coalesce(UserJobMatch.match_tier, JobPosting.match_tier) if use_user_matches else JobPosting.match_tier
+        score_col = UserJobMatch.suitability_score if use_user_matches else JobPosting.suitability_score
+        status_col = UserJobMatch.status if use_user_matches else JobPosting.status
+        tier_col = UserJobMatch.match_tier if use_user_matches else JobPosting.match_tier
 
         base_conds = [JobPosting.is_expired == False]
+        if use_user_matches and not include_dismissed:
+            base_conds.append(UserJobMatch.is_ignored == False)
         if not include_filtered:
             base_conds.append(status_col != "FILTERED_OUT")
         if portal and portal.upper() != "ALL":
@@ -383,6 +393,35 @@ async def list_scraped_jobs(
             base_conds.append(score_col >= min_score)
         def _esc_like(val: str) -> str:
             return val.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+        if industry and industry.strip().lower() not in ("all", ""):
+            ind_key = industry.strip().lower()
+            industry_keywords = {
+                "software_it": ["software", "qa", "developer", "engineer", "devops", "python", "java", "react", "frontend", "backend", "it ", "ტესტ", "პროგრამ"],
+                "finance_banking": ["finance", "bank", "accountant", "audit", "ifrs", "credit", "treasury", "ფინანს", "ბანკ", "ბუღალტ", "აუდიტ"],
+                "economics_analytics": ["econom", "business analyst", "data analyst", "bi ", "sql", "analytics", "ეკონომ", "ანალიტიკ"],
+                "operations_admin": ["operations", "office manager", "administrator", "coordinator", "project manager", "ოპერაცი", "ადმინისტრ"],
+                "marketing_sales": ["marketing", "sales", "seo", "smm", "account manager", "business development", "მარკეტინგ", "გაყიდვ"],
+                "human_resources": ["hr", "human resource", "recruiter", "talent acquisition", "people operations", "რეკრუტ"],
+                "customer_support": ["customer support", "customer service", "helpdesk", "client care", "call center", "მომხმარებ"],
+                "logistics_supply": ["logistics", "supply chain", "procurement", "warehouse", "freight", "ლოგისტიკ", "შესყიდვ"],
+                "legal_compliance": ["legal", "lawyer", "compliance", "aml", "kyc", "counsel", "იურისტ", "კომპლაენს"],
+                "healthcare_education": ["medical", "clinic", "hospital", "nurse", "doctor", "teacher", "lecturer", "სამედიცინო", "კლინიკ"],
+                "hospitality": ["hotel", "receptionist", "hospitality", "concierge", "tourism", "სასტუმრო", "ტურიზმ"],
+                "public_sector": ["ministry", "agency", "municipality", "public", "state", "სამინისტრო", "სააგენტო", "საჯარო"],
+            }.get(ind_key, [ind_key])
+            base_conds.append(
+                or_(
+                    *[
+                        or_(
+                            JobPosting.title.ilike(f"%{_esc_like(k)}%", escape="\\"),
+                            JobPosting.description_raw.ilike(f"%{_esc_like(k)}%", escape="\\"),
+                            JobPosting.company.ilike(f"%{_esc_like(k)}%", escape="\\"),
+                        )
+                        for k in industry_keywords
+                    ]
+                )
+            )
 
         if search and search.strip():
             tokens = [tok for tok in _re.split(r"[\s,;]+", search.strip()) if len(tok) >= 2][:6]
@@ -572,6 +611,39 @@ async def list_scraped_jobs(
                 salary_currency=dumped.get("salary_currency"),
             )
             dumped.update(geo_info)
+            sal_meta = salary_service.detect_salary_metadata(
+                f"{dumped.get('title') or ''}\n{dumped.get('description_raw') or ''}",
+                dumped.get("salary_min"),
+                dumped.get("salary_max"),
+            )
+            dumped["salary_period"] = sal_meta["salary_period"]
+            dumped["salary_gross_net"] = sal_meta["gross_net"]
+            dumped["normalized_monthly_min"] = sal_meta["normalized_monthly_min"]
+            dumped["normalized_monthly_max"] = sal_meta["normalized_monthly_max"]
+
+            um_obj = entry[1] if use_user_matches else None
+            matched_sk = list(um_obj.matched_skills or []) if um_obj is not None else []
+            missing_sk = list(um_obj.missing_skills or []) if um_obj is not None else []
+            mb = dict(um_obj.match_breakdown or {}) if um_obj is not None and isinstance(um_obj.match_breakdown, dict) else {}
+            dumped["is_ignored"] = bool(um_obj.is_ignored) if um_obj is not None else False
+            dumped["dismiss_reason"] = mb.get("dismiss_reason")
+            dumped["recommendation_breakdown"] = {
+                "overall_relevance_score": round(float(dumped.get("suitability_score") or 0.0), 1),
+                "score_disclaimer": "Heuristic profile-to-vacancy fit score (not a hiring probability).",
+                "skills_match_pct": dumped.get("skill_overlap_pct"),
+                "matched_skills": matched_sk[:12],
+                "missing_skills": missing_sk[:10],
+                "experience_compatibility": (
+                    "Unknown experience requirement"
+                    if dumped.get("experience_min_years") is None
+                    else f"Requires ~{dumped.get('experience_min_years'):g}+ yr(s)"
+                ),
+                "location_compatibility": geo_info.get("contract_mode") or dumped.get("remote_type") or "UNKNOWN",
+                "language_compatibility": ", ".join(dumped.get("language_requirements") or []) or "Not specified",
+                "eligibility_restrictions": geo_info.get("eligibility_note") or "",
+                "why_recommended": dumped.get("match_rationale") or "",
+                "matching_confidence": "high" if len(str(dumped.get("description_raw") or "")) >= 200 else "medium" if len(str(dumped.get("description_raw") or "")) >= 60 else "low",
+            }
             return dumped
 
         freshness_col = func.coalesce(JobPosting.published_at, JobPosting.scraped_at)
@@ -587,7 +659,7 @@ async def list_scraped_jobs(
 
         if geo_eligible_only:
             base_stmt = (
-                select(JobPosting, UserJobMatch).outerjoin(
+                select(JobPosting, UserJobMatch).join(
                     UserJobMatch,
                     (UserJobMatch.job_posting_id == JobPosting.id) & (UserJobMatch.user_id == uid),
                 )
@@ -601,6 +673,17 @@ async def list_scraped_jobs(
                 for entry in session.exec(base_stmt.order_by(*order_clauses)).all()
                 if (dumped := _serialize_job_row(entry)).get("georgia_eligible")
             ]
+            if use_user_matches and not all_geo_items and not only_saved:
+                has_any_user_match = session.exec(
+                    select(UserJobMatch.id).where(UserJobMatch.user_id == uid).limit(1)
+                ).first()
+                if has_any_user_match is None and session.exec(select(JobPosting.id).limit(1)).first() is not None:
+                    scraper_orchestrator.rescore_existing_jobs(owner_email=owner, user_id=uid)
+                    all_geo_items = [
+                        dumped
+                        for entry in session.exec(base_stmt.order_by(*order_clauses)).all()
+                        if (dumped := _serialize_job_row(entry)).get("georgia_eligible")
+                    ]
 
             tier_counts = {
                 "ALL": len(all_geo_items),
@@ -652,7 +735,7 @@ async def list_scraped_jobs(
             func.sum(case((status_col == "AUDITED", 1), else_=0)).label("audited_cnt"),
         ).select_from(JobPosting)
         if use_user_matches:
-            agg_stmt = agg_stmt.outerjoin(
+            agg_stmt = agg_stmt.join(
                 UserJobMatch,
                 (UserJobMatch.job_posting_id == JobPosting.id) & (UserJobMatch.user_id == uid),
             )
@@ -660,6 +743,16 @@ async def list_scraped_jobs(
             agg_stmt = agg_stmt.where(*base_conds)
 
         agg_row = session.exec(agg_stmt).one()
+        if use_user_matches and int(agg_row.all_cnt or 0) == 0 and not only_saved:
+            # Lazy first-time scoring for a ready user who has no UserJobMatch rows yet while global postings exist.
+            has_any_user_match = session.exec(
+                select(UserJobMatch.id).where(UserJobMatch.user_id == uid).limit(1)
+            ).first()
+            if has_any_user_match is None:
+                has_any_global_job = session.exec(select(JobPosting.id).limit(1)).first()
+                if has_any_global_job is not None:
+                    scraper_orchestrator.rescore_existing_jobs(owner_email=owner, user_id=uid)
+                    agg_row = session.exec(agg_stmt).one()
         all_cnt = int(agg_row[0] or 0)
         tier_counts = {
             "ALL": all_cnt,
@@ -691,7 +784,7 @@ async def list_scraped_jobs(
         if has_extra_filter:
             count_stmt = select(func.count()).select_from(JobPosting)
             if use_user_matches:
-                count_stmt = count_stmt.outerjoin(
+                count_stmt = count_stmt.join(
                     UserJobMatch,
                     (UserJobMatch.job_posting_id == JobPosting.id) & (UserJobMatch.user_id == uid),
                 )
@@ -702,7 +795,7 @@ async def list_scraped_jobs(
         total_pages = max(1, math.ceil(total / limit))
 
         if use_user_matches:
-            stmt = select(JobPosting, UserJobMatch).outerjoin(
+            stmt = select(JobPosting, UserJobMatch).join(
                 UserJobMatch,
                 (UserJobMatch.job_posting_id == JobPosting.id) & (UserJobMatch.user_id == uid),
             )
@@ -803,6 +896,82 @@ def remove_saved_job_bookmark(
         session.delete(existing)
         session.commit()
         return {"status": "removed", "job_id": job_id}
+
+
+class JobFeedbackRequest(BaseModel):
+    action: str = Field(default="dismiss", description="'dismiss', 'irrelevant', or 'restore'")
+    reason: Optional[str] = Field(
+        default=None,
+        description="irrelevant_role, too_senior, wrong_location, low_salary, already_applied, not_interested",
+    )
+    note: Optional[str] = None
+
+
+@router.post("/jobs/{job_id}/feedback")
+def submit_job_feedback(
+    job_id: int,
+    payload: JobFeedbackRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Records per-user relevance feedback / dismissal without mutating the candidate's verified profile."""
+    from ..db.models import UserJobMatch, utc_now
+
+    with Session(engine) as session:
+        job = session.get(JobPosting, job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job posting not found.")
+        um = session.exec(
+            select(UserJobMatch).where(
+                UserJobMatch.user_id == current_user.id,
+                UserJobMatch.job_posting_id == job_id,
+            )
+        ).first()
+        if not um:
+            um = UserJobMatch(
+                user_id=current_user.id,
+                job_posting_id=job_id,
+                suitability_score=0.0,
+                match_score=0.0,
+                match_tier=job.match_tier or "DIRECT",
+                status="IGNORED",
+            )
+        act = (payload.action or "dismiss").strip().lower()
+        mb = dict(um.match_breakdown or {})
+        if act == "restore":
+            um.is_ignored = False
+            if um.status == "IGNORED":
+                um.status = "STAGED"
+            mb.pop("dismiss_reason", None)
+            mb.pop("dismiss_note", None)
+        else:
+            um.is_ignored = True
+            um.status = "IGNORED"
+            mb["dismiss_reason"] = (payload.reason or "not_interested").strip().lower()
+            if payload.note:
+                mb["dismiss_note"] = payload.note.strip()[:400]
+            mb["feedback_at"] = utc_now().isoformat()
+        um.match_breakdown = mb
+        session.add(um)
+        session.commit()
+        return {
+            "status": "restored" if act == "restore" else "dismissed",
+            "job_id": job_id,
+            "is_ignored": um.is_ignored,
+            "reason": mb.get("dismiss_reason"),
+        }
+
+
+@router.delete("/jobs/{job_id}/feedback")
+def clear_job_feedback(
+    job_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    """Restores a previously dismissed vacancy back into the user's feed."""
+    return submit_job_feedback(
+        job_id=job_id,
+        payload=JobFeedbackRequest(action="restore"),
+        current_user=current_user,
+    )
 
 
 def _to_saved_search_out(r: SavedSearch) -> SavedSearchOut:

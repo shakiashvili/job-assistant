@@ -43,6 +43,7 @@ export interface WorkHistoryItem {
   location: string;
   start_date: string;
   end_date: string;
+  is_current?: boolean;
   highlights: string[];
 }
 
@@ -81,12 +82,48 @@ export interface FAQItem {
   answer: string;
 }
 
+export interface CandidatePreferences {
+  target_roles?: string[];
+  target_industries?: string[];
+  employment_types?: string[];
+  work_modes?: string[];
+  desired_salary_currency?: string;
+  relocation_countries?: string[];
+}
+
+export interface ProfileIntelligenceResponse {
+  completeness_score: number;
+  missing_fields: string[];
+  recommendations: string[];
+  duplicate_skills: Array<{ canonical: string; variants: string[] }>;
+  timeline_warnings: Array<{ section: string; severity: string; message: string }>;
+  profile_status: 'draft' | 'reviewed' | 'ready' | string;
+  provenance: Record<string, any>;
+  counts: {
+    skills: number;
+    work_history: number;
+    education: number;
+    projects: number;
+    certifications: number;
+    languages: number;
+  };
+}
+
+export interface ProfileImportPreviewResponse {
+  filename: string;
+  extracted: Record<string, any>;
+  diff_summary: Record<string, any>;
+  recommended_modes: Record<string, 'merge' | 'replace' | 'skip'>;
+  raw_text_preview: string;
+}
+
 export interface GroundTruth {
   candidate: {
     first_name: string;
     last_name: string;
     full_name: string;
     headline: string;
+    summary?: string;
     email: string;
     phone: string;
     location: CandidateLocation;
@@ -104,6 +141,9 @@ export interface GroundTruth {
   education: EducationItem[];
   projects?: ProjectItem[];
   certifications?: string[];
+  preferences?: CandidatePreferences;
+  profile_status?: 'draft' | 'reviewed' | 'ready' | string;
+  import_provenance?: Record<string, any>;
   cv_variants: Record<string, CVVariant>;
   faq_bank: FAQItem[];
   skills_md_raw?: string;
@@ -183,6 +223,25 @@ export interface DbJobPosting {
   georgia_eligible?: boolean;
   b2b_ready?: boolean;
   eligibility_note?: string;
+  salary_period?: 'monthly' | 'annual' | 'hourly' | 'unknown' | string;
+  salary_gross_net?: 'gross' | 'net' | 'unknown' | string;
+  normalized_monthly_min?: number | null;
+  normalized_monthly_max?: number | null;
+  is_ignored?: boolean;
+  dismiss_reason?: string | null;
+  recommendation_breakdown?: {
+    overall_relevance_score: number;
+    score_disclaimer: string;
+    skills_match_pct?: number | null;
+    matched_skills: string[];
+    missing_skills: string[];
+    experience_compatibility: string;
+    location_compatibility: string;
+    language_compatibility: string;
+    eligibility_restrictions: string;
+    why_recommended: string;
+    matching_confidence: 'high' | 'medium' | 'low' | string;
+  };
 }
 
 export interface ParsedSkillsTaxonomy {
@@ -465,6 +524,20 @@ export interface PredictedQuestion {
   star_strategy: StarStrategy;
 }
 
+export interface MockAnswerEvaluation {
+  question_id: number;
+  question: string;
+  category: string;
+  answer_text: string;
+  relevance_score: number;
+  word_count: number;
+  star_coverage: { situation: boolean; task: boolean; action: boolean; result: boolean };
+  covered_verified_skills: string[];
+  missing_points: string[];
+  improvement_suggestions: string[];
+  evaluated_at: string;
+}
+
 export interface InterviewBrief {
   round_id: number;
   application_id: number;
@@ -474,6 +547,15 @@ export interface InterviewBrief {
   status: string;
   company_intel: string;
   predicted_questions: PredictedQuestion[];
+  technical_glossary?: Array<{ term: string; definition: string }>;
+  follow_up_questions?: string[];
+  experience_gaps?: string[];
+  prep_plan?: string[];
+  mock_progress?: {
+    answered_count: number;
+    total_questions: number;
+    evaluations: MockAnswerEvaluation[];
+  };
   candidate_notes: string;
 }
 
@@ -508,6 +590,8 @@ export interface CVVersionItem {
   edition: string;
   language: string;
   structured_json: Record<string, any>;
+  cover_letter?: string;
+  motivational_letter?: string;
   rendered_html?: string;
   pdf_filename?: string | null;
   docx_filename?: string | null;
@@ -674,6 +758,8 @@ export interface JobSearchParams {
   tier?: string;
   min_score?: number;
   include_filtered?: boolean;
+  include_dismissed?: boolean;
+  industry?: string;
   search?: string;
   country?: string;
   city?: string;
