@@ -8,8 +8,8 @@ Built for job seekers in **Georgia (Tbilisi, `UTC+4`)** and global remote profes
 
 ## Core Capabilities
 
-### 1. Upload-First Universal Profile Engine & Dynamic Experience Bounds
-- **Upload-First Gate (Zero Auto-Seeded Drafts)**: TalentFlow never seeds a hardcoded QA or sample draft profile and blocks live portal scraping until you upload your own `.pdf`, `.docx`, `.md`, or `.txt` CV / skills file (`POST /api/profile/upload-skills` or `POST /api/skills-md/upload`).
+### 1. Candidate Profile Vault (Manual or Safe Import) & Dynamic Experience Bounds
+- **Zero Auto-Seeded Drafts (Manual or Document Import)**: Every registered user starts with an empty, persisted draft profile strictly owned by their account. Candidates can either build their profile completely manually (Identity, Summary, Work History, Education, Skills, Projects, Languages, Certifications, FAQ) or import `.pdf`, `.docx`, `.md`, or `.txt` files with preview & per-section `merge` / `replace` / `skip` controls (`POST /api/profile/import-preview`, `POST /api/profile/import-apply`). Live scraping unlocks as soon as either a manual or imported profile is ready.
 - **Clean Multi-Format Parser**: Handles both Markdown and PDF/DOCX text exports (including ALL-CAPS headers, Word bullets, wrapped lines, and pipe-separated spoken languages), strips YAML frontmatter and AI meta-prompt instructions, canonicalizes skill casing (`FastAPI`, `PostgreSQL`, `REST API`, `SDLC`, `STLC`), and cleanly separates university degrees from technical trainings/certifications.
 - **Universal Person-Adaptive Experience Analyzer**: Dynamically computes target experience bounds and seniority ceilings from each candidate's real history (`Entry-Level / Intern` → `Junior` → `Junior–Mid` → `Mid-Level` → `Senior` → `Lead / Principal`) and passes them into both live scraper query parameters and vacancy matching gates.
 
