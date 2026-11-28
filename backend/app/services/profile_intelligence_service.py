@@ -1,5 +1,5 @@
 import re
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import Any, Dict, List, Optional, Tuple
 
 from .cv_parser_service import cv_parser_service
@@ -315,7 +315,7 @@ def apply_import_merge(
 
     merged["import_provenance"] = {
         "source_filename": source_filename,
-        "imported_at": datetime.now(timezone.utc).isoformat(),
+        "imported_at": datetime.now(UTC).isoformat(),
         "modes": modes,
         "reviewed_by_candidate": True,
     }
@@ -345,10 +345,10 @@ def compute_profile_intelligence(
         if len(variants) > 1
     ]
 
-    now_year = datetime.now(timezone.utc).year
+    now_year = datetime.now(UTC).year
     timeline_warnings: List[Dict[str, str]] = []
     current_roles_count = 0
-    for idx, job in enumerate(gt_data.get("work_history") or []):
+    for job in gt_data.get("work_history") or []:
         if not isinstance(job, dict):
             continue
         label = f"{job.get('role') or 'Role'} at {job.get('company') or 'Company'}"

@@ -4,7 +4,7 @@ import json
 import logging
 import uuid
 from typing import List, Optional, Dict
-from sqlmodel import Session, select, or_, delete
+from sqlmodel import Session, select, delete
 
 from .database import engine, init_db
 from .models import (
@@ -18,6 +18,7 @@ from .models import (
     ApplicationUpdate,
     TrackerAnalyticsResponse,
 )
+from datetime import UTC
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +137,197 @@ class TrackerRepository:
             notes=rec.cover_letter_text or (job.match_rationale if job else ""),
         )
 
+    def _reconcile_orphaned_trackers(self, session: Session, user_id: int) -> None:
+        """Backfills missing ApplicationRecord rows for legacy extension-logged ApplicationTracker entries."""
+        trackers = session.exec(
+            select(ApplicationTracker).where(
+                ApplicationTracker.user_id == user_id,
+                ApplicationTracker.is_deleted == False,
+            )
+        ).all()
+        if not trackers:
+            return
+        existing_records = session.exec(
+            select(ApplicationRecord).where(ApplicationRecord.user_id == user_id)
+        ).all()
+        rec_ids = {r.id for r in existing_records if r.id is not None}
+        rec_job_ids = {r.job_posting_id for r in existing_records if r.job_posting_id is not None}
+        changed = False
+
+        for tr in trackers:
+            if tr.id in rec_ids or (tr.job_posting_id is not None and tr.job_posting_id in rec_job_ids):
+                continue
+            url = (tr.job_url or "").strip() or f"https://portal.local/ext-{tr.id}"
+            job = session.exec(select(JobPosting).where(JobPosting.url == url)).first()
+            if not job:
+                job = JobPosting(
+                    user_id=user_id,
+                    portal=tr.portal or "custom",
+                    external_id=f"ext-{tr.id}-{uuid.uuid4().hex[:6]}",
+                    title=tr.job_title or "Specialist",
+                    company=tr.company_name or "Hiring Company",
+                    url=url,
+                    market="GE" if (tr.portal or "") in ("jobs.ge", "hr.ge", "headhunter.ge", "hr.gov.ge") else "INT_REMOTE",
+                    is_remote=False,
+                    language_requirements=["English"],
+                    description_raw="",
+                    suitability_score=0.0,
+                    match_score=0.0,
+                    match_rationale="Logged via Chrome Extension",
+                    status="STAGED",
+                )
+                session.add(job)
+                session.flush()
+            tr.job_posting_id = job.id
+            cv_url = (tr.cv_pdf_path or "").strip()
+            if cv_url and not cv_url.startswith("/"):
+                cv_url = f"/api/resumes/generated/{cv_url}"
+            rec_id = tr.id if (tr.id is not None and session.get(ApplicationRecord, tr.id) is None) else None
+            rec = ApplicationRecord(
+                id=rec_id,
+                user_id=user_id,
+                job_id=job.id,
+                job_posting_id=job.id,
+                cv_pdf_path=cv_url,
+                custom_cv_path=cv_url,
+                cover_letter=tr.cover_letter_text or "",
+                cover_letter_text=tr.cover_letter_text or "",
+                salary_offered=tr.salary_offered,
+                submission_status=UI_TO_DB_STATUS.get(tr.status or "APPLIED", (tr.status or "APPLIED").upper()),
+                applied_at=tr.applied_at or utc_now(),
+                updated_at=tr.updated_at or utc_now(),
+            )
+            session.add(rec)
+            session.add(tr)
+            changed = True
+
+        if changed:
+            session.commit()
+
+    def upsert_external_application(
+        self,
+        *,
+        user_id: int,
+        company_name: str,
+        job_title: str,
+        job_url: str,
+        portal: str = "custom",
+        status: str = "APPLIED",
+        salary_offered: Optional[str] = None,
+        cv_pdf_path: Optional[str] = None,
+        cover_letter_text: Optional[str] = None,
+        match_score: Optional[int] = None,
+    ) -> Dict[str, object]:
+        """Atomically creates or updates both ApplicationRecord and ApplicationTracker for Chrome Extension logs."""
+        allowed_statuses = {"SAVED", "STAGED", "APPLIED", "HR_SCREEN", "TECH_INTERVIEW", "FINAL_INTERVIEW", "FINAL_ROUND", "OFFER", "REJECTED"}
+        clean_status = status.strip().upper() if status else "APPLIED"
+        if clean_status == "FINAL_ROUND":
+            clean_status = "FINAL_INTERVIEW"
+        target_status = clean_status if clean_status in allowed_statuses else "APPLIED"
+        clean_url = job_url.strip()
+        clean_company = company_name.strip() or "Hiring Company"
+        clean_title = job_title.strip() or "Specialist"
+        normalized_cv = (cv_pdf_path or "").strip()
+        if normalized_cv and not normalized_cv.startswith("/"):
+            normalized_cv = f"/api/resumes/generated/{normalized_cv}"
+
+        with Session(engine) as session:
+            self._reconcile_orphaned_trackers(session, user_id)
+            existing_tracker = session.exec(
+                select(ApplicationTracker).where(
+                    ApplicationTracker.user_id == user_id,
+                    ApplicationTracker.job_url == clean_url,
+                    ApplicationTracker.is_deleted == False,
+                )
+            ).first()
+            if existing_tracker:
+                prev_status = existing_tracker.status
+                existing_tracker.company_name = clean_company
+                existing_tracker.job_title = clean_title
+                existing_tracker.status = target_status
+                existing_tracker.salary_offered = salary_offered or existing_tracker.salary_offered
+                existing_tracker.cv_pdf_path = normalized_cv or existing_tracker.cv_pdf_path
+                existing_tracker.cover_letter_text = cover_letter_text or existing_tracker.cover_letter_text
+                if target_status == "APPLIED" and existing_tracker.applied_at is None:
+                    existing_tracker.applied_at = utc_now()
+                existing_tracker.updated_at = utc_now()
+                session.add(existing_tracker)
+
+                rec = session.get(ApplicationRecord, existing_tracker.id) if existing_tracker.id else None
+                if rec and rec.user_id == user_id:
+                    rec.submission_status = target_status
+                    rec.salary_offered = salary_offered or rec.salary_offered
+                    if normalized_cv:
+                        rec.cv_pdf_path = normalized_cv
+                        rec.custom_cv_path = normalized_cv
+                    if cover_letter_text:
+                        rec.cover_letter = cover_letter_text
+                        rec.cover_letter_text = cover_letter_text
+                    if target_status == "APPLIED" and rec.applied_at is None:
+                        rec.applied_at = utc_now()
+                    rec.updated_at = utc_now()
+                    session.add(rec)
+                    if prev_status != target_status and rec.id is not None:
+                        session.add(
+                            ApplicationEvent(
+                                application_id=rec.id,
+                                user_id=user_id,
+                                from_status=prev_status,
+                                to_status=target_status,
+                                event_type="status_changed",
+                                note=f"Updated from Chrome Extension ({prev_status} -> {target_status})",
+                            )
+                        )
+                session.commit()
+                return {
+                    "status": "updated",
+                    "application_id": f"app-{existing_tracker.id}",
+                    "tracker_id": existing_tracker.id,
+                    "company_name": existing_tracker.company_name,
+                    "job_title": existing_tracker.job_title,
+                    "tracker_status": target_status,
+                }
+
+        created = self.create(
+            ApplicationCreate(
+                company=clean_company,
+                role=clean_title,
+                portal=portal or "custom",
+                url=clean_url,
+                status=DB_TO_UI_STATUS.get(target_status, target_status),
+                match_score=match_score,
+                salary_offered=salary_offered,
+                cv_pdf_url=normalized_cv or None,
+                cover_letter_text=cover_letter_text,
+            ),
+            user_id=user_id,
+        )
+        return {
+            "status": "created",
+            "application_id": created.id,
+            "tracker_id": int(created.id.replace("app-", "")) if created.id.startswith("app-") else None,
+            "company_name": created.company,
+            "job_title": created.role,
+            "tracker_status": target_status,
+        }
+
+    def reconcile_all_orphaned_trackers(self) -> int:
+        """Startup one-shot backfill for any legacy extension-logged ApplicationTracker rows missing ApplicationRecord."""
+        with Session(engine) as session:
+            uids = {
+                uid
+                for uid in session.exec(
+                    select(ApplicationTracker.user_id).where(
+                        ApplicationTracker.user_id.is_not(None),
+                        ApplicationTracker.is_deleted == False,
+                    )
+                ).all()
+                if uid is not None
+            }
+            for uid in uids:
+                self._reconcile_orphaned_trackers(session, int(uid))
+            return len(uids)
+
     def get_all(
         self,
         user_id: Optional[int] = None,
@@ -153,7 +345,10 @@ class TrackerRepository:
                     ApplicationTracker,
                     (ApplicationRecord.id == ApplicationTracker.id) & (ApplicationTracker.user_id == ApplicationRecord.user_id),
                 )
-                .where(ApplicationRecord.user_id == user_id)
+                .where(
+                    ApplicationRecord.user_id == user_id,
+                    ApplicationRecord.submission_status != "DELETED",
+                )
                 .order_by(ApplicationRecord.applied_at.desc(), ApplicationRecord.updated_at.desc())
             )
             triples = session.exec(stmt).all()
@@ -182,6 +377,8 @@ class TrackerRepository:
             if not triple:
                 return None
             rec, job, app_t = triple
+            if rec.submission_status == "DELETED":
+                return None
             if not self._ownership_matches(rec.user_id, user_id, is_guest=is_guest):
                 raise PermissionError("Forbidden: application belongs to another user")
             return self._record_to_item(rec, job, app_t)
@@ -396,7 +593,7 @@ class TrackerRepository:
             if item_update.interview_date is not None:
                 raw_idt = str(item_update.interview_date).strip()
                 if raw_idt:
-                    from datetime import datetime, timezone
+                    from datetime import datetime
                     parsed_idt = None
                     try:
                         parsed_idt = datetime.fromisoformat(raw_idt.replace("Z", "+00:00"))
@@ -409,7 +606,7 @@ class TrackerRepository:
                                 continue
                     if parsed_idt is not None:
                         if parsed_idt.tzinfo is None:
-                            parsed_idt = parsed_idt.replace(tzinfo=timezone.utc)
+                            parsed_idt = parsed_idt.replace(tzinfo=UTC)
                         rec.interview_date = parsed_idt
                 else:
                     rec.interview_date = None
@@ -449,23 +646,45 @@ class TrackerRepository:
         item_id: str,
         user_id: Optional[int] = None,
         is_guest: bool = False,
+        hard: bool = False,
     ) -> bool:
         rec_id_str = str(item_id).replace("app-", "")
         if not rec_id_str.isdigit():
             return False
         with Session(engine) as session:
             rec = session.get(ApplicationRecord, int(rec_id_str))
-            if not rec:
+            if not rec or (not hard and rec.submission_status == "DELETED"):
                 return False
             if not self._ownership_matches(rec.user_id, user_id, is_guest=is_guest):
                 raise PermissionError("Forbidden: application belongs to another user")
-            session.exec(
-                delete(ApplicationEvent).where(ApplicationEvent.application_id == rec.id)
-            )
             tracker_row = session.get(ApplicationTracker, rec.id)
-            if tracker_row and tracker_row.user_id == rec.user_id:
-                session.delete(tracker_row)
-            session.delete(rec)
+            if hard:
+                session.exec(
+                    delete(ApplicationEvent).where(ApplicationEvent.application_id == rec.id)
+                )
+                if tracker_row and tracker_row.user_id == rec.user_id:
+                    session.delete(tracker_row)
+                session.delete(rec)
+            else:
+                old_status = rec.submission_status
+                rec.submission_status = "DELETED"
+                rec.updated_at = utc_now()
+                session.add(rec)
+                if tracker_row and tracker_row.user_id == rec.user_id:
+                    tracker_row.is_deleted = True
+                    tracker_row.updated_at = utc_now()
+                    session.add(tracker_row)
+                if rec.id is not None:
+                    session.add(
+                        ApplicationEvent(
+                            application_id=rec.id,
+                            user_id=rec.user_id,
+                            from_status=old_status,
+                            to_status="DELETED",
+                            event_type="soft_deleted",
+                            note="Application archived/soft-deleted by candidate",
+                        )
+                    )
             session.commit()
             return True
 

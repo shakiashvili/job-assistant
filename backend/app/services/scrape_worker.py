@@ -3,7 +3,7 @@ import logging
 import os
 import socket
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import Any, Dict, List, Optional
 
 from sqlmodel import Session, select, update
@@ -11,6 +11,7 @@ from sqlmodel import Session, select, update
 from ..db.database import engine, init_db
 from ..db.models import ScrapeTask, User, utc_now
 from .scrapers.scraper_orchestrator import scraper_orchestrator
+import contextlib
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +27,8 @@ def _ensure_utc(dt: Optional[datetime]) -> Optional[datetime]:
     if dt is None:
         return None
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 def _touch_heartbeat(task_id: str) -> None:
@@ -158,7 +159,7 @@ async def execute_scrape_task(task_id: str, owner_email: Optional[str] = None) -
         while not stop_hb.is_set():
             try:
                 await asyncio.wait_for(stop_hb.wait(), timeout=SCRAPE_HEARTBEAT_INTERVAL_SECONDS)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 _touch_heartbeat(claimed.task_id)
 
     hb_task = asyncio.create_task(_heartbeat_loop())
@@ -189,7 +190,7 @@ async def execute_scrape_task(task_id: str, owner_email: Optional[str] = None) -
                 session.add(t_row)
                 session.commit()
         return summary
-    except asyncio.TimeoutError:
+    except TimeoutError:
         err_msg = f"Scrape task exceeded execution timeout ({timeout_s}s)."
         logger.error("Background scrape task %s timed out after %ss", claimed.task_id, timeout_s)
         with Session(engine) as session:
@@ -217,10 +218,8 @@ async def execute_scrape_task(task_id: str, owner_email: Optional[str] = None) -
     finally:
         stop_hb.set()
         hb_task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await hb_task
-        except asyncio.CancelledError:
-            pass
 
 
 class DurableScrapeQueue:
@@ -289,8 +288,8 @@ class DurableScrapeQueue:
         if self._wake_event is not None:
             try:
                 self._wake_event.set()
-            except Exception:
-                pass
+            except RuntimeError as wake_err:
+                logger.debug("Scrape worker wake event skipped (loop closed): %s", wake_err)
 
     async def process_one_queued_task(self) -> bool:
         recover_stale_scrape_tasks()
@@ -317,10 +316,8 @@ class DurableScrapeQueue:
             except Exception as exc:
                 logger.warning("Durable scrape worker cycle warning: %s", exc)
             self._wake_event.clear()
-            try:
+            with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._wake_event.wait(), timeout=SCRAPE_POLL_INTERVAL_SECONDS)
-            except asyncio.TimeoutError:
-                pass
 
     def start_embedded_worker(self) -> None:
         if SCRAPE_WORKER_MODE == "external":
@@ -341,10 +338,8 @@ class DurableScrapeQueue:
             self._wake_event.set()
         if self._consumer_task is not None:
             self._consumer_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._consumer_task
-            except asyncio.CancelledError:
-                pass
             self._consumer_task = None
 
 

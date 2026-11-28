@@ -23,7 +23,6 @@ from app.services.crypto_service import blind_index, decrypt_str, encrypt_str, r
 from app.services.cv_generator_service import cv_generator_service, resolve_candidate_headline
 from app.services.gemini_service import gemini_service
 from app.services.gmail_service import gmail_service
-from app.services.playwright_service import playwright_service
 
 
 client = TestClient(app)
@@ -191,17 +190,7 @@ def test_crit_02_03_04_and_09_jwt_admin_attachment_and_crypto():
             os.environ["BLIND_INDEX_KEY"] = orig_bk
 
 
-def test_crit_06_and_07_zero_fabrication_cv_narratives_and_playwright(monkeypatch):
-    # CRIT-06: Path traversal in playwright_service.get_resume_path fails closed
-    outside = GENERATED_RESUMES_DIR.parent.parent / f"outside_{uuid.uuid4().hex[:6]}.pdf"
-    outside.write_bytes(b"%PDF-1.4\n")
-    try:
-        assert playwright_service.get_resume_path("", custom_pdf_filename=str(outside)) is None
-        assert playwright_service.get_resume_path("", custom_pdf_filename=f"../../{outside.name}") is None
-    finally:
-        if outside.exists():
-            outside.unlink()
-
+def test_crit_07_zero_fabrication_cv_narratives(monkeypatch):
     # CRIT-07: Non-QA profiles never receive hardcoded QA headline or synthetic QA/VIP bullets
     nurse_headline = resolve_candidate_headline(
         {"headline": "", "primary_role": "Registered ICU Nurse"},
@@ -460,7 +449,6 @@ def test_high_05_06_09_11_12_14_backup_extension_cache_matching_and_uploads(tmp_
 
 def test_phase3_modularization_admin_aggregates_and_b2b_precision():
     from app.db.document_repository import record_candidate_document
-    from app.db.models import ApplicationTracker
     from app.routers.admin import list_all_users, get_platform_metrics
     from app.routers.b2b import calculate_georgia_b2b_net, TaxCalculatorRequest, get_tbilisi_timezone_matrix
     from app.services.cv_formatting_utils import format_pdf_mixed_script, GEORGIAN_PDF_FONT_NAME, UNICODE_FONT_NAME
@@ -539,7 +527,7 @@ def test_phase3_modularization_admin_aggregates_and_b2b_precision():
 
 
 def test_phase4_ats_pdf_checker_evidence_diffs_and_immutable_jd_snapshots(monkeypatch):
-    from app.db.models import SavedJob, ApplicationTracker
+    from app.db.models import SavedJob
     from app.db.tracker_repository import tracker_store
     from app.schemas.api_schemas import ApplicationCreate
     from app.services.ats_checker import check_pdf_ats_parseability

@@ -1,89 +1,56 @@
-# TalentFlow AI — Georgia Local & Global Remote B2B Career Platform
+# TalentFlow AI
 
-TalentFlow AI is a full-stack, multi-industry job discovery, grounded CV/cover-letter studio, and remote B2B career workspace built with **FastAPI**, **SQLModel / SQLAlchemy + Alembic**, **React 18 + TypeScript**, **Tailwind CSS**, **Gemini / OpenRouter AI**, and a **Chrome Extension (Manifest V3)**.
-
-Built for job seekers in **Georgia (Tbilisi, `UTC+4`)** and global remote professionals across **any profession** (IT/QA, Software Engineering, Finance & Accounting, Data Analytics, Marketing, Logistics, HR, Legal/Public Admin, Hospitality, Healthcare, Sales), TalentFlow combines live local portal discovery (**Jobs.ge**, **HR.ge**, **HeadHunter.ge**, **HR.gov.ge**) with international & remote B2B boards (**Remotive**, **Himalayas**, **RemoteOK**, **Djinni**, **DOU**, **JustJoin.it**, **Greenhouse**, **Lever**, **LinkedIn**), bilingual English / Georgian (`ქართული`, Sylfaen font) ATS CV & full 4-paragraph cover letter generation, Kanban tracking, Google Calendar / `.ics` scheduling, and Georgia B2B tax/timezone planning.
+Multi-industry job discovery, grounded bilingual CV studio, application tracker, and Georgia remote B2B workspace built with **FastAPI**, **SQLModel / SQLAlchemy + Alembic**, **React 18 + TypeScript**, **Tailwind CSS**, **Gemini / OpenRouter**, and a **Chrome Extension (Manifest V3)**.
 
 ---
 
-## Core Capabilities
+## What It Does
 
-### 1. Candidate Profile Vault (Manual or Safe Import) & Dynamic Experience Bounds
-- **Zero Auto-Seeded Drafts (Manual or Document Import)**: Every registered user starts with an empty, persisted draft profile strictly owned by their account. Candidates can either build their profile completely manually (Identity, Summary, Work History, Education, Skills, Projects, Languages, Certifications, FAQ) or import `.pdf`, `.docx`, `.md`, or `.txt` files with preview & per-section `merge` / `replace` / `skip` controls (`POST /api/profile/import-preview`, `POST /api/profile/import-apply`). Live scraping unlocks as soon as either a manual or imported profile is ready.
-- **Clean Multi-Format Parser**: Handles both Markdown and PDF/DOCX text exports (including ALL-CAPS headers, Word bullets, wrapped lines, and pipe-separated spoken languages), strips YAML frontmatter and AI meta-prompt instructions, canonicalizes skill casing (`FastAPI`, `PostgreSQL`, `REST API`, `SDLC`, `STLC`), and cleanly separates university degrees from technical trainings/certifications.
-- **Universal Person-Adaptive Experience Analyzer**: Dynamically computes target experience bounds and seniority ceilings from each candidate's real history (`Entry-Level / Intern` → `Junior` → `Junior–Mid` → `Mid-Level` → `Senior` → `Lead / Principal`) and passes them into both live scraper query parameters and vacancy matching gates.
-
-### 2. Hiring-Grade Multi-Portal Discovery & True Public Sector Separation
-- **13 Live Portals**: `jobs.ge`, `hr.ge`, `headhunter.ge`, `hr.gov.ge`, `djinni.co`, `dou.ua`, `justjoin.it`, `greenhouse.io`, `lever.co`, `linkedin.com`, `remotive.com`, `himalayas.app`, and `remoteok.com`.
-- **Freshness-First Feed & Filtering**: Defaults to **Newest Posted** using extracted publication dates, with `Posted Within` recency filters, market filters (`Georgia Market`, `Remote B2B`, `Global Remote`), work-mode filters, tier tabs (`Direct`, `Adjacent`, `Public Sector`), and saved bookmarks.
-- **Hiring-Perspective Matching**:
-  - Enforces seniority & experience-years gates (including Georgian qualifiers such as `Junior QA` vs `Middle / Senior QA` and `2+` / `ორწლიანი`+ requirements), discipline guards, and spoken-language compatibility.
-  - **True Public Sector vs. Private Internships**: `Public Sector` is reserved strictly for `hr.gov.ge` and verified Georgian state ministries/LEPLs (`სსიპ`, `ა(ა)იპ`, `სამინისტრო`, `მერია`); private traineeships/internships are tagged cleanly as `Entry-Level / Internship`.
-- **Multi-User Isolation**: Every authenticated candidate receives isolated profile storage, `UserJobMatch` scores, and generated documents.
-
-### 3. Top-1% Grounded Bilingual CVs (EN / KA) & Full Cover Letters
-- **ATS-Verified CV Studio (`CVVariantManager`)**: Generates single-column ATS PDF (ReportLab), editable Word (`.docx`), and print-ready HTML in **English** or **Georgian (`ქართული` with Sylfaen OOXML/PDF font support)**, verified automatically with `pypdf` ATS parseability checks (`GET /api/cv-versions/{id}/ats-check`).
-- **Full 4-Paragraph Cover Letters & Distinct Motivational Letters**: Produces recruiter-grade, zero-fabrication 3–4 paragraph Cover Letters (and distinct Motivational Letters) citing concrete verified achievements from multiple employers and connecting relevant academic training (e.g., Economics degrees for banking/fintech roles).
-- **Direct Portal Workflow**: Cleanly links directly to the vacancy on its source portal or prepares an email application package — no brittle headless-browser form auto-submitter.
-
-### 4. Kanban Pipeline, Google Calendar (`.ics` + 1-Click) & Integrations Health
-- **Visual Kanban Pipeline (`ApplicationTracker`)**: Drag-and-drop stages (`Discovered → Applied → HR Screening → Technical Interview → Offer / Rejected`), CSV export, and AI Interview Copilot prep (`POST /api/applications/{id}/prepare-interview`).
-- **Google Calendar & Universal `.ics` Invites**:
-  - One-click **Add to Google Calendar** (writes via Google Calendar API when OAuth is connected, or opens a pre-filled `calendar.google.com` event immediately with zero setup).
-  - Universal RFC 5545 **`.ics` Calendar Export** (`GET /api/applications/{id}/calendar.ics?kind=interview|followup`) with 60-minute and 15-minute reminders for **Interviews** and **+5-day Follow-Up Reminders** (Google Calendar, Apple Calendar, Outlook).
-- **Real Email Dispatch & RFC 2822 `.eml` Transport**: Supports **Gmail OAuth 2.0**, **Gmail SMTP / IMAP Drafts**, and automatic downloadable **`.eml`** drafts with your tailored CV attached when mail credentials are not configured.
-- **Dashboard Integrations & System Health Panel** (`GET /api/applications/integrations/status`): Live status for Uploaded Profile, Google Calendar (including a 1-click **Test Google Calendar** link), Email/Gmail transport, AI Engine, and SQLite/Alembic database integrity (`alembic_version`, `PRAGMA integrity_check`, and `PRAGMA foreign_key_check`).
-
-### 5. Georgia Remote B2B Market Hub
-- **Georgia 1% Small Business vs. 20%+2% Labor Net Calculator** (`POST /api/b2b/tax-calculator`): Compares monthly & annual net take-home pay in USD, EUR, and GEL under Georgian Tax Code Article 90 (1% up to 500,000 GEL cumulative calendar-year turnover / 3% above threshold) vs. standard employment.
-- **Tbilisi `UTC+4` Timezone Overlap Matrix** (`GET /api/b2b/timezone-matrix`) & persistent B2B Contractor Readiness Checklist + Proposal Generator.
-
-### 6. Chrome Extension (Manifest V3) & Accessibility (WCAG 2.1 AA)
-- [`extension/`](./extension/manifest.json) extracts live DOM job postings across Georgian, European, and global ATS/remote portals in your already-authenticated browser session and syncs via JWT.
-- High-contrast obsidian + emerald UI with full keyboard navigation (`Skip to main content`, `Escape`-closable `role="dialog"` modals, visible focus rings, and `prefers-reduced-motion`).
+- **Candidate Profile Vault (Manual or Safe Import):** Every new account starts with an empty persisted draft profile. Build section-by-section manually or import `.pdf`, `.docx`, `.md`, or `.txt` files via preview + per-section `merge` / `replace` / `skip` controls (`POST /api/profile/import-preview`, `POST /api/profile/import-apply`).
+- **Async Multi-Portal Job Discovery (12 Server-Side Portals + Extension):**
+  - Server-side public boards: `jobs.ge`, `hr.ge`, `hr.gov.ge`, `headhunter.ge`, `remotive.com`, `himalayas.app`, `remoteok.com`, `djinni.co`, `dou.ua`, `justjoin.it`, `greenhouse.io`, `lever.co` via one durable async queue (`POST /api/jobs/scrape/async` + `GET /api/jobs/scrape/status/{task_id}`) with per-source health monitoring (`GET /api/jobs/sources/health`), zero-result alerting, and cross-portal deduplication (`also_on_portals`).
+  - **Explainable Match & Skill-Gap Action Plan:** Every discovery card and Chrome Extension panel surfaces exact gate diagnostics (`Seniority`, `Discipline`, `Language` from `matching/gates.py`), matched skills, and 1-click `△ <Skill> +Plan` buttons wired to `POST /api/action-plans/add-skill`.
+  - **Saved-Search Digest Alerts (In-App / Email / Telegram Bot):** Save custom vacancy filters and preview or dispatch grouped digests via in-app notifications, Gmail SMTP/OAuth, or Telegram Bot API (`POST /api/saved-searches/send-digest`).
+  - LinkedIn & authenticated ATS portals are supported strictly via the user's own browser using the Chrome Extension (`extension/`). See [docs/DECISIONS.md](docs/DECISIONS.md).
+- **Chrome Extension Copilot (Manifest V3):**
+  - Shared, unit-tested portal DOM extractors (`extension/shared/extractors.js`, tested in Vitest against `jobs.ge`, `hr.ge`, `headhunter.ge`, `linkedin.com`, and Greenhouse HTML fixtures).
+  - **Duplicate-Application Warning Badge** (`GET /api/extension/check-url`) detecting exact URL or cross-portal `(company, title)` matches before you apply.
+  - **1-Click "Open Gmail Draft & Mark Applied"** (`POST /api/extension/prepare-gmail-draft`) pre-filling recipient email, subject, cover letter, attaching the tailored `.pdf`/`.docx` CV in Gmail Drafts (or Gmail Compose fallback), and atomically marking the role `APPLIED` on the Kanban board.
+  - Native `chrome.downloads` support for tailored `.pdf` and `.docx` CVs (`GET /api/extension/download-cv/{filename}`).
+- **Grounded Bilingual CV Studio (EN / KA):** Generates single-column ATS PDF (ReportLab, Sylfaen/DejaVu Unicode fonts), Word (`.docx`), and HTML CVs plus separate Cover Letters and Motivational Letters under `/api/cv-versions`, with automated `pypdf` ATS checks (`GET /api/cv-versions/{id}/ats-check`). Zero-fabrication rules are checked offline by the 30-case golden evaluation harness (`backend/evals/eval_runner.py`).
+- **Application Kanban, Human-Approved Gmail Reply Sync & Calendar:** Stage tracking with immutable document snapshots, soft-delete + hard-purge (`DELETE /api/applications/{id}?hard=false|true`), **Sync Gmail Replies** (EN/KA employer reply classifier suggesting Kanban stage moves with 1-click **Approve** / **Undo**, `POST /api/applications/gmail/sync-suggestions`), **`+5 day` Follow-Up Email Drafts** (`POST /api/applications/{id}/follow-up-draft`), RFC 5545 `.ics` / Google Calendar links, and vacancy-grounded STAR interview practice.
+- **Georgia Remote B2B Hub (Feature-Flagged via `ENABLE_B2B_HUB`):** Compares Georgian Tax Code Article 90 (1% up to 500,000 GEL / 3% above threshold, informational only — not tax advice) against standard employment, live/fallback NBG FX rates, and a DST-aware Tbilisi (`UTC+4`) overlap matrix.
+- **Hardened AI Gateway & Typed Contracts:** Structured Pydantic schemas with retry-once + fallback telemetry, versioned prompt templates (`backend/app/prompts/`), PII redaction, nonce-delimited untrusted input wrapping, per-user daily token budget, optional explicit third-party AI consent (`docs/AI_SAFETY_AND_CONSENT.md`), and OpenAPI-generated TypeScript types (`backend/scripts/generate_openapi_types.py` → `frontend/src/types/openapi.generated.d.ts`).
 
 ---
 
-## Project Structure
-
-```text
-job-application-assistant/
-├── backend/                  # FastAPI API, SQLModel models, scrapers, AI & CV services
-│   ├── alembic/              # Alembic database schema migrations (head: a3c9d14e7b52)
-│   ├── app/
-│   │   ├── db/               # SQLModel ORM tables, encrypted PII columns & repositories
-│   │   ├── routers/          # auth, ground_truth, audit, b2b, jobs, tracker, extension, admin
-│   │   ├── schemas/          # Pydantic request/response contracts
-│   │   └── services/         # CV/PDF/DOCX generator, matcher, Gemini/OpenRouter gateway, Gmail/Calendar
-│   │       └── scrapers/     # jobs.ge, hr.ge, hr.gov.ge, headhunter.ge, djinni, dou, justjoin, ats, b2b
-│   └── tests/                # Pytest backend functional, regression, migration & calendar suites
-├── frontend/                 # React 18 + TypeScript + Vite + Tailwind CSS
-│   └── src/components/       # DashboardHome, AuditPanel, DiscoveryFeed, B2BMarketHub, ApplicationTracker, CVVariantManager, ProfileVault
-├── extension/                # Chrome Extension Manifest V3 (popup, background SW, content scripts)
-├── tests/non_functional/     # Playwright + axe-core WCAG 2.1 AA, performance & security probes
-└── docs/                     # Architecture, deployment, extension & quality audit guides
-```
-
----
-
-## Local Development Quickstart
+## Quickstart
 
 ### Prerequisites
-- **Python 3.11+**
+- **Python 3.12+**
 - **Node.js 20+** and **npm**
 
-### 1. Environment Setup (Optional for Local Use)
-Copy `.env.example` to `backend/.env` to enable live AI, SMTP, or Google OAuth integrations:
+### 1. Configure Environment (Optional)
 ```bash
-cp .env.example backend/.env
+cp backend/.env.example backend/.env
 ```
-Key optional variables:
-- `SECRET_KEY`: Random hex secret for JWT signing (deterministic local dev fallback used when unset)
-- `GEMINI_API_KEY` / `OPENROUTER_API_KEY`: Enables live AI parsing, CV/cover-letter crafting, and interview prep (clean deterministic engine runs automatically when unset)
-- `GMAIL_USER`, `GMAIL_APP_PASSWORD`: Enables Gmail SMTP send & IMAP drafts with CV attached
-- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`: Enables Google OAuth 2.0 Gmail & Calendar API sync (1-click Google Calendar links & `.ics` invites work out of the box without OAuth)
+Key variables in `backend/.env` (never commit `.env`):
+- **Core / AI:** `SECRET_KEY`, `DATABASE_URL`, `GEMINI_API_KEY` (or `OPENROUTER_API_KEY`), `ENABLE_B2B_HUB=true`, `AI_DAILY_TOKEN_BUDGET_PER_USER=250000`, `AI_THIRD_PARTY_CONSENT_REQUIRED=false`.
+- **Gmail Drafts, Reply Sync & Digest Emails:** Enable 2-Step Verification + IMAP in Gmail, generate a 16-character [App Password](https://myaccount.google.com/apppasswords), and set:
+  ```env
+  SMTP_HOST=smtp.gmail.com
+  SMTP_PORT=465
+  GMAIL_USER=your.email@gmail.com
+  GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx
+  ```
+  *(Optional Google OAuth2 for multi-user Gmail & Calendar: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`.)*
+- **Telegram Bot Saved-Search Digests:** Create a bot via `@BotFather`, send `/start` to your bot, get your Chat ID via `@userinfobot`, and set:
+  ```env
+  TELEGRAM_BOT_TOKEN=123456789:your_bot_token
+  TELEGRAM_DEFAULT_CHAT_ID=your_numeric_chat_id
+  ```
 
-### 2. Run Database Migrations & Backend API (`:8000`)
+### 2. Start Backend (`:8000`)
 ```bash
 cd backend
 pip install -r requirements.txt
@@ -91,56 +58,34 @@ alembic upgrade head
 uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-### 3. Run the Frontend App (`:5173`)
+### 3. Start Frontend (`:5173`)
 ```bash
 cd frontend
 npm install
 npm run dev -- --host 127.0.0.1 --port 5173
 ```
-Production build:
-```bash
-cd frontend
-npm run build
-npm run preview -- --host 127.0.0.1 --port 5173
-```
 
-### 4. Load the Chrome Extension
-1. Open Chrome → `chrome://extensions/`.
-2. Enable **Developer mode**.
-3. Click **Load unpacked** and select the `extension/` directory.
+### 4. Load Chrome Extension (Optional)
+Open `chrome://extensions/`, enable **Developer mode**, click **Load unpacked**, and select `extension/`.
 
 ---
 
-## Testing & Verification
+## Verification & CI Gates
 
-### Backend Unit, Regression, Migration & Security Tests
 ```bash
+# Backend lint, offline golden eval, tests & coverage floor (>=75%)
 cd backend
-pytest tests ../tests/non_functional/test_security.py -q --tb=short
-```
+pip install -r requirements-dev.txt
+ruff check app tests evals
+python -m evals.eval_runner
+pytest tests ../tests/non_functional/test_security.py -q --cov=app --cov-fail-under=75
 
-### Frontend TypeScript, Unit & Production Build Checks
-```bash
-cd frontend
+# Frontend lint, typecheck, unit tests & production build
+cd ../frontend
+npm run lint
 npx tsc --noEmit
-npx vitest run
+npm test
 npm run build
 ```
 
-### Accessibility (WCAG 2.1 AA) & Performance Tests
-With both backend (`:8000`) and frontend (`:5173`) running:
-```bash
-cd backend
-pytest ../tests/non_functional/test_a11y_and_perf.py -v
-```
-
----
-
-## Core Platform Capabilities & Data Governance
-
-- **Candidate Profile Vault & Safe Import Merge:** Every registered user starts with an empty, persisted draft `CandidateProfile` strictly owned by `user_id`. Users can build profiles fully manually (Identity, Summary, Work History, Education, Skills, Projects, Languages, Certifications, Preferences, FAQ) or upload `.pdf` / `.docx` / `.md` / `.txt` files through `POST /api/profile/import-preview` and `POST /api/profile/import-apply` with per-section `merge` / `replace` / `skip` controls (never silently overwriting confirmed data). `GET /api/profile/intelligence` detects duplicate skill variants and experience/education timeline inconsistencies.
-- **Multi-Tenant Job Discovery & Feedback Loop:** Global `JobPosting` rows are isolated from per-user `UserJobMatch` evaluations and per-user profile-fingerprinted caches. Supports occupational industry filtering, normalized salary period (`monthly` / `annual` / `hourly`) and `gross` / `net` metadata, transparent heuristic `recommendation_breakdown` (explicitly labeled as profile-to-vacancy fit, never hiring probability), and per-user dismissal/restore feedback (`POST/DELETE /api/jobs/{job_id}/feedback`).
-- **CV Studio & Application Snapshots:** Supports blank CV creation, master-profile generation, SSRF-safe vacancy URL tailoring, version duplication (`POST /api/cv-versions/{id}/duplicate`), side-by-side comparison, independent persisted `cover_letter` and `motivational_letter` drafts, and English/Georgian PDF + Word (`.docx`) rendering. Linked applications capture immutable `document_snapshot` payloads so historical packages survive subsequent master-profile edits or CV deletions.
-- **Vacancy-Grounded Interview Copilot & Mock Sessions:** Generates vacancy-specific prep plans, experience-gap topics, and grounded STAR strategies, plus 1-question-at-a-time interactive mock-answer evaluation (`POST /api/applications/{app_id}/interviews/{round_id}/mock-answer`) and private session deletion (`DELETE /api/applications/{app_id}/interviews/{round_id}`).
-- **AI Provider Abstraction & Privacy:** External AI calls (Gemini when `GEMINI_API_KEY` is configured; deterministic fallback otherwise) are centralized in `backend/app/services/gemini_service.py` with prompt-injection wrapping, caching, and token/latency telemetry (`ai_operation_logs`). Only task-minimum skills/role context is sent externally; sensitive PII columns on `CandidateProfile` and `CVVersion` are encrypted at rest via Fernet (`crypto_service.py`), and web refresh tokens are restricted to `HttpOnly` cookies.
-
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/DECISIONS.md](docs/DECISIONS.md), and [docs/AI_SAFETY_AND_CONSENT.md](docs/AI_SAFETY_AND_CONSENT.md) for architecture details and trade-offs.

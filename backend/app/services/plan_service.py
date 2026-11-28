@@ -9,7 +9,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from ..db.models import User, SkillActionPlan, CandidateProfile, JobPosting
 from ..db.profile_repository import profile_repository
-from ..services.gemini_service import gemini_service, safe_parse_json
+from ..services.gemini_service import gemini_service
 from ..services.matcher_service import matcher_service, skills_match_token
 
 logger = logging.getLogger(__name__)

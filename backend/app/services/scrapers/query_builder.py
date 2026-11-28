@@ -6,9 +6,6 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 
-from .linkedin_scraper import build_linkedin_search_urls
-
-
 class SearchQueryPackage(BaseModel):
     target_role: str = "Specialist"
     detected_industry: str = "General Professional"
@@ -19,7 +16,6 @@ class SearchQueryPackage(BaseModel):
     jobs_ge_urls: List[str] = Field(default_factory=list)
     hr_ge_urls: List[str] = Field(default_factory=list)
     headhunter_urls: List[str] = Field(default_factory=list)
-    linkedin_urls: List[str] = Field(default_factory=list)
     hr_gov_queries: List[str] = Field(default_factory=list)
     djinni_url: Optional[str] = None
     dou_url: Optional[str] = None
@@ -263,7 +259,7 @@ def build_search_queries(
     jobs_ge_urls: List[str] = []
     if jobs_ge_cid:
         jobs_ge_urls.append(f"https://jobs.ge/ge/?page=1&cid={jobs_ge_cid}")
-    for idx, q in enumerate((primary_ge[:3] + adjacent_ge[:1])):
+    for idx, q in enumerate(primary_ge[:3] + adjacent_ge[:1]):
         enc = quote_plus(q)
         cat_part = cid_suffix if idx < len(primary_ge[:3]) else ""
         u = f"https://jobs.ge/ge/?page=1&q={enc}{cat_part}"
@@ -321,11 +317,6 @@ def build_search_queries(
     hr_gov_queries = list(dict.fromkeys(
         (primary_ge[:2] + ["IT", "ანალიტიკ"]) if is_it else (primary_ge[:2] + adjacent_ge[:1])
     ))
-    linkedin_urls = build_linkedin_search_urls(
-        primary_role=primary_role,
-        verified_skills=verified,
-        cap_exp=cap_exp,
-    )
 
     pkg = SearchQueryPackage(
         target_role=primary_role,
@@ -337,7 +328,6 @@ def build_search_queries(
         jobs_ge_urls=jobs_ge_urls,
         hr_ge_urls=hr_ge_urls,
         headhunter_urls=headhunter_urls,
-        linkedin_urls=linkedin_urls,
         hr_gov_queries=hr_gov_queries,
         djinni_url=djinni_url,
         dou_url=dou_url,

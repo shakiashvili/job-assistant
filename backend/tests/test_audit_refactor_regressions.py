@@ -1,4 +1,3 @@
-import asyncio
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
@@ -17,12 +16,12 @@ from app.services.scrapers.base_scraper import (
     evaluate_remote_and_language_gate,
     is_georgia_country_location,
 )
-from app.services.scrapers.linkedin_scraper import LinkedInScraper
 from app.services.scrapers.scraper_orchestrator import (
     canonical_title_company,
     normalize_job_url,
     scraper_orchestrator,
 )
+from datetime import UTC
 
 
 def _register_and_auth(client: TestClient, email: str):
@@ -160,24 +159,9 @@ def test_georgia_us_state_vs_country_and_linkedin_tos_safe_default(monkeypatch):
     )
     assert status_ge == "DISCOVERED"
 
-    # LinkedIn public scrape disabled by default
-    monkeypatch.setenv("ENABLE_LINKEDIN_PUBLIC_SCRAPE", "false")
-    li = LinkedInScraper()
-    assert asyncio.run(li.scrape(allow_network=True)) == []
-
-    # Account Manager is not rejected as a senior engineering title
-    sample_html = """
-    <div class="job-search-card">
-      <h3 class="base-search-card__title">Account Manager</h3>
-      <h4 class="base-search-card__subtitle">Global Corp</h4>
-      <span class="job-search-card__location">Tbilisi, Georgia</span>
-      <a class="base-card__full-link" href="https://www.linkedin.com/jobs/view/123456789?trk=abc">View</a>
-    </div>
-    """
-    cards = li.parse_html_listings(sample_html, max_allowed_years=2.0)
-    assert len(cards) == 1
-    assert cards[0]["status"] == "DISCOVERED"
-    assert cards[0]["market"] == "GE_DOMESTIC"
+    # LinkedIn server-side scraper is permanently retired (extension-only policy)
+    assert "linkedin.com" not in scraper_orchestrator.SCRAPER_MAP
+    assert "linkedin.com" not in scraper_orchestrator.DEFAULT_PORTALS
 
 
 def test_cross_source_deduplication_and_job_search_sorting_and_health():
@@ -266,7 +250,7 @@ def test_cross_source_deduplication_and_job_search_sorting_and_health():
 
 
 def test_jobs_ge_published_date_parsing_and_newest_sort_and_recency_filter():
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
     from app.services.link_validator import parse_vacancy_published_date
     from app.services.scrapers.jobs_ge_scraper import JobsGeScraper
 
@@ -310,7 +294,7 @@ def test_jobs_ge_published_date_parsing_and_newest_sort_and_recency_filter():
     )
     assert up.status_code == 200
     uid = client.get("/api/auth/me", headers=headers).json()["id"]
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     old_dt = now - timedelta(days=11)
     fresh_dt = now - timedelta(hours=6)
 
@@ -369,7 +353,6 @@ def test_jobs_ge_published_date_parsing_and_newest_sort_and_recency_filter():
 
 
 def test_hiring_perspective_experience_domain_language_and_education_matching():
-    from app.services.matcher_service import matcher_service
 
     parsed_entry_qa = {
         "target_industry": "qa_tech",
@@ -494,7 +477,7 @@ def test_multi_industry_query_builder_covers_all_jobs_ge_categories_and_portals(
         cfg = build_search_queries({"target_industry": ind, "primary_role": role, "years_of_experience": 1.5}, headline=role)
         assert any(expected_cid in u for u in cfg["jobs_ge_urls"]), f"{ind} missing {expected_cid}"
         assert any("area=28" in u and "order_by=publication_time" in u for u in cfg["headhunter_urls"])
-        assert any("Tbilisi%2C+Georgia" in u for u in cfg["linkedin_urls"])
+        assert "linkedin_urls" not in cfg
         if expected_djinni:
             assert expected_djinni in (cfg["djinni_url"] or "")
 
@@ -527,7 +510,6 @@ def test_hr_ge_ng_state_and_dou_ukrainian_date_and_word_boundary_matching():
 
 
 def test_multi_industry_off_domain_matching_excludes_unrelated_professions():
-    from app.services.matcher_service import matcher_service
 
     finance_profile = {
         "target_industry": "finance_accounting",
@@ -661,7 +643,6 @@ def test_public_sector_is_only_state_employers_never_private_companies():
 
 
 def test_entry_qa_profile_junior_procredit_accepted_middle_senior_rejected_andersen_not_public():
-    from app.services.matcher_service import matcher_service
 
     qa_entry = {
         "target_industry": "qa_tech",
@@ -727,7 +708,6 @@ def test_ingest_scraped_jobs_sibling_delete_no_foreign_key_error(tmp_path):
     from sqlmodel import Session, select
     from app.db.database import engine
     from app.db.models import CandidateProfile, JobPosting, User
-    from app.services.scrapers.scraper_orchestrator import scraper_orchestrator
 
     with Session(engine) as session:
         user = User(email="fk-guard@example.com", hashed_password="x", full_name="FK Guard")
@@ -801,7 +781,6 @@ def test_ingest_scraped_jobs_sibling_delete_no_foreign_key_error(tmp_path):
 def test_yaml_skill_meta_never_leaks_and_pdf_cv_with_cover_letter_is_recruiter_grade():
     from app.db.profile_repository import profile_repository
     from app.services.cv_generator_service import cv_generator_service
-    from app.services.matcher_service import matcher_service
 
     # 1. AI SKILL.md with YAML frontmatter & coaching prompts must NEVER pollute name, skills, or education
     ai_skill_md = """---
@@ -897,9 +876,10 @@ def test_upload_first_gate_blocks_scraping_before_skills_upload_and_google_calen
     headers = _register_and_auth(client, email)
 
     # 1. User who has NOT uploaded CV/skills file must NOT auto-target QA or any jobs
-    r_scrape = client.post("/api/jobs/scrape", json={"allow_network": True}, headers=headers)
+    r_scrape = client.post("/api/jobs/scrape/async", json={"allow_network": True}, headers=headers)
     assert r_scrape.status_code == 400
     assert "upload" in r_scrape.json()["detail"].lower()
+    assert client.post("/api/jobs/scrape", json={"allow_network": True}, headers=headers).status_code == 404
 
     # 2. Integrations status reports DB integrity, Alembic head, profile=not uploaded, and Google Calendar ready
     r_int = client.get("/api/applications/integrations/status", headers=headers)
@@ -1064,7 +1044,6 @@ def test_p0_shared_job_not_deleted_when_other_user_filters_it_out():
     """P0 #2: Candidate B getting FILTERED_OUT on a shared JobPosting must NEVER delete the posting or Candidate A's saved/tracked records."""
     from sqlmodel import select
     from app.db.models import ApplicationTracker, SavedJob
-    from app.services.scrapers.scraper_orchestrator import scraper_orchestrator
 
     init_db()
     client = TestClient(app)
@@ -1142,7 +1121,6 @@ def test_p0_shared_job_not_deleted_when_other_user_filters_it_out():
 def test_p0_shared_scrape_cache_never_leaks_candidate_a_score_to_candidate_b():
     """P0 #3: 24h scrape cache is strictly per-user/profile-fingerprint, and GET /api/jobs never falls back to JobPosting.suitability_score."""
     from sqlmodel import select
-    from app.services.scrapers.scraper_orchestrator import scraper_orchestrator
 
     init_db()
     client = TestClient(app)

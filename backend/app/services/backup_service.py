@@ -2,11 +2,11 @@ import hashlib
 import json
 import logging
 import sqlite3
-from datetime import date, datetime, timezone
+from datetime import date, datetime, UTC
 from pathlib import Path
 from typing import Any, Dict, Optional
-from sqlalchemy import Date, DateTime, text
-from sqlmodel import SQLModel, Session
+from sqlalchemy import Date, DateTime
+from sqlmodel import SQLModel
 
 from ..config import DATA_DIR
 from ..db.database import engine, init_db
@@ -26,7 +26,7 @@ def _sha256_file(path: Path) -> str:
 
 
 def _serialize_cell(val: Any) -> Any:
-    if isinstance(val, (datetime, date)):
+    if isinstance(val, datetime | date):
         return val.isoformat()
     return val
 
@@ -64,6 +64,35 @@ class DatabaseBackupService:
     pre-restore safety snapshots.
     """
 
+    _BACKUP_COUNT_TABLES = (
+        "users",
+        "candidate_profiles",
+        "candidate_documents",
+        "cv_versions",
+        "job_postings",
+        "application_tracker",
+        "application_records",
+    )
+
+    @classmethod
+    def _collect_table_counts(cls) -> Dict[str, int]:
+        from sqlalchemy import func, select as sa_select
+
+        counts: Dict[str, int] = {}
+        with engine.connect() as conn:
+            for tbl_name in cls._BACKUP_COUNT_TABLES:
+                tbl_obj = SQLModel.metadata.tables.get(tbl_name)
+                if tbl_obj is None:
+                    counts[tbl_name] = 0
+                    continue
+                try:
+                    cnt = conn.execute(sa_select(func.count()).select_from(tbl_obj)).scalar_one()
+                    counts[tbl_name] = int(cnt or 0)
+                except Exception as cnt_err:
+                    logger.warning("Could not count rows in table '%s': %s", tbl_name, cnt_err)
+                    counts[tbl_name] = 0
+        return counts
+
     def create_backup(
         self,
         target_dir: Optional[Path] = None,
@@ -74,25 +103,10 @@ class DatabaseBackupService:
         init_db()
         out_dir = (target_dir or BACKUPS_DIR).resolve()
         out_dir.mkdir(parents=True, exist_ok=True)
-        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+        ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
         url_str = engine.url.render_as_string(hide_password=False)
 
-        table_counts: Dict[str, int] = {}
-        with Session(engine) as session:
-            for tbl in (
-                "users",
-                "candidate_profiles",
-                "candidate_documents",
-                "cv_versions",
-                "job_postings",
-                "application_tracker",
-                "application_records",
-            ):
-                try:
-                    cnt = session.exec(text(f"SELECT COUNT(*) FROM {tbl}")).one()
-                    table_counts[tbl] = int(cnt[0] if isinstance(cnt, tuple) else cnt)
-                except Exception:
-                    table_counts[tbl] = 0
+        table_counts = self._collect_table_counts()
 
         if url_str.startswith("sqlite") and not portable_json:
             backup_file = out_dir / f"talentflow_backup_{ts}.sqlite3"
@@ -113,7 +127,7 @@ class DatabaseBackupService:
             meta = {
                 "filename": backup_file.name,
                 "backup_path": str(backup_file),
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": datetime.now(UTC).isoformat(),
                 "sha256": checksum,
                 "size_bytes": backup_file.stat().st_size,
                 "integrity_check": integrity,
@@ -140,7 +154,7 @@ class DatabaseBackupService:
                     logger.debug(f"Skipping table '{table.name}' during portable JSON backup: {dump_err}")
 
         payload = {
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
             "format": "portable_json_backup",
             "table_counts": table_counts,
             "tables": tables_dump,
@@ -170,7 +184,8 @@ class DatabaseBackupService:
         for meta_file in sorted(out_dir.glob("*.meta.json"), key=lambda p: p.stat().st_mtime, reverse=True):
             try:
                 items.append(json.loads(meta_file.read_text(encoding="utf-8")))
-            except Exception:
+            except (OSError, json.JSONDecodeError) as meta_err:
+                logger.warning("Skipping unreadable backup metadata file %s: %s", meta_file.name, meta_err)
                 continue
         return items
 
@@ -259,22 +274,7 @@ class DatabaseBackupService:
                 src_conn.close()
 
         init_db(force=True)
-        restored_counts: Dict[str, int] = {}
-        with Session(engine) as session:
-            for tbl in (
-                "users",
-                "candidate_profiles",
-                "candidate_documents",
-                "cv_versions",
-                "job_postings",
-                "application_tracker",
-                "application_records",
-            ):
-                try:
-                    cnt = session.exec(text(f"SELECT COUNT(*) FROM {tbl}")).one()
-                    restored_counts[tbl] = int(cnt[0] if isinstance(cnt, tuple) else cnt)
-                except Exception:
-                    restored_counts[tbl] = 0
+        restored_counts = self._collect_table_counts()
 
         return {
             "status": "restored",

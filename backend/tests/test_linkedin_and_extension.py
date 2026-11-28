@@ -6,8 +6,8 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.services.gemini_service import gemini_service
-from app.services.scrapers.linkedin_scraper import LinkedInScraper, build_linkedin_search_urls
 from app.services.scrapers.query_builder import build_search_queries
+from app.services.scrapers.scraper_orchestrator import scraper_orchestrator
 
 client = TestClient(app)
 
@@ -22,55 +22,12 @@ def test_no_fabricated_fallback_companies_or_titles():
     assert "Senior QA Automation Engineer" not in res["title"]
 
 
-def test_linkedin_query_builder_and_scraper_parsing():
-    urls = build_linkedin_search_urls("Junior QA Engineer", ["Playwright", "Python"], cap_exp=2.0)
-    assert any("f_E=1%2C2%2C3" in u and "f_WT=2" in u for u in urls)
-
+def test_linkedin_server_side_scraping_removed_extension_only():
+    # Phase 4 policy: LinkedIn is supported strictly via the user's browser extension, never server-side scraping.
+    assert "linkedin.com" not in scraper_orchestrator.SCRAPER_MAP
+    assert "linkedin.com" not in scraper_orchestrator.DEFAULT_PORTALS
     pkg = build_search_queries({"target_industry": "qa_tech", "primary_role": "Junior QA Engineer", "years_of_experience": 1.5})
-    assert "linkedin_urls" in pkg and len(pkg["linkedin_urls"]) >= 2
-
-    sample_html = """
-    <ul>
-      <li>
-        <div class="base-card job-search-card" data-entity-urn="urn:li:jobPosting:400112233">
-          <a class="base-card__full-link" href="https://www.linkedin.com/jobs/view/junior-qa-engineer-at-bolt-400112233/?trk=public_jobs"></a>
-          <h3 class="base-search-card__title">Junior QA Automation Engineer</h3>
-          <h4 class="base-search-card__subtitle"><a href="#">Bolt</a></h4>
-          <span class="job-search-card__location">Remote (Worldwide)</span>
-          <span class="job-card-container__apply-method">Easy Apply</span>
-        </div>
-      </li>
-      <li>
-        <div class="base-card job-search-card" data-entity-urn="urn:li:jobPosting:400112244">
-          <a class="base-card__full-link" href="https://www.linkedin.com/jobs/view/manual-qa-intern-400112244/"></a>
-          <h3 class="base-search-card__title">Manual QA Intern</h3>
-          <h4 class="base-search-card__subtitle">TBC Tech</h4>
-          <span class="job-search-card__location">Tbilisi, Georgia</span>
-        </div>
-      </li>
-      <li>
-        <div class="base-card job-search-card" data-entity-urn="urn:li:jobPosting:400112255">
-          <a class="base-card__full-link" href="https://www.linkedin.com/jobs/view/senior-staff-qa-lead-400112255/"></a>
-          <h3 class="base-search-card__title">Senior Staff QA Lead</h3>
-          <h4 class="base-search-card__subtitle">EnterpriseCorp</h4>
-          <span class="job-search-card__location">Remote</span>
-        </div>
-      </li>
-    </ul>
-    """
-    parsed = LinkedInScraper().parse_html_listings(sample_html)
-    assert len(parsed) == 3
-
-    easy = next(j for j in parsed if "Bolt" in j["company"])
-    assert easy["delivery_channel"] == "EASY_APPLY"
-    assert easy["status"] != "FILTERED_OUT"
-
-    ext = next(j for j in parsed if "TBC Tech" in j["company"])
-    assert ext["delivery_channel"] == "EXTERNAL_ATS"
-    assert ext["market"] == "GE_DOMESTIC"
-
-    senior = next(j for j in parsed if "Senior Staff" in j["title"])
-    assert senior["status"] == "FILTERED_OUT"
+    assert "linkedin_urls" not in pkg
 
 
 def test_extension_prepare_and_log_application_with_jwt_and_seniority_guard():
@@ -312,8 +269,6 @@ Tbilisi, Georgia • +995 571-15-68-07 • [giorgishakiashvili21@gmail.com](mail
 
 def test_cv_filename_uniqueness_html_escape_languages_and_download_headers():
     """Verifies role-specific CV filenames, HTML XSS escaping, dynamic Languages from skills.md, ATS header, and Content-Disposition."""
-    import uuid
-    from pathlib import Path
     from docx import Document
     from app.config import GENERATED_RESUMES_DIR
     from app.services.cv_generator_service import cv_generator_service, UNICODE_FONT_NAME

@@ -1,0 +1,8 @@
+# Development, QA, lint, and type-checking dependencies
+-r requirements.txt
+pytest==9.2.0
+pytest-asyncio==1.4.1.post1
+pytest-cov==6.0.0
+ruff==0.9.6
+mypy==1.15.0
+pre-commit==4.1.0

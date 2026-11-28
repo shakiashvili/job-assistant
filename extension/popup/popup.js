@@ -41,25 +41,31 @@
     });
   }
 
-  async function ensureContentScriptAndScrape(tabId) {
-    const pingTab = () =>
-      new Promise((resolve) => {
-        chrome.tabs.sendMessage(tabId, { type: "SCRAPE_CONTEXT" }, (res) => {
-          if (chrome.runtime.lastError || !res) {
-            resolve(null);
-            return;
-          }
-          resolve(res);
-        });
+  function sendTabMessage(tabId, message) {
+    return new Promise((resolve) => {
+      chrome.tabs.sendMessage(tabId, message, (res) => {
+        if (chrome.runtime.lastError) {
+          resolve({ ok: false, error: chrome.runtime.lastError.message });
+          return;
+        }
+        resolve(res || { ok: false, error: "No response from page content script" });
       });
+    });
+  }
+
+  async function ensureContentScriptAndScrape(tabId) {
+    const pingTab = async () => {
+      const res = await sendTabMessage(tabId, { type: "SCRAPE_CONTEXT" });
+      return res?.ok ? res : null;
+    };
 
     let scraped = await pingTab();
     if (!scraped) {
       try {
         await chrome.scripting.insertCSS({ target: { tabId }, files: ["content/content.css"] });
-        await chrome.scripting.executeScript({ target: { tabId }, files: ["content/content.js"] });
+        await chrome.scripting.executeScript({ target: { tabId }, files: ["shared/extractors.js", "content/content.js"] });
         scraped = await pingTab();
-      } catch (_err) {
+      } catch {
         return null;
       }
     }
@@ -170,9 +176,33 @@
       docxLink.classList.remove("hidden");
     }
 
+    const contactEmail = state.pageContext?.contact_email || "";
+    if (el("contact-email-bar")) {
+      el("contact-email-bar").classList.remove("hidden");
+      if (el("contact-email-input") && contactEmail) {
+        el("contact-email-input").value = contactEmail;
+      }
+    }
+
+    const gatesBox = el("match-gates-box");
+    const gateItems = Array.isArray(data.match_explanation) ? data.match_explanation : [];
+    if (gatesBox) {
+      gatesBox.innerHTML = "";
+      gateItems.forEach((g) => {
+        const pill = document.createElement("span");
+        pill.className = "skill-chip";
+        pill.style.borderColor = g.passed ? "#10b981" : "#f43f5e";
+        pill.style.color = g.passed ? "#6ee7b7" : "#fda4af";
+        const label = String(g.gate || "gate").replace(/_gate$/i, "").replace(/_/g, " ");
+        pill.textContent = g.passed ? `✓ ${label}` : `✗ ${label}`;
+        if (g.reason) pill.title = g.reason;
+        gatesBox.appendChild(pill);
+      });
+    }
+
     const matchedSkills = data.matched_skills || [];
     const missingSkills = data.missing_skills || [];
-    if ((matchedSkills.length > 0 || missingSkills.length > 0) && el("matched-skills-box")) {
+    if ((matchedSkills.length > 0 || missingSkills.length > 0 || gateItems.length > 0) && el("matched-skills-box")) {
       el("matched-skills-section")?.classList.remove("hidden");
       const box = el("matched-skills-box");
       box.innerHTML = "";
@@ -182,12 +212,33 @@
         chip.textContent = `✓ ${sk}`;
         box.appendChild(chip);
       });
-      missingSkills.slice(0, 3).forEach((sk) => {
-        const chip = document.createElement("span");
+      missingSkills.slice(0, 4).forEach((sk) => {
+        const chip = document.createElement("button");
+        chip.type = "button";
         chip.className = "skill-chip";
         chip.style.borderColor = "#f59e0b";
         chip.style.color = "#fcd34d";
-        chip.textContent = `△ ${sk}`;
+        chip.style.cursor = "pointer";
+        chip.style.background = "transparent";
+        chip.title = `Click to add "${sk}" to your 7-day Skill Action Plan`;
+        chip.textContent = `△ ${sk} +Plan`;
+        chip.addEventListener("click", async () => {
+          chip.disabled = true;
+          const res = await sendBg({
+            type: "ADD_SKILL_TO_PLAN",
+            skillName: sk,
+            targetRole: data.job_title || el("job-title-input").value.trim() || "Specialist",
+          });
+          if (res?.ok) {
+            chip.style.borderColor = "#10b981";
+            chip.style.color = "#6ee7b7";
+            chip.textContent = `✓ ${sk} in Plan`;
+            showStatus(`Added "${sk}" to your 7-day Skill Action Plan!`, "success");
+          } else {
+            chip.disabled = false;
+            showStatus(res?.error || `Could not add "${sk}" to Action Plan.`, "error");
+          }
+        });
         box.appendChild(chip);
       });
     }
@@ -294,6 +345,23 @@
               el("captcha-warn").textContent = scraped.captcha.reason;
               el("captcha-warn").classList.remove("hidden");
             }
+            if (state.authenticated && scraped.context?.url) {
+              const dup = await sendBg({
+                type: "CHECK_DUPLICATE_URL",
+                url: scraped.context.url,
+                company: scraped.context.company_name || "",
+                title: scraped.context.job_title || "",
+              });
+              const dupEl = el("duplicate-app-banner");
+              if (dupEl && dup?.ok && dup.data?.already_tracked) {
+                const d = dup.data;
+                const datePart = d.applied_date ? ` on ${d.applied_date}` : "";
+                dupEl.textContent = `✅ Already Tracked (${d.status}${datePart} · ${d.portal})`;
+                dupEl.classList.remove("hidden");
+              } else {
+                dupEl?.classList.add("hidden");
+              }
+            }
           } else {
             el("portal-badge").textContent = "GRANT ACCESS";
             el("site-access-banner")?.classList.remove("hidden");
@@ -359,35 +427,51 @@
       const data = res.data;
       renderPreparedResult(data);
 
-      const fillRes = await new Promise((resolve) => {
-        chrome.tabs.sendMessage(
-          state.activeTabId,
-          { type: "APPLY_FIELD_ANSWERS", fieldAnswers: data.field_answers || [] },
-          resolve
-        );
-      });
+      const hasFormFields = Array.isArray(scraped.fields) && scraped.fields.length > 0;
+      const hasFileInput = hasFormFields && scraped.fields.some((f) => f.field_type === "file");
 
-      if (attachCv && data.tailored_cv?.pdf_url) {
-        const pdfRes = await sendBg({ type: "FETCH_CV_BLOB", pdfUrl: data.tailored_cv.pdf_url });
+      let filledCount = 0;
+      if (hasFormFields) {
+        const fillRes = await sendTabMessage(state.activeTabId, {
+          type: "APPLY_FIELD_ANSWERS",
+          fieldAnswers: data.field_answers || [],
+        });
+        filledCount = fillRes?.filledCount || 0;
+      }
+
+      let attachedCv = false;
+      if (attachCv && hasFileInput && data.tailored_cv?.pdf_url) {
+        const pdfRes = await sendBg({
+          type: "FETCH_CV_BLOB",
+          pdfUrl: data.tailored_cv.pdf_url,
+          filename: data.tailored_cv.pdf_filename || "",
+        });
         if (pdfRes?.ok && pdfRes.base64) {
-          await new Promise((resolve) => {
-            chrome.tabs.sendMessage(
-              state.activeTabId,
-              {
-                type: "ATTACH_PDF",
-                base64: pdfRes.base64,
-                filename: data.tailored_cv.pdf_filename || pdfRes.filename,
-              },
-              resolve
-            );
+          const attRes = await sendTabMessage(state.activeTabId, {
+            type: "ATTACH_PDF",
+            base64: pdfRes.base64,
+            filename: data.tailored_cv.pdf_filename || pdfRes.filename,
           });
+          attachedCv = Boolean(attRes?.attached);
         }
       }
 
-      showStatus(
-        `Ready: Filled ${fillRes?.filledCount || 0} fields cleanly. Verify everything before clicking Next or Submit.`,
-        "success"
-      );
+      if (!hasFormFields) {
+        showStatus(
+          "Tailored CV & Cover Letter ready! No web form on this page — download PDF / Word or copy the cover letter below.",
+          "success"
+        );
+      } else if (attachedCv) {
+        showStatus(
+          `Ready: Filled ${filledCount} fields & attached tailored PDF CV. Verify everything before Submit.`,
+          "success"
+        );
+      } else {
+        showStatus(
+          `Ready: Filled ${filledCount} fields cleanly. Download PDF / Word below if needed, and verify before Submit.`,
+          "success"
+        );
+      }
     } finally {
       state.isPreparing = false;
       btn.disabled = false;
@@ -496,12 +580,9 @@
 
     el("btn-reapply-edited")?.addEventListener("click", async () => {
       if (!state.activeTabId || !state.preparedApp?.field_answers?.length) return;
-      const fillRes = await new Promise((resolve) => {
-        chrome.tabs.sendMessage(
-          state.activeTabId,
-          { type: "APPLY_FIELD_ANSWERS", fieldAnswers: state.preparedApp.field_answers },
-          resolve
-        );
+      const fillRes = await sendTabMessage(state.activeTabId, {
+        type: "APPLY_FIELD_ANSWERS",
+        fieldAnswers: state.preparedApp.field_answers,
       });
       showStatus(`Re-applied ${fillRes?.filledCount || 0} edited answers to page.`, "success");
     });
@@ -578,26 +659,45 @@
   el("btn-prepare-fill")?.addEventListener("click", () => runPrepareAndFill(true));
   el("btn-fill-step")?.addEventListener("click", () => runPrepareAndFill(false));
 
-    async function downloadAuthenticatedCv(linkEl) {
-      const fileUrl = linkEl?.dataset?.fileUrl;
-      if (!fileUrl) return;
-      const res = await sendBg({ type: "FETCH_CV_BLOB", fileUrl });
-      if (!res?.ok || !res.base64) {
-        showStatus(res?.error || "Could not download CV file.", "error");
+    async function downloadAuthenticatedCv(btnEl) {
+      const fileUrl = btnEl?.dataset?.fileUrl;
+      const filename = btnEl?.dataset?.filename || "Tailored_CV.pdf";
+      if (!fileUrl) {
+        showStatus("Generate a tailored CV first before downloading.", "error");
         return;
       }
-      const bin = atob(res.base64);
-      const bytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      const blob = new Blob([bytes], { type: res.mimeType || "application/pdf" });
-      const blobUrl = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = blobUrl;
-      a.download = linkEl.dataset.filename || res.filename || "Tailored_CV.pdf";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+      const origText = btnEl.textContent;
+      btnEl.disabled = true;
+      btnEl.textContent = "⏳...";
+      try {
+        const res = await sendBg({ type: "DOWNLOAD_CV_FILE", fileUrl, filename });
+        if (res?.ok && !res.fallbackRequired) {
+          showStatus(`Downloaded ${res.filename || filename} to your Downloads folder.`, "success");
+          return;
+        }
+        if (res?.base64) {
+          const bin = atob(res.base64);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          const blob = new Blob([bytes], { type: res.mimeType || "application/pdf" });
+          const blobUrl = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = blobUrl;
+          a.download = res.filename || filename;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+          showStatus(`Downloaded ${res.filename || filename}.`, "success");
+          return;
+        }
+        showStatus(res?.error || "Could not download CV file.", "error");
+      } catch (err) {
+        showStatus(`CV download error: ${err?.message || err}`, "error");
+      } finally {
+        btnEl.disabled = false;
+        btnEl.textContent = origText;
+      }
     }
 
     el("cv-download-link")?.addEventListener("click", (e) => {
@@ -608,8 +708,75 @@
       e.preventDefault();
       downloadAuthenticatedCv(el("cv-docx-download-link"));
     });
+    el("btn-copy-email")?.addEventListener("click", async () => {
+      const addr = el("contact-email-input")?.value?.trim() || "";
+      if (!addr) {
+        showStatus("Enter a recruiter email address first.", "error");
+        return;
+      }
+      await navigator.clipboard.writeText(addr);
+      showStatus(`Copied ${addr} to clipboard.`, "success");
+    });
 
-    async function logApplication(status) {
+    el("btn-open-gmail-draft")?.addEventListener("click", async () => {
+      const btn = el("btn-open-gmail-draft");
+      const recipient = el("contact-email-input")?.value?.trim() || "";
+      if (!recipient || !recipient.includes("@")) {
+        showStatus("Enter a valid recruiter email address (e.g. cv@company.ge) first.", "error");
+        return;
+      }
+      const app = state.preparedApp || {};
+      const jobUrl = state.pageContext?.url || state.activeTabUrl || "";
+      const origText = btn?.textContent;
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "⏳ Preparing Gmail Draft...";
+      }
+      try {
+        const res = await sendBg({
+          type: "PREPARE_GMAIL_DRAFT",
+          payload: {
+            recipient_email: recipient,
+            company_name: el("company-input").value.trim() || app.company_name || "Hiring Company",
+            job_title: el("job-title-input").value.trim() || app.job_title || "Specialist",
+            job_url: jobUrl || `mailto:${recipient}`,
+            portal: state.pageContext?.portal || app.portal || "jobs.ge",
+            cover_letter: app.cover_letter || el("cover-letter-preview")?.textContent || "",
+            pdf_filename: app.tailored_cv?.pdf_filename || null,
+            docx_filename: app.tailored_cv?.docx_filename || null,
+            salary_offered: app.salary_info?.display || null,
+            mark_applied: true,
+          },
+        });
+        if (!res?.ok || !res.data) {
+          showStatus(res?.error || "Could not prepare Gmail draft.", "error");
+          return;
+        }
+        const d = res.data;
+        if (!d.gmail_draft_saved && app.tailored_cv?.pdf_url) {
+          // Download tailored PDF locally so the user can attach it immediately into Gmail Compose
+          await sendBg({
+            type: "DOWNLOAD_CV_FILE",
+            fileUrl: app.tailored_cv.pdf_url,
+            filename: app.tailored_cv.pdf_filename || "Tailored_CV.pdf",
+          });
+        }
+        if (d.open_url) {
+          chrome.tabs.create({ url: d.open_url });
+        }
+        const note = d.gmail_draft_saved
+          ? `Gmail Draft saved with ${d.attached_filename || "CV"} attached & marked APPLIED on Tracker!`
+          : `Opened Gmail Compose + downloaded CV (${app.tailored_cv?.pdf_filename || "PDF"}) & marked APPLIED on Tracker!`;
+        showStatus(note, "success");
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = origText;
+        }
+      }
+    });
+
+    async function logApplication(status, triggerBtn) {
       const app = state.preparedApp || {};
       const jobUrl = state.pageContext?.url || state.activeTabUrl || "";
       if (!jobUrl || !/^https?:\/\//i.test(jobUrl)) {
@@ -622,23 +789,37 @@
         job_url: jobUrl,
         portal: state.pageContext?.portal || app.portal || "custom",
         salary_offered: app.salary_info?.display || null,
-        cv_pdf_path: app.tailored_cv?.pdf_filename || null,
+        cv_pdf_path: app.tailored_cv?.pdf_url || app.tailored_cv?.pdf_filename || null,
         cover_letter_text: app.cover_letter || null,
         status,
       };
-      const res = await sendBg({ type: "LOG_APPLICATION", payload });
-      if (res?.ok) {
-        const msg = status === "SAVED"
-          ? `Bookmarked "${payload.job_title}" at "${payload.company_name}" as SAVED in your Tracker!`
-          : `Saved "${payload.job_title}" at "${payload.company_name}" to your Kanban Tracker!`;
-        showStatus(msg, "success");
-      } else {
-        showStatus(res?.error || "Could not save application to Kanban tracker.", "error");
+      const origText = triggerBtn?.textContent;
+      if (triggerBtn) {
+        triggerBtn.disabled = true;
+        triggerBtn.textContent = "⏳ Saving...";
+      }
+      try {
+        const res = await sendBg({ type: "LOG_APPLICATION", payload });
+        if (res?.ok) {
+          const verb = res.data?.status === "updated" ? "Updated" : "Saved";
+          const label = status === "SAVED" ? "Saved" : "Applied";
+          showStatus(
+            `${verb} "${payload.job_title}" at "${payload.company_name}" on your Application Tracker board (${label})!`,
+            "success"
+          );
+        } else {
+          showStatus(res?.error || "Could not save application to Kanban tracker.", "error");
+        }
+      } finally {
+        if (triggerBtn) {
+          triggerBtn.disabled = false;
+          triggerBtn.textContent = origText;
+        }
       }
     }
 
-    el("btn-mark-applied")?.addEventListener("click", () => logApplication("APPLIED"));
-    el("btn-save-job-later")?.addEventListener("click", () => logApplication("SAVED"));
+    el("btn-mark-applied")?.addEventListener("click", () => logApplication("APPLIED", el("btn-mark-applied")));
+    el("btn-save-job-later")?.addEventListener("click", () => logApplication("SAVED", el("btn-save-job-later")));
 
     el("btn-copy-letter")?.addEventListener("click", async () => {
       const txt = el("cover-letter-preview").textContent || "";

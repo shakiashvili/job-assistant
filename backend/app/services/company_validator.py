@@ -136,7 +136,7 @@ class CompanyValidatorService:
 
     def validate_company(self, company_name: str, raw_text: str = "") -> CompanyValidation:
         import datetime
-        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        now_iso = datetime.datetime.now(datetime.UTC).isoformat()
         clean_name = (company_name or "Unknown Company").strip()
         lower_name = clean_name.lower()
         lower_text = (raw_text or "").lower()

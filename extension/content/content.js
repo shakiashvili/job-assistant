@@ -2,37 +2,18 @@
   if (window.__talentFlowCopilotLoaded) return;
   window.__talentFlowCopilotLoaded = true;
 
+  const extHelpers = globalThis.TalentFlowExtractors || {};
+
   function detectPortal() {
-    const host = (window.location.hostname || "").toLowerCase();
-    const url = (window.location.href || "").toLowerCase();
-    if (host.includes("linkedin.com")) return "linkedin.com";
-    if (host.includes("myworkdayjobs.com")) return "workday";
-    if (host.includes("greenhouse.io")) return "greenhouse";
-    if (host.includes("lever.co")) return "lever";
-    if (host.includes("djinni.co")) return "djinni.co";
-    if (host.includes("dou.ua")) return "dou.ua";
-    if (host.includes("remotive.com")) return "remotive.com";
-    if (host.includes("himalayas.app")) return "himalayas.app";
-    if (host.includes("remoteok.com")) return "remoteok.com";
-    if (host.includes("vacancy.hr.gov.ge") || host.includes("hr.gov.ge")) return "hr.gov.ge";
-    if (host.includes("jobs.ge")) return "jobs.ge";
-    if (host.includes("headhunter.ge")) return "headhunter.ge";
-    if (host.includes("hr.ge")) return "hr.ge";
-    if (host.includes("justjoin.it")) return "justjoin.it";
+    if (typeof extHelpers.detectPortalFromUrl === "function") {
+      return extHelpers.detectPortalFromUrl(window.location.hostname, window.location.href);
+    }
     return "generic";
   }
 
   function cleanText(el) {
+    if (typeof extHelpers.cleanText === "function") return extHelpers.cleanText(el);
     return el ? (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim() : "";
-  }
-
-  function firstText(selectors, root = document) {
-    for (const sel of selectors) {
-      const el = root.querySelector(sel);
-      const txt = cleanText(el);
-      if (txt) return txt;
-    }
-    return "";
   }
 
   function detectCaptcha() {
@@ -56,112 +37,18 @@
   }
 
   function extractJobContext() {
-    const portal = detectPortal();
-    let jobTitle = "";
-    let companyName = "";
-    let location = "";
-    let jobDescription = "";
-
-    if (portal === "linkedin.com") {
-      jobTitle = firstText([
-        ".job-details-jobs-unified-top-card__job-title h1",
-        ".job-details-jobs-unified-top-card__job-title",
-        ".jobs-unified-top-card__job-title",
-        "h1.t-24",
-        ".jobs-easy-apply-modal #jobs-apply-header",
-      ]);
-      // Easy Apply header often reads "Apply to <Company>"
-      const applyHdr = firstText(["#jobs-apply-header", ".jobs-easy-apply-modal h2"]);
-      companyName = firstText([
-        ".job-details-jobs-unified-top-card__company-name a",
-        ".job-details-jobs-unified-top-card__company-name",
-        ".jobs-unified-top-card__company-name a",
-        ".jobs-unified-top-card__company-name",
-        ".topcard__org-name-link",
-      ]);
-      if (!companyName && applyHdr && /^apply to\s+/i.test(applyHdr)) {
-        companyName = applyHdr.replace(/^apply to\s+/i, "").trim();
-      }
-      location = firstText([
-        ".job-details-jobs-unified-top-card__primary-description-container .tvm__text",
-        ".jobs-unified-top-card__bullet",
-        ".topcard__flavor--bullet",
-      ]);
-      jobDescription = firstText([
-        "#job-details",
-        ".jobs-description__content",
-        ".jobs-description-content__text",
-        ".show-more-less-html__markup",
-      ]);
-    } else if (portal === "workday") {
-      jobTitle = firstText([
-        '[data-automation-id="jobPostingHeader"] h2',
-        '[data-automation-id="jobPostingHeader"]',
-        "h1",
-        "h2",
-      ]);
-      const metaSite = document.querySelector('meta[property="og:site_name"]')?.getAttribute("content") || "";
-      const subHost = window.location.hostname.split(".")[0] || "";
-      companyName = metaSite || (subHost && !subHost.startsWith("wd") ? subHost : "");
-      location = firstText(['[data-automation-id="locations"] dd', '[data-automation-id="locations"]']);
-      jobDescription = firstText(['[data-automation-id="jobPostingDescription"]']);
-    } else if (portal === "greenhouse" || portal === "lever") {
-      jobTitle = firstText(["h1.app-title", ".posting-headline h2", "h1"]);
-      companyName = firstText([".company-name", ".main-header-logo img[alt]"]) ||
-        (document.querySelector('meta[property="og:site_name"]')?.getAttribute("content") || "");
-      location = firstText([".location", ".posting-categories .location"]);
-      jobDescription = firstText(["#content", ".posting-page", ".section-wrapper"]);
-    } else if (portal === "dou.ua") {
-      jobTitle = firstText(["h1.g-h2", ".b-vacancy h1", "h1"]);
-      companyName = firstText([
-        ".b-compinfo .l-n a",
-        ".b-compinfo .l-n",
-        ".comp-name a",
-        ".company-name",
-      ]) || "";
-      location = firstText([".place", ".b-vacancy .place", ".location"]);
-      jobDescription = firstText([".b-typo.vacancy-section", ".b-vacancy", "article", "main"]);
-    } else if (portal === "djinni.co") {
-      jobTitle = firstText(["header h1", "h1"]);
-      companyName = firstText([
-        ".job-details--title a",
-        "a.text-reset[href*='/jobs/company-']",
-        ".company-name",
-      ]) || "";
-      location = firstText([".location-text", ".job-additional-info--item"]);
-      jobDescription = firstText([".job-post__description", ".profile-page-section", "main"]);
-    } else {
-      jobTitle = firstText(["h1.job-title", "h1", ".vacancy-title", ".job-header h2", "h2"]);
-      if (!jobTitle) {
-        const ogTitle = (document.querySelector('meta[property="og:title"]')?.getAttribute("content") || "").trim();
-        jobTitle = ogTitle ? ogTitle.split(/\s[|\-–—]\s/)[0].trim() : (document.title || "").split(/\s[|\-–—]\s/)[0].trim();
-      }
-      const metaSite = (document.querySelector('meta[property="og:site_name"]')?.getAttribute("content") || "").trim();
-      const genericPortalSites = new Set([
-        "dou", "dou.ua", "djinni", "djinni.co", "jobs.ge", "hr.ge", "hr.gov.ge",
-        "linkedin", "workday", "greenhouse", "lever", "ashby", "workable", "indeed", "glassdoor"
-      ]);
-      const hostParts = (window.location.hostname || "")
-        .replace(/^(www|careers|jobs|apply|boards|hire)\./i, "")
-        .split(".");
-      const hostCompany = hostParts[0] && hostParts[0].length > 1
-        ? hostParts[0].charAt(0).toUpperCase() + hostParts[0].slice(1)
-        : "";
-      companyName =
-        firstText([".company-name", ".employer-name", '[itemprop="hiringOrganization"]']) ||
-        (metaSite && !genericPortalSites.has(metaSite.toLowerCase()) ? metaSite : "") ||
-        (!genericPortalSites.has((hostCompany || "").toLowerCase()) ? hostCompany : "");
-      jobDescription = firstText(["main", "article", ".job-description", ".description", "#job-description", "[role='main']"]);
+    if (typeof extHelpers.extractJobContextFromDocument === "function") {
+      return extHelpers.extractJobContextFromDocument(document, window.location);
     }
-
     const rawPageText = (document.body?.innerText || "").replace(/\s+/g, " ").trim().slice(0, 6000);
     return {
       url: window.location.href,
-      portal,
-      job_title: jobTitle,
-      company_name: companyName.replace(/^at\s+/i, "").trim(),
-      location,
-      job_description: (jobDescription || rawPageText).slice(0, 5000),
+      portal: detectPortal(),
+      job_title: "",
+      company_name: "",
+      location: "",
+      contact_email: "",
+      job_description: rawPageText.slice(0, 5000),
       raw_page_text: rawPageText,
     };
   }
@@ -449,11 +336,15 @@
     }
 
     if (!attached) {
-      triggerBrowserDownload(file, filename || "Tailored_Resume.pdf");
-      document
-        .querySelectorAll('input[type="file"], .jobs-document-upload__upload-button-container, [data-automation-id="file-upload-drop-zone"]')
-        .forEach((el) => el.classList.add("ai-upload-highlight"));
-      showToast(`Saved ${filename} — drop it into the highlighted Upload box!`, false);
+      if (fileInputs.length > 0) {
+        triggerBrowserDownload(file, filename || "Tailored_Resume.pdf");
+        document
+          .querySelectorAll('input[type="file"], .jobs-document-upload__upload-button-container, [data-automation-id="file-upload-drop-zone"]')
+          .forEach((el) => el.classList.add("ai-upload-highlight"));
+        showToast(`Saved ${filename} — drop it into the highlighted Upload box!`, false);
+      } else {
+        showToast(`No upload field on this page — use Download PDF / Word in the Side Panel.`, false);
+      }
     } else {
       showToast(`Tailored CV attached: ${filename} (Human review before Submit)`, false);
     }
@@ -483,7 +374,10 @@
           <span class="hud-status-dot" id="tf-hud-dot"></span>
           <span>TalentFlow Copilot</span>
         </div>
-        <span style="font-size:11px; color:#94a3b8;" id="tf-hud-chevron">▲</span>
+        <div style="display:flex; align-items:center; gap:6px;">
+          <span style="font-size:11px; color:#94a3b8;" id="tf-hud-chevron">▲</span>
+          <button type="button" id="tf-hud-close" title="Hide HUD" style="background:none;border:none;color:#94a3b8;cursor:pointer;font-size:12px;padding:0 2px;">×</button>
+        </div>
       </div>
       <div class="hud-body">
         <div class="blocker-alert" id="tf-hud-warn" style="display:none;"></div>
@@ -492,17 +386,25 @@
         </div>
         <button class="hud-btn-primary" id="tf-hud-fill-btn">Analyze, Build CV &amp; Fill</button>
         <button class="hud-btn-secondary" id="tf-hud-step-btn">Fill Current Modal Step</button>
+        <button class="hud-btn-secondary" id="tf-hud-applied-btn" style="margin-top:4px; border-color:#10b981; color:#6ee7b7;">✅ Mark Applied (Tracker)</button>
       </div>
     `;
     document.body.appendChild(hud);
     const portalBadgeEl = document.getElementById("tf-hud-portal");
     if (portalBadgeEl) portalBadgeEl.textContent = detectPortal().toUpperCase();
 
+    document.getElementById("tf-hud-close")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      hud.remove();
+    });
+
     document.getElementById("tf-hud-toggle")?.addEventListener("click", () => {
       hud.classList.toggle("minimized");
       const chev = document.getElementById("tf-hud-chevron");
       if (chev) chev.textContent = hud.classList.contains("minimized") ? "▲" : "▼";
     });
+
+    let lastHudPrepared = null;
 
     async function runHudFill(useLastCvOnly) {
       const cap = detectCaptcha();
@@ -525,8 +427,8 @@
       chrome.runtime.sendMessage(
         { type: "PREPARE_APPLICATION", payload: { ...ctx, fields } },
         (res) => {
-          if (!res || !res.ok) {
-            const errMsg = res?.error || "Open the extension popup to sign in first.";
+          if (chrome.runtime.lastError || !res || !res.ok) {
+            const errMsg = chrome.runtime.lastError?.message || res?.error || "Open the extension popup to sign in first.";
             if (warnEl) {
               warnEl.style.display = "block";
               warnEl.textContent = errMsg;
@@ -535,28 +437,50 @@
             return;
           }
           const data = res.data;
+          lastHudPrepared = { ctx, data };
           if (data.seniority_blocked && warnEl) {
             warnEl.style.display = "block";
             warnEl.textContent = `Warning: ${data.seniority_warning}`;
           }
-          const applied = applyFieldAnswers(data.field_answers || []);
+          const applied = fields.length > 0 ? applyFieldAnswers(data.field_answers || []) : { filledCount: 0 };
           if (metaEl) {
             metaEl.dataset.locked = "true";
-            metaEl.textContent = `${data.job_title} (${data.match_score}% ${data.match_tier}) · Filled ${applied.filledCount} fields`;
+            metaEl.textContent = fields.length > 0
+              ? `${data.job_title} (${data.match_score}% ${data.match_tier}) · Filled ${applied.filledCount} fields`
+              : `${data.job_title} (${data.match_score}% ${data.match_tier}) · CV Ready`;
           }
+          const hasFileInput = fields.some((f) => f.field_type === "file");
           if (!useLastCvOnly && data.tailored_cv?.pdf_url) {
-            chrome.runtime.sendMessage(
-              { type: "FETCH_CV_BLOB", pdfUrl: data.tailored_cv.pdf_url },
-              (pdfRes) => {
-                if (pdfRes?.ok && pdfRes.base64) {
-                  attachResumePdf(pdfRes.base64, data.tailored_cv.pdf_filename || pdfRes.filename);
-                } else {
-                  showToast(`Filled ${applied.filledCount} fields — please verify before Submit.`, false);
+            if (hasFileInput) {
+              chrome.runtime.sendMessage(
+                { type: "FETCH_CV_BLOB", pdfUrl: data.tailored_cv.pdf_url, filename: data.tailored_cv.pdf_filename || "" },
+                (pdfRes) => {
+                  if (!chrome.runtime.lastError && pdfRes?.ok && pdfRes.base64) {
+                    attachResumePdf(pdfRes.base64, data.tailored_cv.pdf_filename || pdfRes.filename);
+                  } else {
+                    showToast(`Filled ${applied.filledCount} fields — download CV from the Side Panel.`, false);
+                  }
                 }
-              }
-            );
+              );
+            } else {
+              chrome.runtime.sendMessage(
+                { type: "DOWNLOAD_CV_FILE", fileUrl: data.tailored_cv.pdf_url, filename: data.tailored_cv.pdf_filename || "" },
+                (dlRes) => {
+                  if (!chrome.runtime.lastError && dlRes?.ok) {
+                    showToast(`Tailored PDF downloaded (${dlRes.filename})! Open Side Panel for Word/Cover Letter.`, false);
+                  } else {
+                    showToast("CV & Cover Letter ready in Side Panel (click Download PDF / Word).", false);
+                  }
+                }
+              );
+            }
           } else {
-            showToast(`Step filled (${applied.filledCount} fields) — review before clicking Next/Submit.`, false);
+            showToast(
+              fields.length > 0
+                ? `Step filled (${applied.filledCount} fields) — review before clicking Next/Submit.`
+                : "No web form on this page — use the Side Panel to download CV & copy cover letter.",
+              false
+            );
           }
         }
       );
@@ -564,6 +488,32 @@
 
     document.getElementById("tf-hud-fill-btn")?.addEventListener("click", () => runHudFill(false));
     document.getElementById("tf-hud-step-btn")?.addEventListener("click", () => runHudFill(true));
+    document.getElementById("tf-hud-applied-btn")?.addEventListener("click", () => {
+      const ctx = lastHudPrepared?.ctx || extractJobContext();
+      const data = lastHudPrepared?.data || {};
+      chrome.runtime.sendMessage(
+        {
+          type: "LOG_APPLICATION",
+          payload: {
+            company_name: data.company_name || ctx.company_name || "Unknown Company",
+            job_title: data.job_title || ctx.job_title || "Unknown Title",
+            job_url: ctx.url,
+            portal: ctx.portal || "custom",
+            salary_offered: data.salary_info?.display || null,
+            cv_pdf_path: data.tailored_cv?.pdf_url || data.tailored_cv?.pdf_filename || null,
+            cover_letter_text: data.cover_letter || null,
+            status: "APPLIED",
+          },
+        },
+        (res) => {
+          if (!chrome.runtime.lastError && res?.ok) {
+            showToast(`Saved "${data.job_title || ctx.job_title}" to your Application Tracker board as Applied!`, false);
+          } else {
+            showToast(chrome.runtime.lastError?.message || res?.error || "Sign in via Side Panel to save to Tracker.", true);
+          }
+        }
+      );
+    });
   }
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {

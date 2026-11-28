@@ -189,6 +189,14 @@ export interface JobDetails {
   summary: string;
 }
 
+export interface MatchGateExplanation {
+  gate: string;
+  passed: boolean;
+  reason?: string;
+  penalty?: number;
+  metadata?: Record<string, any>;
+}
+
 export interface DbJobPosting {
   id: number;
   portal: string;
@@ -208,6 +216,10 @@ export interface DbJobPosting {
   posting_date?: string | null;
   published_at?: string | null;
   suitability_score: number;
+  also_on_portals?: string[];
+  matched_skills?: string[];
+  missing_skills?: string[];
+  match_explanation?: MatchGateExplanation[];
   match_rationale: string;
   match_tier?: 'DIRECT' | 'ADJACENT' | 'PUBLIC_INTERNSHIP' | string;
   adjacent_role_tag?: string | null;
@@ -433,19 +445,6 @@ export interface GenerateAnswersResponse {
   motivation_letter?: string;
   dou_motivational_letter?: string;
   default_start_date?: string;
-}
-
-export interface StageApplicationResponse {
-  status: string;
-  portal_detected: string;
-  fields_filled: string[];
-  captcha_status?: string;
-  file_uploaded: boolean;
-  resume_file_path?: string;
-  company_validation?: CompanyValidation;
-  message: string;
-  manual_review_needed: boolean;
-  page_title?: string;
 }
 
 export interface ApplicationItem {
@@ -780,11 +779,16 @@ export interface JobSearchParams {
 export interface ScraperSourceHealthItem {
   portal: string;
   status: string;
+  last_run_at?: string | null;
   last_attempt_at?: string | null;
   last_success_at?: string | null;
-  jobs_found: number;
-  latency_ms: number;
+  last_count?: number;
+  jobs_found?: number;
+  last_latency_ms?: number;
+  latency_ms?: number;
   consecutive_failures: number;
+  consecutive_zero_runs?: number;
+  zero_run_alert?: boolean;
   last_error?: string | null;
 }
 

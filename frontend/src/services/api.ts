@@ -4,7 +4,6 @@ import {
   JobAuditResponse,
   GenerateAnswersResponse,
   ScreeningQuestion,
-  StageApplicationResponse,
   ApplicationItem,
   PortalVacancyItem,
   SkillsPresetItem,
@@ -95,11 +94,41 @@ export async function apiFetch(url: string, init: RequestInit = {}): Promise<Res
   return res;
 }
 
+export class ApiError extends Error {
+  status: number;
+  detail: string;
+  constructor(message: string, status = 0) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.detail = message;
+  }
+}
+
+export async function downloadAuthorizedFile(relativeOrFullUrl: string, filename: string): Promise<void> {
+  const targetUrl = relativeOrFullUrl.startsWith('http') ? relativeOrFullUrl : `${BACKEND_ORIGIN}${relativeOrFullUrl}`;
+  const res = await apiFetch(targetUrl);
+  if (!res.ok) {
+    throw new ApiError(await readErrorDetail(res, `HTTP ${res.status}`), res.status);
+  }
+  const blob = await res.blob();
+  const blobUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = blobUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+}
+
 async function readErrorDetail(res: Response, fallback: string): Promise<string> {
   try {
     const data = await res.json();
     if (data?.detail) return String(data.detail);
-  } catch {}
+  } catch (parseErr) {
+    console.debug('Error response was not JSON:', parseErr);
+  }
   return fallback;
 }
 
@@ -316,17 +345,6 @@ export async function fetchScrapedJobs(
 export const fetchScraperSourceHealth = (): Promise<{ sources: ScraperSourceHealthItem[]; default_portals: string[] }> =>
   apiJson('/jobs/sources/health', { errorMessage: 'Failed to fetch source health' });
 
-export const triggerMultiPortalScrape = (
-  allowNetwork = true
-): Promise<{
-  total_processed: number;
-  staged_ready_count: number;
-  filtered_out_count: number;
-  cache_hits?: number;
-  rejection_reasons?: Array<{ portal: string; title: string; company: string; reason: string }>;
-  jobs: DbJobPosting[];
-}> => apiJson('/jobs/scrape', { method: 'POST', body: { allow_network: allowNetwork }, errorMessage: 'Scraper run failed' });
-
 export const triggerAsyncScrape = (allowNetwork = true): Promise<{ task_id: string; status: string; deduplicated?: boolean }> =>
   apiJson('/jobs/scrape/async', { method: 'POST', body: { allow_network: allowNetwork }, errorMessage: 'Failed to start background scraper' });
 
@@ -438,21 +456,6 @@ export const generateAnswers = (params: {
   cv_language?: 'en' | 'ka';
 }): Promise<GenerateAnswersResponse> =>
   apiJson('/generate-answers', { method: 'POST', body: params, errorMessage: 'Failed to generate screening answers' });
-
-export const stageApplication = (params: {
-  job_url: string;
-  variant?: string;
-  custom_pdf_filename?: string;
-  custom_answers?: Record<string, string>;
-  applicant_summary?: string;
-  motivation_letter?: string;
-  expected_salary?: string;
-  start_date?: string;
-  bypass_company_gate?: boolean;
-  auto_submit?: boolean;
-  headless?: boolean;
-}): Promise<StageApplicationResponse> =>
-  apiJson('/stage-application', { method: 'POST', body: params, errorMessage: 'Staging failed' });
 
 export const fetchApplications = (): Promise<ApplicationItem[]> =>
   apiJson('/applications', { errorMessage: 'Failed to fetch applications' });
@@ -662,6 +665,83 @@ export const fetchActionPlans = (): Promise<SkillActionPlan[]> =>
 
 export const generateActionPlans = (): Promise<SkillActionPlan[]> =>
   apiJson('/profile/generate-action-plan', { method: 'POST', errorMessage: 'Failed to generate action plans' });
+
+export const addSkillToActionPlan = (
+  skillName: string,
+  targetRole = 'Specialist'
+): Promise<SkillActionPlan> =>
+  apiJson('/action-plans/add-skill', {
+    method: 'POST',
+    body: { skill_name: skillName, target_role: targetRole },
+    errorMessage: 'Failed to add skill to Action Plan',
+  });
+
+export const triggerSavedSearchDigest = (params?: {
+  channels?: string[];
+  telegram_chat_id?: string;
+  min_score?: number;
+  dry_run?: boolean;
+}): Promise<{
+  status: string;
+  digest: { searches_evaluated: number; total_matches: number; groups: unknown[] };
+  preview_text?: string;
+  delivery: Record<string, unknown>;
+}> =>
+  apiJson('/saved-searches/send-digest', {
+    method: 'POST',
+    body: params || { channels: ['in_app', 'email'], dry_run: false },
+    errorMessage: 'Failed to dispatch saved-search digest',
+  });
+
+export const syncGmailStatusSuggestions = (): Promise<{
+  gmail_connected: boolean;
+  messages_scanned: number;
+  suggestions: Array<{
+    application_id: string;
+    company: string;
+    role: string;
+    current_status: string;
+    suggested_status: string;
+    confidence: number;
+    matched_signal: string;
+    email_subject: string;
+    email_from: string;
+    email_snippet: string;
+  }>;
+}> =>
+  apiJson('/applications/gmail/sync-suggestions', {
+    method: 'POST',
+    body: {},
+    errorMessage: 'Failed to scan Gmail replies',
+  });
+
+export const applyStatusSuggestion = (
+  appId: string,
+  suggestedStatus: string,
+  reason = ''
+): Promise<{ status: string; application_id: string; previous_status: string; new_status: string }> =>
+  apiJson(`/applications/${encodeURIComponent(appId)}/apply-status-suggestion`, {
+    method: 'POST',
+    body: { suggested_status: suggestedStatus, reason },
+    errorMessage: 'Failed to update application stage',
+  });
+
+export const createFollowUpDraft = (
+  appId: string,
+  params?: { days_since_applied?: number; language?: 'en' | 'ka'; save_to_gmail?: boolean }
+): Promise<{
+  application_id: string;
+  recipient_email: string;
+  subject: string;
+  body_text: string;
+  gmail_compose_url: string;
+  gmail_draft_saved?: boolean;
+}> =>
+  apiJson(`/applications/${encodeURIComponent(appId)}/follow-up-draft`, {
+    method: 'POST',
+    body: params || { days_since_applied: 5, language: 'en', save_to_gmail: false },
+    errorMessage: 'Failed to prepare follow-up email draft',
+  });
 
 export const toggleMilestone = (planId: number, milestoneIndex: number): Promise<SkillActionPlan> =>
   apiJson(`/action-plans/${planId}/milestones/${milestoneIndex}`, { method: 'PATCH', errorMessage: 'Failed to toggle milestone' });

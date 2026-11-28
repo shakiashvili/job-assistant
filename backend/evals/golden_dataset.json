@@ -1,0 +1,107 @@
+{
+  "version": "2026-11-v1",
+  "description": "30 labelled multi-industry job/profile pairs for offline matcher accuracy, seniority-gate precision/recall, and zero-fabrication groundedness evaluation.",
+  "profiles": {
+    "junior_qa": {
+      "full_name": "Nino Kvaratskhelia",
+      "target_industry": "qa_tech",
+      "primary_role": "Junior QA Engineer",
+      "years_experience": 0.8,
+      "seniority_level": "Junior",
+      "max_allowed_years": 1.5,
+      "eligible_internships": true,
+      "all_skills": ["Playwright", "Python", "SQL", "REST API", "Postman", "Jira", "Manual Testing", "Git"],
+      "spoken_languages": ["Georgian (Native)", "English (C1)"],
+      "employers": ["Vention Teams", "EPAM Systems"],
+      "education": ["Tbilisi State University (TSU), Faculty of Economics"]
+    },
+    "junior_finance": {
+      "full_name": "Giorgi Beridze",
+      "target_industry": "finance_accounting",
+      "primary_role": "Junior Financial Analyst",
+      "years_experience": 1.0,
+      "seniority_level": "Junior",
+      "max_allowed_years": 1.5,
+      "eligible_internships": true,
+      "all_skills": ["IFRS", "Excel", "SQL", "Financial Modeling", "Reconciliation", "Accounting", "Audit"],
+      "spoken_languages": ["Georgian (Native)", "English (B2)"],
+      "employers": ["Bank of Georgia", "TBC Leasing"],
+      "education": ["Tbilisi State University (TSU), Bachelor of Economics"]
+    },
+    "mid_hospitality": {
+      "full_name": "Mariam Lomidze",
+      "target_industry": "hospitality_reception",
+      "primary_role": "Front Desk Receptionist",
+      "years_experience": 2.5,
+      "seniority_level": "Middle",
+      "max_allowed_years": 4.0,
+      "eligible_internships": false,
+      "all_skills": ["Opera PMS", "Front Desk", "Guest Relations", "Reservations", "Check-In", "CRM", "Hospitality"],
+      "spoken_languages": ["Georgian (Native)", "English (C1)"],
+      "employers": ["Rooms Hotel Tbilisi", "Radisson Blu Iveria"],
+      "education": ["Ilia State University, Tourism Management"]
+    },
+    "junior_logistics": {
+      "full_name": "Luka Maisuradze",
+      "target_industry": "logistics_supply_chain",
+      "primary_role": "Logistics Coordinator",
+      "years_experience": 1.0,
+      "seniority_level": "Junior",
+      "max_allowed_years": 2.0,
+      "eligible_internships": true,
+      "all_skills": ["Supply Chain", "Incoterms", "Freight", "Customs", "WMS", "Excel", "Procurement"],
+      "spoken_languages": ["Georgian (Native)", "English (B2)"],
+      "employers": ["Georgian Logistics Group"],
+      "education": ["Georgian Technical University, Transport Management"]
+    },
+    "mid_hr": {
+      "full_name": "Tamara Gelashvili",
+      "target_industry": "hr_recruiting",
+      "primary_role": "HR & Talent Acquisition Specialist",
+      "years_experience": 3.0,
+      "seniority_level": "Middle",
+      "max_allowed_years": 4.5,
+      "eligible_internships": false,
+      "all_skills": ["Recruiting", "Talent Acquisition", "ATS", "Onboarding", "People Operations", "Interviewing"],
+      "spoken_languages": ["Georgian (Native)", "English (C1)"],
+      "employers": ["MagtiCom", "Silknet"],
+      "education": ["Free University of Tbilisi, Business Administration"]
+    }
+  },
+  "cases": [
+    {"id": "qa_01", "profile": "junior_qa", "portal": "jobs.ge", "company": "TBC Bank", "title": "Junior QA Engineer", "description": "Manual and Playwright UI testing, Postman REST API testing, SQL validation, Jira defect tracking. 0-1 years experience.", "expected_seniority_pass": true, "expected_domain_pass": true},
+    {"id": "qa_02", "profile": "junior_qa", "portal": "jobs.ge", "company": "EPAM", "title": "QA Automation Trainee", "description": "Entry level QA trainee program working with Playwright, Python, Git, and REST APIs.", "expected_seniority_pass": true, "expected_domain_pass": true},
+    {"id": "qa_03", "profile": "junior_qa", "portal": "djinni.co", "company": "FinTech EU", "title": "Senior QA Automation Lead", "description": "Minimum 5+ years of QA engineering and leadership across enterprise teams.", "expected_seniority_pass": false, "expected_domain_pass": true},
+    {"id": "qa_04", "profile": "junior_qa", "portal": "jobs.ge", "company": "GlobalCorp", "title": "Principal SDET Architect", "description": "Lead test architecture with 6+ years commercial automation experience.", "expected_seniority_pass": false, "expected_domain_pass": true},
+    {"id": "qa_05", "profile": "junior_qa", "portal": "jobs.ge", "company": "ProCredit", "title": "Middle / Senior QA Engineer", "description": "Requires 3-5 years of commercial QA testing experience.", "expected_seniority_pass": false, "expected_domain_pass": true},
+    {"id": "qa_06", "profile": "junior_qa", "portal": "hr.ge", "company": "Local Clinic", "title": "Dental Surgeon / Medical Doctor", "description": "Licensed medical doctor specializing in dental surgery and anesthesia.", "expected_seniority_pass": true, "expected_domain_pass": false},
+    {"id": "qa_07", "profile": "junior_qa", "portal": "jobs.ge", "company": "Cafe Rustaveli", "title": "Head Pastry Chef", "description": "Manage kitchen pastry production and dessert baking menu.", "expected_seniority_pass": true, "expected_domain_pass": false},
+    {"id": "qa_08", "profile": "junior_qa", "portal": "hr.gov.ge", "company": "Ministry of Finance", "title": "IT Quality & Systems Testing Intern", "description": "Public sector internship for university students in QA, SQL, and software verification.", "expected_seniority_pass": true, "expected_domain_pass": true},
+    {"id": "qa_09", "profile": "junior_qa", "portal": "jobs.ge", "company": "Payze", "title": "QA Engineer (Manual & API)", "description": "Test payment REST APIs in Postman, verify SQL database rows, log Jira bugs. Up to 1 year experience.", "expected_seniority_pass": true, "expected_domain_pass": true},
+    {"id": "qa_10", "profile": "junior_qa", "portal": "remotive.com", "company": "CloudMetrics", "title": "Director of Quality Engineering", "description": "Own organization-wide quality strategy. 8+ years required.", "expected_seniority_pass": false, "expected_domain_pass": true},
+
+    {"id": "fin_01", "profile": "junior_finance", "portal": "jobs.ge", "company": "Credo Bank", "title": "Junior Financial Analyst", "description": "Prepare IFRS reports, Excel models, SQL reconciliations, and variance analysis. 0-1 year experience.", "expected_seniority_pass": true, "expected_domain_pass": true},
+    {"id": "fin_02", "profile": "junior_finance", "portal": "jobs.ge", "company": "PwC Georgia", "title": "Audit Associate (Entry Level)", "description": "Support external financial audits, accounting reconciliations, and IFRS compliance.", "expected_seniority_pass": true, "expected_domain_pass": true},
+    {"id": "fin_03", "profile": "junior_finance", "portal": "jobs.ge", "company": "Liberty Bank", "title": "Chief Financial Officer (CFO) / Head of Finance", "description": "Executive financial leadership with 10+ years of banking experience.", "expected_seniority_pass": false, "expected_domain_pass": true},
+    {"id": "fin_04", "profile": "junior_finance", "portal": "hr.ge", "company": "Deloitte", "title": "Senior Accounting Manager", "description": "Lead IFRS reporting teams with 5+ years of post-qualification experience.", "expected_seniority_pass": false, "expected_domain_pass": true},
+    {"id": "fin_05", "profile": "junior_finance", "portal": "jobs.ge", "company": "AutoRepair GE", "title": "Car Mechanic / Electrician", "description": "Diagnose car engine faults, brake systems, and vehicle wiring.", "expected_seniority_pass": true, "expected_domain_pass": false},
+    {"id": "fin_06", "profile": "junior_finance", "portal": "jobs.ge", "company": "BasisBank", "title": "Junior Accountant", "description": "Daily bookkeeping, bank reconciliation, Excel reporting, and invoice verification.", "expected_seniority_pass": true, "expected_domain_pass": true},
+
+    {"id": "hosp_01", "profile": "mid_hospitality", "portal": "jobs.ge", "company": "Stamba Hotel", "title": "Front Desk Receptionist", "description": "Manage guest check-in, Opera PMS reservations, concierge requests, and English-speaking visitors.", "expected_seniority_pass": true, "expected_domain_pass": true},
+    {"id": "hosp_02", "profile": "mid_hospitality", "portal": "hr.ge", "company": "Marriott Tbilisi", "title": "Guest Relations Specialist", "description": "Coordinate VIP reservations, CRM guest profiles, and front office hospitality excellence.", "expected_seniority_pass": true, "expected_domain_pass": true},
+    {"id": "hosp_03", "profile": "mid_hospitality", "portal": "jobs.ge", "company": "Hilton Batumi", "title": "Director of Hotel Operations", "description": "Executive hospitality director requiring 8+ years managing luxury hotels.", "expected_seniority_pass": false, "expected_domain_pass": true},
+    {"id": "hosp_04", "profile": "mid_hospitality", "portal": "jobs.ge", "company": "KernelTech", "title": "Embedded C++ Firmware Engineer", "description": "Write RTOS drivers, ARM Cortex-M firmware, and SPI/I2C hardware interfaces.", "expected_seniority_pass": true, "expected_domain_pass": false},
+    {"id": "hosp_05", "profile": "mid_hospitality", "portal": "jobs.ge", "company": "Paragraph Hotel", "title": "Front Office Shift Supervisor", "description": "Oversee daily front desk check-in operations, Opera PMS billing, and guest satisfaction. 2 years experience.", "expected_seniority_pass": true, "expected_domain_pass": true},
+
+    {"id": "log_01", "profile": "junior_logistics", "portal": "jobs.ge", "company": "DHL Georgia", "title": "Junior Logistics Coordinator", "description": "Track international freight shipments, prepare Incoterms customs paperwork, update WMS inventory.", "expected_seniority_pass": true, "expected_domain_pass": true},
+    {"id": "log_02", "profile": "junior_logistics", "portal": "hr.ge", "company": "Maersk Caucasus", "title": "Supply Chain & Procurement Assistant", "description": "Coordinate vendor purchase orders, Excel shipment schedules, and customs clearance.", "expected_seniority_pass": true, "expected_domain_pass": true},
+    {"id": "log_03", "profile": "junior_logistics", "portal": "jobs.ge", "company": "TransCargo", "title": "Head of Global Supply Chain", "description": "Direct international freight operations across 12 countries. Minimum 7+ years experience.", "expected_seniority_pass": false, "expected_domain_pass": true},
+    {"id": "log_04", "profile": "junior_logistics", "portal": "jobs.ge", "company": "PharmaMed", "title": "Clinical Cardiologist", "description": "Perform cardiac diagnostics, ECG interpretation, and hospital inpatient care.", "expected_seniority_pass": true, "expected_domain_pass": false},
+    {"id": "log_05", "profile": "junior_logistics", "portal": "jobs.ge", "company": "Georgian Post", "title": "Warehouse & Customs Operations Specialist", "description": "Manage WMS stock reconciliation, freight dispatch, and customs documentation. 1 year experience.", "expected_seniority_pass": true, "expected_domain_pass": true},
+
+    {"id": "hr_01", "profile": "mid_hr", "portal": "jobs.ge", "company": "Wolt Georgia", "title": "Talent Acquisition Specialist", "description": "Manage full-cycle recruiting, ATS pipelines, structured interviews, and employee onboarding. 2-3 years experience.", "expected_seniority_pass": true, "expected_domain_pass": true},
+    {"id": "hr_02", "profile": "mid_hr", "portal": "hr.ge", "company": "Glovo", "title": "People Operations & HR Generalist", "description": "Coordinate onboarding, HRIS records, recruiting workflows, and employee engagement.", "expected_seniority_pass": true, "expected_domain_pass": true},
+    {"id": "hr_03", "profile": "mid_hr", "portal": "jobs.ge", "company": "GlobalBank", "title": "VP of Human Resources", "description": "Executive HR leadership over 5,000 employees. 10+ years required.", "expected_seniority_pass": false, "expected_domain_pass": true},
+    {"id": "hr_04", "profile": "mid_hr", "portal": "jobs.ge", "company": "BuildCo", "title": "Structural Civil Engineer", "description": "Design reinforced concrete bridges using AutoCAD and structural load calculations.", "expected_seniority_pass": true, "expected_domain_pass": false}
+  ]
+}

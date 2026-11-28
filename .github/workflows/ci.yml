@@ -33,11 +33,18 @@ jobs:
       - name: Install system fonts and backend dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-freefont-ttf fonts-dejavu-core
-          pip install -r backend/requirements.txt ruff
-          python -m playwright install chromium --with-deps
+          pip install -r backend/requirements-dev.txt
       - name: Run Python lint check (ruff)
         working-directory: backend
-        run: ruff check app tests --select E9,F63,F7,F82
+        run: ruff check app tests evals
+      - name: Run offline AI golden-set & groundedness evaluation
+        working-directory: backend
+        env:
+          PYTHONPATH: .
+        run: python -m evals.eval_runner
+      - name: Run Python type check (mypy)
+        working-directory: backend
+        run: mypy app/services app/db
       - name: Verify Alembic migrations from scratch (SQLite and PostgreSQL)
         working-directory: backend
         env:
@@ -46,11 +53,11 @@ jobs:
           DATABASE_URL=sqlite:///./ci_migration_smoke.db alembic upgrade head
           rm -f ci_migration_smoke.db
           DATABASE_URL=postgresql+psycopg2://talentflow:ci_test_password@localhost:5432/talentflow_ci alembic upgrade head
-      - name: Run backend functional & unit tests
+      - name: Run backend functional & unit tests with coverage floor
         working-directory: backend
         env:
           PYTHONPATH: .
-        run: python -m pytest tests -q --tb=short
+        run: python -m pytest tests -q --tb=short --cov=app --cov-report=term-missing --cov-fail-under=75
       - name: Run security & exploit-resistance tests
         env:
           PYTHONPATH: backend
@@ -63,15 +70,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: Install, typecheck, test, and build frontend
+      - name: Install, lint, typecheck, test, and build frontend
         working-directory: frontend
         run: |
           npm ci
+          npm run lint
           npx tsc --noEmit
           npm test
           npm run build
       - name: Validate Chrome Extension JS & Manifest
         run: |
+          node --check extension/shared/extractors.js
           node --check extension/background/service_worker.js
           node --check extension/content/content.js
           node --check extension/popup/popup.js

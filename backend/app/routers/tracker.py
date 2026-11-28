@@ -249,21 +249,22 @@ def update_application(
 @router.delete("/{app_id}")
 def delete_application(
     app_id: str,
-    hard: bool = Query(False, description="Permanent hard delete if true"),
+    hard: bool = Query(False, description="Permanent hard delete if true; soft-delete otherwise"),
     current_user: User = Depends(get_current_user),
 ):
-    """Removes an application from tracking after verifying ownership."""
+    """Soft-deletes (default) or permanently purges (hard=true) an application after verifying ownership."""
     try:
         deleted = tracker_store.delete(
             app_id,
             user_id=current_user.id,
-            is_guest=False,
+            hard=hard,
         )
     except PermissionError as exc:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Application {app_id} not found")
-    return {"status": "success", "message": f"Application {app_id} deleted"}
+    mode = "permanently deleted" if hard else "archived (soft-deleted)"
+    return {"status": "success", "hard": hard, "message": f"Application {app_id} {mode}"}
 
 
 @router.get("/{app_id}/events")
@@ -539,7 +540,6 @@ def get_integrations_status(current_user: User = Depends(get_current_user)):
     """Unified live status & test diagnostics for Profile, Google Calendar, Email, AI, and DB Migrations."""
     from sqlalchemy import text as sa_text
     from ..config import get_smtp_config
-    from ..db.database import engine
     from ..db.profile_repository import ground_truth_store
     from ..services.gemini_service import gemini_service
 
@@ -702,3 +702,113 @@ def create_interview_calendar_event(
         duration_minutes=req.duration_minutes,
         attendee_email=req.attendee_email or item.recruiter_email,
     )
+
+
+class GmailSyncRequest(BaseModel):
+    messages: Optional[List[dict]] = None
+    max_results: int = Field(default=20, ge=1, le=50)
+
+
+class ApplyStatusSuggestionRequest(BaseModel):
+    suggested_status: str = Field(..., min_length=2, max_length=60)
+    reason: Optional[str] = Field(default="", max_length=300)
+
+
+class FollowUpDraftRequest(BaseModel):
+    days_since_applied: int = Field(default=5, ge=1, le=90)
+    language: str = Field(default="en", pattern="^(en|ka)$")
+    save_to_gmail: bool = False
+
+
+@router.post("/gmail/sync-suggestions")
+def scan_gmail_status_suggestions(
+    req: Optional[GmailSyncRequest] = None,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Scans recent employer replies (from connected Gmail OAuth or supplied messages) and returns
+    human-reviewable Kanban stage move suggestions without auto-mutating tracker cards.
+    """
+    from ..services.gmail_sync_service import build_status_suggestions, fetch_recent_gmail_messages
+
+    body = req or GmailSyncRequest()
+    apps = tracker_store.get_all(user_id=current_user.id, is_guest=False)
+    gmail_connected = bool(isinstance(current_user.gmail_oauth_token, dict) and current_user.gmail_oauth_token.get("access_token"))
+    messages = (
+        body.messages
+        if body.messages is not None
+        else fetch_recent_gmail_messages(current_user.gmail_oauth_token, max_results=body.max_results)
+    )
+    suggestions = build_status_suggestions(apps, messages)
+    return {
+        "gmail_connected": gmail_connected,
+        "messages_scanned": len(messages),
+        "suggestions": suggestions,
+    }
+
+
+@router.post("/{app_id}/apply-status-suggestion")
+def apply_gmail_status_suggestion(
+    app_id: str,
+    req: ApplyStatusSuggestionRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Applies a user-approved stage move and returns previous_status to support 1-click Undo."""
+    try:
+        existing = tracker_store.get_by_id(app_id, user_id=current_user.id, is_guest=False)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+    if not existing:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Application {app_id} not found")
+
+    prev_status = existing.status
+    updated = tracker_store.update(
+        app_id,
+        ApplicationUpdate(status=req.suggested_status, notes=req.reason or existing.notes),
+        user_id=current_user.id,
+        is_guest=False,
+    )
+    return {
+        "status": "updated",
+        "application_id": app_id,
+        "previous_status": prev_status,
+        "new_status": updated.status if updated else req.suggested_status,
+    }
+
+
+@router.post("/{app_id}/follow-up-draft")
+def generate_followup_draft(
+    app_id: str,
+    req: Optional[FollowUpDraftRequest] = None,
+    current_user: User = Depends(get_current_user),
+):
+    """Generates a polite follow-up email draft (+5 day default cadence) with optional Gmail Draft creation."""
+    from ..services.gmail_sync_service import build_followup_email_draft
+
+    body = req or FollowUpDraftRequest()
+    try:
+        item = tracker_store.get_by_id(app_id, user_id=current_user.id, is_guest=False)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Application {app_id} not found")
+
+    draft = build_followup_email_draft(
+        item,
+        current_user,
+        days_since_applied=body.days_since_applied,
+        language=body.language,
+    )
+    if body.save_to_gmail and draft["recipient_email"]:
+        gm = gmail_service.create_gmail_draft(
+            to_email=draft["recipient_email"],
+            subject=draft["subject"],
+            body_text=draft["body_text"],
+            oauth_token=current_user.gmail_oauth_token,
+            user_id=current_user.id,
+        )
+        draft["gmail_draft_saved"] = bool(gm.get("draft_created"))
+        draft["gmail_drafts_url"] = gm.get("drafts_url")
+    else:
+        draft["gmail_draft_saved"] = False
+    return draft

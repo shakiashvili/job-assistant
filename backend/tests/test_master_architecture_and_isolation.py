@@ -7,10 +7,8 @@ from app.main import app
 from app.db.database import engine, init_db
 from app.db.models import (
     User,
-    CandidateProfile,
     CandidateSkill,
     CandidateEducation,
-    UserJobMatch,
 )
 from app.db.tracker_repository import tracker_store
 from app.services.auth_service import hash_password, create_access_token

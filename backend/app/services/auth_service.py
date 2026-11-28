@@ -4,7 +4,7 @@ import logging
 import os
 import secrets
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from typing import Optional
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -97,8 +97,8 @@ def _bucket_key(identifier: str) -> str:
 def _ensure_rate_limit_table() -> None:
     try:
         AuthRateLimit.__table__.create(engine, checkfirst=True)
-    except Exception:
-        pass
+    except Exception as ddl_err:
+        logger.debug("Rate-limit table checkfirst creation skipped: %s", ddl_err)
 
 
 def purge_expired_rate_limits(
@@ -355,20 +355,20 @@ def reset_login_attempts(identifier: str) -> None:
     if r_client is not None:
         try:
             r_client.delete(f"tf:rl:{b_key}")
-        except Exception:
-            pass
+        except Exception as redis_err:
+            logger.debug("Redis reset_login_attempts skipped: %s", redis_err)
     try:
         with Session(engine) as session:
             session.exec(delete(AuthRateLimit).where(AuthRateLimit.bucket_key == b_key))
             session.commit()
-    except Exception:
-        pass
+    except Exception as sql_err:
+        logger.debug("SQL reset_login_attempts skipped: %s", sql_err)
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     """Generates a secure HS256 JWT access token (default 60 minutes)."""
     to_encode = data.copy()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if expires_delta:
         expire = now + expires_delta
     else:
@@ -381,7 +381,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 def create_refresh_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     """Generates a long-lived HS256 JWT refresh token (default 14 days)."""
     to_encode = data.copy()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if expires_delta:
         expire = now + expires_delta
     else:
@@ -416,7 +416,7 @@ def decode_refresh_token(token: str) -> Optional[dict]:
 
 def create_oauth_state_token(user_id: Optional[int], email: str) -> str:
     """Signs short-lived HS256 OAuth state linking callback tokens safely to the initiating user."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     payload = {
         "sub": email,
         "uid": user_id,

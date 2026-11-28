@@ -1,15 +1,13 @@
 import os
-import asyncio
 import ipaddress
 import logging
 import socket
 import urllib.parse
 import urllib.request
 import httpx
-from bs4 import BeautifulSoup
 from pathlib import Path
 from typing import List, Optional, Dict, Any
-from ..config import ENABLE_PLAYWRIGHT, TEST_FORMS_DIR
+from ..config import TEST_FORMS_DIR
 from ..db.document_repository import record_candidate_document, resolve_user_id_by_email
 from ..db.profile_repository import ground_truth_store
 from ..services.gemini_service import gemini_service
@@ -26,7 +24,17 @@ from ..db.models import (
 logger = logging.getLogger(__name__)
 
 
-def validate_safe_external_url(url: str, require_dns: bool = False) -> str:
+def _resolve_host_ips(host: str) -> List[str]:
+    """Resolves a hostname to IP strings; isolated for deterministic offline testing."""
+    addr_info = socket.getaddrinfo(host, None)
+    return [item[4][0].split("%")[0] for item in addr_info]
+
+
+def validate_safe_external_url(
+    url: str,
+    require_dns: bool = False,
+    resolver: Optional[Any] = None,
+) -> str:
     """
     Validates that a user-supplied URL does not target loopback, RFC1918 private networks,
     link-local cloud metadata endpoints (169.254.169.254), or arbitrary local files (SSRF protection).
@@ -41,8 +49,8 @@ def validate_safe_external_url(url: str, require_dns: bool = False) -> str:
                 local_path = Path(urllib.request.url2pathname(parsed_file.path)).resolve()
                 if local_path.is_relative_to(TEST_FORMS_DIR.resolve()):
                     return clean
-            except Exception:
-                pass
+            except (OSError, ValueError) as file_err:
+                logger.debug("Blocked invalid test file:// URL '%s': %s", clean, file_err)
         raise ValueError("SSRF Protection: arbitrary file:// URLs are forbidden.")
 
     parsed = urllib.parse.urlparse(clean)
@@ -88,10 +96,9 @@ def validate_safe_external_url(url: str, require_dns: bool = False) -> str:
         if "SSRF Protection" in str(ve):
             raise
         # Hostname rather than literal IP: resolve via DNS and inspect every returned IP
+        resolve_fn = resolver or _resolve_host_ips
         try:
-            addr_info = socket.getaddrinfo(host, None)
-            for item in addr_info:
-                resolved_ip = item[4][0].split("%")[0]
+            for resolved_ip in resolve_fn(host):
                 _check_ip_public(resolved_ip)
         except ValueError as dns_ve:
             if "SSRF Protection" in str(dns_ve):
@@ -103,28 +110,12 @@ def validate_safe_external_url(url: str, require_dns: bool = False) -> str:
     return clean
 
 
-def _fetch_spa_html_with_playwright(url: str) -> str:
-    """Isolated headless Playwright fallback for client-side hydrated SPA job boards."""
-    validate_safe_external_url(url, require_dns=True)
-    from playwright.sync_api import sync_playwright
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        try:
-            page = browser.new_page()
-            page.goto(url, wait_until="domcontentloaded", timeout=12000)
-            page.wait_for_timeout(500)
-            return page.content()
-        finally:
-            browser.close()
-
-
 class AuditService:
     async def fetch_url_content(self, url: str) -> str:
         """
-        Hybrid fetching strategy for job pages with SSRF protection:
+        SSRF-hardened job page fetcher:
         1. Validates URL against SSRF blocklist (loopback, RFC1918 private IPs, cloud metadata, file://).
         2. Fast HTTP fetch via httpx with realistic browser headers and per-hop redirect SSRF validation.
-        3. Optional headless Playwright fallback if ENABLE_PLAYWRIGHT=true and body text < 150 chars.
         """
         validate_safe_external_url(url, require_dns=True)
         html_text = ""
@@ -155,22 +146,6 @@ class AuditService:
             raise
         except Exception as e:
             logger.debug(f"Fast httpx fetch note for {url}: {e}")
-
-        soup = BeautifulSoup(html_text or "", "html.parser")
-        body_text = (soup.body.get_text(" ", strip=True) if soup.body else soup.get_text(" ", strip=True)).strip()
-
-        if len(body_text) < 150 and url.startswith(("http://", "https://", "file://")):
-            if not ENABLE_PLAYWRIGHT:
-                logger.info(
-                    f"Body text length ({len(body_text)} < 150 chars) on {url}, "
-                    "but ENABLE_PLAYWRIGHT=false; skipping headless Chromium SPA hydration and using httpx HTML."
-                )
-            else:
-                logger.info(f"Body text length ({len(body_text)} < 150 chars) on {url}; falling back to headless Playwright SPA hydration.")
-                try:
-                    html_text = await asyncio.to_thread(_fetch_spa_html_with_playwright, url)
-                except Exception as pw_err:
-                    logger.warning(f"Headless Playwright SPA hydration fallback failed for {url}: {pw_err}")
 
         return html_text
 

@@ -34,7 +34,17 @@ def test_audit_job_with_raw_text_and_pdf_generation():
     assert "1 week after offer" in data["tailored_cv"]["start_date_default"]
 
 
-def test_receptionist_and_georgian_cv_generation():
+def test_receptionist_and_georgian_cv_generation(monkeypatch):
+    from app.services import audit_service as audit_mod
+
+    # Keep test 100% offline-hermetic without weakening runtime SSRF DNS checks
+    monkeypatch.setattr(audit_mod, "_resolve_host_ips", lambda host: ["93.184.216.34"])
+
+    async def _offline_fetch(url: str) -> str:
+        return "<html><body><h1>Front Desk Receptionist</h1><p>Rooms Hotel Tbilisi Opera PMS</p></body></html>"
+
+    monkeypatch.setattr(audit_mod.audit_service, "fetch_url_content", _offline_fetch)
+
     # Switch to Receptionist & Hospitality preset
     preset_res = client.post("/api/skills-md/preset/receptionist_hospitality")
     assert preset_res.status_code == 200

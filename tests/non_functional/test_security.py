@@ -198,11 +198,12 @@ def test_ssrf_url_validation_and_playwright_stage_blocks():
         with pytest.raises(ValueError):
             validate_safe_external_url(url)
 
+        # Server-side Playwright staging route was retired in Phase 4 (DEC-001)
         stage_res = client.post(
             "/api/stage-application",
             json={"job_url": url, "variant": "qa_automation"},
         )
-        assert stage_res.status_code == 400, f"Stage accepted SSRF URL: {url}"
+        assert stage_res.status_code == 404
 
         audit_res = client.post(
             "/api/audit-job",

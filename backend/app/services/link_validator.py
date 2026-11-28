@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, UTC
 from typing import Dict, List, Optional, Tuple
 import httpx
 from bs4 import BeautifulSoup
@@ -10,13 +10,14 @@ from .portal_detector import detect_portal_from_url
 logger = logging.getLogger(__name__)
 
 # Georgian month names mapping (nominative, dative, genitive)
+# Note: "აგვისტოს" is shared by both dative and genitive cases in Georgian.
 GEORGIAN_MONTHS = {
     "იანვარი": 1, "თებერვალი": 2, "მარტი": 3, "აპრილი": 4, "მაისი": 5, "ივნისი": 6,
     "ივლისი": 7, "აგვისტო": 8, "სექტემბერი": 9, "ოქტომბერი": 10, "ნოემბერი": 11, "დეკემბერი": 12,
     "იანვარს": 1, "თებერვალს": 2, "მარტს": 3, "აპრილს": 4, "მაისს": 5, "ივნისს": 6,
     "ივლისს": 7, "აგვისტოს": 8, "სექტემბერს": 9, "ოქტომბერს": 10, "ნოემბერს": 11, "დეკემბერს": 12,
     "იანვრის": 1, "თებერვლის": 2, "მარტის": 3, "აპრილის": 4, "მაისის": 5, "ივნისის": 6,
-    "ივლისის": 7, "აგვისტოს": 8, "სექტემბრის": 9, "ოქტომბრის": 10, "ნოემბრის": 11, "დეკემბრის": 12,
+    "ივლისის": 7, "სექტემბრის": 9, "ოქტომბრის": 10, "ნოემბრის": 11, "დეკემბრის": 12,
 }
 
 ENGLISH_MONTHS = {
@@ -41,7 +42,7 @@ def _build_deadline_tuple(
     today: date,
 ) -> Optional[Tuple[datetime, str, bool]]:
     try:
-        dl_date = datetime(year, month, day, 23, 59, 59, tzinfo=timezone.utc)
+        dl_date = datetime(year, month, day, 23, 59, 59, tzinfo=UTC)
     except ValueError:
         return None
     return dl_date, display_str, dl_date.date() < today
@@ -61,7 +62,7 @@ def parse_vacancy_deadline(text: str) -> Tuple[Optional[datetime], Optional[str]
     if not text:
         return None, None, False
 
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
 
     # Pattern 1: Georgian numeric "ბოლო ვადა: DD.MM.YYYY" or "DD/MM/YYYY" or "DD-MM-YYYY"
     for m1 in re.finditer(r"(?:ბოლო\s*ვადა|განცხადების\s*ვადა|ვადა)\s*[:—–-]?\s*(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})", text, re.I):
@@ -130,12 +131,12 @@ _PUBLISHED_KW_PATTERN = r"(?:გამოქვეყნდა|თარიღ�
 def _infer_year_for_day_month(day: int, month: int, today: date) -> Optional[datetime]:
     year = today.year
     try:
-        dt = datetime(year, month, day, 12, 0, 0, tzinfo=timezone.utc)
+        dt = datetime(year, month, day, 12, 0, 0, tzinfo=UTC)
     except ValueError:
         return None
     if dt.date() > today + timedelta(days=7):
         try:
-            dt = datetime(year - 1, month, day, 12, 0, 0, tzinfo=timezone.utc)
+            dt = datetime(year - 1, month, day, 12, 0, 0, tzinfo=UTC)
         except ValueError:
             return None
     return dt
@@ -155,7 +156,7 @@ def parse_vacancy_published_date(
     if not raw:
         return None, None
 
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
 
     # 1. Epoch timestamp (int/float seconds or ms)
     if standalone and re.fullmatch(r"\d{10,13}", raw):
@@ -163,7 +164,7 @@ def parse_vacancy_published_date(
         if ts > 10_000_000_000:
             ts = ts // 1000
         try:
-            dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+            dt = datetime.fromtimestamp(ts, tz=UTC)
             return dt, dt.strftime("%Y-%m-%d")
         except Exception:
             return None, None
@@ -173,7 +174,7 @@ def parse_vacancy_published_date(
     m_iso = re.search(iso_pat, raw, re.I)
     if m_iso:
         try:
-            dt = datetime(int(m_iso.group(1)), int(m_iso.group(2)), int(m_iso.group(3)), 12, 0, 0, tzinfo=timezone.utc)
+            dt = datetime(int(m_iso.group(1)), int(m_iso.group(2)), int(m_iso.group(3)), 12, 0, 0, tzinfo=UTC)
             return dt, dt.strftime("%Y-%m-%d")
         except ValueError:
             pass
@@ -182,16 +183,16 @@ def parse_vacancy_published_date(
     low = raw.lower()
     if standalone:
         if low in ("today", "დღეს", "just now", "new"):
-            dt = datetime(today.year, today.month, today.day, 12, 0, 0, tzinfo=timezone.utc)
+            dt = datetime(today.year, today.month, today.day, 12, 0, 0, tzinfo=UTC)
             return dt, dt.strftime("%Y-%m-%d")
         if low in ("yesterday", "გუშინ"):
             yd = today - timedelta(days=1)
-            dt = datetime(yd.year, yd.month, yd.day, 12, 0, 0, tzinfo=timezone.utc)
+            dt = datetime(yd.year, yd.month, yd.day, 12, 0, 0, tzinfo=UTC)
             return dt, dt.strftime("%Y-%m-%d")
         rel_m = re.search(r"(\d{1,2})\s*(?:days?|d|დღის)\s*(?:ago|წინ)?", low)
         if rel_m:
             d = today - timedelta(days=int(rel_m.group(1)))
-            dt = datetime(d.year, d.month, d.day, 12, 0, 0, tzinfo=timezone.utc)
+            dt = datetime(d.year, d.month, d.day, 12, 0, 0, tzinfo=UTC)
             return dt, dt.strftime("%Y-%m-%d")
 
     # 4. Numeric DD.MM.YYYY / DD/MM/YYYY
@@ -202,7 +203,7 @@ def parse_vacancy_published_date(
         if year < 100:
             year += 2000
         try:
-            dt = datetime(year, month, day, 12, 0, 0, tzinfo=timezone.utc)
+            dt = datetime(year, month, day, 12, 0, 0, tzinfo=UTC)
             return dt, dt.strftime("%Y-%m-%d")
         except ValueError:
             pass
@@ -221,7 +222,7 @@ def parse_vacancy_published_date(
         if month:
             if yr_raw:
                 try:
-                    dt = datetime(int(yr_raw), month, day, 12, 0, 0, tzinfo=timezone.utc)
+                    dt = datetime(int(yr_raw), month, day, 12, 0, 0, tzinfo=UTC)
                     return dt, dt.strftime("%Y-%m-%d")
                 except ValueError:
                     pass
@@ -244,7 +245,7 @@ def parse_vacancy_published_date(
         if month:
             if yr_raw:
                 try:
-                    dt = datetime(int(yr_raw), month, day, 12, 0, 0, tzinfo=timezone.utc)
+                    dt = datetime(int(yr_raw), month, day, 12, 0, 0, tzinfo=UTC)
                     return dt, dt.strftime("%Y-%m-%d")
                 except ValueError:
                     pass

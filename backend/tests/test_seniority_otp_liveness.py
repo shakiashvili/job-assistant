@@ -1,11 +1,11 @@
 import pytest
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, UTC
 from fastapi.testclient import TestClient
-from sqlmodel import Session, select, create_engine
+from sqlmodel import Session, select
 
 from app.main import app
 from app.db.database import init_db, engine
-from app.db.models import User, UserOTP, CandidateProfile, JobPosting
+from app.db.models import UserOTP, CandidateProfile
 from app.services.crypto_service import blind_index
 from app.services.matcher_service import matcher_service
 from app.services.profile_service import profile_service
@@ -35,8 +35,8 @@ def test_passwordless_otp_flow():
         ).first()
         assert otp_rec is not None
         assert otp_rec.is_used is False
-        exp = otp_rec.expires_at if otp_rec.expires_at.tzinfo else otp_rec.expires_at.replace(tzinfo=timezone.utc)
-        assert exp > datetime.now(timezone.utc)
+        exp = otp_rec.expires_at if otp_rec.expires_at.tzinfo else otp_rec.expires_at.replace(tzinfo=UTC)
+        assert exp > datetime.now(UTC)
         code = otp_rec.otp_code
         assert len(code) == 6
 
@@ -137,20 +137,20 @@ def test_link_validator_and_deadline_expiration():
     assert is_expired is False
 
     dl_date, dl_str, is_expired = parse_vacancy_deadline("Apply before 15 January 2024")
-    assert dl_date == datetime(2024, 1, 15, 23, 59, 59, tzinfo=timezone.utc)
+    assert dl_date == datetime(2024, 1, 15, 23, 59, 59, tzinfo=UTC)
     assert dl_str == "15 January 2024"
     assert is_expired is True
 
     dl_date, dl_str, is_expired = parse_vacancy_deadline("Deadline: January 15, 2024")
-    assert dl_date == datetime(2024, 1, 15, 23, 59, 59, tzinfo=timezone.utc)
+    assert dl_date == datetime(2024, 1, 15, 23, 59, 59, tzinfo=UTC)
     assert is_expired is True
 
     dl_date, dl_str, is_expired = parse_vacancy_deadline("ბოლო ვადა: 15 იანვარი 2024")
-    assert dl_date == datetime(2024, 1, 15, 23, 59, 59, tzinfo=timezone.utc)
+    assert dl_date == datetime(2024, 1, 15, 23, 59, 59, tzinfo=UTC)
     assert is_expired is True
 
     dl_date, dl_str, is_expired = parse_vacancy_deadline("Closing date: 30 Dec 2027")
-    assert dl_date == datetime(2027, 12, 30, 23, 59, 59, tzinfo=timezone.utc)
+    assert dl_date == datetime(2027, 12, 30, 23, 59, 59, tzinfo=UTC)
     assert is_expired is False
 
     assert parse_vacancy_deadline("Published on 15 January 2024") == (None, None, False)

@@ -1,21 +1,31 @@
 import os
 import logging
+import time
+import uuid
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 
 from sqlalchemy import text
-from .config import GEMINI_MODEL, GEMINI_FAST_MODEL, DATABASE_URL, FRONTEND_URL, ENABLE_PLAYWRIGHT, IS_PRODUCTION
+from .config import (
+    AI_STARTUP_HEALTHCHECK,
+    DATABASE_URL,
+    ENABLE_B2B_HUB,
+    FRONTEND_URL,
+    GEMINI_FAST_MODEL,
+    GEMINI_MODEL,
+    IS_PRODUCTION,
+)
 from .db.database import engine, init_db
 from .services.gemini_service import gemini_service
+from .services.observability import log_structured_request, runtime_metrics
 from .services.scrape_worker import SCRAPE_WORKER_MODE, scrape_queue
+from .services.scrapers.scraper_orchestrator import scraper_orchestrator
 from .services.storage_service import storage_service
 from .routers.audit import router as audit_router
 from .routers.answers import router as answers_router
-from .routers.stage import router as stage_router
 from .routers.ground_truth import router as ground_truth_router
 from .routers.tracker import router as tracker_router
 from .routers.jobs import router as jobs_router
@@ -36,6 +46,11 @@ logger = logging.getLogger("job_assistant_backend")
 async def lifespan(app: FastAPI):
     init_db()
     try:
+        from .db.tracker_repository import tracker_store
+        tracker_store.reconcile_all_orphaned_trackers()
+    except Exception as exc:
+        logger.debug("Startup orphan tracker reconciliation skipped: %s", exc)
+    try:
         from .services.auth_service import purge_expired_rate_limits
         purge_expired_rate_limits()
     except Exception as exc:
@@ -51,18 +66,13 @@ async def lifespan(app: FastAPI):
         )
     else:
         logger.info(f"✅ Gemini API active using model '{gemini_service.model_name}'.")
+        if IS_PRODUCTION and AI_STARTUP_HEALTHCHECK:
+            gemini_service.verify_startup_model_health(fail_loudly=True)
     yield
     try:
         await scrape_queue.stop_embedded_worker()
     except Exception as exc:
         logger.debug("Durable scrape worker shutdown note: %s", exc)
-    # Clean up lingering Playwright sessions and browser processes on shutdown
-    try:
-        from .services.playwright_service import playwright_service
-        await playwright_service.close_all_sessions()
-        logger.info("Playwright active browser sessions cleanly terminated.")
-    except Exception as e:
-        logger.debug(f"Playwright session shutdown cleanup: {e}")
 
 
 app = FastAPI(
@@ -81,7 +91,19 @@ app = FastAPI(
 
 @app.middleware("http")
 async def security_headers_middleware(request: Request, call_next):
+    req_id = (request.headers.get("X-Request-ID") or "").strip()[:64] or uuid.uuid4().hex[:16]
+    started = time.perf_counter()
     response = await call_next(request)
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
+    runtime_metrics.record(status_code=response.status_code, latency_ms=elapsed_ms)
+    log_structured_request(
+        request_id=req_id,
+        method=request.method,
+        path=request.url.path,
+        status_code=response.status_code,
+        latency_ms=elapsed_ms,
+    )
+    response.headers["X-Request-ID"] = req_id
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
@@ -164,11 +186,11 @@ app.include_router(plans_router)
 app.include_router(jobs_router)
 app.include_router(audit_router)
 app.include_router(answers_router)
-app.include_router(stage_router)
 app.include_router(ground_truth_router)
 app.include_router(tracker_router)
 app.include_router(extension_router)
-app.include_router(b2b_router)
+if ENABLE_B2B_HUB:
+    app.include_router(b2b_router)
 
 @app.get("/")
 def root():
@@ -181,6 +203,7 @@ def root():
     }
 
 
+@app.get("/healthz")
 @app.get("/health/live")
 @app.get("/api/health/live")
 def liveness_check():
@@ -188,6 +211,7 @@ def liveness_check():
     return {"status": "alive"}
 
 
+@app.get("/readyz")
 @app.get("/health")
 @app.get("/api/health")
 @app.get("/api/health/ready")
@@ -208,7 +232,7 @@ def healthcheck():
                 "database_reachable": False,
                 "storage": storage_service.get_storage_status(),
                 "scrape_worker_mode": SCRAPE_WORKER_MODE,
-                "playwright_enabled": ENABLE_PLAYWRIGHT,
+                "b2b_hub_enabled": ENABLE_B2B_HUB,
             },
         )
 
@@ -219,7 +243,7 @@ def healthcheck():
         "database_reachable": True,
         "storage": storage_service.get_storage_status(),
         "scrape_worker_mode": SCRAPE_WORKER_MODE,
-        "playwright_enabled": ENABLE_PLAYWRIGHT,
+        "b2b_hub_enabled": ENABLE_B2B_HUB,
         "gemini": {
             "model": GEMINI_MODEL,
             "fast_model": GEMINI_FAST_MODEL,
@@ -227,4 +251,23 @@ def healthcheck():
             "mode": f"live_{GEMINI_MODEL}" if gemini_service.is_available else "ground_truth_heuristic_engine",
         },
         "ai": ai_health,
+    }
+
+
+@app.get("/api/metrics")
+def operational_metrics():
+    """Returns lightweight runtime HTTP, scraper health, and feature-flag operational metrics."""
+    sources = scraper_orchestrator.get_source_health()
+    zero_alerts = [s["portal"] for s in sources if s.get("zero_run_alert")]
+    failing = [s["portal"] for s in sources if s.get("status") in ("error", "timeout")]
+    return {
+        "http": runtime_metrics.snapshot(),
+        "scrapers": {
+            "total_sources": len(sources),
+            "failing_sources": failing,
+            "zero_run_alert_sources": zero_alerts,
+        },
+        "features": {
+            "b2b_hub_enabled": ENABLE_B2B_HUB,
+        },
     }

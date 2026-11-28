@@ -17,6 +17,9 @@ import {
   Mail,
   GripVertical,
   CheckCircle2,
+  RefreshCw,
+  RotateCcw,
+  Send,
 } from 'lucide-react';
 import {
   fetchApplications,
@@ -28,6 +31,9 @@ import {
   fetchGoogleOAuthConsentUrl,
   createApplicationCalendarEvent,
   downloadApplicationCalendarIcs,
+  syncGmailStatusSuggestions,
+  applyStatusSuggestion,
+  createFollowUpDraft,
   BACKEND_ORIGIN,
 } from '../services/api';
 import { ApplicationItem, GoogleCalendarEventResponse, GoogleCalendarStatus } from '../types';
@@ -73,6 +79,31 @@ export const ApplicationTracker: React.FC = () => {
   // Drag-and-Drop State
   const [draggingAppId, setDraggingAppId] = useState<string | null>(null);
   const [dragOverStage, setDragOverStage] = useState<KanbanStage | null>(null);
+
+  // Human-Approved Gmail Reply Sync & +5d Follow-Up Draft State
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncNotice, setSyncNotice] = useState<string | null>(null);
+  const [gmailSuggestions, setGmailSuggestions] = useState<
+    Array<{
+      application_id: string;
+      company: string;
+      role: string;
+      current_status: string;
+      suggested_status: string;
+      confidence: number;
+      matched_signal: string;
+      email_subject: string;
+      email_from: string;
+      email_snippet: string;
+    }>
+  >([]);
+  const [undoMove, setUndoMove] = useState<{
+    application_id: string;
+    company: string;
+    previous_status: string;
+    new_status: string;
+  } | null>(null);
+  const [followUpBusyId, setFollowUpBusyId] = useState<string | null>(null);
 
   // New form state
   const [newCompany, setNewCompany] = useState('');
@@ -252,6 +283,76 @@ export const ApplicationTracker: React.FC = () => {
     }
   };
 
+  const handleSyncGmailReplies = async () => {
+    setSyncBusy(true);
+    setSyncNotice(null);
+    try {
+      const res = await syncGmailStatusSuggestions();
+      setGmailSuggestions(res.suggestions || []);
+      if (!res.gmail_connected) {
+        setSyncNotice('Connect Gmail OAuth (or configure IMAP in backend/.env) to scan employer replies automatically.');
+      } else if (!res.suggestions?.length) {
+        setSyncNotice(`Scanned ${res.messages_scanned} recent inbox messages — no new stage moves detected.`);
+      } else {
+        setSyncNotice(`Found ${res.suggestions.length} suggested stage update(s) from ${res.messages_scanned} messages. Review & approve below.`);
+      }
+    } catch (err: any) {
+      setSyncNotice(err?.message || 'Could not scan Gmail replies.');
+    } finally {
+      setSyncBusy(false);
+    }
+  };
+
+  const handleApproveSuggestion = async (s: (typeof gmailSuggestions)[number]) => {
+    try {
+      const res = await applyStatusSuggestion(
+        s.application_id,
+        s.suggested_status,
+        `Gmail reply (${s.matched_signal}): ${s.email_subject}`
+      );
+      setGmailSuggestions((prev) => prev.filter((item) => item.application_id !== s.application_id));
+      setUndoMove({
+        application_id: res.application_id,
+        company: s.company,
+        previous_status: res.previous_status,
+        new_status: res.new_status,
+      });
+      await loadApps();
+    } catch (err: any) {
+      setSyncNotice(err?.message || 'Failed to apply suggested stage move.');
+    }
+  };
+
+  const handleUndoStageMove = async () => {
+    if (!undoMove) return;
+    try {
+      await applyStatusSuggestion(undoMove.application_id, undoMove.previous_status, 'Undo Gmail sync move');
+      setUndoMove(null);
+      await loadApps();
+    } catch (err: any) {
+      setSyncNotice(err?.message || 'Undo failed.');
+    }
+  };
+
+  const handleDraftFollowUp = async (app: ApplicationItem) => {
+    setFollowUpBusyId(app.id);
+    try {
+      const res = await createFollowUpDraft(app.id, { days_since_applied: 5, language: 'en', save_to_gmail: true });
+      if (res.gmail_compose_url) {
+        window.open(res.gmail_compose_url, '_blank', 'noopener,noreferrer');
+      }
+      setSyncNotice(
+        res.gmail_draft_saved
+          ? `Saved +5d follow-up draft for ${app.company} directly to Gmail Drafts.`
+          : `Opened pre-filled +5d follow-up email compose window for ${app.company}.`
+      );
+    } catch (err: any) {
+      setSyncNotice(err?.message || 'Could not prepare follow-up email draft.');
+    } finally {
+      setFollowUpBusyId(null);
+    }
+  };
+
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newCompany || !newRole) return;
@@ -312,6 +413,16 @@ export const ApplicationTracker: React.FC = () => {
         <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
           <button
             type="button"
+            onClick={handleSyncGmailReplies}
+            disabled={syncBusy}
+            className="min-h-[44px] flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-sky-200 bg-sky-950/60 hover:bg-sky-900/70 border border-sky-700/50 transition-all disabled:opacity-50"
+            title="Scan Gmail inbox for employer replies and suggest stage moves (human-approved)"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-sky-400 ${syncBusy ? 'animate-spin' : ''}`} aria-hidden="true" />
+            <span>{syncBusy ? 'Scanning Gmail...' : 'Sync Gmail Replies'}</span>
+          </button>
+          <button
+            type="button"
             onClick={() => {
               downloadApplicationsExport('csv').catch(() => {});
             }}
@@ -330,6 +441,69 @@ export const ApplicationTracker: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Gmail Reply Sync Suggestions (Human-Approved + 1-Click Undo) */}
+      {(syncNotice || undoMove || gmailSuggestions.length > 0) && (
+        <div className="space-y-2.5">
+          {undoMove && (
+            <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 rounded-xl bg-emerald-950/40 border border-emerald-700/50 text-xs text-emerald-200">
+              <span>
+                Moved <strong>{undoMove.company}</strong> from <strong>{undoMove.previous_status}</strong> to <strong>{undoMove.new_status}</strong>.
+              </span>
+              <button
+                type="button"
+                onClick={handleUndoStageMove}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-800/70 hover:bg-emerald-700 text-white font-semibold"
+              >
+                <RotateCcw className="w-3 h-3" />
+                Undo Move
+              </button>
+            </div>
+          )}
+          {syncNotice && (
+            <div className="flex items-center justify-between gap-2 px-4 py-2 rounded-xl bg-slate-900 border border-slate-800 text-xs text-slate-300">
+              <span>{syncNotice}</span>
+              <button type="button" onClick={() => setSyncNotice(null)} className="text-slate-500 hover:text-white" aria-label="Dismiss notice">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+          {gmailSuggestions.map((s) => (
+            <div
+              key={`${s.application_id}-${s.suggested_status}`}
+              className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl bg-sky-950/35 border border-sky-700/50 text-xs"
+            >
+              <div className="space-y-0.5 min-w-0">
+                <div className="text-sky-200 font-semibold">
+                  {s.company} — {s.role}: <span className="text-slate-400">{s.current_status}</span> &rarr; <span className="text-emerald-300">{s.suggested_status}</span>
+                  <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-sky-900/80 text-sky-200 border border-sky-700/50">
+                    {Math.round(s.confidence * 100)}% · {s.matched_signal}
+                  </span>
+                </div>
+                <div className="text-[11px] text-slate-400 truncate">
+                  {s.email_subject} — {s.email_snippet}
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5 flex-shrink-0">
+                <button
+                  type="button"
+                  onClick={() => handleApproveSuggestion(s)}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white font-semibold"
+                >
+                  Approve Move
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGmailSuggestions((prev) => prev.filter((item) => item.application_id !== s.application_id))}
+                  className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Mobile Swipe Peek Hint (visible only on mobile viewports) */}
       <div className="xl:hidden text-center text-[11px] text-slate-400 font-medium">
@@ -470,6 +644,20 @@ export const ApplicationTracker: React.FC = () => {
                           >
                             <Mail className="w-3.5 h-3.5" aria-hidden="true" />
                           </button>
+
+                          {/* +5 Day Follow-Up Draft Button */}
+                          {(stage === 'Applied' || stage === 'HR Screening') && (
+                            <button
+                              type="button"
+                              disabled={followUpBusyId === app.id}
+                              onClick={() => handleDraftFollowUp(app)}
+                              title="Prepare +5 day polite follow-up email draft"
+                              aria-label={`Draft follow-up email for ${app.role} at ${app.company}`}
+                              className="min-h-[44px] min-w-[44px] sm:min-h-[32px] sm:min-w-[32px] p-1.5 rounded-lg hover:bg-slate-800 text-amber-400 hover:text-amber-300 transition-colors flex items-center justify-center disabled:opacity-40"
+                            >
+                              <Send className="w-3.5 h-3.5" aria-hidden="true" />
+                            </button>
+                          )}
 
                           {/* Resume Download */}
                           {pdfUrl && (

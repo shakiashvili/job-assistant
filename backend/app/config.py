@@ -1,7 +1,7 @@
 import json
 import logging
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, UTC
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -38,8 +38,8 @@ def reload_env_files(override: bool = False) -> None:
                     v = v.strip().strip('"').strip("'")
                     if k and (override or k not in os.environ):
                         os.environ[k] = v
-            except Exception:
-                pass
+            except OSError as env_err:
+                logging.getLogger(__name__).warning("Could not read env file %s: %s", p, env_err)
 
 
 # Initial load at startup
@@ -68,6 +68,14 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 GEMINI_FAST_MODEL = os.getenv("GEMINI_FAST_MODEL", "gemini-3.5-flash-lite")
 GEMINI_TIMEOUT_MS = int(os.getenv("GEMINI_TIMEOUT_MS", "30000"))
 GEMINI_PRICING_TIER = os.getenv("GEMINI_PRICING_TIER", "standard").strip().lower() or "standard"
+AI_DAILY_TOKEN_BUDGET_PER_USER = int(os.getenv("AI_DAILY_TOKEN_BUDGET_PER_USER", "250000"))
+AI_MAX_CACHE_ENTRIES = int(os.getenv("AI_MAX_CACHE_ENTRIES", "1000"))
+AI_THIRD_PARTY_CONSENT_REQUIRED = os.getenv("AI_THIRD_PARTY_CONSENT_REQUIRED", "false").strip().lower() in (
+    "1", "true", "yes", "on"
+)
+AI_STARTUP_HEALTHCHECK = os.getenv("AI_STARTUP_HEALTHCHECK", "false").strip().lower() in (
+    "1", "true", "yes", "on"
+)
 
 # Optional Free-Tier / Low-Cost OpenAI-Compatible Fallback (e.g. OpenRouter :free models)
 AI_PROVIDER = os.getenv("AI_PROVIDER", "auto").strip().lower() or "auto"
@@ -79,8 +87,8 @@ OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemma-3-27b-it:free").s
 OPENROUTER_FAST_MODEL = os.getenv("OPENROUTER_FAST_MODEL", "meta-llama/llama-3.3-70b-instruct:free").strip()
 OPENROUTER_TIMEOUT_SECONDS = float(os.getenv("OPENROUTER_TIMEOUT_SECONDS", "25"))
 
-# LinkedIn public scraping is opt-in (disabled by default for ToS-safe operation)
-ENABLE_LINKEDIN_PUBLIC_SCRAPE = os.getenv("ENABLE_LINKEDIN_PUBLIC_SCRAPE", "false").strip().lower() in (
+# Georgia B2B Tax & Remote Hub feature flag (enabled by default; cited with Article 90 effective date)
+ENABLE_B2B_HUB = os.getenv("ENABLE_B2B_HUB", "true").strip().lower() in (
     "1", "true", "yes", "on"
 )
 
@@ -173,7 +181,7 @@ def resolve_gemini_model_pricing(
     if selected_tier == "free":
         return (0.0, 0.0)
 
-    check_date = as_of or datetime.now(timezone.utc).date()
+    check_date = as_of or datetime.now(UTC).date()
     low_model = (model_name or "").strip().lower()
 
     pricing_table: Dict[str, Dict[str, Any]] = dict(GEMINI_DEFAULT_PRICING)
@@ -199,7 +207,7 @@ def resolve_gemini_model_pricing(
         if check_date <= date(2026, 12, 31) and isinstance(matched_entry.get("effective_until_2026"), dict):
             tier_map = matched_entry["effective_until_2026"]
         rates = tier_map.get(selected_tier) or tier_map.get("standard")
-        if isinstance(rates, (list, tuple)) and len(rates) == 2:
+        if isinstance(rates, list | tuple) and len(rates) == 2:
             return (float(rates[0]), float(rates[1]))
 
     if "flash-lite" in low_model:
@@ -216,7 +224,6 @@ def resolve_gemini_model_pricing(
     return base
 PORT = int(os.getenv("PORT", "8000"))
 HOST = os.getenv("HOST", "0.0.0.0")
-ENABLE_PLAYWRIGHT = os.getenv("ENABLE_PLAYWRIGHT", "true").strip().lower() in ("1", "true", "yes", "on")
 
 # Security & JWT Auth
 _DEV_FALLBACK_SECRET = "talentflow-ai-ultra-secure-jwt-secret-key-production-hardening-64chars-min-entropy"

@@ -1,5 +1,5 @@
 import asyncio
-from datetime import timedelta, timezone
+from datetime import timedelta, UTC
 import hashlib
 import json
 import logging
@@ -30,7 +30,6 @@ from .dou_scraper import dou_scraper
 from .djinni_scraper import djinni_scraper
 from .justjoin_scraper import justjoin_scraper
 from .headhunter_scraper import headhunter_scraper
-from .linkedin_scraper import linkedin_scraper
 from .ats_board_scraper import greenhouse_scraper, lever_scraper
 from .remote_b2b_scrapers import remotive_scraper, himalayas_scraper, remoteok_scraper
 
@@ -108,7 +107,6 @@ class ScraperOrchestrator:
         "dou.ua": dou_scraper,
         "djinni.co": djinni_scraper,
         "justjoin.it": justjoin_scraper,
-        "linkedin.com": linkedin_scraper,
         "greenhouse.io": greenhouse_scraper,
         "lever.co": lever_scraper,
     }
@@ -131,7 +129,6 @@ class ScraperOrchestrator:
         "justjoin.it",
         "greenhouse.io",
         "lever.co",
-        "linkedin.com",
     ]
 
     def __init__(self) -> None:
@@ -153,6 +150,8 @@ class ScraperOrchestrator:
                     "last_latency_ms": 0,
                     "last_error": None,
                     "consecutive_failures": 0,
+                    "consecutive_zero_runs": 0,
+                    "zero_run_alert": False,
                 })
         return items
 
@@ -166,6 +165,7 @@ class ScraperOrchestrator:
     ) -> None:
         prev = self._source_health.get(portal) or {}
         failures = 0 if status in ("ok", "disabled") else int(prev.get("consecutive_failures", 0)) + 1
+        zero_runs = int(prev.get("consecutive_zero_runs", 0)) + 1 if count == 0 else 0
         self._source_health[portal] = {
             "portal": portal,
             "status": status,
@@ -174,6 +174,8 @@ class ScraperOrchestrator:
             "last_latency_ms": latency_ms,
             "last_error": error,
             "consecutive_failures": failures,
+            "consecutive_zero_runs": zero_runs,
+            "zero_run_alert": zero_runs >= 3,
         }
 
     def _build_portal_coro(
@@ -207,14 +209,6 @@ class ScraperOrchestrator:
         if canonical == "justjoin.it":
             url = search_cfg.get("justjoin_url")
             return (scraper.scrape(allow_network=True, search_url=url, candidate_languages=cand_langs) if url else None), canonical
-        if canonical == "linkedin.com":
-            return scraper.scrape(
-                allow_network=True,
-                search_urls=search_cfg.get("linkedin_urls") or [],
-                domain_keywords=combined_kw,
-                candidate_languages=cand_langs,
-                max_allowed_years=max_allowed_years,
-            ), canonical
         # Greenhouse, Lever, Remotive, Himalayas, RemoteOK share a unified signature
         return scraper.scrape(allow_network=True, domain_keywords=combined_kw, candidate_languages=cand_langs), canonical
 
@@ -289,7 +283,7 @@ class ScraperOrchestrator:
                     items = data if isinstance(data, list) else []
                     self._record_source_health(portal_name, "ok", len(items), latency_ms)
                     return items
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     latency_ms = int((time.perf_counter() - started) * 1000)
                     self._record_source_health(portal_name, "timeout", 0, latency_ms, "Timed out after 32s")
                     logger.debug("Portal scraper %s timed out", portal_name)
@@ -583,9 +577,9 @@ class ScraperOrchestrator:
 
                 # Per-user 24h evaluation cache: NEVER reuse another user's score; require matching (user_id, job_id, profile_fp, matcher_ver)
                 if existing and existing.scraped_at:
-                    scr_ts = existing.scraped_at if existing.scraped_at.tzinfo else existing.scraped_at.replace(tzinfo=timezone.utc)
+                    scr_ts = existing.scraped_at if existing.scraped_at.tzinfo else existing.scraped_at.replace(tzinfo=UTC)
                     prof_ts = (
-                        (profile.updated_at if profile.updated_at.tzinfo else profile.updated_at.replace(tzinfo=timezone.utc))
+                        (profile.updated_at if profile.updated_at.tzinfo else profile.updated_at.replace(tzinfo=UTC))
                         if profile and profile.updated_at
                         else scr_ts
                     )
@@ -596,7 +590,7 @@ class ScraperOrchestrator:
                         user_um = existing_matches.get(existing.id) if existing.id is not None else None
                         um_bd = (user_um.match_breakdown or {}) if user_um else {}
                         um_ts = (
-                            (user_um.evaluated_at if user_um.evaluated_at.tzinfo else user_um.evaluated_at.replace(tzinfo=timezone.utc))
+                            (user_um.evaluated_at if user_um.evaluated_at.tzinfo else user_um.evaluated_at.replace(tzinfo=UTC))
                             if user_um and user_um.evaluated_at
                             else None
                         )

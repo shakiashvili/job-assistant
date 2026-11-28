@@ -36,30 +36,17 @@ def list_portal_vacancies(current_user: User = Depends(get_current_user)):
             return []
 
         industry = str((profile.parsed_skills or {}).get("target_industry") or "general_professional")
-        is_guest = (current_user.email or "").strip().lower() == "guest@talentflow.local"
-        rows: List[JobPosting] = []
-        if not is_guest:
-            matched_pairs = session.exec(
-                select(JobPosting, UserJobMatch)
-                .join(UserJobMatch, UserJobMatch.job_posting_id == JobPosting.id)
-                .where(
-                    (UserJobMatch.user_id == current_user.id)
-                    & (UserJobMatch.status != "FILTERED_OUT")
-                    & (UserJobMatch.suitability_score >= 60.0)
-                )
-                .order_by(UserJobMatch.suitability_score.desc(), JobPosting.scraped_at.desc())
-            ).all()
-            rows = [jp for jp, _ in matched_pairs]
-        else:
-            rows = session.exec(
-                select(JobPosting)
-                .where(
-                    (JobPosting.user_id.is_(None) | (JobPosting.user_id == current_user.id))
-                    & (JobPosting.status != "FILTERED_OUT")
-                    & (JobPosting.suitability_score >= 60.0)
-                )
-                .order_by(JobPosting.suitability_score.desc(), JobPosting.scraped_at.desc())
-            ).all()
+        matched_pairs = session.exec(
+            select(JobPosting, UserJobMatch)
+            .join(UserJobMatch, UserJobMatch.job_posting_id == JobPosting.id)
+            .where(
+                (UserJobMatch.user_id == current_user.id)
+                & (UserJobMatch.status != "FILTERED_OUT")
+                & (UserJobMatch.suitability_score >= 60.0)
+            )
+            .order_by(UserJobMatch.suitability_score.desc(), JobPosting.scraped_at.desc())
+        ).all()
+        rows: List[JobPosting] = [jp for jp, _ in matched_pairs]
 
         items: List[PortalVacancyItem] = []
         seen_tc: set[tuple[str, str]] = set()

@@ -5,29 +5,16 @@ from sqlmodel import SQLModel, Session, create_engine
 from sqlalchemy import event, inspect as sa_inspect
 from ..config import DATABASE_URL, _is_prod
 from .models import (
-    User,
-    UserOTP,
     ApplicationTracker,
     ApplicationRecord,
     ApplicationEvent,
     InterviewRound,
     InterviewNote,
-    SkillActionPlan,
-    CandidateProfile,
-    CandidateSkill,
-    CandidateExperience,
-    CandidateEducation,
     CandidateDocument,
     JobPosting,
     UserJobMatch,
     SavedJob,
-    SavedSearch,
     Notification,
-    ScrapeTask,
-    CVVersion,
-    AIOperationLog,
-    AICacheEntry,
-    AuthRateLimit,
 )  # noqa: F401
 
 logger = logging.getLogger(__name__)

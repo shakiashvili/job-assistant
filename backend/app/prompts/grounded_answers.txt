@@ -1,0 +1,19 @@
+Answer each form question using ONLY verified candidate facts below. If a fact is missing from Candidate Profile or <{cand_tag}>, return an empty string "" for that index so the user can review it manually.
+Rules:
+1. Language: {language_label} (unless options force English Yes/No).
+2. For numeric experience fields (field_type == "number"), use verified years_of_experience={exp_years_label} (return "" if UNCONFIRMED).
+3. For select/radio fields with options, pick a matching exact string from `options` ONLY if verified.
+4. Target role: {safe_title} at {safe_company}.
+
+Candidate Profile:
+- Full Name: {full_name}
+- Primary Role: {primary_role} (Industry: {industry})
+- Verified Experience Years: {exp_years_display}
+- Verified Skills: {verified_skills_csv}
+
+{wrapped_skills}
+
+Questions JSON:
+{q_payload}
+
+Return STRICT JSON: {{"answers": [{{"index": 0, "answer": "..."}}]}}

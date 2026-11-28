@@ -17,9 +17,8 @@ from app.main import app
 from app.config import BASE_DIR, GENERATED_RESUMES_DIR, PROJECT_ROOT, TEST_FORMS_DIR, resolve_gemini_model_pricing
 from app.db.database import DATABASE_URL, engine, init_db
 from app.db.document_repository import migrate_legacy_generated_resumes, user_generated_resumes_dir
-from app.db.models import AuthRateLimit, CandidateDocument, User
+from app.db.models import AuthRateLimit, CandidateDocument
 from app.services import auth_service as auth_service_mod
-from app.services import playwright_service as pw_module
 from app.services.ats_checker import check_pdf_ats_parseability
 from app.services.auth_service import (
     check_rate_limit,
@@ -36,7 +35,6 @@ from app.services.crypto_service import (
     reindex_all_blind_indices,
 )
 from app.services.gemini_service import GeminiService
-from app.services.playwright_service import playwright_service
 
 client = TestClient(app)
 
@@ -133,19 +131,13 @@ def test_generated_cv_user_directory_isolation_and_fail_closed_staging(monkeypat
                 "timeout_seconds": 5,
             },
         )
-        assert stray_stage.status_code == 403
-
-        # User C with NO documents gets None from get_resume_path (never grabs first shared PDF!)
-        _, _, hdr_c = _register_and_upload_same_candidate("iso_c", "GammaEmployer")
-        with Session(engine) as sess:
-            uid_c = sess.exec(select(User).order_by(User.id.desc())).first().id
-        assert playwright_service.get_resume_path("qa_automation", user_id=uid_c) is None
-        assert playwright_service.get_resume_path("", custom_pdf_filename=stray_name, user_id=uid_c) is None
+        # Removed /api/stage-application route returns 404 (server-side Playwright auto-staging retired)
+        assert stray_stage.status_code == 404
     finally:
         if stray_path.exists():
             stray_path.unlink()
 
-    # Create a User-A-only tailored CV with a distinct filename and verify User B is forbidden from downloading or staging it
+    # Create a User-A-only tailored CV with a distinct filename and verify User B is forbidden from downloading it
     only_a = client.post(
         "/api/resumes/generate-edition",
         headers=hdr_a,
@@ -164,69 +156,6 @@ def test_generated_cv_user_directory_isolation_and_fail_closed_staging(monkeypat
     assert client.get(f"/api/resumes/{only_a_pdf}", headers=hdr_b).status_code in (403, 404)
     listed_b = client.get("/api/resumes/generated", headers=hdr_b).json()
     assert not any(item["filename"] == only_a_pdf for item in listed_b)
-
-    sample_form_url = (TEST_FORMS_DIR / "greenhouse_sample.html").as_uri()
-    cross_stage = client.post(
-        "/api/stage-application",
-        headers=hdr_b,
-        json={
-            "job_url": sample_form_url,
-            "variant": "qa_automation",
-            "custom_pdf_filename": only_a_pdf,
-            "headless": True,
-            "timeout_seconds": 5,
-        },
-    )
-    assert cross_stage.status_code == 403
-
-    # Fail closed even when headless=False in CI/headless env OR when ENABLE_PLAYWRIGHT=false
-    monkeypatch.setenv("CI", "true")
-    cross_stage_ci = client.post(
-        "/api/stage-application",
-        headers=hdr_b,
-        json={
-            "job_url": sample_form_url,
-            "variant": "qa_automation",
-            "custom_pdf_filename": only_a_pdf,
-            "headless": False,
-            "timeout_seconds": 5,
-        },
-    )
-    assert cross_stage_ci.status_code == 403
-
-    orig_enable_pw = pw_module.ENABLE_PLAYWRIGHT
-    monkeypatch.setattr(pw_module, "ENABLE_PLAYWRIGHT", False)
-    cross_stage_disabled = client.post(
-        "/api/stage-application",
-        headers=hdr_b,
-        json={
-            "job_url": sample_form_url,
-            "variant": "qa_automation",
-            "custom_pdf_filename": only_a_pdf,
-            "headless": False,
-        },
-    )
-    assert cross_stage_disabled.status_code == 403
-
-    # Owner staging succeeds with headless fallback enforced under CI=true
-    monkeypatch.setattr(pw_module, "ENABLE_PLAYWRIGHT", orig_enable_pw)
-    if orig_enable_pw:
-        sessions_before = len(playwright_service._active_sessions)
-        owner_stage_ci = client.post(
-            "/api/stage-application",
-            headers=hdr_a,
-            json={
-                "job_url": sample_form_url,
-                "variant": "qa_automation",
-                "custom_pdf_filename": only_a_pdf,
-                "headless": False,
-                "timeout_seconds": 5,
-            },
-        )
-        assert owner_stage_ci.status_code == 200, owner_stage_ci.text
-        assert owner_stage_ci.json()["status"] == "staged"
-        assert owner_stage_ci.json()["file_uploaded"] is True
-        assert len(playwright_service._active_sessions) == sessions_before
 
 
 def test_ats_checker_layout_full_name_and_expected_contact_honesty(tmp_path: Path):
@@ -375,9 +304,9 @@ def test_shared_persistent_rate_limiting_and_ip_buckets():
         assert ip_exc.value.status_code == 429
 
         # Expired SQL rows from one-off probes are cleaned up while active buckets are preserved
-        stale_key_1 = hashlib.sha256(f"probe_{uuid.uuid4().hex}@example.com".encode("utf-8")).hexdigest()
-        stale_key_2 = hashlib.sha256(f"probe_{uuid.uuid4().hex}@example.com".encode("utf-8")).hexdigest()
-        active_key = hashlib.sha256(f"active_{uuid.uuid4().hex}@example.com".encode("utf-8")).hexdigest()
+        stale_key_1 = hashlib.sha256(f"probe_{uuid.uuid4().hex}@example.com".encode()).hexdigest()
+        stale_key_2 = hashlib.sha256(f"probe_{uuid.uuid4().hex}@example.com".encode()).hexdigest()
+        active_key = hashlib.sha256(f"active_{uuid.uuid4().hex}@example.com".encode()).hexdigest()
         now_val = time.time()
         with Session(engine) as sess:
             sess.add(AuthRateLimit(bucket_key=stale_key_1, attempts=1, window_started_at=now_val - 900, expires_at=now_val - 300))
@@ -393,7 +322,7 @@ def test_shared_persistent_rate_limiting_and_ip_buckets():
             assert sess.get(AuthRateLimit, active_key) is not None
 
         # Throttled periodic sweep during live consume_rate_limit also prunes expired buckets
-        stale_key_3 = hashlib.sha256(f"probe_{uuid.uuid4().hex}@example.com".encode("utf-8")).hexdigest()
+        stale_key_3 = hashlib.sha256(f"probe_{uuid.uuid4().hex}@example.com".encode()).hexdigest()
         with Session(engine) as sess:
             sess.add(AuthRateLimit(bucket_key=stale_key_3, attempts=1, window_started_at=now_val - 900, expires_at=now_val - 60))
             sess.commit()

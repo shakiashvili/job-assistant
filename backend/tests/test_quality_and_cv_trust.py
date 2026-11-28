@@ -1,4 +1,3 @@
-import io
 import re
 import uuid
 import zipfile
@@ -21,9 +20,6 @@ from app.services.cv_generator_service import cv_generator_service
 from app.services.cv_parser_service import cv_parser_service
 from app.services.gemini_service import gemini_service, wrap_untrusted_input
 from app.services.portal_detector import detect_portal_from_html
-from app.services.scrapers.linkedin_scraper import LinkedInScraper
-from app.services.scrapers.remote_b2b_scrapers import HimalayasScraper
-from app.services.scrapers.scraper_orchestrator import scraper_orchestrator
 
 client = TestClient(app)
 
@@ -266,20 +262,6 @@ def test_cv_parser_security_invalid_tracker_id_portal_detector_and_lifecycle():
     assert other_hr_portal == "custom"
     other_hr_no_url, _ = detect_portal_from_html(other_hr_html)
     assert other_hr_no_url == "custom"
-
-    # 6. LinkedInScraper adaptive seniority allows senior role when max_allowed_years > 2.5
-    li_html = """
-    <div class="base-card">
-      <h3 class="base-search-card__title">Senior QA Automation Engineer</h3>
-      <h4 class="base-search-card__subtitle">GlobalCo</h4>
-      <span class="job-search-card__location">Remote</span>
-      <a class="base-card__full-link" href="https://www.linkedin.com/jobs/view/123456">Apply</a>
-    </div>
-    """
-    jr_res = LinkedInScraper().parse_html_listings(li_html, max_allowed_years=2.0)
-    sr_res = LinkedInScraper().parse_html_listings(li_html, max_allowed_years=6.0)
-    assert jr_res[0]["status"] == "FILTERED_OUT"
-    assert sr_res[0]["status"] != "FILTERED_OUT"
 
 
 def test_direct_bcrypt_long_password_422_and_otp_request_throttling():
