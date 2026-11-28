@@ -4,8 +4,9 @@ import logging
 import os
 from typing import Any, Callable, Dict, List, Optional
 import httpx
-from sqlmodel import Session, select
+from sqlmodel import Session, and_, col, select
 
+from ..config import reload_env_files
 from ..db.database import engine
 from ..db.models import JobPosting, Notification, SavedSearch, User, UserJobMatch, utc_now
 from .gmail_service import gmail_service
@@ -49,9 +50,15 @@ def collect_saved_search_digest(
 
         rows = session.exec(
             select(JobPosting, UserJobMatch)
-            .join(UserJobMatch, (UserJobMatch.job_posting_id == JobPosting.id) & (UserJobMatch.user_id == user_id))
-            .where(UserJobMatch.status != "FILTERED_OUT", UserJobMatch.is_ignored == False)
-            .order_by(UserJobMatch.suitability_score.desc(), JobPosting.scraped_at.desc())
+            .join(
+                UserJobMatch,
+                and_(
+                    col(UserJobMatch.job_posting_id) == col(JobPosting.id),
+                    col(UserJobMatch.user_id) == user_id,
+                ),
+            )
+            .where(col(UserJobMatch.status) != "FILTERED_OUT", col(UserJobMatch.is_ignored) == False)
+            .order_by(col(UserJobMatch.suitability_score).desc(), col(JobPosting.scraped_at).desc())
             .limit(200)
         ).all()
 
@@ -175,8 +182,9 @@ def dispatch_saved_search_digest(
             }
 
     if "telegram" in active_channels:
+        reload_env_files()
         bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-        chat_id = (telegram_chat_id or os.getenv("TELEGRAM_DEFAULT_CHAT_ID", "")).strip()
+        chat_id = (telegram_chat_id or os.getenv("TELEGRAM_DEFAULT_CHAT_ID") or "").strip()
         if dry_run:
             delivery["telegram"] = {"sent": False, "dry_run": True, "configured": bool(bot_token and chat_id)}
         else:

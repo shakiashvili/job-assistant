@@ -4,14 +4,14 @@ from datetime import timedelta
 from typing import Any, Dict, List, Optional, Tuple
 from fastapi import Query
 from sqlalchemy import String, case, cast, func
-from sqlmodel import Session, and_, or_, select
+from sqlalchemy import select as sa_select
+from sqlmodel import Session, and_, col, or_, select
 
 from ..db.database import engine, init_db
 from ..db.models import ApplicationRecord, JobPosting, SavedJob, User, UserJobMatch, utc_now
 from ..db.profile_repository import ground_truth_store
 from .matcher_service import matcher_service, skills_match_token
 from .matching.gates import run_gate_pipeline
-from .answer_service import load_live_candidate_profile
 from .salary_service import salary_service
 from .scrapers.base_scraper import classify_georgia_b2b_suitability, sanitize_company_name
 from .scrapers.scraper_orchestrator import scraper_orchestrator
@@ -122,8 +122,8 @@ def _or_title_desc(patterns: List[str]) -> Any:
     return or_(
         *[
             or_(
-                JobPosting.title.ilike(f"%{_esc_like(p)}%", escape="\\"),
-                JobPosting.description_raw.ilike(f"%{_esc_like(p)}%", escape="\\"),
+                col(JobPosting.title).ilike(f"%{_esc_like(p)}%", escape="\\"),
+                col(JobPosting.description_raw).ilike(f"%{_esc_like(p)}%", escape="\\"),
             )
             for p in patterns
         ]
@@ -137,9 +137,9 @@ def _add_text_and_industry_conds(conds: List[Any], f: JobFilters) -> None:
             or_(
                 *[
                     or_(
-                        JobPosting.title.ilike(f"%{_esc_like(k)}%", escape="\\"),
-                        JobPosting.description_raw.ilike(f"%{_esc_like(k)}%", escape="\\"),
-                        JobPosting.company.ilike(f"%{_esc_like(k)}%", escape="\\"),
+                        col(JobPosting.title).ilike(f"%{_esc_like(k)}%", escape="\\"),
+                        col(JobPosting.description_raw).ilike(f"%{_esc_like(k)}%", escape="\\"),
+                        col(JobPosting.company).ilike(f"%{_esc_like(k)}%", escape="\\"),
                     )
                     for k in kws
                 ]
@@ -151,10 +151,10 @@ def _add_text_and_industry_conds(conds: List[Any], f: JobFilters) -> None:
             kw = f"%{_esc_like(tok)}%"
             conds.append(
                 or_(
-                    JobPosting.title.ilike(kw, escape="\\"),
-                    JobPosting.company.ilike(kw, escape="\\"),
-                    JobPosting.description_raw.ilike(kw, escape="\\"),
-                    JobPosting.match_rationale.ilike(kw, escape="\\"),
+                    col(JobPosting.title).ilike(kw, escape="\\"),
+                    col(JobPosting.company).ilike(kw, escape="\\"),
+                    col(JobPosting.description_raw).ilike(kw, escape="\\"),
+                    col(JobPosting.match_rationale).ilike(kw, escape="\\"),
                 )
             )
     if f.technology and f.technology.strip():
@@ -162,49 +162,49 @@ def _add_text_and_industry_conds(conds: List[Any], f: JobFilters) -> None:
             conds.append(_or_title_desc([tech_tok.strip()]))
     if f.language and f.language.strip().lower() not in ("all", ""):
         lkw = f"%{_esc_like(f.language.strip())}%"
-        conds.append(or_(JobPosting.description_raw.ilike(lkw, escape="\\"), cast(JobPosting.language_requirements, String).ilike(lkw, escape="\\")))
+        conds.append(or_(col(JobPosting.description_raw).ilike(lkw, escape="\\"), cast(col(JobPosting.language_requirements), String).ilike(lkw, escape="\\")))
 
 
 def _add_location_and_scope_conds(conds: List[Any], f: JobFilters, user_id: Optional[int]) -> None:
     if f.country and f.country.strip():
         c_clean = f.country.strip()
         ckw = f"%{_esc_like(c_clean)}%"
-        c_fallbacks = [JobPosting.market.ilike(ckw, escape="\\")]
+        c_fallbacks = [col(JobPosting.market).ilike(ckw, escape="\\")]
         if c_clean.lower() in ("georgia", "ge", "sakartvelo"):
-            c_fallbacks.extend([JobPosting.market.ilike("GE%", escape="\\"), JobPosting.country.ilike("%GE%", escape="\\")])
-        conds.append(or_(JobPosting.country.ilike(ckw, escape="\\"), and_(or_(JobPosting.country.is_(None), JobPosting.country == ""), or_(*c_fallbacks))))
+            c_fallbacks.extend([col(JobPosting.market).ilike("GE%", escape="\\"), col(JobPosting.country).ilike("%GE%", escape="\\")])
+        conds.append(or_(col(JobPosting.country).ilike(ckw, escape="\\"), and_(or_(col(JobPosting.country).is_(None), col(JobPosting.country) == ""), or_(*c_fallbacks))))
     if f.city and f.city.strip():
         city_kw = f"%{_esc_like(f.city.strip())}%"
-        conds.append(or_(JobPosting.city.ilike(city_kw, escape="\\"), and_(or_(JobPosting.city.is_(None), JobPosting.city == ""), or_(JobPosting.market.ilike(city_kw, escape="\\"), JobPosting.description_raw.ilike(city_kw, escape="\\")))))
+        conds.append(or_(col(JobPosting.city).ilike(city_kw, escape="\\"), and_(or_(col(JobPosting.city).is_(None), col(JobPosting.city) == ""), or_(col(JobPosting.market).ilike(city_kw, escape="\\"), col(JobPosting.description_raw).ilike(city_kw, escape="\\")))))
     if f.remote_type and f.remote_type.upper() != "ALL":
         rt_up = f.remote_type.strip().upper()
-        conds.append((JobPosting.is_remote == True) if rt_up == "REMOTE" else (JobPosting.remote_type == rt_up))
+        conds.append((col(JobPosting.is_remote) == True) if rt_up == "REMOTE" else (col(JobPosting.remote_type) == rt_up))
     if f.salary_min is not None and f.salary_min > 0:
-        conds.append(JobPosting.salary_max >= f.salary_min)
+        conds.append(col(JobPosting.salary_max) >= f.salary_min)
     if f.experience_level and f.experience_level.strip().lower() not in ("all", ""):
         conds.append(_or_title_desc(EXPERIENCE_PATTERNS.get(f.experience_level.strip().lower(), [f.experience_level.strip().lower()])))
     if f.employment_type and f.employment_type.strip().lower() not in ("all", ""):
         conds.append(_or_title_desc(EMPLOYMENT_PATTERNS.get(f.employment_type.strip().lower(), [f.employment_type.strip().lower()])))
     if f.only_saved and user_id is not None:
-        conds.append(JobPosting.id.in_(select(SavedJob.job_posting_id).where(SavedJob.user_id == user_id)))
+        conds.append(col(JobPosting.id).in_(select(SavedJob.job_posting_id).where(col(SavedJob.user_id) == user_id)))
     if f.only_new and user_id is not None:
-        conds.append(JobPosting.id.not_in(select(ApplicationRecord.job_posting_id).where(ApplicationRecord.user_id == user_id, ApplicationRecord.job_posting_id.is_not(None))))
+        conds.append(col(JobPosting.id).not_in(select(ApplicationRecord.job_posting_id).where(col(ApplicationRecord.user_id) == user_id, col(ApplicationRecord.job_posting_id).is_not(None))))
     if f.b2b_only:
-        conds.append(or_(JobPosting.portal.in_(B2B_PORTALS), JobPosting.market.in_(["GLOBAL_REMOTE", "INT_REMOTE", "EU_REMOTE"])))
+        conds.append(or_(col(JobPosting.portal).in_(B2B_PORTALS), col(JobPosting.market).in_(["GLOBAL_REMOTE", "INT_REMOTE", "EU_REMOTE"])))
     if f.posted_within_days is not None:
-        conds.append(func.coalesce(JobPosting.published_at, JobPosting.scraped_at) >= utc_now() - timedelta(days=f.posted_within_days))
+        conds.append(func.coalesce(col(JobPosting.published_at), col(JobPosting.scraped_at)) >= utc_now() - timedelta(days=f.posted_within_days))
 
 
 def _build_base_conditions(f: JobFilters, use_user_matches: bool, score_col: Any, status_col: Any, user_id: Optional[int]) -> List[Any]:
-    conds: List[Any] = [JobPosting.is_expired == False]
+    conds: List[Any] = [col(JobPosting.is_expired) == False]
     if use_user_matches and not f.include_dismissed:
-        conds.append(UserJobMatch.is_ignored == False)
+        conds.append(col(UserJobMatch.is_ignored) == False)
     if not f.include_filtered:
         conds.append(status_col != "FILTERED_OUT")
     if f.portal and f.portal.upper() != "ALL":
-        conds.append(JobPosting.portal == f.portal)
+        conds.append(col(JobPosting.portal) == f.portal)
     if f.market and f.market.upper() != "ALL":
-        conds.append(JobPosting.market == f.market)
+        conds.append(col(JobPosting.market) == f.market)
     if f.min_score is not None and f.min_score > 0:
         conds.append(score_col >= f.min_score)
     _add_text_and_industry_conds(conds, f)
@@ -213,14 +213,14 @@ def _build_base_conditions(f: JobFilters, use_user_matches: bool, score_col: Any
 
 
 def _build_order_clauses(sort_by: str, score_col: Any) -> tuple[Any, Any]:
-    freshness = func.coalesce(JobPosting.published_at, JobPosting.scraped_at)
+    freshness = func.coalesce(col(JobPosting.published_at), col(JobPosting.scraped_at))
     norm = (sort_by or "newest").strip().lower()
     if norm == "newest":
         return (freshness.desc(), score_col.desc())
     if norm == "salary_desc":
-        return (func.coalesce(JobPosting.salary_max, JobPosting.salary_min, -1).desc(), freshness.desc())
+        return (func.coalesce(col(JobPosting.salary_max), col(JobPosting.salary_min), -1).desc(), freshness.desc())
     if norm == "company_asc":
-        return (JobPosting.company.asc(), freshness.desc())
+        return (col(JobPosting.company).asc(), freshness.desc())
     return (score_col.desc(), freshness.desc())
 
 
@@ -244,16 +244,21 @@ def _normalize_djinni_and_salary(dumped: Dict[str, Any]) -> None:
         dumped["posting_date"] = dumped.get("published_at") or dumped.get("scraped_at")
 
 
-def _resolve_parsed_skills(profile: Any, owner_email: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    if owner_email:
-        live = load_live_candidate_profile(owner_email)
-        if live:
-            parsed = dict(live)
-            parsed.setdefault("verified_skills", live.get("all_skills") or [])
-            return parsed
+def _resolve_parsed_skills(profile: Any) -> Optional[Dict[str, Any]]:
+    """Extracts parsed skills directly from the already-loaded CandidateProfile (0 extra DB queries)."""
     if profile is None:
         return None
-    raw_md = getattr(profile, "raw_skills_md", None) or ""
+    ps = getattr(profile, "parsed_skills", None)
+    if isinstance(ps, dict) and ps:
+        parsed = dict(ps)
+        exp = getattr(profile, "experience_years", None)
+        if exp is not None:
+            parsed.setdefault("experience_years", exp)
+            parsed.setdefault("years_experience", exp)
+            parsed.setdefault("years_of_experience", exp)
+        parsed.setdefault("verified_skills", parsed.get("all_skills") or [])
+        return parsed
+    raw_md = getattr(profile, "raw_markdown", None) or ""
     if raw_md.strip():
         return matcher_service.parse_skills_markdown(raw_md)
     return None
@@ -374,7 +379,8 @@ def _query_geo_eligible(
     owner: Optional[str],
     parsed_skills: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    stmt = select(JobPosting, UserJobMatch).join(UserJobMatch, (UserJobMatch.job_posting_id == JobPosting.id) & (UserJobMatch.user_id == uid)) if use_user_matches else select(JobPosting)
+    join_cond = and_(col(UserJobMatch.job_posting_id) == col(JobPosting.id), col(UserJobMatch.user_id) == uid)
+    stmt: Any = select(JobPosting, UserJobMatch).join(UserJobMatch, join_cond) if use_user_matches else select(JobPosting)
     if base_conds:
         stmt = stmt.where(*base_conds)
     items_geo = [d for e in session.exec(stmt.order_by(*order_clauses)).all() if (d := _serialize_job_row(e, use_user_matches, parsed_skills)).get("georgia_eligible")]
@@ -446,26 +452,27 @@ def query_jobs_paginated(filters: JobFilters, current_user: User, is_profile_rea
             return {"items": [], "total": 0, "page": filters.page, "limit": filters.limit, "total_pages": 1, "tier_counts": {"ALL": 0, "DIRECT": 0, "ADJACENT": 0, "PUBLIC_INTERNSHIP": 0}, "status_counts": {"ALL": 0, "STAGED": 0, "AUDITED": 0}}
 
         use_um = uid is not None
-        score_col = UserJobMatch.suitability_score if use_um else JobPosting.suitability_score
-        status_col = UserJobMatch.status if use_um else JobPosting.status
-        tier_col = UserJobMatch.match_tier if use_um else JobPosting.match_tier
+        score_col: Any = col(UserJobMatch.suitability_score) if use_um else col(JobPosting.suitability_score)
+        status_col: Any = col(UserJobMatch.status) if use_um else col(JobPosting.status)
+        tier_col: Any = col(UserJobMatch.match_tier) if use_um else col(JobPosting.match_tier)
+        join_cond = and_(col(UserJobMatch.job_posting_id) == col(JobPosting.id), col(UserJobMatch.user_id) == uid)
 
-        parsed_skills = _resolve_parsed_skills(profile, owner)
+        parsed_skills = _resolve_parsed_skills(profile)
         base_conds = _build_base_conditions(filters, use_um, score_col, status_col, current_user.id)
         order_clauses = _build_order_clauses(filters.sort_by, score_col)
         if filters.geo_eligible_only:
             return _query_geo_eligible(session, filters, base_conds, order_clauses, use_um, uid, owner, parsed_skills)
 
-        agg_stmt = select(
+        agg_stmt: Any = sa_select(
             func.count().label("all_cnt"),
             func.sum(case((tier_col == "DIRECT", 1), else_=0)).label("direct_cnt"),
             func.sum(case((tier_col == "ADJACENT", 1), else_=0)).label("adjacent_cnt"),
-            func.sum(case(((tier_col == "PUBLIC_INTERNSHIP") | (JobPosting.portal == "hr.gov.ge"), 1), else_=0)).label("intern_cnt"),
+            func.sum(case((or_(tier_col == "PUBLIC_INTERNSHIP", col(JobPosting.portal) == "hr.gov.ge"), 1), else_=0)).label("intern_cnt"),
             func.sum(case((status_col == "STAGED", 1), else_=0)).label("staged_cnt"),
             func.sum(case((status_col == "AUDITED", 1), else_=0)).label("audited_cnt"),
         ).select_from(JobPosting)
         if use_um:
-            agg_stmt = agg_stmt.join(UserJobMatch, (UserJobMatch.job_posting_id == JobPosting.id) & (UserJobMatch.user_id == uid))
+            agg_stmt = agg_stmt.join(UserJobMatch, join_cond)
         if base_conds:
             agg_stmt = agg_stmt.where(*base_conds)
 
@@ -487,17 +494,17 @@ def query_jobs_paginated(filters: JobFilters, current_user: User, is_profile_rea
             elif t_low == "adjacent":
                 conditions.append(tier_col == "ADJACENT")
             elif t_low in ("internship", "public_internship"):
-                conditions.append((tier_col == "PUBLIC_INTERNSHIP") | (JobPosting.portal == "hr.gov.ge"))
+                conditions.append(or_(tier_col == "PUBLIC_INTERNSHIP", col(JobPosting.portal) == "hr.gov.ge"))
 
         if extra:
-            c_stmt = select(func.count()).select_from(JobPosting)
+            c_stmt: Any = select(func.count()).select_from(JobPosting)
             if use_um:
-                c_stmt = c_stmt.join(UserJobMatch, (UserJobMatch.job_posting_id == JobPosting.id) & (UserJobMatch.user_id == uid))
+                c_stmt = c_stmt.join(UserJobMatch, join_cond)
             total = int(session.exec(c_stmt.where(*conditions)).one() or 0)
         else:
             total = all_cnt
 
-        stmt = select(JobPosting, UserJobMatch).join(UserJobMatch, (UserJobMatch.job_posting_id == JobPosting.id) & (UserJobMatch.user_id == uid)) if use_um else select(JobPosting)
+        stmt: Any = select(JobPosting, UserJobMatch).join(UserJobMatch, join_cond) if use_um else select(JobPosting)
         rows = session.exec(stmt.where(*conditions).order_by(*order_clauses).offset((filters.page - 1) * filters.limit).limit(filters.limit)).all()
         return {
             "items": cluster_cross_portal_jobs([_serialize_job_row(e, use_um, parsed_skills) for e in rows]),

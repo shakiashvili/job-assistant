@@ -167,7 +167,8 @@ class CVParserService:
             (isinstance(loc, dict) and (loc.get("city") or loc.get("country")))
             or (isinstance(loc, str) and loc.strip())
         )
-        links = cand.get("links") if isinstance(cand.get("links"), dict) else {}
+        raw_links = cand.get("links")
+        links: Dict[str, Any] = raw_links if isinstance(raw_links, dict) else {}
         has_links = bool(
             links.get("linkedin")
             or links.get("github")

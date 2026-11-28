@@ -49,7 +49,8 @@ def build_cv_render_context(
     else:
         loc_str = str(loc or "").strip()
 
-    links = candidate.get("links") if isinstance(candidate.get("links"), dict) else {}
+    raw_links = candidate.get("links")
+    links: Dict[str, Any] = raw_links if isinstance(raw_links, dict) else {}
     return CVRenderContext(
         full_name=str(candidate.get("full_name") or "").strip(),
         headline=str(candidate.get("headline") or target_role or "").strip(),

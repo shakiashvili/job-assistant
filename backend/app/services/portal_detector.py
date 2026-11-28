@@ -69,7 +69,7 @@ def detect_portal_from_html(html: str, url: Optional[str] = None) -> Tuple[str, 
     soup = BeautifulSoup(html or "", "html.parser")
 
     if portal_type == "custom" and hostname is None:
-        board_el = soup.find(attrs={"data-board": True})
+        board_el = soup.find(True, attrs={"data-board": True})
         board_val = str(board_el.get("data-board", "")).strip().lower() if board_el else ""
         if board_val in KNOWN_PORTALS:
             portal_type = board_val
@@ -98,7 +98,7 @@ def detect_portal_from_html(html: str, url: Optional[str] = None) -> Tuple[str, 
     # Extract Company via semantic selectors
     company = ""
     company_el = (
-        soup.find(attrs={"itemprop": "hiringOrganization"})
+        soup.find(True, attrs={"itemprop": "hiringOrganization"})
         or soup.find("a", class_=re.compile(r"company", re.I))
         or soup.find("div", class_=re.compile(r"company|employer|posting-headline", re.I))
         or soup.find("span", class_=re.compile(r"company", re.I))

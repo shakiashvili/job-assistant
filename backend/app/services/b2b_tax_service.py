@@ -1,7 +1,7 @@
 import logging
 import time
 from datetime import UTC, datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import httpx
 
@@ -228,23 +228,23 @@ def compute_timezone_matrix(work_start_get: int = 11, work_end_get: int = 19) ->
 
     ge_hours = set(range(start_get, end_get))
     tbilisi_offset, _ = _resolve_tz_offset_hours("Asia/Tbilisi", 4)
-    regions = [
-        {"region": "UAE / Gulf (Dubai GST)", "tz": "Asia/Dubai", "fallback_offset": 4},
-        {"region": "Central Europe (Berlin / Warsaw)", "tz": "Europe/Berlin", "fallback_offset": 1},
-        {"region": "United Kingdom (London)", "tz": "Europe/London", "fallback_offset": 0},
-        {"region": "US East Coast (New York)", "tz": "America/New_York", "fallback_offset": -5},
-        {"region": "US West Coast (San Francisco)", "tz": "America/Los_Angeles", "fallback_offset": -8},
+    regions: List[Tuple[str, str, int]] = [
+        ("UAE / Gulf (Dubai GST)", "Asia/Dubai", 4),
+        ("Central Europe (Berlin / Warsaw)", "Europe/Berlin", 1),
+        ("United Kingdom (London)", "Europe/London", 0),
+        ("US East Coast (New York)", "America/New_York", -5),
+        ("US West Coast (San Francisco)", "America/Los_Angeles", -8),
     ]
 
     matrix: List[Dict[str, Any]] = []
-    for reg in regions:
-        cur_offset, dst_active = _resolve_tz_offset_hours(reg["tz"], reg["fallback_offset"])
+    for label, tz_name, fallback_offset in regions:
+        cur_offset, dst_active = _resolve_tz_offset_hours(tz_name, fallback_offset)
         diff = tbilisi_offset - cur_offset
         c_start, c_end = 9 + diff, 17 + diff
         overlap = sorted(ge_hours & {h % 24 for h in range(c_start, c_end)})
         rec_start = max(8, min(16, c_start % 24))
         matrix.append({
-            "region": f"{reg['region']}{' · DST' if dst_active else ''}",
+            "region": f"{label}{' · DST' if dst_active else ''}",
             "hours_behind_tbilisi": diff,
             "client_hours_tbilisi_time": f"{c_start % 24:02d}:00–{c_end % 24:02d}:00 GET{' (+1d)' if c_end > 24 else ''}",
             "overlap_hours_count": len(overlap),

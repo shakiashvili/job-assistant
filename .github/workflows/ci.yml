@@ -42,9 +42,8 @@ jobs:
         env:
           PYTHONPATH: .
         run: python -m evals.eval_runner
-      - name: Run Python type check (mypy, non-blocking during Phase 2 ratchet)
+      - name: Run Python type check (mypy)
         working-directory: backend
-        continue-on-error: true
         run: mypy app/services app/db
       - name: Verify Alembic migrations from scratch (SQLite and PostgreSQL)
         working-directory: backend
@@ -81,6 +80,7 @@ jobs:
           npm run build
       - name: Validate Chrome Extension JS & Manifest
         run: |
+          node --check extension/shared/extractors.js
           node --check extension/background/service_worker.js
           node --check extension/content/content.js
           node --check extension/popup/popup.js

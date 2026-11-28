@@ -56,11 +56,37 @@ max-statements = 60
 
 [tool.mypy]
 python_version = "3.12"
+explicit_package_bases = true
 warn_return_any = false
 warn_unused_ignores = true
 ignore_missing_imports = true
 check_untyped_defs = false
 files = ["app/services", "app/db"]
+
+# Progressive mypy ratchet: all new and refactored domain modules (job_query_service,
+# digest_service, gmail_sync_service, b2b_tax_service, matching.gates, ai_schemas,
+# observability, cv.context, cv_parser_service, portal_detector, matcher_service,
+# salary_service, ats_checker, interview_service, crypto_service, company_validator)
+# are strictly checked on every CI run. Legacy SQLModel-heavy modules below will be
+# migrated to sqlmodel.col() and removed from this override list progressively.
+[[tool.mypy.overrides]]
+module = [
+    "app.db.*",
+    "app.services.answer_service",
+    "app.services.audit_service",
+    "app.services.auth_service",
+    "app.services.backup_service",
+    "app.services.cv_generator_service",
+    "app.services.gemini_service",
+    "app.services.gmail_service",
+    "app.services.link_validator",
+    "app.services.plan_service",
+    "app.services.profile_intelligence_service",
+    "app.services.profile_service",
+    "app.services.scrape_worker",
+    "app.services.scrapers.*",
+]
+ignore_errors = true
 
 [tool.coverage.run]
 source = ["app"]

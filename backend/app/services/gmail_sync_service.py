@@ -82,7 +82,7 @@ def _message_matches_application(msg: Dict[str, Any], app: ApplicationItem) -> b
     snippet = str(msg.get("snippet") or "").lower()
     combined = f"{sender} {subject} {snippet}"
 
-    rec_email = (app.recruiter_email or "").strip().lower()
+    rec_email = str(getattr(app, "recruiter_email", None) or "").strip().lower()
     if rec_email and rec_email in sender:
         return True
 
