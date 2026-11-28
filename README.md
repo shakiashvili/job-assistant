@@ -10,7 +10,7 @@ Multi-industry job discovery, grounded bilingual CV studio, application tracker,
 - **Async Multi-Portal Job Discovery (12 Server-Side Portals + Extension):**
   - Server-side public boards: `jobs.ge`, `hr.ge`, `hr.gov.ge`, `headhunter.ge`, `remotive.com`, `himalayas.app`, `remoteok.com`, `djinni.co`, `dou.ua`, `justjoin.it`, `greenhouse.io`, `lever.co` via one durable async queue (`POST /api/jobs/scrape/async` + `GET /api/jobs/scrape/status/{task_id}`) with per-source health monitoring (`GET /api/jobs/sources/health`), zero-result alerting, and cross-portal deduplication (`also_on_portals`).
   - **Explainable Match & Skill-Gap Action Plan:** Every discovery card and Chrome Extension panel surfaces exact gate diagnostics (`Seniority`, `Discipline`, `Language` from `matching/gates.py`), matched skills, and 1-click `△ <Skill> +Plan` buttons wired to `POST /api/action-plans/add-skill`.
-  - **Saved-Search Digest Alerts (In-App / Email / Telegram Bot):** Save custom vacancy filters and preview or dispatch grouped digests via in-app notifications, Gmail SMTP/OAuth, or Telegram Bot API (`POST /api/saved-searches/send-digest`).
+  - **Daily 09:00 AM Job Digest Alerts (Email / Telegram Bot / In-App):** Evaluates **all suitable vacancies across Direct, Adjacent, and Public Sector tiers** (or optional Saved Searches only), reports exact **Match %**, **Mismatch/Gap %**, matched skills, and **missing skills**, tracks every delivered vacancy in `digest_delivery_logs` so jobs are **never resent**, appends a compact **yesterday reminder** for unapplied roles, and still sends a clear status notice when 0 new vacancies were found (`POST /api/saved-searches/send-digest`, `GET /api/saved-searches/digest-schedule`). Auto-runs daily at `09:00 Asia/Tbilisi` while the backend is running, or standalone via `python -m app.services.digest_scheduler` (Windows Task Scheduler / cron).
   - LinkedIn & authenticated ATS portals are supported strictly via the user's own browser using the Chrome Extension (`extension/`). See [docs/DECISIONS.md](docs/DECISIONS.md).
 - **Chrome Extension Copilot (Manifest V3):**
   - Shared, unit-tested portal DOM extractors (`extension/shared/extractors.js`, tested in Vitest against `jobs.ge`, `hr.ge`, `headhunter.ge`, `linkedin.com`, and Greenhouse HTML fixtures).
@@ -44,11 +44,16 @@ Key variables in `backend/.env` (never commit `.env`):
   GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx
   ```
   *(Optional Google OAuth2 for multi-user Gmail & Calendar: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`.)*
-- **Telegram Bot Saved-Search Digests:** Create a bot via `@BotFather`, send `/start` to your bot, get your Chat ID via `@userinfobot`, and set:
+- **Telegram Bot & Daily 09:00 AM Digest Scheduler:** Create a bot via `@BotFather`, send `/start` to your bot, get your Chat ID via `@userinfobot`, and set in `backend/.env`:
   ```env
   TELEGRAM_BOT_TOKEN=123456789:your_bot_token
   TELEGRAM_DEFAULT_CHAT_ID=your_numeric_chat_id
+  DAILY_DIGEST_ENABLED=true
+  DAILY_DIGEST_HOUR=9
+  DAILY_DIGEST_MINUTE=0
+  DAILY_DIGEST_TIMEZONE=Asia/Tbilisi
   ```
+  *Note:* The built-in scheduler runs automatically whenever the backend server is up (and catches up once per day if started after `09:00`). To deliver digests on Windows even when the web app is closed, schedule `python -m app.services.digest_scheduler` (working directory: `backend/`) at `09:00` in **Windows Task Scheduler** (or a cloud cron job).
 
 ### 2. Start Backend (`:8000`)
 ```bash
@@ -73,10 +78,11 @@ Open `chrome://extensions/`, enable **Developer mode**, click **Load unpacked**,
 ## Verification & CI Gates
 
 ```bash
-# Backend lint, offline golden eval, tests & coverage floor (>=75%)
+# Backend lint, typecheck, offline golden eval, tests & coverage floor (>=75%)
 cd backend
 pip install -r requirements-dev.txt
 ruff check app tests evals
+mypy app/services app/db
 python -m evals.eval_runner
 pytest tests ../tests/non_functional/test_security.py -q --cov=app --cov-fail-under=75
 

@@ -127,3 +127,11 @@ class DailyDigestScheduler:
 
 
 daily_digest_scheduler = DailyDigestScheduler()
+
+
+if __name__ == "__main__":
+    # Standalone CLI entrypoint for Windows Task Scheduler / cron when the web server is stopped:
+    #   cd backend && python -m app.services.digest_scheduler
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    count = run_due_daily_digests()
+    logger.info("Daily digest CLI run complete: dispatched=%s", count)
