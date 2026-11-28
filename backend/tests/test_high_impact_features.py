@@ -468,3 +468,79 @@ def test_daily_digest_all_tiers_dedup_mismatch_missing_skills_yesterday_reminder
     assert sched.status_code == 200
     assert sched.json()["schedule_time"] == "09:00"
     assert sched.json()["total_unique_vacancies_sent"] == 2
+
+
+def test_post_discovered_applied_and_hr_screening_hidden_from_discovery_and_digests():
+    from app.db.models import ApplicationTracker, User
+
+    headers, user_id = _register_and_upload("hideprog")
+    u_disc = f"https://jobs.ge/ge/?view=jobs&id=hp_disc_{uuid.uuid4().hex[:6]}"
+    u_app = f"https://jobs.ge/ge/?view=jobs&id=hp_app_{uuid.uuid4().hex[:6]}"
+    u_hr = f"https://hr.ge/announcement/hp_hr_{uuid.uuid4().hex[:6]}"
+
+    with Session(engine) as session:
+        j_disc = JobPosting(
+            portal="jobs.ge", external_id=f"hp1_{uuid.uuid4().hex[:6]}", title="Junior QA",
+            company="Still Open Co", url=u_disc, market="GE", is_remote=False,
+            language_requirements=["English"], description_raw="Playwright SQL Docker",
+            suitability_score=85.0, match_score=85.0, status="STAGED",
+        )
+        j_app = JobPosting(
+            portal="jobs.ge", external_id=f"hp2_{uuid.uuid4().hex[:6]}", title="QA Engineer",
+            company="Already Applied Bank", url=u_app, market="GE", is_remote=False,
+            language_requirements=["English"], description_raw="Playwright SQL",
+            suitability_score=89.0, match_score=89.0, status="STAGED",
+        )
+        j_hr = JobPosting(
+            portal="hr.ge", external_id=f"hp3_{uuid.uuid4().hex[:6]}", title="QA Analyst",
+            company="HR Screening Tech", url=u_hr, market="GE", is_remote=False,
+            language_requirements=["English"], description_raw="Playwright Postman",
+            suitability_score=91.0, match_score=91.0, status="STAGED",
+        )
+        session.add_all([j_disc, j_app, j_hr])
+        session.commit()
+        for jp in (j_disc, j_app, j_hr):
+            session.refresh(jp)
+            session.add(
+                UserJobMatch(
+                    user_id=user_id, job_posting_id=jp.id, suitability_score=jp.suitability_score,
+                    match_tier="DIRECT", status="STAGED", is_ignored=False,
+                )
+            )
+        # Mark j_disc still in Discovered (must remain visible), j_app as Applied (by id), j_hr as HR Screening (by URL only)
+        session.add_all([
+            ApplicationTracker(
+                user_id=user_id, job_posting_id=j_disc.id, company_name=j_disc.company,
+                job_title=j_disc.title, job_url=u_disc, portal="jobs.ge", status="DISCOVERED",
+            ),
+            ApplicationTracker(
+                user_id=user_id, job_posting_id=j_app.id, company_name=j_app.company,
+                job_title=j_app.title, job_url=u_app, portal="jobs.ge", status="APPLIED",
+            ),
+            ApplicationTracker(
+                user_id=user_id, job_posting_id=None, company_name=j_hr.company,
+                job_title=j_hr.title, job_url=u_hr, portal="hr.ge", status="HR_SCREEN",
+            ),
+        ])
+        session.commit()
+        user_obj = session.get(User, user_id)
+
+    # 1. Discovery Feed hides Applied & HR Screening, keeps Discovered visible
+    feed = client.get("/api/jobs", params={"limit": 50}, headers=headers)
+    assert feed.status_code == 200, feed.text
+    feed_companies = {it["company"] for it in feed.json()["items"]}
+    assert "Still Open Co" in feed_companies
+    assert "Already Applied Bank" not in feed_companies
+    assert "HR Screening Tech" not in feed_companies
+
+    # 2. Email/Telegram Digest excludes Applied & HR Screening, includes Discovered
+    prev = dispatch_saved_search_digest(
+        user_obj,
+        channels=["in_app"],
+        include_all_vacancies=True,
+        min_score=0.0,
+        dry_run=True,
+    )
+    assert "Still Open Co" in prev["preview_text"]
+    assert "Already Applied Bank" not in prev["preview_text"]
+    assert "HR Screening Tech" not in prev["preview_text"]

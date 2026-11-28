@@ -11,6 +11,7 @@ from sqlmodel import Session, and_, col, select
 from ..config import reload_env_files
 from ..db.database import engine, init_db
 from ..db.models import (
+    ApplicationRecord,
     ApplicationTracker,
     DigestDeliveryLog,
     JobPosting,
@@ -22,6 +23,7 @@ from ..db.models import (
 )
 from ..db.profile_repository import ground_truth_store
 from .gmail_service import gmail_service
+from .job_query_service import POST_DISCOVERED_MATCH_STATUSES, PRE_APPLIED_TRACKER_STATUSES
 from .matcher_service import matcher_service, skills_match_token
 
 logger = logging.getLogger(__name__)
@@ -133,12 +135,56 @@ def _load_candidate_skill_context(user_id: int) -> Tuple[List[str], str]:
     return cleaned, " ".join(cleaned)
 
 
+def _norm_url(url: Optional[str]) -> str:
+    return (url or "").strip().rstrip("/").lower()
+
+
+def _load_progressed_applications(session: Session, user_id: int) -> Tuple[Set[int], Set[str]]:
+    """Returns (job_posting_ids, normalized_urls) for vacancies already past Discovered (Applied, HR Screening, etc.)."""
+    progressed_ids: Set[int] = set()
+    progressed_urls: Set[str] = set()
+    trackers = session.exec(
+        select(ApplicationTracker).where(
+            col(ApplicationTracker.user_id) == user_id,
+            col(ApplicationTracker.is_deleted) == False,
+            col(ApplicationTracker.status).not_in(PRE_APPLIED_TRACKER_STATUSES),
+        )
+    ).all()
+    for tr in trackers:
+        if tr.job_posting_id is not None:
+            progressed_ids.add(int(tr.job_posting_id))
+        u_norm = _norm_url(tr.job_url)
+        if u_norm:
+            progressed_urls.add(u_norm)
+
+    records = session.exec(
+        select(ApplicationRecord.job_posting_id).where(
+            col(ApplicationRecord.user_id) == user_id,
+            col(ApplicationRecord.job_posting_id).is_not(None),
+            col(ApplicationRecord.submission_status).not_in(PRE_APPLIED_TRACKER_STATUSES),
+        )
+    ).all()
+    for rid in records:
+        if rid is not None:
+            progressed_ids.add(int(rid))
+    return progressed_ids, progressed_urls
+
+
+def _is_progressed(job: JobPosting, progressed_ids: Set[int], progressed_urls: Set[str]) -> bool:
+    if job.id is not None and int(job.id) in progressed_ids:
+        return True
+    u_norm = _norm_url(job.url)
+    return bool(u_norm and u_norm in progressed_urls)
+
+
 def _load_previously_sent_and_yesterday(
     session: Session,
     user_id: int,
     today_date: str,
+    progressed_ids: Set[int],
+    progressed_urls: Set[str],
 ) -> Tuple[Set[int], List[Dict[str, Any]]]:
-    """Returns (all previously sent job_posting_ids, compact reminder items from yesterday)."""
+    """Returns (all previously sent job_posting_ids, compact reminder items from yesterday excluding progressed apps)."""
     prev_logs = session.exec(
         select(DigestDeliveryLog)
         .where(col(DigestDeliveryLog.user_id) == user_id)
@@ -161,18 +207,7 @@ def _load_previously_sent_and_yesterday(
     if not yest_job_ids:
         return sent_job_ids, []
 
-    applied_ids: Set[int] = {
-        int(a.job_posting_id)
-        for a in session.exec(
-            select(ApplicationTracker).where(
-                col(ApplicationTracker.user_id) == user_id,
-                col(ApplicationTracker.is_deleted) == False,
-                col(ApplicationTracker.job_posting_id).is_not(None),
-            )
-        ).all()
-        if a.job_posting_id is not None
-    }
-    pending_ids = [jid for jid in dict.fromkeys(yest_job_ids) if jid not in applied_ids][:10]
+    pending_ids = [jid for jid in dict.fromkeys(yest_job_ids) if jid not in progressed_ids][:12]
     if not pending_ids:
         return sent_job_ids, []
 
@@ -185,7 +220,10 @@ def _load_previously_sent_and_yesterday(
                 col(UserJobMatch.user_id) == user_id,
             ),
         )
-        .where(col(JobPosting.id).in_(pending_ids))
+        .where(
+            col(JobPosting.id).in_(pending_ids),
+            col(UserJobMatch.status).not_in(POST_DISCOVERED_MATCH_STATUSES),
+        )
     ).all()
     reminders = [
         {
@@ -198,7 +236,8 @@ def _load_previously_sent_and_yesterday(
             "sent_date": last_prev_date,
         }
         for jp, um in yest_rows
-    ]
+        if not _is_progressed(jp, progressed_ids, progressed_urls)
+    ][:10]
     return sent_job_ids, reminders
 
 
@@ -305,9 +344,12 @@ def collect_saved_search_digest(
                 )
             ).all()
         )
-        sent_job_ids, yesterday_reminders = _load_previously_sent_and_yesterday(session, user_id, today_date)
+        progressed_ids, progressed_urls = _load_progressed_applications(session, user_id)
+        sent_job_ids, yesterday_reminders = _load_previously_sent_and_yesterday(
+            session, user_id, today_date, progressed_ids, progressed_urls
+        )
 
-        rows = list(
+        raw_rows = list(
             session.exec(
                 select(JobPosting, UserJobMatch)
                 .join(
@@ -320,12 +362,14 @@ def collect_saved_search_digest(
                 .where(
                     col(JobPosting.is_expired) == False,
                     col(UserJobMatch.status) != "FILTERED_OUT",
+                    col(UserJobMatch.status).not_in(POST_DISCOVERED_MATCH_STATUSES),
                     col(UserJobMatch.is_ignored) == False,
                 )
                 .order_by(col(UserJobMatch.suitability_score).desc(), col(JobPosting.scraped_at).desc())
                 .limit(250)
             ).all()
         )
+        rows = [(jp, um) for jp, um in raw_rows if not _is_progressed(jp, progressed_ids, progressed_urls)]
 
         if include_all_vacancies:
             groups, total_matches, new_job_ids = _group_all_vacancies(

@@ -8,7 +8,7 @@ from sqlalchemy import select as sa_select
 from sqlmodel import Session, and_, col, or_, select
 
 from ..db.database import engine, init_db
-from ..db.models import ApplicationRecord, JobPosting, SavedJob, User, UserJobMatch, utc_now
+from ..db.models import ApplicationRecord, ApplicationTracker, JobPosting, SavedJob, User, UserJobMatch, utc_now
 from ..db.profile_repository import ground_truth_store
 from .matcher_service import matcher_service, skills_match_token
 from .matching.gates import run_gate_pipeline
@@ -195,12 +195,54 @@ def _add_location_and_scope_conds(conds: List[Any], f: JobFilters, user_id: Opti
         conds.append(func.coalesce(col(JobPosting.published_at), col(JobPosting.scraped_at)) >= utc_now() - timedelta(days=f.posted_within_days))
 
 
+PRE_APPLIED_TRACKER_STATUSES: Tuple[str, ...] = (
+    "DISCOVERED", "SAVED", "STAGED", "AUDITED", "Discovered", "Saved",
+)
+POST_DISCOVERED_MATCH_STATUSES: Tuple[str, ...] = (
+    "APPLIED", "SUBMITTED", "HR_SCREEN", "HR Screening",
+    "INTERVIEW", "INTERVIEWING", "TECH_INTERVIEW", "Technical Interview",
+    "FINAL_INTERVIEW", "FINAL_ROUND", "ASSESSMENT", "Assessment",
+    "OFFER", "Offer", "REJECTED", "Rejected", "Applied", "Interviewing",
+)
+
+
+def _add_post_discovered_exclusion(conds: List[Any], f: JobFilters, status_col: Any, user_id: Optional[int]) -> None:
+    """Hides vacancies already past Discovered (Applied, HR Screening, Interview, Offer, Rejected) with 0 extra queries."""
+    if f.status and f.status.upper() not in ("ALL", "DISCOVERED", "STAGED", "AUDITED"):
+        return
+    conds.append(status_col.not_in(POST_DISCOVERED_MATCH_STATUSES))
+    if user_id is None:
+        return
+    tracker_ids = select(ApplicationTracker.job_posting_id).where(
+        col(ApplicationTracker.user_id) == user_id,
+        col(ApplicationTracker.is_deleted) == False,
+        col(ApplicationTracker.job_posting_id).is_not(None),
+        col(ApplicationTracker.status).not_in(PRE_APPLIED_TRACKER_STATUSES),
+    )
+    tracker_urls = select(ApplicationTracker.job_url).where(
+        col(ApplicationTracker.user_id) == user_id,
+        col(ApplicationTracker.is_deleted) == False,
+        col(ApplicationTracker.job_url).is_not(None),
+        col(ApplicationTracker.job_url) != "",
+        col(ApplicationTracker.status).not_in(PRE_APPLIED_TRACKER_STATUSES),
+    )
+    record_ids = select(ApplicationRecord.job_posting_id).where(
+        col(ApplicationRecord.user_id) == user_id,
+        col(ApplicationRecord.job_posting_id).is_not(None),
+        col(ApplicationRecord.submission_status).not_in(PRE_APPLIED_TRACKER_STATUSES),
+    )
+    conds.append(col(JobPosting.id).not_in(tracker_ids))
+    conds.append(col(JobPosting.id).not_in(record_ids))
+    conds.append(col(JobPosting.url).not_in(tracker_urls))
+
+
 def _build_base_conditions(f: JobFilters, use_user_matches: bool, score_col: Any, status_col: Any, user_id: Optional[int]) -> List[Any]:
     conds: List[Any] = [col(JobPosting.is_expired) == False]
     if use_user_matches and not f.include_dismissed:
         conds.append(col(UserJobMatch.is_ignored) == False)
     if not f.include_filtered:
         conds.append(status_col != "FILTERED_OUT")
+    _add_post_discovered_exclusion(conds, f, status_col, user_id)
     if f.portal and f.portal.upper() != "ALL":
         conds.append(col(JobPosting.portal) == f.portal)
     if f.market and f.market.upper() != "ALL":
