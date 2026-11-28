@@ -87,6 +87,7 @@
         "*://remoteok.com/*"
       ],
       "js": [
+        "shared/extractors.js",
         "content/content.js"
       ],
       "css": [

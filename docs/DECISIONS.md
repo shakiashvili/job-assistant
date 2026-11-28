@@ -58,3 +58,11 @@ This log records every feature removal, simplification, and architectural trade-
 ## DEC-006: Evidence-Backed Claims Only in Documentation
 - **Status:** Accepted & Implemented
 - **Decision:** Trimmed `README.md` to remove unverified marketing language ("Top-1%") and report only measured capabilities backed by automated tests and the offline 30-case golden evaluation + zero-fabrication groundedness harness (`backend/evals/eval_runner.py`).
+
+---
+
+## DEC-007: Canonical Application State Unification (`ApplicationRecord` + `ApplicationTracker`)
+- **Status:** Phase 1 Implemented (`upsert_external_application` + startup orphan backfill); Phase 2 Schema Consolidation Planned
+- **Context:** Historically, `application_records` powered the Kanban board (`GET /api/applications`) while `application_tracker` stored extended fields (`company_name`, `job_url`, `jd_snapshot`), causing extension-logged applications to be invisible when only one table was written.
+- **Phase 1 (Implemented):** All external/extension writes route through `TrackerRepository.upsert_external_application()`, atomically updating both tables and emitting `ApplicationEvent` audit rows. `reconcile_all_orphaned_trackers()` runs once on startup without adding extra queries to `get_all()`'s 1-query JOIN.
+- **Phase 2 (Next Migration):** Add a zero-downtime Alembic migration adding missing metadata columns (`company_name`, `job_title`, `job_url`, `portal`, `jd_snapshot`, `is_deleted`) directly onto `application_records`, backfill from `application_tracker`, switch all reads/writes to `application_records`, and retire `application_tracker` in the following release.

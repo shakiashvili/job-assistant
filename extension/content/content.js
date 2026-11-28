@@ -2,37 +2,18 @@
   if (window.__talentFlowCopilotLoaded) return;
   window.__talentFlowCopilotLoaded = true;
 
+  const extHelpers = globalThis.TalentFlowExtractors || {};
+
   function detectPortal() {
-    const host = (window.location.hostname || "").toLowerCase();
-    const url = (window.location.href || "").toLowerCase();
-    if (host.includes("linkedin.com")) return "linkedin.com";
-    if (host.includes("myworkdayjobs.com")) return "workday";
-    if (host.includes("greenhouse.io")) return "greenhouse";
-    if (host.includes("lever.co")) return "lever";
-    if (host.includes("djinni.co")) return "djinni.co";
-    if (host.includes("dou.ua")) return "dou.ua";
-    if (host.includes("remotive.com")) return "remotive.com";
-    if (host.includes("himalayas.app")) return "himalayas.app";
-    if (host.includes("remoteok.com")) return "remoteok.com";
-    if (host.includes("vacancy.hr.gov.ge") || host.includes("hr.gov.ge")) return "hr.gov.ge";
-    if (host.includes("jobs.ge")) return "jobs.ge";
-    if (host.includes("headhunter.ge")) return "headhunter.ge";
-    if (host.includes("hr.ge")) return "hr.ge";
-    if (host.includes("justjoin.it")) return "justjoin.it";
+    if (typeof extHelpers.detectPortalFromUrl === "function") {
+      return extHelpers.detectPortalFromUrl(window.location.hostname, window.location.href);
+    }
     return "generic";
   }
 
   function cleanText(el) {
+    if (typeof extHelpers.cleanText === "function") return extHelpers.cleanText(el);
     return el ? (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim() : "";
-  }
-
-  function firstText(selectors, root = document) {
-    for (const sel of selectors) {
-      const el = root.querySelector(sel);
-      const txt = cleanText(el);
-      if (txt) return txt;
-    }
-    return "";
   }
 
   function detectCaptcha() {
@@ -56,157 +37,18 @@
   }
 
   function extractJobContext() {
-    const portal = detectPortal();
-    let jobTitle = "";
-    let companyName = "";
-    let location = "";
-    let jobDescription = "";
-
-    if (portal === "linkedin.com") {
-      jobTitle = firstText([
-        ".job-details-jobs-unified-top-card__job-title h1",
-        ".job-details-jobs-unified-top-card__job-title",
-        ".jobs-unified-top-card__job-title",
-        "h1.t-24",
-        ".jobs-easy-apply-modal #jobs-apply-header",
-      ]);
-      // Easy Apply header often reads "Apply to <Company>"
-      const applyHdr = firstText(["#jobs-apply-header", ".jobs-easy-apply-modal h2"]);
-      companyName = firstText([
-        ".job-details-jobs-unified-top-card__company-name a",
-        ".job-details-jobs-unified-top-card__company-name",
-        ".jobs-unified-top-card__company-name a",
-        ".jobs-unified-top-card__company-name",
-        ".topcard__org-name-link",
-      ]);
-      if (!companyName && applyHdr && /^apply to\s+/i.test(applyHdr)) {
-        companyName = applyHdr.replace(/^apply to\s+/i, "").trim();
-      }
-      location = firstText([
-        ".job-details-jobs-unified-top-card__primary-description-container .tvm__text",
-        ".jobs-unified-top-card__bullet",
-        ".topcard__flavor--bullet",
-      ]);
-      jobDescription = firstText([
-        "#job-details",
-        ".jobs-description__content",
-        ".jobs-description-content__text",
-        ".show-more-less-html__markup",
-      ]);
-    } else if (portal === "workday") {
-      jobTitle = firstText([
-        '[data-automation-id="jobPostingHeader"] h2',
-        '[data-automation-id="jobPostingHeader"]',
-        "h1",
-        "h2",
-      ]);
-      const metaSite = document.querySelector('meta[property="og:site_name"]')?.getAttribute("content") || "";
-      const subHost = window.location.hostname.split(".")[0] || "";
-      companyName = metaSite || (subHost && !subHost.startsWith("wd") ? subHost : "");
-      location = firstText(['[data-automation-id="locations"] dd', '[data-automation-id="locations"]']);
-      jobDescription = firstText(['[data-automation-id="jobPostingDescription"]']);
-    } else if (portal === "greenhouse" || portal === "lever") {
-      jobTitle = firstText(["h1.app-title", ".posting-headline h2", "h1"]);
-      companyName = firstText([".company-name", ".main-header-logo img[alt]"]) ||
-        (document.querySelector('meta[property="og:site_name"]')?.getAttribute("content") || "");
-      location = firstText([".location", ".posting-categories .location"]);
-      jobDescription = firstText(["#content", ".posting-page", ".section-wrapper"]);
-    } else if (portal === "dou.ua") {
-      jobTitle = firstText(["h1.g-h2", ".b-vacancy h1", "h1"]);
-      companyName = firstText([
-        ".b-compinfo .l-n a",
-        ".b-compinfo .l-n",
-        ".comp-name a",
-        ".company-name",
-      ]) || "";
-      location = firstText([".place", ".b-vacancy .place", ".location"]);
-      jobDescription = firstText([".b-typo.vacancy-section", ".b-vacancy", "article", "main"]);
-    } else if (portal === "djinni.co") {
-      jobTitle = firstText(["header h1", "h1"]);
-      companyName = firstText([
-        ".job-details--title a",
-        "a.text-reset[href*='/jobs/company-']",
-        ".company-name",
-      ]) || "";
-      location = firstText([".location-text", ".job-additional-info--item"]);
-      jobDescription = firstText([".job-post__description", ".profile-page-section", "main"]);
-    } else if (portal === "jobs.ge") {
-      // Dedicated jobs.ge extractor: avoids picking site banner "Jobs.GE" / hostname "Jobs"
-      const bodyText = document.body?.innerText || "";
-      jobTitle =
-        firstText(["td.dtitle", "#job_view h1", "#job_view h2", ".dtitle", "table.dtable b"]) ||
-        (bodyText.match(/(?:დასახელება|Title)\s*:\s*([^\n]{3,120})/i)?.[1] || "").trim();
-      if (!jobTitle) {
-        // First prominent bold heading above "მომწოდებელი:" in the job container
-        const headings = Array.from(document.querySelectorAll("h1, h2, h3, td b, p b"))
-          .map((n) => cleanText(n))
-          .filter((t) => t.length >= 4 && t.length <= 120 && !/^jobs\.?ge$/i.test(t) && !/ვაკანსიები|ტრენინგები|სტიპენდიები/i.test(t));
-        jobTitle = headings[0] || "";
-      }
-      const provMatch = bodyText.match(/(?:მომწოდებელი|Provider)\s*:\s*([^\n]{2,100})/i);
-      companyName =
-        (provMatch ? provMatch[1].trim() : "") ||
-        firstText(['a[href*="cid="][href*="client"]', 'a[href*="view=client"]', ".client_name"]);
-      location = (bodyText.match(/(?:ადგილმდებარეობა|Location)\s*:\s*([^\n]{2,80})/i)?.[1] || "Georgia").trim();
-      jobDescription = firstText(["#job_view", "table.dtable", "#content", "main"]) || bodyText;
-    } else if (portal === "hr.ge") {
-      jobTitle = firstText(["h1.vacancy-title", "h1", ".announcement-title", "h2"]);
-      companyName = firstText(['a[href*="/company/"]', ".company-name", ".employer-title"]);
-      location = firstText([".location", ".city", '[class*="location"]']) || "Georgia";
-      jobDescription = firstText([".vacancy-description", ".description", "article", "main"]);
-    } else if (portal === "headhunter.ge") {
-      jobTitle = firstText(['[data-qa="vacancy-title"]', "h1.bloko-header-section-1", "h1"]);
-      companyName = firstText(['[data-qa="vacancy-company-name"]', ".vacancy-company-name"]);
-      location = firstText(['[data-qa="vacancy-view-location"]', '[data-qa="vacancy-view-raw-address"]']) || "Georgia";
-      jobDescription = firstText(['[data-qa="vacancy-description"]', ".vacancy-description", "main"]);
-    } else if (portal === "hr.gov.ge") {
-      jobTitle = firstText(["h1", ".vacancy-title", ".job-title"]);
-      companyName = firstText([".organization-name", ".agency-name", ".company-name"]);
-      location = "Georgia";
-      jobDescription = firstText([".vacancy-details", ".description", "main"]);
-    } else {
-      const genericPortalSites = new Set([
-        "dou", "dou.ua", "djinni", "djinni.co", "jobs", "jobs.ge", "hr", "hr.ge", "hr.gov.ge",
-        "headhunter", "headhunter.ge", "linkedin", "workday", "greenhouse", "lever",
-        "ashby", "workable", "indeed", "glassdoor"
-      ]);
-      const rawTitle = firstText(["h1.job-title", "h1", ".vacancy-title", ".job-header h2", "h2"]);
-      jobTitle = rawTitle && !genericPortalSites.has(rawTitle.toLowerCase()) ? rawTitle : "";
-      if (!jobTitle) {
-        const ogTitle = (document.querySelector('meta[property="og:title"]')?.getAttribute("content") || "").trim();
-        const fallbackT = ogTitle ? ogTitle.split(/\s[|\-–—]\s/)[0].trim() : (document.title || "").split(/\s[|\-–—]\s/)[0].trim();
-        if (fallbackT && !genericPortalSites.has(fallbackT.toLowerCase())) {
-          jobTitle = fallbackT;
-        }
-      }
-      const metaSite = (document.querySelector('meta[property="og:site_name"]')?.getAttribute("content") || "").trim();
-      const hostParts = (window.location.hostname || "")
-        .replace(/^(www|careers|jobs|apply|boards|hire)\./i, "")
-        .split(".");
-      const hostCompany = hostParts[0] && hostParts[0].length > 1
-        ? hostParts[0].charAt(0).toUpperCase() + hostParts[0].slice(1)
-        : "";
-      companyName =
-        firstText([".company-name", ".employer-name", '[itemprop="hiringOrganization"]']) ||
-        (metaSite && !genericPortalSites.has(metaSite.toLowerCase()) ? metaSite : "") ||
-        (!genericPortalSites.has((hostCompany || "").toLowerCase()) ? hostCompany : "");
-      jobDescription = firstText(["main", "article", ".job-description", ".description", "#job-description", "[role='main']"]);
+    if (typeof extHelpers.extractJobContextFromDocument === "function") {
+      return extHelpers.extractJobContextFromDocument(document, window.location);
     }
-
     const rawPageText = (document.body?.innerText || "").replace(/\s+/g, " ").trim().slice(0, 6000);
-    const mailtoHref = document.querySelector('a[href^="mailto:"]')?.getAttribute("href") || "";
-    const mailtoAddr = mailtoHref.replace(/^mailto:/i, "").split("?")[0].trim();
-    const bodyEmailMatch = rawPageText.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/);
-    const contactEmail = mailtoAddr || (bodyEmailMatch ? bodyEmailMatch[0] : "");
-
     return {
       url: window.location.href,
-      portal,
-      job_title: jobTitle,
-      company_name: companyName.replace(/^at\s+/i, "").trim(),
-      location,
-      contact_email: contactEmail,
-      job_description: (jobDescription || rawPageText).slice(0, 5000),
+      portal: detectPortal(),
+      job_title: "",
+      company_name: "",
+      location: "",
+      contact_email: "",
+      job_description: rawPageText.slice(0, 5000),
       raw_page_text: rawPageText,
     };
   }
