@@ -543,6 +543,31 @@ def create_saved_search(
         return _to_saved_search_out(row)
 
 
+class SavedSearchDigestRequest(BaseModel):
+    channels: List[str] = Field(default_factory=lambda: ["in_app", "email"])
+    telegram_chat_id: Optional[str] = None
+    min_score: Optional[float] = Field(default=None, ge=0.0, le=100.0)
+    dry_run: bool = False
+
+
+@router.post("/saved-searches/send-digest")
+def send_saved_search_digest(
+    req: Optional[SavedSearchDigestRequest] = None,
+    current_user: User = Depends(get_current_user),
+):
+    """Evaluates saved searches and dispatches a digest via in-app notification, email, and/or Telegram."""
+    from ..services.digest_service import dispatch_saved_search_digest
+
+    body = req or SavedSearchDigestRequest()
+    return dispatch_saved_search_digest(
+        current_user,
+        channels=body.channels,
+        telegram_chat_id=body.telegram_chat_id,
+        min_score=body.min_score,
+        dry_run=body.dry_run,
+    )
+
+
 @router.delete("/saved-searches/{search_id}")
 def delete_saved_search(
     search_id: int,

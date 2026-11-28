@@ -63,7 +63,7 @@
     if (!scraped) {
       try {
         await chrome.scripting.insertCSS({ target: { tabId }, files: ["content/content.css"] });
-        await chrome.scripting.executeScript({ target: { tabId }, files: ["content/content.js"] });
+        await chrome.scripting.executeScript({ target: { tabId }, files: ["shared/extractors.js", "content/content.js"] });
         scraped = await pingTab();
       } catch {
         return null;
@@ -177,16 +177,32 @@
     }
 
     const contactEmail = state.pageContext?.contact_email || "";
-    if (contactEmail && el("contact-email-bar") && el("contact-email-text")) {
-      el("contact-email-text").textContent = contactEmail;
+    if (el("contact-email-bar")) {
       el("contact-email-bar").classList.remove("hidden");
-    } else {
-      el("contact-email-bar")?.classList.add("hidden");
+      if (el("contact-email-input") && contactEmail) {
+        el("contact-email-input").value = contactEmail;
+      }
+    }
+
+    const gatesBox = el("match-gates-box");
+    const gateItems = Array.isArray(data.match_explanation) ? data.match_explanation : [];
+    if (gatesBox) {
+      gatesBox.innerHTML = "";
+      gateItems.forEach((g) => {
+        const pill = document.createElement("span");
+        pill.className = "skill-chip";
+        pill.style.borderColor = g.passed ? "#10b981" : "#f43f5e";
+        pill.style.color = g.passed ? "#6ee7b7" : "#fda4af";
+        const label = String(g.gate || "gate").replace(/_gate$/i, "").replace(/_/g, " ");
+        pill.textContent = g.passed ? `✓ ${label}` : `✗ ${label}`;
+        if (g.reason) pill.title = g.reason;
+        gatesBox.appendChild(pill);
+      });
     }
 
     const matchedSkills = data.matched_skills || [];
     const missingSkills = data.missing_skills || [];
-    if ((matchedSkills.length > 0 || missingSkills.length > 0) && el("matched-skills-box")) {
+    if ((matchedSkills.length > 0 || missingSkills.length > 0 || gateItems.length > 0) && el("matched-skills-box")) {
       el("matched-skills-section")?.classList.remove("hidden");
       const box = el("matched-skills-box");
       box.innerHTML = "";
@@ -196,12 +212,33 @@
         chip.textContent = `✓ ${sk}`;
         box.appendChild(chip);
       });
-      missingSkills.slice(0, 3).forEach((sk) => {
-        const chip = document.createElement("span");
+      missingSkills.slice(0, 4).forEach((sk) => {
+        const chip = document.createElement("button");
+        chip.type = "button";
         chip.className = "skill-chip";
         chip.style.borderColor = "#f59e0b";
         chip.style.color = "#fcd34d";
-        chip.textContent = `△ ${sk}`;
+        chip.style.cursor = "pointer";
+        chip.style.background = "transparent";
+        chip.title = `Click to add "${sk}" to your 7-day Skill Action Plan`;
+        chip.textContent = `△ ${sk} +Plan`;
+        chip.addEventListener("click", async () => {
+          chip.disabled = true;
+          const res = await sendBg({
+            type: "ADD_SKILL_TO_PLAN",
+            skillName: sk,
+            targetRole: data.job_title || el("job-title-input").value.trim() || "Specialist",
+          });
+          if (res?.ok) {
+            chip.style.borderColor = "#10b981";
+            chip.style.color = "#6ee7b7";
+            chip.textContent = `✓ ${sk} in Plan`;
+            showStatus(`Added "${sk}" to your 7-day Skill Action Plan!`, "success");
+          } else {
+            chip.disabled = false;
+            showStatus(res?.error || `Could not add "${sk}" to Action Plan.`, "error");
+          }
+        });
         box.appendChild(chip);
       });
     }
@@ -307,6 +344,23 @@
             if (scraped.captcha?.detected) {
               el("captcha-warn").textContent = scraped.captcha.reason;
               el("captcha-warn").classList.remove("hidden");
+            }
+            if (state.authenticated && scraped.context?.url) {
+              const dup = await sendBg({
+                type: "CHECK_DUPLICATE_URL",
+                url: scraped.context.url,
+                company: scraped.context.company_name || "",
+                title: scraped.context.job_title || "",
+              });
+              const dupEl = el("duplicate-app-banner");
+              if (dupEl && dup?.ok && dup.data?.already_tracked) {
+                const d = dup.data;
+                const datePart = d.applied_date ? ` on ${d.applied_date}` : "";
+                dupEl.textContent = `✅ Already Tracked (${d.status}${datePart} · ${d.portal})`;
+                dupEl.classList.remove("hidden");
+              } else {
+                dupEl?.classList.add("hidden");
+              }
             }
           } else {
             el("portal-badge").textContent = "GRANT ACCESS";
@@ -655,10 +709,71 @@
       downloadAuthenticatedCv(el("cv-docx-download-link"));
     });
     el("btn-copy-email")?.addEventListener("click", async () => {
-      const addr = el("contact-email-text")?.textContent?.trim() || "";
-      if (!addr) return;
+      const addr = el("contact-email-input")?.value?.trim() || "";
+      if (!addr) {
+        showStatus("Enter a recruiter email address first.", "error");
+        return;
+      }
       await navigator.clipboard.writeText(addr);
       showStatus(`Copied ${addr} to clipboard.`, "success");
+    });
+
+    el("btn-open-gmail-draft")?.addEventListener("click", async () => {
+      const btn = el("btn-open-gmail-draft");
+      const recipient = el("contact-email-input")?.value?.trim() || "";
+      if (!recipient || !recipient.includes("@")) {
+        showStatus("Enter a valid recruiter email address (e.g. cv@company.ge) first.", "error");
+        return;
+      }
+      const app = state.preparedApp || {};
+      const jobUrl = state.pageContext?.url || state.activeTabUrl || "";
+      const origText = btn?.textContent;
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "⏳ Preparing Gmail Draft...";
+      }
+      try {
+        const res = await sendBg({
+          type: "PREPARE_GMAIL_DRAFT",
+          payload: {
+            recipient_email: recipient,
+            company_name: el("company-input").value.trim() || app.company_name || "Hiring Company",
+            job_title: el("job-title-input").value.trim() || app.job_title || "Specialist",
+            job_url: jobUrl || `mailto:${recipient}`,
+            portal: state.pageContext?.portal || app.portal || "jobs.ge",
+            cover_letter: app.cover_letter || el("cover-letter-preview")?.textContent || "",
+            pdf_filename: app.tailored_cv?.pdf_filename || null,
+            docx_filename: app.tailored_cv?.docx_filename || null,
+            salary_offered: app.salary_info?.display || null,
+            mark_applied: true,
+          },
+        });
+        if (!res?.ok || !res.data) {
+          showStatus(res?.error || "Could not prepare Gmail draft.", "error");
+          return;
+        }
+        const d = res.data;
+        if (!d.gmail_draft_saved && app.tailored_cv?.pdf_url) {
+          // Download tailored PDF locally so the user can attach it immediately into Gmail Compose
+          await sendBg({
+            type: "DOWNLOAD_CV_FILE",
+            fileUrl: app.tailored_cv.pdf_url,
+            filename: app.tailored_cv.pdf_filename || "Tailored_CV.pdf",
+          });
+        }
+        if (d.open_url) {
+          chrome.tabs.create({ url: d.open_url });
+        }
+        const note = d.gmail_draft_saved
+          ? `Gmail Draft saved with ${d.attached_filename || "CV"} attached & marked APPLIED on Tracker!`
+          : `Opened Gmail Compose + downloaded CV (${app.tailored_cv?.pdf_filename || "PDF"}) & marked APPLIED on Tracker!`;
+        showStatus(note, "success");
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = origText;
+        }
+      }
     });
 
     async function logApplication(status, triggerBtn) {

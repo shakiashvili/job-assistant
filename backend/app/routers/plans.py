@@ -1,13 +1,13 @@
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
 from ..db.database import get_session
 from ..db.models import User, SkillActionPlan
 from ..services.auth_service import get_current_user
-from ..services.plan_service import plan_service
+from ..services.plan_service import _build_dynamic_skill_roadmap, plan_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["Skill Gap Action Plans"])
@@ -50,6 +50,44 @@ def generate_action_plans(
     """
     plans = plan_service.generate_plans_for_user(user=current_user, session=session, force_refresh=True)
     return [plan_to_out(p) for p in plans]
+
+
+class AddSkillPlanRequest(BaseModel):
+    skill_name: str = Field(..., min_length=1, max_length=120)
+    target_role: Optional[str] = Field(default="Specialist", max_length=120)
+
+
+@router.post("/action-plans/add-skill", response_model=ActionPlanOut)
+def add_single_skill_to_action_plan(
+    req: AddSkillPlanRequest,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    """Creates (or returns existing) 7-day learning roadmap for one specific missing skill."""
+    clean_skill = req.skill_name.strip()
+    if not clean_skill:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Skill name is required.")
+
+    existing_plans = session.exec(
+        select(SkillActionPlan).where(SkillActionPlan.user_id == current_user.id)
+    ).all()
+    for p in existing_plans:
+        if (p.skill_name or "").strip().lower() == clean_skill.lower():
+            return plan_to_out(p)
+
+    roadmap = _build_dynamic_skill_roadmap(clean_skill, role=(req.target_role or "Specialist").strip())
+    new_plan = SkillActionPlan(
+        user_id=current_user.id,
+        skill_name=roadmap["skill_name"],
+        category=roadmap["category"],
+        days_to_learn=roadmap["days_to_learn"],
+        milestones=roadmap["milestones"],
+        is_completed=False,
+    )
+    session.add(new_plan)
+    session.commit()
+    session.refresh(new_plan)
+    return plan_to_out(new_plan)
 
 
 @router.get("/action-plans", response_model=List[ActionPlanOut])

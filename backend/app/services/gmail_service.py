@@ -251,6 +251,7 @@ class GmailService:
             subject=subject,
             body_text=body_text,
             attachment_paths=resolved_files,
+            user_id=uid,
         )
         try:
             ctx = ssl.create_default_context()

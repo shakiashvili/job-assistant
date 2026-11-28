@@ -474,6 +474,34 @@ const MESSAGE_HANDLERS = {
       requiresAuth: true,
     }),
 
+  CHECK_DUPLICATE_URL: (message) => {
+    const qs = new URLSearchParams();
+    if (message.url) qs.set("url", message.url);
+    if (message.company) qs.set("company", message.company);
+    if (message.title) qs.set("title", message.title);
+    return apiRequest(`/api/extension/check-url?${qs.toString()}`, {
+      method: "GET",
+      requiresAuth: true,
+    });
+  },
+
+  PREPARE_GMAIL_DRAFT: (message) =>
+    apiRequest("/api/extension/prepare-gmail-draft", {
+      method: "POST",
+      body: message.payload,
+      requiresAuth: true,
+    }),
+
+  ADD_SKILL_TO_PLAN: (message) =>
+    apiRequest("/api/action-plans/add-skill", {
+      method: "POST",
+      body: {
+        skill_name: message.skillName || "",
+        target_role: message.targetRole || "Specialist",
+      },
+      requiresAuth: true,
+    }),
+
   SYNC_FROM_OPEN_WEB_TAB: () => syncFromOpenWebTab(),
 };
 

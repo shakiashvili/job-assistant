@@ -209,6 +209,8 @@ export interface DbJobPosting {
   published_at?: string | null;
   suitability_score: number;
   also_on_portals?: string[];
+  matched_skills?: string[];
+  missing_skills?: string[];
   match_rationale: string;
   match_tier?: 'DIRECT' | 'ADJACENT' | 'PUBLIC_INTERNSHIP' | string;
   adjacent_role_tag?: string | null;

@@ -21,7 +21,7 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { DbJobPosting, JobSearchParams, SavedSearchItem, NotificationItem, ScraperSourceHealthItem } from '../types';
-import { BACKEND_ORIGIN } from '../services/api';
+import { BACKEND_ORIGIN, addSkillToActionPlan } from '../services/api';
 
 export interface CandidateRoleHeaderInfo {
   full_name?: string;
@@ -256,6 +256,19 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
   const eduList = candidateProfile?.education || [];
 
   const [showPortalHealth, setShowPortalHealth] = useState(false);
+  const [addedPlanSkills, setAddedPlanSkills] = useState<Set<string>>(new Set());
+
+  const handleAddSkillToPlan = async (e: React.MouseEvent, skill: string, targetRole: string) => {
+    e.stopPropagation();
+    const key = skill.toLowerCase();
+    if (addedPlanSkills.has(key)) return;
+    try {
+      await addSkillToActionPlan(skill, targetRole);
+      setAddedPlanSkills((prev) => new Set(prev).add(key));
+    } catch (err) {
+      console.warn('Could not add skill to action plan:', err);
+    }
+  };
 
   const portals = [
     'ALL',
@@ -1128,6 +1141,29 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 <div className="text-[10px] text-slate-300 line-clamp-2 pt-1 border-t border-slate-800/60">
                   <span>{job.match_rationale}</span>
                 </div>
+
+                {Array.isArray(job.missing_skills) && job.missing_skills.length > 0 && (
+                  <div className="flex flex-wrap gap-1 pt-1">
+                    {job.missing_skills.slice(0, 2).map((sk) => {
+                      const added = addedPlanSkills.has(sk.toLowerCase());
+                      return (
+                        <button
+                          key={sk}
+                          type="button"
+                          onClick={(e) => void handleAddSkillToPlan(e, sk, job.title)}
+                          title={`Add "${sk}" to your 7-day Skill Action Plan`}
+                          className={`text-[9px] px-1.5 py-0.5 rounded border font-semibold transition-colors ${
+                            added
+                              ? 'bg-emerald-950/70 border-emerald-700 text-emerald-300'
+                              : 'bg-amber-950/50 border-amber-700/60 text-amber-200 hover:bg-amber-900/60'
+                          }`}
+                        >
+                          {added ? `✓ ${sk} in Plan` : `△ ${sk} +Plan`}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
               <div className="pt-2 mt-2 border-t border-slate-800/60 space-y-2 text-[10px]">

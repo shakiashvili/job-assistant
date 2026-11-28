@@ -2,21 +2,24 @@ import logging
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from urllib.parse import quote
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
-from sqlmodel import Session
+from sqlmodel import Session, select
 
-from ..db.database import get_session, init_db
+from ..db.database import engine, get_session, init_db
 from ..db.document_repository import record_candidate_document, resolve_owned_generated_document
-from ..db.models import User
-from ..db.tracker_repository import tracker_store
+from ..db.models import ApplicationTracker, User
+from ..db.tracker_repository import DB_TO_UI_STATUS, tracker_store
 from ..services.answer_service import load_live_candidate_profile
 from ..services.auth_service import decode_access_token, get_user_by_email
 from ..services.cv_generator_service import cv_generator_service
 from ..services.gemini_service import gemini_service
+from ..services.gmail_service import gmail_service
 from ..services.matcher_service import matcher_service
+from ..services.matching.gates import run_gate_pipeline
 from ..services.salary_service import salary_service
 from ..db.profile_repository import ground_truth_store
 
@@ -141,6 +144,7 @@ class PrepareApplicationResponse(BaseModel):
     seniority_blocked: bool = False
     matched_skills: List[str] = Field(default_factory=list)
     missing_skills: List[str] = Field(default_factory=list)
+    match_explanation: List[Dict[str, Any]] = Field(default_factory=list)
     salary_info: Dict[str, Any]
     company_intel: Dict[str, Any]
     tailored_cv: Dict[str, Any]
@@ -159,6 +163,19 @@ class LogApplicationRequest(BaseModel):
     cv_pdf_path: Optional[str] = None
     cover_letter_text: Optional[str] = None
     status: str = "APPLIED"
+
+
+class PrepareGmailDraftRequest(BaseModel):
+    recipient_email: str = Field(..., min_length=3)
+    company_name: str = Field(..., min_length=1)
+    job_title: str = Field(..., min_length=1)
+    job_url: str = Field(..., min_length=1)
+    portal: str = "custom"
+    cover_letter: str = ""
+    pdf_filename: Optional[str] = None
+    docx_filename: Optional[str] = None
+    salary_offered: Optional[str] = None
+    mark_applied: bool = True
 
 
 @router.get("/profile")
@@ -556,6 +573,23 @@ def prepare_application(
                 )
             )
 
+    gate_results = run_gate_pipeline(
+        title=job_title if job_title != "Unknown Title" else "",
+        description=desc_text,
+        parsed_skills=parsed_skills,
+        portal=portal,
+        company=company_name,
+    )
+    match_explanation = [
+        {
+            "gate": g.gate_name,
+            "passed": g.passed,
+            "reason": g.reason,
+            "penalty": g.penalty,
+        }
+        for g in gate_results
+    ]
+
     return PrepareApplicationResponse(
         status="warning_seniority" if seniority_blocked else "ready",
         portal=portal,
@@ -568,6 +602,7 @@ def prepare_application(
         seniority_blocked=seniority_blocked,
         matched_skills=matched_skills,
         missing_skills=missing_skills,
+        match_explanation=match_explanation,
         salary_info=salary_info,
         company_intel=company_intel,
         tailored_cv={
@@ -582,6 +617,146 @@ def prepare_application(
         applicant_summary=narratives["human_tone_summary"],
         field_answers=field_answers,
     )
+
+
+def _norm_dedup_token(val: Optional[str]) -> str:
+    return re.sub(r"[^a-z0-9\u10A0-\u10FF]+", " ", str(val or "").lower()).strip()
+
+
+@router.get("/check-url")
+def check_extension_duplicate_application(
+    url: str = Query(default=""),
+    company: str = Query(default=""),
+    title: str = Query(default=""),
+    current_user: User = Depends(require_extension_user),
+) -> Dict[str, Any]:
+    """Checks whether the current user has already saved or applied to this vacancy (by URL or company+title)."""
+    init_db()
+    clean_url = (url or "").strip().rstrip("/")
+    norm_comp = _norm_dedup_token(company)
+    norm_title = _norm_dedup_token(title)
+
+    with Session(engine) as session:
+        rows = session.exec(
+            select(ApplicationTracker).where(
+                ApplicationTracker.user_id == current_user.id,
+                ApplicationTracker.is_deleted == False,
+            )
+        ).all()
+
+    matched_row: Optional[ApplicationTracker] = None
+    match_reason = ""
+    for row in rows:
+        row_url = (row.job_url or "").strip().rstrip("/")
+        if clean_url and row_url and row_url == clean_url:
+            matched_row = row
+            match_reason = "exact_url"
+            break
+        if (
+            norm_comp
+            and norm_title
+            and norm_comp not in ("hiring company", "unknown", "unknown company", "jobs")
+            and _norm_dedup_token(row.company_name) == norm_comp
+            and _norm_dedup_token(row.job_title) == norm_title
+        ):
+            matched_row = row
+            match_reason = "same_company_and_role"
+
+    if not matched_row:
+        return {"already_tracked": False}
+
+    raw_status = (matched_row.status or "APPLIED").upper()
+    ui_status = DB_TO_UI_STATUS.get(raw_status, raw_status)
+    dt = matched_row.applied_at or matched_row.updated_at or matched_row.created_at
+    return {
+        "already_tracked": True,
+        "match_reason": match_reason,
+        "application_id": f"app-{matched_row.id}",
+        "status": ui_status,
+        "raw_status": raw_status,
+        "applied_date": dt.strftime("%Y-%m-%d") if dt else None,
+        "portal": matched_row.portal or "custom",
+        "company_name": matched_row.company_name,
+        "job_title": matched_row.job_title,
+    }
+
+
+@router.post("/prepare-gmail-draft")
+def prepare_extension_gmail_draft(
+    req: PrepareGmailDraftRequest,
+    current_user: User = Depends(require_extension_user),
+) -> Dict[str, Any]:
+    """
+    Prepares a Gmail draft (with tailored DOCX/PDF attached via Gmail IMAP/OAuth when configured,
+    plus an instant pre-filled Gmail compose URL fallback) and optionally marks the job APPLIED on the Tracker board.
+    """
+    init_db()
+    if current_user.id is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authenticated user required.")
+
+    recipient = req.recipient_email.strip()
+    subject = f"Application: {req.job_title.strip()} — {current_user.full_name or 'Candidate'}"
+    body_text = (req.cover_letter or "").strip() or (
+        f"Dear {req.company_name.strip()} Hiring Team,\n\n"
+        f"Please find my CV attached for the {req.job_title.strip()} position.\n\n"
+        f"Best regards,\n{current_user.full_name or 'Candidate'}"
+    )
+
+    # Resolve owned generated attachment (prefer PDF for universal compatibility, fallback to DOCX)
+    attachment_path: Optional[Path] = None
+    attached_filename: Optional[str] = None
+    for cand_name in (req.pdf_filename, req.docx_filename):
+        if cand_name:
+            resolved, err = resolve_owned_generated_document(cand_name, user_id=current_user.id, is_guest=False)
+            if not err and resolved is not None and resolved.is_file():
+                attachment_path = resolved
+                attached_filename = resolved.name
+                break
+
+    draft_res = gmail_service.create_gmail_draft(
+        recipient_email=recipient,
+        subject=subject,
+        body_text=body_text,
+        attachment_paths=[str(attachment_path)] if attachment_path else None,
+        user=current_user,
+    )
+
+    gmail_compose_url = (
+        "https://mail.google.com/mail/?view=cm&fs=1"
+        f"&to={quote(recipient)}"
+        f"&su={quote(subject)}"
+        f"&body={quote(body_text)}"
+    )
+    gmail_draft_saved = bool(draft_res.get("draft_created"))
+    open_url = draft_res.get("drafts_url") if (gmail_draft_saved and draft_res.get("drafts_url")) else gmail_compose_url
+
+    tracker_result = None
+    if req.mark_applied:
+        tracker_result = tracker_store.upsert_external_application(
+            user_id=current_user.id,
+            company_name=req.company_name,
+            job_title=req.job_title,
+            job_url=req.job_url,
+            portal=req.portal or "custom",
+            status="APPLIED",
+            salary_offered=req.salary_offered,
+            cv_pdf_path=req.pdf_filename or attached_filename,
+            cover_letter_text=body_text,
+        )
+
+    return {
+        "status": "ready",
+        "recipient_email": recipient,
+        "subject": subject,
+        "gmail_draft_saved": gmail_draft_saved,
+        "gmail_drafts_url": draft_res.get("drafts_url"),
+        "gmail_compose_url": gmail_compose_url,
+        "open_url": open_url,
+        "attached_filename": attached_filename,
+        "draft_mode_used": draft_res.get("mode_used"),
+        "draft_error": draft_res.get("error"),
+        "tracker": tracker_result,
+    }
 
 
 @router.get("/download-cv/{filename}")

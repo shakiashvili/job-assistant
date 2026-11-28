@@ -666,6 +666,83 @@ export const fetchActionPlans = (): Promise<SkillActionPlan[]> =>
 export const generateActionPlans = (): Promise<SkillActionPlan[]> =>
   apiJson('/profile/generate-action-plan', { method: 'POST', errorMessage: 'Failed to generate action plans' });
 
+export const addSkillToActionPlan = (
+  skillName: string,
+  targetRole = 'Specialist'
+): Promise<SkillActionPlan> =>
+  apiJson('/action-plans/add-skill', {
+    method: 'POST',
+    body: { skill_name: skillName, target_role: targetRole },
+    errorMessage: 'Failed to add skill to Action Plan',
+  });
+
+export const triggerSavedSearchDigest = (params?: {
+  channels?: string[];
+  telegram_chat_id?: string;
+  min_score?: number;
+  dry_run?: boolean;
+}): Promise<{
+  status: string;
+  digest: { searches_evaluated: number; total_matches: number; groups: unknown[] };
+  preview_text?: string;
+  delivery: Record<string, unknown>;
+}> =>
+  apiJson('/saved-searches/send-digest', {
+    method: 'POST',
+    body: params || { channels: ['in_app', 'email'], dry_run: false },
+    errorMessage: 'Failed to dispatch saved-search digest',
+  });
+
+export const syncGmailStatusSuggestions = (): Promise<{
+  gmail_connected: boolean;
+  messages_scanned: number;
+  suggestions: Array<{
+    application_id: string;
+    company: string;
+    role: string;
+    current_status: string;
+    suggested_status: string;
+    confidence: number;
+    matched_signal: string;
+    email_subject: string;
+    email_from: string;
+    email_snippet: string;
+  }>;
+}> =>
+  apiJson('/applications/gmail/sync-suggestions', {
+    method: 'POST',
+    body: {},
+    errorMessage: 'Failed to scan Gmail replies',
+  });
+
+export const applyStatusSuggestion = (
+  appId: string,
+  suggestedStatus: string,
+  reason = ''
+): Promise<{ status: string; application_id: string; previous_status: string; new_status: string }> =>
+  apiJson(`/applications/${encodeURIComponent(appId)}/apply-status-suggestion`, {
+    method: 'POST',
+    body: { suggested_status: suggestedStatus, reason },
+    errorMessage: 'Failed to update application stage',
+  });
+
+export const createFollowUpDraft = (
+  appId: string,
+  params?: { days_since_applied?: number; language?: 'en' | 'ka'; save_to_gmail?: boolean }
+): Promise<{
+  application_id: string;
+  recipient_email: string;
+  subject: string;
+  body_text: string;
+  gmail_compose_url: string;
+  gmail_draft_saved?: boolean;
+}> =>
+  apiJson(`/applications/${encodeURIComponent(appId)}/follow-up-draft`, {
+    method: 'POST',
+    body: params || { days_since_applied: 5, language: 'en', save_to_gmail: false },
+    errorMessage: 'Failed to prepare follow-up email draft',
+  });
+
 export const toggleMilestone = (planId: number, milestoneIndex: number): Promise<SkillActionPlan> =>
   apiJson(`/action-plans/${planId}/milestones/${milestoneIndex}`, { method: 'PATCH', errorMessage: 'Failed to toggle milestone' });
 
