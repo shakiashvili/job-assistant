@@ -471,7 +471,8 @@ def test_daily_digest_all_tiers_dedup_mismatch_missing_skills_yesterday_reminder
 
 
 def test_post_discovered_applied_and_hr_screening_hidden_from_discovery_and_digests():
-    from app.db.models import ApplicationTracker, User
+    from app.db.models import User
+    from app.db.tracker_repository import tracker_store
 
     headers, user_id = _register_and_upload("hideprog")
     u_disc = f"https://jobs.ge/ge/?view=jobs&id=hp_disc_{uuid.uuid4().hex[:6]}"
@@ -507,23 +508,22 @@ def test_post_discovered_applied_and_hr_screening_hidden_from_discovery_and_dige
                     match_tier="DIRECT", status="STAGED", is_ignored=False,
                 )
             )
-        # Mark j_disc still in Discovered (must remain visible), j_app as Applied (by id), j_hr as HR Screening (by URL only)
-        session.add_all([
-            ApplicationTracker(
-                user_id=user_id, job_posting_id=j_disc.id, company_name=j_disc.company,
-                job_title=j_disc.title, job_url=u_disc, portal="jobs.ge", status="DISCOVERED",
-            ),
-            ApplicationTracker(
-                user_id=user_id, job_posting_id=j_app.id, company_name=j_app.company,
-                job_title=j_app.title, job_url=u_app, portal="jobs.ge", status="APPLIED",
-            ),
-            ApplicationTracker(
-                user_id=user_id, job_posting_id=None, company_name=j_hr.company,
-                job_title=j_hr.title, job_url=u_hr, portal="hr.ge", status="HR_SCREEN",
-            ),
-        ])
         session.commit()
         user_obj = session.get(User, user_id)
+
+    # Track via canonical repository write path (keeps ApplicationRecord & ApplicationTracker synchronized)
+    tracker_store.upsert_external_application(
+        user_id=user_id, company_name="Still Open Co", job_title="Junior QA",
+        job_url=u_disc, portal="jobs.ge", status="SAVED",
+    )
+    tracker_store.upsert_external_application(
+        user_id=user_id, company_name="Already Applied Bank", job_title="QA Engineer",
+        job_url=u_app, portal="jobs.ge", status="APPLIED",
+    )
+    tracker_store.upsert_external_application(
+        user_id=user_id, company_name="HR Screening Tech", job_title="QA Analyst",
+        job_url=u_hr, portal="hr.ge", status="HR_SCREEN",
+    )
 
     # 1. Discovery Feed hides Applied & HR Screening, keeps Discovered visible
     feed = client.get("/api/jobs", params={"limit": 50}, headers=headers)
@@ -544,3 +544,57 @@ def test_post_discovered_applied_and_hr_screening_hidden_from_discovery_and_dige
     assert "Still Open Co" in prev["preview_text"]
     assert "Already Applied Bank" not in prev["preview_text"]
     assert "HR Screening Tech" not in prev["preview_text"]
+
+
+def test_discovery_and_tracker_deduplication_and_email_detection():
+    headers, user_id = _register_and_upload("dedup")
+    shared_id = uuid.uuid4().hex[:6]
+    u_ge = f"https://jobs.ge/ge/?view=jobs&id=99{shared_id}"
+    u_en = f"https://jobs.ge/en/?view=jobs&id=99{shared_id}"
+    with Session(engine) as session:
+        j1 = JobPosting(
+            portal="jobs.ge", external_id=f"dd1_{shared_id}", title="Junior QA Tester",
+            company="Liberty Bank JSC", url=u_ge, market="GE", is_remote=False,
+            language_requirements=["English"], description_raw="Send CV to careers@libertybank.ge with Playwright.",
+            suitability_score=86.0, match_score=86.0, status="STAGED",
+        )
+        j2 = JobPosting(
+            portal="hr.ge", external_id=f"dd2_{shared_id}", title="Junior QA Tester",
+            company="Liberty Bank", url=u_en, market="GE", is_remote=False,
+            language_requirements=["English"], description_raw="QA role in Tbilisi.",
+            suitability_score=82.0, match_score=82.0, status="STAGED",
+        )
+        session.add_all([j1, j2])
+        session.commit()
+        for jp in (j1, j2):
+            session.refresh(jp)
+            session.add(
+                UserJobMatch(
+                    user_id=user_id, job_posting_id=jp.id, suitability_score=jp.suitability_score,
+                    match_tier="DIRECT", status="STAGED", is_ignored=False,
+                )
+            )
+        session.commit()
+
+    feed = client.get("/api/jobs", params={"search": "Liberty Bank", "limit": 20}, headers=headers)
+    assert feed.status_code == 200
+    items = [it for it in feed.json()["items"] if "liberty" in it["company"].lower()]
+    assert len(items) == 1
+    assert items[0]["target_email"] == "careers@libertybank.ge"
+    assert items[0]["delivery_channel"] == "EMAIL"
+
+    # Creating the same vacancy twice on the Tracker Board updates the single card instead of duplicating
+    c1 = client.post(
+        "/api/applications",
+        headers=headers,
+        json={"company": "Liberty Bank JSC", "role": "Junior QA Tester", "url": u_ge, "portal": "jobs.ge", "status": "Discovered"},
+    )
+    c2 = client.post(
+        "/api/applications",
+        headers=headers,
+        json={"company": "Liberty Bank", "role": "Junior QA Tester", "url": u_en, "portal": "jobs.ge", "status": "Applied"},
+    )
+    assert c1.status_code in (200, 201) and c2.status_code in (200, 201)
+    assert c1.json()["id"] == c2.json()["id"]
+    apps = client.get("/api/applications", headers=headers).json()
+    assert len([a for a in apps if "liberty" in a["company"].lower()]) == 1

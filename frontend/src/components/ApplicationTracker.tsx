@@ -638,12 +638,28 @@ export const ApplicationTracker: React.FC = () => {
                           {/* Gmail Dispatch Button */}
                           <button
                             onClick={() => setEmailModalApp(app)}
-                            title="Save as Gmail Draft or Send via Email"
-                            aria-label={`Send or draft email for ${app.role} at ${app.company}`}
-                            className="min-h-[44px] min-w-[44px] sm:min-h-[32px] sm:min-w-[32px] p-1.5 rounded-lg hover:bg-slate-800 text-rose-400 hover:text-rose-300 transition-colors flex items-center justify-center"
+                            title="Draft Mail / Send via Gmail"
+                            aria-label={`Draft mail for ${app.role} at ${app.company}`}
+                            className="min-h-[32px] px-2 py-1 rounded-lg bg-rose-950/60 hover:bg-rose-800/70 border border-rose-800/60 text-rose-200 font-semibold transition-colors flex items-center gap-1"
                           >
-                            <Mail className="w-3.5 h-3.5" aria-hidden="true" />
+                            <Mail className="w-3 h-3" aria-hidden="true" />
+                            <span>Draft Mail</span>
                           </button>
+
+                          {/* See Original Job Posting Button */}
+                          {app.url && /^https?:\/\//i.test(app.url) && !app.url.includes('portal.local') && (
+                            <a
+                              href={app.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title="See original job posting"
+                              aria-label={`See job posting for ${app.role} at ${app.company}`}
+                              className="min-h-[32px] px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 font-semibold transition-colors flex items-center gap-1"
+                            >
+                              <ExternalLink className="w-3 h-3" aria-hidden="true" />
+                              <span>See Job</span>
+                            </a>
+                          )}
 
                           {/* +5 Day Follow-Up Draft Button */}
                           {(stage === 'Applied' || stage === 'HR Screening') && (

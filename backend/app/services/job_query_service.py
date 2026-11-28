@@ -20,6 +20,10 @@ _DJINNI_FIRE_RE = re.compile(r"🔥\s*|\s*⚡\s*")
 _DJINNI_RESPONDS_RE = re.compile(r"\bResponds\s+to\s+\d+%.*$", re.I)
 _DJINNI_SALARY_TAIL_RE = re.compile(r"\s+(?:to|up\s+to|from)?\s*[\$€£]\s*\d[\d,]*(?:\s*-\s*[\$€£]?\d[\d,]*)?.*$", re.I)
 _WHITESPACE_RE = re.compile(r"\s+")
+_EMAIL_IN_TEXT_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+_LEGAL_SUFFIX_RE = re.compile(r"\b(?:ltd|llc|jsc|inc|corp|gmbh|შპს|სს)\b", re.I)
+_JOBS_GE_ID_RE = re.compile(r"jobs\.ge/(?:ge|en)/?\?.*?\bid=(\d+)", re.I)
+_IGNORED_EMAIL_DOMAINS = ("jobs.ge", "hr.ge", "headhunter.ge", "hr.gov.ge", "example.com", "sentry.io")
 
 INDUSTRY_KEYWORDS: Dict[str, List[str]] = {
     "software_it": ["software", "qa", "developer", "engineer", "devops", "python", "java", "react", "frontend", "backend", "it ", "ტესტ", "პროგრამ"],
@@ -284,6 +288,17 @@ def _normalize_djinni_and_salary(dumped: Dict[str, Any]) -> None:
     dumped["salary_source"] = "missing" if (dumped.get("salary_min") is None and dumped.get("salary_max") is None) else ("ai_estimated" if (dumped.get("salary_is_estimated") or dumped.get("salary_estimated_by_ai")) else "verified")
     if not dumped.get("posting_date"):
         dumped["posting_date"] = dumped.get("published_at") or dumped.get("scraped_at")
+    if not (dumped.get("target_email") or "").strip():
+        desc_blob = f"{dumped.get('description_raw') or ''}"
+        for m_em in _EMAIL_IN_TEXT_RE.findall(desc_blob):
+            em_low = m_em.lower()
+            if em_low.startswith("noreply@") or em_low.startswith("no-reply@"):
+                continue
+            if any(em_low.endswith(f"@{dom}") for dom in _IGNORED_EMAIL_DOMAINS):
+                continue
+            dumped["target_email"] = m_em
+            dumped["delivery_channel"] = "EMAIL"
+            break
 
 
 def _resolve_parsed_skills(profile: Any) -> Optional[Dict[str, Any]]:
@@ -452,33 +467,63 @@ def _query_geo_eligible(
         )
     ]
     offset = (f.page - 1) * f.limit
-    return {"items": filtered[offset : offset + f.limit], "total": len(filtered), "page": f.page, "limit": f.limit, "total_pages": max(1, math.ceil(len(filtered) / f.limit)), "tier_counts": tier_counts, "status_counts": status_counts}
+    deduped = cluster_cross_portal_jobs(filtered)
+    return {"items": deduped[offset : offset + f.limit], "total": len(deduped), "page": f.page, "limit": f.limit, "total_pages": max(1, math.ceil(len(deduped) / f.limit)), "tier_counts": tier_counts, "status_counts": status_counts}
+
+
+def _canonical_job_url_key(url: Any) -> str:
+    raw = str(url or "").strip().lower()
+    if not raw:
+        return ""
+    raw = re.sub(r"^https?://(?:www\.)?", "", raw).rstrip("/")
+    m_jge = _JOBS_GE_ID_RE.search(raw)
+    if m_jge:
+        return f"jobs.ge/id={m_jge.group(1)}"
+    return raw
+
+
+def _canonical_company_title_key(company: Any, title: Any) -> Optional[Tuple[str, str]]:
+    comp = _LEGAL_SUFFIX_RE.sub("", str(company or "").lower())
+    comp = re.sub(r"[^a-z0-9\u10A0-\u10FF]+", " ", comp).strip()
+    t = re.sub(r"[^a-z0-9\u10A0-\u10FF]+", " ", str(title or "").lower()).strip()
+    if not comp or not t or comp in ("hiring company", "unknown", "confidential", "company", "employer"):
+        return None
+    return (comp, t)
 
 
 def cluster_cross_portal_jobs(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Clusters duplicate vacancies across portals by normalized (company, title).
-    Keeps the primary card (highest order rank) and attaches `also_on_portals` listing other portals.
+    Deduplicates vacancies by canonical URL (including jobs.ge /ge/ vs /en/) AND normalized (company, title).
+    Preserves target_email/EMAIL channel and higher suitability_score when merging duplicates.
     """
     clustered: List[Dict[str, Any]] = []
-    by_key: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    by_url: Dict[str, Dict[str, Any]] = {}
+    by_ct: Dict[Tuple[str, str], Dict[str, Any]] = {}
     for raw in items:
         item = dict(raw)
         item.setdefault("also_on_portals", [])
-        comp = re.sub(r"[^a-z0-9\u10A0-\u10FF]+", " ", str(item.get("company") or "").lower()).strip()
-        title = re.sub(r"[^a-z0-9\u10A0-\u10FF]+", " ", str(item.get("title") or "").lower()).strip()
         portal = str(item.get("portal") or "").strip()
-        if not comp or not title or comp in ("hiring company", "unknown", "confidential", "company"):
+        url_key = _canonical_job_url_key(item.get("url"))
+        ct_key = _canonical_company_title_key(item.get("company"), item.get("title"))
+
+        primary = by_url.get(url_key) if url_key else None
+        if primary is None and ct_key is not None:
+            primary = by_ct.get(ct_key)
+
+        if primary is None:
             clustered.append(item)
-            continue
-        key = (comp, title)
-        if key not in by_key:
-            by_key[key] = item
-            clustered.append(item)
+            if url_key:
+                by_url[url_key] = item
+            if ct_key is not None:
+                by_ct[ct_key] = item
         else:
-            primary = by_key[key]
             if portal and portal != primary.get("portal") and portal not in primary["also_on_portals"]:
                 primary["also_on_portals"].append(portal)
+            if not primary.get("target_email") and item.get("target_email"):
+                primary["target_email"] = item["target_email"]
+                primary["delivery_channel"] = "EMAIL"
+            if float(item.get("suitability_score") or 0.0) > float(primary.get("suitability_score") or 0.0):
+                primary["suitability_score"] = item["suitability_score"]
     return clustered
 
 

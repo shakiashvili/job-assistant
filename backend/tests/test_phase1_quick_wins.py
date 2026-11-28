@@ -78,4 +78,10 @@ def test_application_soft_delete_vs_hard_delete_and_audit_event():
     assert d2.status_code == 200 and d2.json()["hard"] is True
     with Session(engine) as session:
         assert session.get(ApplicationRecord, num_id2) is None
-        assert session.get(ApplicationTracker, num_id2) is None
+        remaining_tracker = session.exec(
+            select(ApplicationTracker).where(
+                ApplicationTracker.company_name == "HardDelCo",
+                ApplicationTracker.job_title == "QA Engineer",
+            )
+        ).first()
+        assert remaining_tracker is None

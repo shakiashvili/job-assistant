@@ -1534,7 +1534,11 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 </div>
 
                 <div className="flex items-center gap-1.5 pt-1">
-                  {job.delivery_channel === 'EMAIL' || Boolean(job.target_email) ? (
+                  {job.delivery_channel === 'EMAIL' ||
+                  Boolean(job.target_email) ||
+                  /\b[A-Za-z0-9._%+-]+@(?!jobs\.ge|hr\.ge|headhunter\.ge|hr\.gov\.ge|example\.com)[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/i.test(
+                    job.description_raw || ''
+                  ) ? (
                     <>
                       <button
                         type="button"
@@ -1543,22 +1547,23 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                           e.stopPropagation();
                           onDraftInGmail(job);
                         }}
-                        className="flex-1 flex items-center justify-center gap-1 py-1 px-2 rounded-lg bg-rose-700 hover:bg-rose-500 text-white font-semibold transition-colors disabled:opacity-50"
+                        className="flex-1 flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg bg-rose-700 hover:bg-rose-500 text-white font-semibold transition-colors disabled:opacity-50"
                         title="Generate Tailored Word CV (.docx) + Cover Letter and save Gmail Draft"
                       >
-                        <Mail className="w-3 h-3" />
-                        <span>{draftingJobId === job.id ? 'Preparing...' : 'Draft in Gmail'}</span>
+                        <Mail className="w-3 h-3" aria-hidden="true" />
+                        <span>{draftingJobId === job.id ? 'Preparing...' : 'Draft Mail'}</span>
                       </button>
                       <a
                         href={job.url}
                         target="_blank"
                         rel="noopener noreferrer"
                         onClick={(e) => e.stopPropagation()}
-                        className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700"
-                        aria-label={`Open original posting for ${job.title}`}
+                        className="flex-1 flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-100 border border-slate-700 font-semibold transition-colors"
+                        aria-label={`See job posting for ${job.title}`}
                         title="Open live job page in new tab"
                       >
                         <ExternalLink className="w-3 h-3" aria-hidden="true" />
+                        <span>See Job</span>
                       </a>
                     </>
                   ) : (
@@ -1567,11 +1572,12 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                       target="_blank"
                       rel="noopener noreferrer"
                       onClick={(e) => e.stopPropagation()}
-                      className="flex-1 flex items-center justify-center gap-1 py-1 px-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-100 border border-slate-700 font-semibold transition-colors"
+                      className="flex-1 flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-100 border border-slate-700 font-semibold transition-colors"
                       aria-label={`Open original posting for ${job.title}`}
+                      title="Open live job page in new tab"
                     >
                       <ExternalLink className="w-3 h-3" aria-hidden="true" />
-                      <span>Open on {job.portal}</span>
+                      <span>See Job ({job.portal})</span>
                     </a>
                   )}
                 </div>

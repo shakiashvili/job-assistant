@@ -2,6 +2,7 @@ import csv
 import io
 import json
 import logging
+import re
 import uuid
 from typing import List, Optional, Dict
 from sqlmodel import Session, select, delete
@@ -233,13 +234,9 @@ class TrackerRepository:
 
         with Session(engine) as session:
             self._reconcile_orphaned_trackers(session, user_id)
-            existing_tracker = session.exec(
-                select(ApplicationTracker).where(
-                    ApplicationTracker.user_id == user_id,
-                    ApplicationTracker.job_url == clean_url,
-                    ApplicationTracker.is_deleted == False,
-                )
-            ).first()
+            canon_url = self._canonical_url_key(clean_url)
+            canon_cr = self._canonical_company_role_key(clean_company, clean_title)
+            existing_tracker = self._find_active_tracker_duplicate(session, user_id, canon_url, canon_cr)
             if existing_tracker:
                 prev_status = existing_tracker.status
                 existing_tracker.company_name = clean_company
@@ -328,6 +325,63 @@ class TrackerRepository:
                 self._reconcile_orphaned_trackers(session, int(uid))
             return len(uids)
 
+    @staticmethod
+    def _canonical_url_key(url: Optional[str]) -> str:
+        raw = (url or "").strip().lower()
+        if not raw or "portal.local/" in raw:
+            return ""
+        raw = re.sub(r"^https?://(?:www\.)?", "", raw).rstrip("/")
+        # Normalize jobs.ge /ge/ vs /en/ variants of the same job ID
+        m_jge = re.search(r"jobs\.ge/(?:ge|en)/?\?.*?\bid=(\d+)", raw)
+        if m_jge:
+            return f"jobs.ge/id={m_jge.group(1)}"
+        return raw
+
+    @staticmethod
+    def _canonical_company_role_key(company: Optional[str], role: Optional[str]) -> str:
+        c = re.sub(r"\b(?:ltd|llc|jsc|inc|corp|gmbh|შპს|სს)\b", "", (company or "").lower())
+        c = re.sub(r"[^a-z0-9\u10A0-\u10FF]+", " ", c).strip()
+        r = re.sub(r"[^a-z0-9\u10A0-\u10FF]+", " ", (role or "").lower()).strip()
+        if not c or not r or c in ("hiring company", "unknown", "company", "employer"):
+            return ""
+        return f"{c}||{r}"
+
+    @staticmethod
+    def _stage_rank(status: Optional[str]) -> int:
+        order = {
+            "DISCOVERED": 1, "Discovered": 1, "SAVED": 1, "Saved": 1, "STAGED": 1,
+            "APPLIED": 2, "SUBMITTED": 2, "Applied": 2,
+            "ASSESSMENT": 3, "Assessment": 3,
+            "HR_SCREEN": 4, "HR Screening": 4, "INTERVIEW": 4, "Interviewing": 4,
+            "TECH_INTERVIEW": 5, "Technical Interview": 5,
+            "FINAL_INTERVIEW": 6, "FINAL_ROUND": 6, "Final Interview": 6,
+            "OFFER": 7, "Offer": 7,
+            "REJECTED": 7, "Rejected": 7,
+        }
+        return order.get(str(status or ""), 0)
+
+    def _find_active_tracker_duplicate(
+        self,
+        session: Session,
+        user_id: int,
+        canon_url: str,
+        canon_cr: str,
+    ) -> Optional[ApplicationTracker]:
+        rows = session.exec(
+            select(ApplicationTracker)
+            .where(
+                ApplicationTracker.user_id == user_id,
+                ApplicationTracker.is_deleted == False,
+            )
+            .order_by(ApplicationTracker.updated_at.desc())
+        ).all()
+        for row in rows:
+            if canon_url and self._canonical_url_key(row.job_url) == canon_url:
+                return row
+            if canon_cr and self._canonical_company_role_key(row.company_name, row.job_title) == canon_cr:
+                return row
+        return None
+
     def get_all(
         self,
         user_id: Optional[int] = None,
@@ -352,7 +406,29 @@ class TrackerRepository:
                 .order_by(ApplicationRecord.applied_at.desc(), ApplicationRecord.updated_at.desc())
             )
             triples = session.exec(stmt).all()
-            return [self._record_to_item(rec, job, app_t) for rec, job, app_t in triples]
+            items = [self._record_to_item(rec, job, app_t) for rec, job, app_t in triples]
+
+        # Deduplicate Kanban board cards by canonical URL or normalized (company, role), keeping highest-stage card
+        deduped: List[ApplicationItem] = []
+        by_key: Dict[str, int] = {}
+        for item in items:
+            u_key = self._canonical_url_key(item.url)
+            cr_key = self._canonical_company_role_key(item.company, item.role)
+            existing_idx = by_key.get(f"u:{u_key}") if u_key else None
+            if existing_idx is None and cr_key:
+                existing_idx = by_key.get(f"cr:{cr_key}")
+            if existing_idx is None:
+                idx = len(deduped)
+                deduped.append(item)
+                if u_key:
+                    by_key[f"u:{u_key}"] = idx
+                if cr_key:
+                    by_key[f"cr:{cr_key}"] = idx
+            else:
+                prev = deduped[existing_idx]
+                if self._stage_rank(item.status) > self._stage_rank(prev.status):
+                    deduped[existing_idx] = item
+        return deduped
 
     def get_by_id(
         self,
@@ -390,6 +466,43 @@ class TrackerRepository:
     ) -> ApplicationItem:
         with Session(engine) as session:
             url = item_in.url or f"https://portal.local/{uuid.uuid4().hex[:8]}"
+            db_status = UI_TO_DB_STATUS.get(item_in.status or "Saved", item_in.status or "STAGED")
+
+            # Prevent duplicate Kanban cards for the same user + same canonical URL or (company, role)
+            if user_id is not None:
+                canon_url = self._canonical_url_key(url)
+                canon_cr = self._canonical_company_role_key(item_in.company, item_in.role)
+                dup_tracker = self._find_active_tracker_duplicate(session, user_id, canon_url, canon_cr)
+                if dup_tracker is not None:
+                    dup_rec = session.get(ApplicationRecord, dup_tracker.id) if dup_tracker.id else None
+                    if dup_rec is None and dup_tracker.job_posting_id is not None:
+                        dup_rec = session.exec(
+                            select(ApplicationRecord).where(
+                                ApplicationRecord.user_id == user_id,
+                                ApplicationRecord.job_posting_id == dup_tracker.job_posting_id,
+                                ApplicationRecord.submission_status != "DELETED",
+                            )
+                        ).first()
+                    if dup_rec is not None and dup_rec.user_id == user_id and dup_rec.submission_status != "DELETED":
+                        if self._stage_rank(db_status) >= self._stage_rank(dup_rec.submission_status):
+                            dup_rec.submission_status = db_status
+                            dup_tracker.status = db_status
+                        if item_in.cv_pdf_url:
+                            dup_rec.cv_pdf_path = item_in.cv_pdf_url
+                            dup_rec.custom_cv_path = item_in.cv_pdf_url
+                            dup_tracker.cv_pdf_path = item_in.cv_pdf_url
+                        if item_in.cover_letter_text or item_in.notes:
+                            dup_rec.cover_letter_text = item_in.notes or item_in.cover_letter_text or dup_rec.cover_letter_text
+                            dup_tracker.cover_letter_text = dup_rec.cover_letter_text
+                        dup_rec.updated_at = utc_now()
+                        dup_tracker.updated_at = utc_now()
+                        session.add(dup_rec)
+                        session.add(dup_tracker)
+                        session.commit()
+                        session.refresh(dup_rec)
+                        dup_job = session.get(JobPosting, dup_rec.job_posting_id) if dup_rec.job_posting_id else None
+                        return self._record_to_item(dup_rec, dup_job, dup_tracker)
+
             job = session.exec(select(JobPosting).where(JobPosting.url == url)).first()
             if not job:
                 job = JobPosting(
@@ -411,7 +524,6 @@ class TrackerRepository:
                 session.add(job)
                 session.flush()
 
-            db_status = UI_TO_DB_STATUS.get(item_in.status or "Saved", item_in.status or "STAGED")
             submitted_statuses = {"SUBMITTED", "APPLIED", "HR_SCREEN", "TECH_INTERVIEW", "FINAL_INTERVIEW", "OFFER", "REJECTED"}
             applied_ts = utc_now() if db_status in submitted_statuses else None
             rec = ApplicationRecord(
@@ -657,23 +769,36 @@ class TrackerRepository:
                 return False
             if not self._ownership_matches(rec.user_id, user_id, is_guest=is_guest):
                 raise PermissionError("Forbidden: application belongs to another user")
-            tracker_row = session.get(ApplicationTracker, rec.id)
+            matching_trackers: List[ApplicationTracker] = []
+            direct_tracker = session.get(ApplicationTracker, rec.id)
+            if direct_tracker and direct_tracker.user_id == rec.user_id:
+                matching_trackers.append(direct_tracker)
+            if rec.job_posting_id is not None:
+                linked = session.exec(
+                    select(ApplicationTracker).where(
+                        ApplicationTracker.user_id == rec.user_id,
+                        ApplicationTracker.job_posting_id == rec.job_posting_id,
+                    )
+                ).all()
+                for lt in linked:
+                    if all(mt.id != lt.id for mt in matching_trackers):
+                        matching_trackers.append(lt)
             if hard:
                 session.exec(
                     delete(ApplicationEvent).where(ApplicationEvent.application_id == rec.id)
                 )
-                if tracker_row and tracker_row.user_id == rec.user_id:
-                    session.delete(tracker_row)
+                for mt in matching_trackers:
+                    session.delete(mt)
                 session.delete(rec)
             else:
                 old_status = rec.submission_status
                 rec.submission_status = "DELETED"
                 rec.updated_at = utc_now()
                 session.add(rec)
-                if tracker_row and tracker_row.user_id == rec.user_id:
-                    tracker_row.is_deleted = True
-                    tracker_row.updated_at = utc_now()
-                    session.add(tracker_row)
+                for mt in matching_trackers:
+                    mt.is_deleted = True
+                    mt.updated_at = utc_now()
+                    session.add(mt)
                 if rec.id is not None:
                     session.add(
                         ApplicationEvent(

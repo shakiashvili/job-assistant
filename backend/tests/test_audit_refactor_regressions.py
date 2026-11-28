@@ -930,6 +930,7 @@ def test_upload_first_gate_blocks_scraping_before_skills_upload_and_google_calen
 def test_fresh_database_alembic_upgrade_head_clean(tmp_path):
     from alembic import command
     from alembic.config import Config
+    from alembic.script import ScriptDirectory
     from sqlalchemy import create_engine, text
     from app.config import BASE_DIR
 
@@ -938,6 +939,7 @@ def test_fresh_database_alembic_upgrade_head_clean(tmp_path):
     cfg = Config(str(BASE_DIR / "alembic.ini"))
     cfg.set_main_option("script_location", str(BASE_DIR / "alembic"))
     cfg.set_main_option("sqlalchemy.url", db_url)
+    expected_head = ScriptDirectory.from_config(cfg).get_current_head()
     command.upgrade(cfg, "head")
 
     eng = create_engine(db_url)
@@ -945,7 +947,8 @@ def test_fresh_database_alembic_upgrade_head_clean(tmp_path):
         assert conn.execute(text("PRAGMA integrity_check")).fetchall() == [("ok",)]
         assert conn.execute(text("PRAGMA foreign_key_check")).fetchall() == []
         rev = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert rev == "a3c9d14e7b52"
+        assert rev == expected_head
+        assert rev == "e7f4a21c9b83"
     eng.dispose()
 
 
