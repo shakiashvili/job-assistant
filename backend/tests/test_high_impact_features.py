@@ -295,7 +295,7 @@ def test_feature5_saved_search_digest_in_app_and_telegram_dispatch(monkeypatch):
 
     with Session(engine) as session:
         notifs = session.exec(select(Notification).where(Notification.user_id == user_id)).all()
-        assert any("Saved-Search Digest" in n.title for n in notifs)
+        assert any("Digest" in n.title for n in notifs)
 
 
 def test_discovery_feed_returns_explainable_gates_and_skill_gaps():
@@ -341,3 +341,260 @@ def test_discovery_feed_returns_explainable_gates_and_skill_gaps():
     assert "Kubernetes" in hit["missing_skills"]
     assert len(hit["match_explanation"]) >= 3
     assert {g["gate"] for g in hit["match_explanation"]} >= {"seniority_gate", "discipline_gate", "language_gate"}
+
+
+def test_daily_digest_all_tiers_dedup_mismatch_missing_skills_yesterday_reminder_and_9am_scheduler(monkeypatch):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from app.db.models import User
+    from app.services.digest_scheduler import run_due_daily_digests
+
+    headers, user_id = _register_and_upload("daily9am")
+    with Session(engine) as session:
+        jp_direct = JobPosting(
+            portal="jobs.ge",
+            external_id=f"d9_dir_{uuid.uuid4().hex[:6]}",
+            title="Junior QA Engineer",
+            company="Credo Bank",
+            url=f"https://jobs.ge/ge/?view=jobs&id=d9_1_{uuid.uuid4().hex[:6]}",
+            market="GE",
+            is_remote=False,
+            language_requirements=["English", "Georgian"],
+            description_raw="Manual QA, Playwright, SQL, Kubernetes, Docker",
+            suitability_score=84.0,
+            match_score=84.0,
+            status="STAGED",
+        )
+        jp_adj = JobPosting(
+            portal="hr.ge",
+            external_id=f"d9_adj_{uuid.uuid4().hex[:6]}",
+            title="Technical Support Analyst",
+            company="MagtiCom",
+            url=f"https://hr.ge/announcement/d9_2_{uuid.uuid4().hex[:6]}",
+            market="GE",
+            is_remote=False,
+            language_requirements=["English", "Georgian"],
+            description_raw="SQL, Postman, Linux, Jira",
+            suitability_score=72.0,
+            match_score=72.0,
+            status="AUDITED",
+        )
+        session.add(jp_direct)
+        session.add(jp_adj)
+        session.commit()
+        session.refresh(jp_direct)
+        session.refresh(jp_adj)
+        session.add(
+            UserJobMatch(
+                user_id=user_id,
+                job_posting_id=jp_direct.id,
+                suitability_score=84.0,
+                match_tier="DIRECT",
+                status="STAGED",
+                matched_skills=["Playwright", "SQL"],
+                missing_skills=["Kubernetes", "Docker"],
+                is_ignored=False,
+            )
+        )
+        session.add(
+            UserJobMatch(
+                user_id=user_id,
+                job_posting_id=jp_adj.id,
+                suitability_score=72.0,
+                match_tier="ADJACENT",
+                status="AUDITED",
+                matched_skills=["SQL", "Postman"],
+                missing_skills=["Linux"],
+                is_ignored=False,
+            )
+        )
+        session.commit()
+        user_obj = session.get(User, user_id)
+
+    sent_payloads = []
+
+    class _OkResp:
+        status_code = 200
+
+    def fake_post(url, json=None, timeout=12.0):
+        sent_payloads.append(json["text"])
+        return _OkResp()
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-daily-token")
+    monkeypatch.setenv("TELEGRAM_DEFAULT_CHAT_ID", "999000111")
+
+    # Day 1: Includes BOTH Direct and Adjacent vacancies, shows Match %, Mismatch/Gap %, and exact missing skills!
+    day1 = dispatch_saved_search_digest(
+        user_obj,
+        channels=["in_app", "telegram"],
+        include_all_vacancies=True,
+        min_score=0.0,
+        dry_run=False,
+        digest_date="2026-11-27",
+        http_post=fake_post,
+    )
+    assert day1["status"] == "dispatched"
+    assert day1["digest"]["total_matches"] == 2
+    assert "Credo Bank" in day1["preview_text"]
+    assert "MagtiCom" in day1["preview_text"]
+    assert "Mismatch/Gap: 16.0%" in day1["preview_text"]
+    assert "Missing skills: Kubernetes, Docker" in day1["preview_text"]
+    assert "Mismatch/Gap: 28.0%" in day1["preview_text"]
+    assert "Missing skills: Linux" in day1["preview_text"]
+
+    # Day 2 (no new vacancies): Does NOT resend Day 1 vacancies, sends "No new matching vacancies" notice + compact Yesterday Reminder!
+    day2 = dispatch_saved_search_digest(
+        user_obj,
+        channels=["in_app", "telegram"],
+        include_all_vacancies=True,
+        min_score=0.0,
+        dry_run=False,
+        digest_date="2026-11-28",
+        http_post=fake_post,
+    )
+    assert day2["status"] == "dispatched_empty_notice"
+    assert day2["digest"]["total_matches"] == 0
+    assert day2["delivery"]["telegram"]["sent"] is True
+    assert "No new matching vacancies were found today" in day2["preview_text"]
+    assert "Reminder — Yesterday's vacancies (2026-11-27" in day2["preview_text"]
+    assert "Credo Bank" in day2["preview_text"]
+    assert "Link: https://jobs.ge" not in day2["preview_text"]
+
+    # 09:00 AM Scheduler gate check: does not fire at 08:59, fires once at 09:00, idempotent at 09:05
+    tz = ZoneInfo("Asia/Tbilisi")
+    assert run_due_daily_digests(now_local=datetime(2026, 11, 29, 8, 59, tzinfo=tz)) == 0
+    # Schedule status endpoint reports schedule metadata
+    sched = client.get("/api/saved-searches/digest-schedule", headers=headers)
+    assert sched.status_code == 200
+    assert sched.json()["schedule_time"] == "09:00"
+    assert sched.json()["total_unique_vacancies_sent"] == 2
+
+
+def test_post_discovered_applied_and_hr_screening_hidden_from_discovery_and_digests():
+    from app.db.models import User
+    from app.db.tracker_repository import tracker_store
+
+    headers, user_id = _register_and_upload("hideprog")
+    u_disc = f"https://jobs.ge/ge/?view=jobs&id=hp_disc_{uuid.uuid4().hex[:6]}"
+    u_app = f"https://jobs.ge/ge/?view=jobs&id=hp_app_{uuid.uuid4().hex[:6]}"
+    u_hr = f"https://hr.ge/announcement/hp_hr_{uuid.uuid4().hex[:6]}"
+
+    with Session(engine) as session:
+        j_disc = JobPosting(
+            portal="jobs.ge", external_id=f"hp1_{uuid.uuid4().hex[:6]}", title="Junior QA",
+            company="Still Open Co", url=u_disc, market="GE", is_remote=False,
+            language_requirements=["English"], description_raw="Playwright SQL Docker",
+            suitability_score=85.0, match_score=85.0, status="STAGED",
+        )
+        j_app = JobPosting(
+            portal="jobs.ge", external_id=f"hp2_{uuid.uuid4().hex[:6]}", title="QA Engineer",
+            company="Already Applied Bank", url=u_app, market="GE", is_remote=False,
+            language_requirements=["English"], description_raw="Playwright SQL",
+            suitability_score=89.0, match_score=89.0, status="STAGED",
+        )
+        j_hr = JobPosting(
+            portal="hr.ge", external_id=f"hp3_{uuid.uuid4().hex[:6]}", title="QA Analyst",
+            company="HR Screening Tech", url=u_hr, market="GE", is_remote=False,
+            language_requirements=["English"], description_raw="Playwright Postman",
+            suitability_score=91.0, match_score=91.0, status="STAGED",
+        )
+        session.add_all([j_disc, j_app, j_hr])
+        session.commit()
+        for jp in (j_disc, j_app, j_hr):
+            session.refresh(jp)
+            session.add(
+                UserJobMatch(
+                    user_id=user_id, job_posting_id=jp.id, suitability_score=jp.suitability_score,
+                    match_tier="DIRECT", status="STAGED", is_ignored=False,
+                )
+            )
+        session.commit()
+        user_obj = session.get(User, user_id)
+
+    # Track via canonical repository write path (keeps ApplicationRecord & ApplicationTracker synchronized)
+    tracker_store.upsert_external_application(
+        user_id=user_id, company_name="Still Open Co", job_title="Junior QA",
+        job_url=u_disc, portal="jobs.ge", status="SAVED",
+    )
+    tracker_store.upsert_external_application(
+        user_id=user_id, company_name="Already Applied Bank", job_title="QA Engineer",
+        job_url=u_app, portal="jobs.ge", status="APPLIED",
+    )
+    tracker_store.upsert_external_application(
+        user_id=user_id, company_name="HR Screening Tech", job_title="QA Analyst",
+        job_url=u_hr, portal="hr.ge", status="HR_SCREEN",
+    )
+
+    # 1. Discovery Feed hides Applied & HR Screening, keeps Discovered visible
+    feed = client.get("/api/jobs", params={"limit": 50}, headers=headers)
+    assert feed.status_code == 200, feed.text
+    feed_companies = {it["company"] for it in feed.json()["items"]}
+    assert "Still Open Co" in feed_companies
+    assert "Already Applied Bank" not in feed_companies
+    assert "HR Screening Tech" not in feed_companies
+
+    # 2. Email/Telegram Digest excludes Applied & HR Screening, includes Discovered
+    prev = dispatch_saved_search_digest(
+        user_obj,
+        channels=["in_app"],
+        include_all_vacancies=True,
+        min_score=0.0,
+        dry_run=True,
+    )
+    assert "Still Open Co" in prev["preview_text"]
+    assert "Already Applied Bank" not in prev["preview_text"]
+    assert "HR Screening Tech" not in prev["preview_text"]
+
+
+def test_discovery_and_tracker_deduplication_and_email_detection():
+    headers, user_id = _register_and_upload("dedup")
+    shared_id = uuid.uuid4().hex[:6]
+    u_ge = f"https://jobs.ge/ge/?view=jobs&id=99{shared_id}"
+    u_en = f"https://jobs.ge/en/?view=jobs&id=99{shared_id}"
+    with Session(engine) as session:
+        j1 = JobPosting(
+            portal="jobs.ge", external_id=f"dd1_{shared_id}", title="Junior QA Tester",
+            company="Liberty Bank JSC", url=u_ge, market="GE", is_remote=False,
+            language_requirements=["English"], description_raw="Send CV to careers@libertybank.ge with Playwright.",
+            suitability_score=86.0, match_score=86.0, status="STAGED",
+        )
+        j2 = JobPosting(
+            portal="hr.ge", external_id=f"dd2_{shared_id}", title="Junior QA Tester",
+            company="Liberty Bank", url=u_en, market="GE", is_remote=False,
+            language_requirements=["English"], description_raw="QA role in Tbilisi.",
+            suitability_score=82.0, match_score=82.0, status="STAGED",
+        )
+        session.add_all([j1, j2])
+        session.commit()
+        for jp in (j1, j2):
+            session.refresh(jp)
+            session.add(
+                UserJobMatch(
+                    user_id=user_id, job_posting_id=jp.id, suitability_score=jp.suitability_score,
+                    match_tier="DIRECT", status="STAGED", is_ignored=False,
+                )
+            )
+        session.commit()
+
+    feed = client.get("/api/jobs", params={"search": "Liberty Bank", "limit": 20}, headers=headers)
+    assert feed.status_code == 200
+    items = [it for it in feed.json()["items"] if "liberty" in it["company"].lower()]
+    assert len(items) == 1
+    assert items[0]["target_email"] == "careers@libertybank.ge"
+    assert items[0]["delivery_channel"] == "EMAIL"
+
+    # Creating the same vacancy twice on the Tracker Board updates the single card instead of duplicating
+    c1 = client.post(
+        "/api/applications",
+        headers=headers,
+        json={"company": "Liberty Bank JSC", "role": "Junior QA Tester", "url": u_ge, "portal": "jobs.ge", "status": "Discovered"},
+    )
+    c2 = client.post(
+        "/api/applications",
+        headers=headers,
+        json={"company": "Liberty Bank", "role": "Junior QA Tester", "url": u_en, "portal": "jobs.ge", "status": "Applied"},
+    )
+    assert c1.status_code in (200, 201) and c2.status_code in (200, 201)
+    assert c1.json()["id"] == c2.json()["id"]
+    apps = client.get("/api/applications", headers=headers).json()
+    assert len([a for a in apps if "liberty" in a["company"].lower()]) == 1

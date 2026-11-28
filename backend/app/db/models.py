@@ -493,6 +493,22 @@ class AuthRateLimit(SQLModel, table=True):
     expires_at: float = Field(default=0.0, index=True)
 
 
+class DigestDeliveryLog(SQLModel, table=True):
+    """Tracks every vacancy sent in a daily Email/Telegram digest so jobs are never resent."""
+    __tablename__ = "digest_delivery_logs"
+    __table_args__ = (
+        Index("ix_digest_delivery_user_job", "user_id", "job_posting_id"),
+        Index("ix_digest_delivery_user_date", "user_id", "digest_date"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    job_posting_id: Optional[int] = Field(default=None, foreign_key="job_postings.id", index=True)
+    digest_date: str = Field(max_length=16, index=True)  # Local YYYY-MM-DD (e.g. Asia/Tbilisi)
+    channels: str = Field(default="email,telegram", max_length=64)
+    sent_at: datetime = Field(default_factory=utc_now, index=True)
+
+
 # Canonical and backwards-compatible aliases
 Application = ApplicationTracker
 JobVacancy = JobPosting
@@ -550,6 +566,7 @@ def _cascade_delete_job_posting_children(mapper, connection, target: JobPosting)
         connection.execute(ApplicationEvent.__table__.delete().where(ApplicationEvent.application_id.in_(tracker_ids_subq)))
         connection.execute(UserJobMatch.__table__.delete().where(UserJobMatch.job_posting_id == target.id))
         connection.execute(SavedJob.__table__.delete().where(SavedJob.job_posting_id == target.id))
+        connection.execute(DigestDeliveryLog.__table__.delete().where(DigestDeliveryLog.job_posting_id == target.id))
         connection.execute(Notification.__table__.delete().where(Notification.job_posting_id == target.id))
         connection.execute(CandidateDocument.__table__.delete().where(CandidateDocument.job_posting_id == target.id))
         connection.execute(

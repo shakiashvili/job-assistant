@@ -544,10 +544,21 @@ def create_saved_search(
 
 
 class SavedSearchDigestRequest(BaseModel):
-    channels: List[str] = Field(default_factory=lambda: ["in_app", "email"])
+    channels: List[str] = Field(default_factory=lambda: ["in_app", "email", "telegram"])
     telegram_chat_id: Optional[str] = None
-    min_score: Optional[float] = Field(default=None, ge=0.0, le=100.0)
+    min_score: Optional[float] = Field(default=0.0, ge=0.0, le=100.0)
+    include_all_vacancies: bool = True
     dry_run: bool = False
+
+
+@router.get("/saved-searches/digest-schedule")
+def get_digest_schedule_status(current_user: User = Depends(get_current_user)):
+    """Returns the daily 09:00 AM digest schedule & delivery history for the current user."""
+    from ..services.digest_service import get_user_digest_status
+
+    if current_user.id is None:
+        raise HTTPException(status_code=401, detail="Authenticated user required.")
+    return get_user_digest_status(current_user.id)
 
 
 @router.post("/saved-searches/send-digest")
@@ -555,7 +566,7 @@ def send_saved_search_digest(
     req: Optional[SavedSearchDigestRequest] = None,
     current_user: User = Depends(get_current_user),
 ):
-    """Evaluates saved searches and dispatches a digest via in-app notification, email, and/or Telegram."""
+    """Evaluates all new (non-sent) vacancies or saved searches and dispatches via in-app, email, and/or Telegram."""
     from ..services.digest_service import dispatch_saved_search_digest
 
     body = req or SavedSearchDigestRequest()
@@ -564,6 +575,7 @@ def send_saved_search_digest(
         channels=body.channels,
         telegram_chat_id=body.telegram_chat_id,
         min_score=body.min_score,
+        include_all_vacancies=body.include_all_vacancies,
         dry_run=body.dry_run,
     )
 

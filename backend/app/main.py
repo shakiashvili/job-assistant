@@ -19,6 +19,7 @@ from .config import (
     IS_PRODUCTION,
 )
 from .db.database import engine, init_db
+from .services.digest_scheduler import daily_digest_scheduler
 from .services.gemini_service import gemini_service
 from .services.observability import log_structured_request, runtime_metrics
 from .services.scrape_worker import SCRAPE_WORKER_MODE, scrape_queue
@@ -59,6 +60,10 @@ async def lifespan(app: FastAPI):
         scrape_queue.start_embedded_worker()
     except Exception as exc:
         logger.warning("Durable scrape worker startup warning: %s", exc)
+    try:
+        daily_digest_scheduler.start()
+    except Exception as exc:
+        logger.warning("Daily digest scheduler startup warning: %s", exc)
     if not gemini_service.is_available:
         logger.warning(
             "⚠️ GEMINI_API_KEY is not configured or invalid. The backend is running in "
@@ -69,6 +74,10 @@ async def lifespan(app: FastAPI):
         if IS_PRODUCTION and AI_STARTUP_HEALTHCHECK:
             gemini_service.verify_startup_model_health(fail_loudly=True)
     yield
+    try:
+        await daily_digest_scheduler.stop()
+    except Exception as exc:
+        logger.debug("Daily digest scheduler shutdown note: %s", exc)
     try:
         await scrape_queue.stop_embedded_worker()
     except Exception as exc:

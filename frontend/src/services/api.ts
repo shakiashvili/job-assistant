@@ -680,17 +680,39 @@ export const triggerSavedSearchDigest = (params?: {
   channels?: string[];
   telegram_chat_id?: string;
   min_score?: number;
+  include_all_vacancies?: boolean;
   dry_run?: boolean;
 }): Promise<{
   status: string;
-  digest: { searches_evaluated: number; total_matches: number; groups: unknown[] };
+  digest: {
+    digest_date?: string;
+    mode?: string;
+    searches_evaluated: number;
+    total_matches: number;
+    previously_sent_skipped?: number;
+    groups: unknown[];
+    yesterday_reminders?: unknown[];
+  };
   preview_text?: string;
   delivery: Record<string, unknown>;
 }> =>
   apiJson('/saved-searches/send-digest', {
     method: 'POST',
-    body: params || { channels: ['in_app', 'email'], dry_run: false },
+    body: params || { channels: ['in_app', 'email', 'telegram'], include_all_vacancies: true, min_score: 0, dry_run: false },
     errorMessage: 'Failed to dispatch saved-search digest',
+  });
+
+export const fetchDigestScheduleStatus = (): Promise<{
+  enabled: boolean;
+  schedule_time: string;
+  timezone: string;
+  last_digest_date?: string | null;
+  total_unique_vacancies_sent: number;
+  telegram_configured: boolean;
+  telegram_default_chat_id_set: boolean;
+}> =>
+  apiJson('/saved-searches/digest-schedule', {
+    errorMessage: 'Failed to load daily digest schedule',
   });
 
 export const syncGmailStatusSuggestions = (): Promise<{
