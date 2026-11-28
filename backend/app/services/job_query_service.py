@@ -9,6 +9,9 @@ from sqlmodel import Session, and_, or_, select
 from ..db.database import engine, init_db
 from ..db.models import ApplicationRecord, JobPosting, SavedJob, User, UserJobMatch, utc_now
 from ..db.profile_repository import ground_truth_store
+from .matcher_service import matcher_service, skills_match_token
+from .matching.gates import run_gate_pipeline
+from .answer_service import load_live_candidate_profile
 from .salary_service import salary_service
 from .scrapers.base_scraper import classify_georgia_b2b_suitability, sanitize_company_name
 from .scrapers.scraper_orchestrator import scraper_orchestrator
@@ -241,7 +244,67 @@ def _normalize_djinni_and_salary(dumped: Dict[str, Any]) -> None:
         dumped["posting_date"] = dumped.get("published_at") or dumped.get("scraped_at")
 
 
-def _serialize_job_row(entry: Any, use_user_matches: bool) -> Dict[str, Any]:
+def _resolve_parsed_skills(profile: Any, owner_email: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    if owner_email:
+        live = load_live_candidate_profile(owner_email)
+        if live:
+            parsed = dict(live)
+            parsed.setdefault("verified_skills", live.get("all_skills") or [])
+            return parsed
+    if profile is None:
+        return None
+    raw_md = getattr(profile, "raw_skills_md", None) or ""
+    if raw_md.strip():
+        return matcher_service.parse_skills_markdown(raw_md)
+    return None
+
+
+def _compute_explainability(
+    dumped: Dict[str, Any],
+    um: Any,
+    parsed_skills: Optional[Dict[str, Any]],
+) -> Tuple[List[str], List[str], List[Dict[str, Any]]]:
+    matched = list(um.matched_skills or [])[:12] if um is not None else []
+    missing = list(um.missing_skills or [])[:10] if um is not None else []
+    title = str(dumped.get("title") or "")
+    desc = str(dumped.get("description_raw") or "")
+    if parsed_skills and not matched and not missing:
+        req_skills = matcher_service.extract_job_requirements(title, desc)
+        cand_skills = list(parsed_skills.get("all_skills") or parsed_skills.get("verified_skills") or [])
+        cand_blob = " ".join(str(s) for s in cand_skills)
+        for req in req_skills[:14]:
+            if skills_match_token(req, cand_skills, cand_blob):
+                if req not in matched:
+                    matched.append(req)
+            elif req not in missing:
+                missing.append(req)
+    gate_expl: List[Dict[str, Any]] = []
+    if parsed_skills:
+        gates = run_gate_pipeline(
+            title=title,
+            description=desc,
+            parsed_skills=parsed_skills,
+            portal=str(dumped.get("portal") or "generic"),
+            company=str(dumped.get("company") or ""),
+        )
+        gate_expl = [
+            {
+                "gate": g.gate_name,
+                "passed": g.passed,
+                "reason": g.reason,
+                "penalty": g.penalty,
+                "metadata": g.metadata or {},
+            }
+            for g in gates
+        ]
+    return matched[:12], missing[:10], gate_expl
+
+
+def _serialize_job_row(
+    entry: Any,
+    use_user_matches: bool,
+    parsed_skills: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     r, um = entry if use_user_matches else (entry, None)
     dumped = r.model_dump(mode="json")
     if um is not None:
@@ -271,14 +334,18 @@ def _serialize_job_row(entry: Any, use_user_matches: bool) -> Dict[str, Any]:
 
     mb = dict(um.match_breakdown or {}) if um is not None and isinstance(um.match_breakdown, dict) else {}
     desc_len = len(str(dumped.get("description_raw") or ""))
+    matched_sk, missing_sk, gate_expl = _compute_explainability(dumped, um, parsed_skills)
     dumped["is_ignored"] = bool(um.is_ignored) if um is not None else False
     dumped["dismiss_reason"] = mb.get("dismiss_reason")
+    dumped["matched_skills"] = matched_sk
+    dumped["missing_skills"] = missing_sk
+    dumped["match_explanation"] = gate_expl
     dumped["recommendation_breakdown"] = {
         "overall_relevance_score": round(float(dumped.get("suitability_score") or 0.0), 1),
         "score_disclaimer": "Heuristic profile-to-vacancy fit score (not a hiring probability).",
         "skills_match_pct": dumped.get("skill_overlap_pct"),
-        "matched_skills": list(um.matched_skills or [])[:12] if um is not None else [],
-        "missing_skills": list(um.missing_skills or [])[:10] if um is not None else [],
+        "matched_skills": matched_sk,
+        "missing_skills": missing_sk,
         "experience_compatibility": "Unknown experience requirement" if dumped.get("experience_min_years") is None else f"Requires ~{dumped.get('experience_min_years'):g}+ yr(s)",
         "location_compatibility": geo_info.get("contract_mode") or dumped.get("remote_type") or "UNKNOWN",
         "language_compatibility": ", ".join(dumped.get("language_requirements") or []) or "Not specified",
@@ -297,13 +364,22 @@ def _maybe_rescore_first_time(session: Session, uid: int, owner: Optional[str]) 
     return False
 
 
-def _query_geo_eligible(session: Session, f: JobFilters, base_conds: List[Any], order_clauses: tuple[Any, Any], use_user_matches: bool, uid: Optional[int], owner: Optional[str]) -> Dict[str, Any]:
+def _query_geo_eligible(
+    session: Session,
+    f: JobFilters,
+    base_conds: List[Any],
+    order_clauses: tuple[Any, Any],
+    use_user_matches: bool,
+    uid: Optional[int],
+    owner: Optional[str],
+    parsed_skills: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     stmt = select(JobPosting, UserJobMatch).join(UserJobMatch, (UserJobMatch.job_posting_id == JobPosting.id) & (UserJobMatch.user_id == uid)) if use_user_matches else select(JobPosting)
     if base_conds:
         stmt = stmt.where(*base_conds)
-    items_geo = [d for e in session.exec(stmt.order_by(*order_clauses)).all() if (d := _serialize_job_row(e, use_user_matches)).get("georgia_eligible")]
+    items_geo = [d for e in session.exec(stmt.order_by(*order_clauses)).all() if (d := _serialize_job_row(e, use_user_matches, parsed_skills)).get("georgia_eligible")]
     if use_user_matches and not items_geo and not f.only_saved and uid is not None and _maybe_rescore_first_time(session, uid, owner):
-        items_geo = [d for e in session.exec(stmt.order_by(*order_clauses)).all() if (d := _serialize_job_row(e, use_user_matches)).get("georgia_eligible")]
+        items_geo = [d for e in session.exec(stmt.order_by(*order_clauses)).all() if (d := _serialize_job_row(e, use_user_matches, parsed_skills)).get("georgia_eligible")]
 
     tier_counts = {
         "ALL": len(items_geo),
@@ -374,10 +450,11 @@ def query_jobs_paginated(filters: JobFilters, current_user: User, is_profile_rea
         status_col = UserJobMatch.status if use_um else JobPosting.status
         tier_col = UserJobMatch.match_tier if use_um else JobPosting.match_tier
 
+        parsed_skills = _resolve_parsed_skills(profile, owner)
         base_conds = _build_base_conditions(filters, use_um, score_col, status_col, current_user.id)
         order_clauses = _build_order_clauses(filters.sort_by, score_col)
         if filters.geo_eligible_only:
-            return _query_geo_eligible(session, filters, base_conds, order_clauses, use_um, uid, owner)
+            return _query_geo_eligible(session, filters, base_conds, order_clauses, use_um, uid, owner, parsed_skills)
 
         agg_stmt = select(
             func.count().label("all_cnt"),
@@ -423,7 +500,7 @@ def query_jobs_paginated(filters: JobFilters, current_user: User, is_profile_rea
         stmt = select(JobPosting, UserJobMatch).join(UserJobMatch, (UserJobMatch.job_posting_id == JobPosting.id) & (UserJobMatch.user_id == uid)) if use_um else select(JobPosting)
         rows = session.exec(stmt.where(*conditions).order_by(*order_clauses).offset((filters.page - 1) * filters.limit).limit(filters.limit)).all()
         return {
-            "items": cluster_cross_portal_jobs([_serialize_job_row(e, use_um) for e in rows]),
+            "items": cluster_cross_portal_jobs([_serialize_job_row(e, use_um, parsed_skills) for e in rows]),
             "total": total,
             "page": filters.page,
             "limit": filters.limit,

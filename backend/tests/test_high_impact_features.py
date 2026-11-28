@@ -296,3 +296,48 @@ def test_feature5_saved_search_digest_in_app_and_telegram_dispatch(monkeypatch):
     with Session(engine) as session:
         notifs = session.exec(select(Notification).where(Notification.user_id == user_id)).all()
         assert any("Saved-Search Digest" in n.title for n in notifs)
+
+
+def test_discovery_feed_returns_explainable_gates_and_skill_gaps():
+    headers, user_id = _register_and_upload("expl")
+    with Session(engine) as session:
+        jp = JobPosting(
+            portal="jobs.ge",
+            external_id=f"expl_{uuid.uuid4().hex[:6]}",
+            title="Junior QA Automation Engineer",
+            company="Bank of Georgia",
+            url=f"https://jobs.ge/ge/?view=jobs&id=expl_{uuid.uuid4().hex[:6]}",
+            market="GE",
+            is_remote=False,
+            language_requirements=["English", "Georgian"],
+            description_raw="Looking for QA with Playwright, SQL, Postman, Docker and Kubernetes.",
+            suitability_score=84.0,
+            match_score=84.0,
+            status="STAGED",
+        )
+        session.add(jp)
+        session.commit()
+        session.refresh(jp)
+        session.add(
+            UserJobMatch(
+                user_id=user_id,
+                job_posting_id=jp.id,
+                suitability_score=84.0,
+                match_tier="ADJACENT",
+                status="STAGED",
+                matched_skills=["Playwright", "SQL", "Postman"],
+                missing_skills=["Kubernetes", "Docker"],
+                is_ignored=False,
+            )
+        )
+        session.commit()
+
+    resp = client.get("/api/jobs", params={"portal": "jobs.ge", "limit": 20}, headers=headers)
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["items"]
+    hit = next((it for it in items if it["company"] == "Bank of Georgia"), None)
+    assert hit is not None
+    assert "Playwright" in hit["matched_skills"]
+    assert "Kubernetes" in hit["missing_skills"]
+    assert len(hit["match_explanation"]) >= 3
+    assert {g["gate"] for g in hit["match_explanation"]} >= {"seniority_gate", "discipline_gate", "language_gate"}

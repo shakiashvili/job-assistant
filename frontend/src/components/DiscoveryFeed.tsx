@@ -19,9 +19,14 @@ import {
   Trash2,
   SlidersHorizontal,
   AlertTriangle,
+  Send,
+  ShieldCheck,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { DbJobPosting, JobSearchParams, SavedSearchItem, NotificationItem, ScraperSourceHealthItem } from '../types';
-import { BACKEND_ORIGIN, addSkillToActionPlan } from '../services/api';
+import { BACKEND_ORIGIN, addSkillToActionPlan, triggerSavedSearchDigest } from '../services/api';
 
 export interface CandidateRoleHeaderInfo {
   full_name?: string;
@@ -257,6 +262,32 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
 
   const [showPortalHealth, setShowPortalHealth] = useState(false);
   const [addedPlanSkills, setAddedPlanSkills] = useState<Set<string>>(new Set());
+  const [planToast, setPlanToast] = useState<string | null>(null);
+  const [expandedExplainId, setExpandedExplainId] = useState<number | null>(null);
+
+  // Saved-Search Digest Alerts (Email / Telegram Bot) UI State
+  const [showDigestPanel, setShowDigestPanel] = useState(false);
+  const [digestChannels, setDigestChannels] = useState<{ in_app: boolean; email: boolean; telegram: boolean }>({
+    in_app: true,
+    email: true,
+    telegram: false,
+  });
+  const [telegramChatId, setTelegramChatId] = useState<string>(() => {
+    try {
+      return localStorage.getItem('talentflow_telegram_chat_id') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [digestMinScore, setDigestMinScore] = useState<number>(65);
+  const [digestBusy, setDigestBusy] = useState(false);
+  const [digestError, setDigestError] = useState<string | null>(null);
+  const [digestResult, setDigestResult] = useState<{
+    status: string;
+    digest: { searches_evaluated: number; total_matches: number; groups: unknown[] };
+    preview_text?: string;
+    delivery: Record<string, any>;
+  } | null>(null);
 
   const handleAddSkillToPlan = async (e: React.MouseEvent, skill: string, targetRole: string) => {
     e.stopPropagation();
@@ -265,9 +296,49 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
     try {
       await addSkillToActionPlan(skill, targetRole);
       setAddedPlanSkills((prev) => new Set(prev).add(key));
+      setPlanToast(`Added "${skill}" to your 7-day Skill Action Plan.`);
     } catch (err) {
       console.warn('Could not add skill to action plan:', err);
+      setPlanToast(`Could not add "${skill}" — sign in and retry.`);
     }
+  };
+
+  const handleRunDigest = async (dryRun: boolean) => {
+    const selectedChannels: string[] = [];
+    if (digestChannels.in_app) selectedChannels.push('in_app');
+    if (digestChannels.email) selectedChannels.push('email');
+    if (digestChannels.telegram) selectedChannels.push('telegram');
+    if (selectedChannels.length === 0) {
+      setDigestError('Select at least one delivery channel (In-App, Email, or Telegram).');
+      return;
+    }
+    try {
+      if (telegramChatId.trim()) {
+        localStorage.setItem('talentflow_telegram_chat_id', telegramChatId.trim());
+      }
+    } catch {
+      // ignore storage errors
+    }
+    setDigestBusy(true);
+    setDigestError(null);
+    try {
+      const res = await triggerSavedSearchDigest({
+        channels: selectedChannels,
+        telegram_chat_id: telegramChatId.trim() || undefined,
+        min_score: digestMinScore,
+        dry_run: dryRun,
+      });
+      setDigestResult(res);
+    } catch (err: any) {
+      setDigestError(err?.message || 'Could not generate saved-search digest.');
+    } finally {
+      setDigestBusy(false);
+    }
+  };
+
+  const formatGateLabel = (gate: string): string => {
+    const g = gate.replace(/_gate$/i, '').replace(/_/g, ' ');
+    return g.charAt(0).toUpperCase() + g.slice(1);
   };
 
   const portals = [
@@ -528,6 +599,21 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
               </button>
             )}
 
+            <button
+              type="button"
+              aria-expanded={showDigestPanel}
+              onClick={() => setShowDigestPanel((v) => !v)}
+              className={`inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg font-semibold border transition-colors ${
+                showDigestPanel
+                  ? 'bg-sky-900/60 border-sky-400/70 text-sky-100'
+                  : 'bg-slate-950 text-sky-300 hover:text-white border-sky-700/60'
+              }`}
+              title="Preview or send Saved-Search Digest Alerts via Email or Telegram Bot"
+            >
+              <Send className="w-3 h-3" aria-hidden="true" />
+              <span>Digest Alerts (Email / Telegram)</span>
+            </button>
+
             {onAdvancedFiltersChange && (
               <>
                 <select
@@ -633,6 +719,175 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                 </button>
               )}
             </div>
+          </div>
+        )}
+
+        {/* Saved-Search Digest Alerts (Email / Telegram Bot) Panel */}
+        {showDigestPanel && (
+          <div className="p-3.5 rounded-xl bg-slate-950/90 border border-sky-700/60 space-y-3 text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Send className="w-4 h-4 text-sky-400" aria-hidden="true" />
+                <div>
+                  <div className="font-bold text-white">Saved-Search Digest Alerts (Email &amp; Telegram Bot)</div>
+                  <div className="text-[11px] text-slate-400">
+                    Evaluate your {savedSearches.length} saved search alert(s) and deliver new high-match Georgia &amp; remote B2B vacancies.
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowDigestPanel(false)}
+                className="text-slate-400 hover:text-white p-1"
+                aria-label="Close digest alerts panel"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {savedSearches.length === 0 && onSaveSearchAlert && (
+              <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-lg bg-amber-950/40 border border-amber-700/50 text-[11px] text-amber-200">
+                <span>You don&apos;t have any Saved Search alerts yet. Save your current filters first to receive digests.</span>
+                <button
+                  type="button"
+                  onClick={onSaveSearchAlert}
+                  className="px-2.5 py-1 rounded-md bg-emerald-700 hover:bg-emerald-600 text-white font-semibold"
+                >
+                  + Save Current Filters as Alert
+                </button>
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-200 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={digestChannels.in_app}
+                  onChange={(e) => setDigestChannels((c) => ({ ...c, in_app: e.target.checked }))}
+                  className="rounded border-slate-600 bg-slate-900 text-sky-500"
+                />
+                <span>In-App Alert</span>
+              </label>
+              <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-200 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={digestChannels.email}
+                  onChange={(e) => setDigestChannels((c) => ({ ...c, email: e.target.checked }))}
+                  className="rounded border-slate-600 bg-slate-900 text-sky-500"
+                />
+                <span>Email Digest</span>
+              </label>
+              <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-200 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={digestChannels.telegram}
+                  onChange={(e) => setDigestChannels((c) => ({ ...c, telegram: e.target.checked }))}
+                  className="rounded border-slate-600 bg-slate-900 text-sky-500"
+                />
+                <span>Telegram Bot</span>
+              </label>
+
+              <select
+                aria-label="Minimum digest match score"
+                value={digestMinScore}
+                onChange={(e) => setDigestMinScore(Number(e.target.value))}
+                className="text-[11px] px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-slate-200"
+              >
+                <option value={50}>Min Score: 50%+</option>
+                <option value={65}>Min Score: 65%+</option>
+                <option value={75}>Min Score: 75%+</option>
+                <option value={85}>Min Score: 85%+</option>
+              </select>
+
+              {digestChannels.telegram && (
+                <input
+                  type="text"
+                  value={telegramChatId}
+                  onChange={(e) => setTelegramChatId(e.target.value)}
+                  placeholder="Telegram Chat ID (optional if set in .env)"
+                  aria-label="Telegram Chat ID"
+                  className="text-[11px] px-2.5 py-1 rounded-lg bg-slate-900 border border-sky-700/70 text-slate-100 placeholder-slate-400 w-64"
+                />
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={digestBusy}
+                onClick={() => void handleRunDigest(true)}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 text-[11px] font-semibold disabled:opacity-50"
+              >
+                {digestBusy ? 'Running...' : 'Preview Digest'}
+              </button>
+              <button
+                type="button"
+                disabled={digestBusy}
+                onClick={() => void handleRunDigest(false)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-700 hover:bg-sky-600 text-white text-[11px] font-semibold disabled:opacity-50"
+              >
+                <Send className="w-3 h-3" aria-hidden="true" />
+                <span>{digestBusy ? 'Sending...' : 'Send Digest Now'}</span>
+              </button>
+              <span className="text-[10px] text-slate-400">
+                Telegram uses <code className="text-sky-300">TELEGRAM_BOT_TOKEN</code> from <code className="text-slate-300">backend/.env</code>.
+              </span>
+            </div>
+
+            {digestError && (
+              <div className="text-[11px] text-rose-300 bg-rose-950/40 border border-rose-800/60 px-3 py-1.5 rounded-lg">
+                {digestError}
+              </div>
+            )}
+
+            {digestResult && (
+              <div className="p-2.5 rounded-lg bg-slate-900/90 border border-slate-800 space-y-1.5 text-[11px]">
+                <div className="flex flex-wrap items-center gap-2 font-semibold text-emerald-300">
+                  <CheckCircle2 className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>
+                    Status: {digestResult.status} — {digestResult.digest.total_matches} match(es) across {digestResult.digest.searches_evaluated} saved search(es)
+                  </span>
+                </div>
+                {Object.keys(digestResult.delivery || {}).length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {Object.entries(digestResult.delivery).map(([ch, info]) => (
+                      <span
+                        key={ch}
+                        className={`px-2 py-0.5 rounded border text-[10px] font-semibold ${
+                          info?.sent
+                            ? 'bg-emerald-950/70 border-emerald-700 text-emerald-300'
+                            : 'bg-amber-950/60 border-amber-700/60 text-amber-200'
+                        }`}
+                      >
+                        {ch}: {info?.sent ? 'Delivered' : info?.dry_run ? 'Preview Only' : info?.reason || info?.mode || 'Not Configured'}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {digestResult.preview_text && (
+                  <pre className="mt-1 p-2 rounded bg-slate-950 border border-slate-800 text-[10px] text-slate-300 whitespace-pre-wrap max-h-40 overflow-y-auto">
+                    {digestResult.preview_text}
+                  </pre>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {planToast && (
+          <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-emerald-950/40 border border-emerald-700/60 text-xs text-emerald-200">
+            <span className="inline-flex items-center gap-1.5">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" aria-hidden="true" />
+              <span>{planToast}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setPlanToast(null)}
+              className="text-emerald-300 hover:text-white"
+              aria-label="Dismiss skill plan notice"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
           </div>
         )}
 
@@ -1142,28 +1397,110 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
                   <span>{job.match_rationale}</span>
                 </div>
 
-                {Array.isArray(job.missing_skills) && job.missing_skills.length > 0 && (
-                  <div className="flex flex-wrap gap-1 pt-1">
-                    {job.missing_skills.slice(0, 2).map((sk) => {
-                      const added = addedPlanSkills.has(sk.toLowerCase());
-                      return (
+                {/* Explainable Match Gates & 1-Click Skill-Gap Action Chips */}
+                {(() => {
+                  const matchedList = (job.matched_skills?.length ? job.matched_skills : job.recommendation_breakdown?.matched_skills) || [];
+                  const missingList = (job.missing_skills?.length ? job.missing_skills : job.recommendation_breakdown?.missing_skills) || [];
+                  const gates = job.match_explanation || [];
+                  const isExpanded = expandedExplainId === job.id;
+                  if (!matchedList.length && !missingList.length && !gates.length) return null;
+                  return (
+                    <div className="pt-1.5 space-y-1.5">
+                      <div className="flex flex-wrap items-center justify-between gap-1">
+                        <div className="flex flex-wrap items-center gap-1">
+                          {gates.map((g) => (
+                            <span
+                              key={g.gate}
+                              title={g.reason || `${formatGateLabel(g.gate)}: ${g.passed ? 'Passed' : 'Flagged'}`}
+                              className={`inline-flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded border font-semibold ${
+                                g.passed
+                                  ? 'bg-emerald-950/50 border-emerald-800/70 text-emerald-300'
+                                  : 'bg-rose-950/50 border-rose-800/70 text-rose-300'
+                              }`}
+                            >
+                              <ShieldCheck className="w-2.5 h-2.5" aria-hidden="true" />
+                              <span>{g.passed ? '✓' : '!'} {formatGateLabel(g.gate)}</span>
+                            </span>
+                          ))}
+                        </div>
                         <button
-                          key={sk}
                           type="button"
-                          onClick={(e) => void handleAddSkillToPlan(e, sk, job.title)}
-                          title={`Add "${sk}" to your 7-day Skill Action Plan`}
-                          className={`text-[9px] px-1.5 py-0.5 rounded border font-semibold transition-colors ${
-                            added
-                              ? 'bg-emerald-950/70 border-emerald-700 text-emerald-300'
-                              : 'bg-amber-950/50 border-amber-700/60 text-amber-200 hover:bg-amber-900/60'
-                          }`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setExpandedExplainId(isExpanded ? null : job.id);
+                          }}
+                          className="inline-flex items-center gap-0.5 text-[9px] font-semibold text-sky-300 hover:text-sky-200"
+                          title="Inspect full match gates, matched skills, and skill gaps"
                         >
-                          {added ? `✓ ${sk} in Plan` : `△ ${sk} +Plan`}
+                          <span>Why {Math.round(job.suitability_score)}%?</span>
+                          {isExpanded ? <ChevronUp className="w-2.5 h-2.5" /> : <ChevronDown className="w-2.5 h-2.5" />}
                         </button>
-                      );
-                    })}
-                  </div>
-                )}
+                      </div>
+
+                      {matchedList.length > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                          {matchedList.slice(0, isExpanded ? 10 : 3).map((sk) => (
+                            <span
+                              key={sk}
+                              className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-950/60 border border-emerald-800/60 text-emerald-300 font-medium"
+                            >
+                              ✓ {sk}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      {missingList.length > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                          {missingList.slice(0, isExpanded ? 8 : 3).map((sk) => {
+                            const added = addedPlanSkills.has(sk.toLowerCase());
+                            return (
+                              <button
+                                key={sk}
+                                type="button"
+                                onClick={(e) => void handleAddSkillToPlan(e, sk, job.title)}
+                                title={`Add "${sk}" to your 7-day Skill Action Plan`}
+                                className={`text-[9px] px-1.5 py-0.5 rounded border font-semibold transition-colors ${
+                                  added
+                                    ? 'bg-emerald-950/70 border-emerald-700 text-emerald-300'
+                                    : 'bg-amber-950/50 border-amber-700/60 text-amber-200 hover:bg-amber-900/60'
+                                }`}
+                              >
+                                {added ? `✓ ${sk} in Plan` : `△ ${sk} +Plan`}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {isExpanded && (
+                        <div
+                          onClick={(e) => e.stopPropagation()}
+                          className="p-2 rounded-lg bg-slate-900/90 border border-slate-700/80 space-y-1 text-[10px] text-slate-300"
+                        >
+                          <div className="font-bold text-white">
+                            Explainable Match ({Math.round(job.suitability_score)}% {tier})
+                          </div>
+                          {gates.map((g) => (
+                            <div key={g.gate} className="flex items-start justify-between gap-2">
+                              <span className={g.passed ? 'text-emerald-300' : 'text-rose-300'}>
+                                {g.passed ? '✓' : '✗'} {formatGateLabel(g.gate)}
+                              </span>
+                              <span className="text-slate-400 text-right">
+                                {g.reason || (g.metadata?.label ? String(g.metadata.label) : 'Passed')}
+                              </span>
+                            </div>
+                          ))}
+                          {job.recommendation_breakdown?.language_compatibility && (
+                            <div className="text-slate-400">
+                              Languages: <strong className="text-slate-200">{job.recommendation_breakdown.language_compatibility}</strong>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
 
               <div className="pt-2 mt-2 border-t border-slate-800/60 space-y-2 text-[10px]">

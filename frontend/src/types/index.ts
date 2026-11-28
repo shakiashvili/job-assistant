@@ -189,6 +189,14 @@ export interface JobDetails {
   summary: string;
 }
 
+export interface MatchGateExplanation {
+  gate: string;
+  passed: boolean;
+  reason?: string;
+  penalty?: number;
+  metadata?: Record<string, any>;
+}
+
 export interface DbJobPosting {
   id: number;
   portal: string;
@@ -211,6 +219,7 @@ export interface DbJobPosting {
   also_on_portals?: string[];
   matched_skills?: string[];
   missing_skills?: string[];
+  match_explanation?: MatchGateExplanation[];
   match_rationale: string;
   match_tier?: 'DIRECT' | 'ADJACENT' | 'PUBLIC_INTERNSHIP' | string;
   adjacent_role_tag?: string | null;
